@@ -114,13 +114,19 @@ test_stop_hook_blocks_on_failure() {
 
 test_stop_hook_gives_up_after_three() {
     printf 'fn main() { let _x = 1; }\n' >"$stop_dir/b.rs"
+    local message='4x4 checks are still red after 3 blocked stops — tell the user before finishing'
     run_stop false
     expect_status 2
+    [[ -z $stdout ]] || fail "blocking run 1 must not print to stdout, got: $stdout"
     run_stop false
     expect_status 2
+    [[ -z $stdout ]] || fail "blocking run 2 must not print to stdout, got: $stdout"
     run_stop false
     expect_status 0
     expect_contains "giving up" "$stderr" stderr
+    # Exit 0 hides stderr from the user, so the warning must also be a systemMessage.
+    jq -es --arg m "$message" 'length == 1 and .[0].systemMessage == $m' <<<"$stdout" >/dev/null ||
+        fail "expected stdout to be exactly one systemMessage JSON object, got: $stdout"
 }
 
 test_stop_hook_ignores_non_rust_change() {

@@ -65,4 +65,6 @@ fi
 
 rm -f "$blocks_file"
 echo "giving up after $max_blocks blocked stops; checks are still red — tell the user" >&2
+# stderr is not shown for exit 0; systemMessage on stdout is what reaches the user.
+echo '{"systemMessage": "4x4 checks are still red after 3 blocked stops — tell the user before finishing"}'
 exit 0
