@@ -1,4 +1,5 @@
 // Modified for gpui-pre (snapshot of zed@08cbb88): adapt device queues and sRGB detection to wgpu 30.0.1.
+// Modified for 4x4: create the GPU context Vulkan-first, see PATCHED.md.
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -299,41 +300,22 @@ impl WgpuRenderer {
     where
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
-        let window_handle = window
-            .window_handle()
-            .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
-
-        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            // Fall back to the display handle already provided via InstanceDescriptor::display.
-            raw_display_handle: None,
-            raw_window_handle: window_handle.as_raw(),
-        };
-
-        // Use the existing context's instance if available, otherwise create a new one.
-        // The surface must be created with the same instance that will be used for
-        // adapter selection, otherwise wgpu will panic.
-        let instance = gpu_context
-            .borrow()
-            .as_ref()
-            .map(|ctx| ctx.instance.clone())
-            .unwrap_or_else(|| WgpuContext::instance(Some(Box::new(window.clone()))));
-
-        // Safety: The caller guarantees that the window handle is valid for the
-        // lifetime of this renderer. In practice, the RawWindow struct is created
-        // from the native window handles and the surface is dropped before the window.
-        let surface = unsafe {
-            instance
-                .create_surface_unsafe(target)
-                .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?
-        };
-
         let mut ctx_ref = gpu_context.borrow_mut();
-        let context = match ctx_ref.as_mut() {
+        let (context, surface) = match ctx_ref.as_mut() {
             Some(context) => {
+                let window_handle = window
+                    .window_handle()
+                    .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
+                let surface = create_surface(&context.instance, window_handle.as_raw())
+                    .context("Failed to create surface")?;
                 context.check_compatible_with_surface(&surface)?;
-                context
+                (context, surface)
             }
-            None => ctx_ref.insert(WgpuContext::new(instance, &surface, compositor_gpu)?),
+            None => {
+                let (surface, new_context) =
+                    create_context_vulkan_first(window, compositor_gpu, false)?;
+                (ctx_ref.insert(new_context), surface)
+            }
         };
 
         let atlas = Arc::new(WgpuAtlas::from_context(context));
@@ -2232,10 +2214,8 @@ impl WgpuRenderer {
             // may need more time to come back (e.g. after suspend/resume).
             std::thread::sleep(std::time::Duration::from_millis(350));
 
-            let instance = WgpuContext::instance(Some(Box::new(window.clone())));
-            let surface = create_surface(&instance, window_handle.as_raw())?;
-            let new_context =
-                WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?;
+            let (surface, new_context) =
+                create_context_vulkan_first(window, self.compositor_gpu, true)?;
             *gpu_context.borrow_mut() = Some(new_context);
             surface
         } else {
@@ -2542,6 +2522,58 @@ impl gpui::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
 
 fn instance_range(range: Range<usize>) -> Range<u32> {
     range.start as u32..range.end as u32
+}
+
+/// Creates the shared GPU context without loading driver stacks it does not use.
+///
+/// Asking wgpu for Vulkan and OpenGL at once initializes EGL and maps the OpenGL driver even
+/// when a Vulkan adapter is selected. So try, in order: a hardware Vulkan adapter; a hardware
+/// OpenGL adapter (VMs and old GPUs without a Vulkan driver); and only then any adapter,
+/// software renderers included, unless the caller rejects them. This keeps the old preference
+/// of a hardware OpenGL adapter over a software Vulkan one (lavapipe).
+#[cfg(not(target_family = "wasm"))]
+fn create_context_vulkan_first<W>(
+    window: &W,
+    compositor_gpu: Option<CompositorGpuHint>,
+    reject_software: bool,
+) -> anyhow::Result<(wgpu::Surface<'static>, WgpuContext)>
+where
+    W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
+{
+    let raw_window_handle = window
+        .window_handle()
+        .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?
+        .as_raw();
+    let attempt = |backends: wgpu::Backends,
+                   hardware_only: bool|
+     -> anyhow::Result<(wgpu::Surface<'static>, WgpuContext)> {
+        let instance = WgpuContext::instance_with_backends(Some(Box::new(window.clone())), backends);
+        let surface = create_surface(&instance, raw_window_handle)
+            .context("Failed to create surface")?;
+        let context = if hardware_only {
+            WgpuContext::new_rejecting_software(instance, &surface, compositor_gpu)?
+        } else {
+            WgpuContext::new(instance, &surface, compositor_gpu)?
+        };
+        Ok((surface, context))
+    };
+    let mut attempts = vec![(wgpu::Backends::VULKAN, true), (wgpu::Backends::GL, true)];
+    if !reject_software {
+        attempts.push((wgpu::Backends::VULKAN | wgpu::Backends::GL, false));
+    }
+    let mut errors = Vec::new();
+    for (backends, hardware_only) in attempts {
+        match attempt(backends, hardware_only) {
+            Ok(created) => return Ok(created),
+            Err(error) => {
+                log::warn!(
+                    "No usable {backends:?} adapter (hardware only: {hardware_only}): {error:#}"
+                );
+                errors.push(format!("{backends:?}: {error:#}"));
+            }
+        }
+    }
+    anyhow::bail!("No GPU adapter can drive this window: {}", errors.join("; "))
 }
 
 #[cfg(not(target_family = "wasm"))]

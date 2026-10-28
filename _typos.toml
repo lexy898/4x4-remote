@@ -1,2 +1,3 @@
 [files]
-extend-exclude = [".specs/", "**/tests/fixtures/", "target/"]
+# vendor/ holds third-party code, which is not spell-checked (vendor/gpui-pre-wgpu/PATCHED.md).
+extend-exclude = [".specs/", "**/tests/fixtures/", "target/", "vendor/"]

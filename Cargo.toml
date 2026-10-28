@@ -56,7 +56,9 @@ unreachable = "warn"
 unused_result_ok = "warn"
 unwrap_used = "warn"
 
-# A vendored copy of the gpui-pre-wgpu that gpui-kit pulls in, kept unchanged for now.
+# A vendored copy of the gpui-pre-wgpu that gpui-kit pulls in, patched so the GPU context is
+# created Vulkan-first and the OpenGL driver stays unloaded (vendor/gpui-pre-wgpu/PATCHED.md).
+# The directory is not a workspace member, so our lints do not apply to it.
 [patch.crates-io]
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 

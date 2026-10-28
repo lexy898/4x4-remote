@@ -429,7 +429,8 @@ test_check_tools_passes_when_all_present() {
 }
 
 # A minimal repository layout for lint-policy.sh, plus a stub `cargo` whose `cargo tree`
-# output per crate comes from tree-<crate>.txt next to it (clean by default).
+# output per crate comes from tree-<crate>.txt next to it, and its stderr from
+# tree-<crate>.stderr if that exists (clean by default: x4-app's tree is the vendored crate).
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
@@ -440,8 +441,13 @@ new_policy_root() {
             "$crate" >"$dir/crates/$crate/src/lib.rs"
         printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
     done
-    printf '#!/usr/bin/env bash\nwhile (($#)); do [[ $1 == -p ]] && crate=$2; shift; done\ncat "%s/tree-$crate.txt"\n' \
-        "$dir" >"$dir/cargo"
+    printf 'gpui-pre-wgpu v0.3.10 (%s/vendor/gpui-pre-wgpu)\n' "$dir" >"$dir/tree-x4-app.txt"
+    cat >"$dir/cargo" <<EOF
+#!/usr/bin/env bash
+while ((\$#)); do [[ \$1 == -p ]] && crate=\$2; shift; done
+if [[ -f "$dir/tree-\$crate.stderr" ]]; then cat "$dir/tree-\$crate.stderr" >&2; fi
+cat "$dir/tree-\$crate.txt"
+EOF
     chmod +x "$dir/cargo"
     echo "$dir"
 }
@@ -510,6 +516,38 @@ test_lint_policy_rejects_wrong_dependency_direction() {
     [[ $stderr != *serde* ]] || fail "serde is an allowed dependency, got: $stderr"
 }
 
+# What a gpui-kit bump to another gpui-pre-wgpu version looks like: the registry crate is built.
+test_lint_policy_rejects_registry_gpui_pre_wgpu() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'gpui-pre-wgpu v0.3.11\n└── gpui-pre-linux v0.3.11\n' >"$dir/tree-x4-app.txt"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-app: gpui-pre-wgpu resolves to 'gpui-pre-wgpu v0.3.11', not vendor/gpui-pre-wgpu" \
+        "$stderr" stderr
+    expect_contains "vendor/gpui-pre-wgpu/PATCHED.md" "$stderr" stderr
+}
+
+test_lint_policy_rejects_unused_gpui_pre_wgpu_patch() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'warning: patch `gpui-pre-wgpu v0.3.10 (%s/vendor/gpui-pre-wgpu)` was not used in the crate graph\n' \
+        "$dir" >"$dir/tree-x4-app.stderr"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-app: Cargo reports the vendored gpui-pre-wgpu patch as unused" "$stderr" stderr
+}
+
+test_lint_policy_rejects_failed_gpui_pre_wgpu_lookup() {
+    local dir
+    dir=$(new_policy_root)
+    rm "$dir/tree-x4-app.txt" # the stub cargo then fails, like an ambiguous or missing package
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-app: cargo tree failed, cannot check that gpui-pre-wgpu is the vendored copy" \
+        "$stderr" stderr
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -551,6 +589,9 @@ cases=(
     lint_policy_ignores_exceptions_in_comments
     lint_policy_rejects_missing_workspace_lints
     lint_policy_rejects_wrong_dependency_direction
+    lint_policy_rejects_registry_gpui_pre_wgpu
+    lint_policy_rejects_unused_gpui_pre_wgpu_patch
+    lint_policy_rejects_failed_gpui_pre_wgpu_lookup
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )

@@ -25,7 +25,8 @@ toml-check:
 spell:
     typos
 
-# AGENTS.md rules clippy cannot express: lint exceptions, workspace lints, dependency direction.
+# AGENTS.md rules clippy cannot express: lint exceptions, workspace lints, dependency direction,
+# and that the vendored gpui-pre-wgpu patch is applied.
 lint-policy:
     scripts/lint-policy.sh
 
@@ -44,8 +45,9 @@ doc:
 deny:
     cargo deny check --hide-inclusion-graph
 
+# Only our crates: vendor/ holds third-party code (vendor/gpui-pre-wgpu/PATCHED.md).
 machete:
-    cargo machete
+    cargo machete crates
 
 # Re-record the scrubbed test fixtures from a real daemon (read-only calls). X4_LIVE_URL overrides the endpoint.
 record-fixtures:
