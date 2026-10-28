@@ -22,5 +22,9 @@ ureq.workspace = true
 # `just test` (plain `cargo nextest run --workspace`) must build them without extra flags.
 x4-rpc = { workspace = true, features = ["test-support"] }
 
+[[example]]
+name = "record_fixtures"
+required-features = ["test-support"]
+
 [lints]
 workspace = true

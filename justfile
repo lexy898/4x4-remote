@@ -47,6 +47,10 @@ deny:
 machete:
     cargo machete
 
+# Re-record the scrubbed test fixtures from a real daemon (read-only calls). X4_LIVE_URL overrides the endpoint.
+record-fixtures:
+    X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" cargo run -p x4-rpc --example record_fixtures --features test-support --locked
+
 # Enable the git hooks and verify the required tools are installed.
 setup:
     git config core.hooksPath .githooks

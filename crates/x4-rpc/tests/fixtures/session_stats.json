@@ -1,0 +1,25 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "active_torrent_count": 6,
+    "cumulative_stats": {
+      "downloaded_bytes": 230319039386,
+      "files_added": 58,
+      "seconds_active": 18101923,
+      "session_count": 17,
+      "uploaded_bytes": 1695567953398
+    },
+    "current_stats": {
+      "downloaded_bytes": 34428533868,
+      "files_added": 1,
+      "seconds_active": 352231,
+      "session_count": 1,
+      "uploaded_bytes": 51596733597
+    },
+    "download_speed": 0,
+    "paused_torrent_count": 0,
+    "torrent_count": 6,
+    "upload_speed": 163970
+  }
+}

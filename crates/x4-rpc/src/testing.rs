@@ -1,7 +1,10 @@
 //! Test doubles for code that talks to Transmission (feature `test-support`).
 //!
 //! [`FakeTransport`] answers requests from a script or a handler and records every request;
-//! [`ok`] and [`conflict`] build the common responses.
+//! [`ok`] and [`conflict`] build the common responses. [`scrub`] removes private data from
+//! recorded responses and [`fixtures`] holds the scrubbed responses of a real daemon.
+
+pub mod scrub;
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -147,6 +150,28 @@ fn with_request_id(mut response: HttpResponse, id: Value) -> HttpResponse {
         response.body = Value::Object(body).to_string().into_bytes();
     }
     response
+}
+
+/// Responses of a real Transmission 4.1 daemon, scrubbed by [`scrub::Scrubber`].
+///
+/// Each constant is a whole JSON-RPC response, `{"jsonrpc":"2.0","id":1,"result":…}`. To answer a
+/// request with one, parse it and pass its `result` to [`ok`], which supplies the request's id.
+/// `just record-fixtures` records them again.
+pub mod fixtures {
+    /// `session_get` with the session fields the app reads.
+    pub const SESSION_GET: &str = include_str!("../tests/fixtures/session_get.json");
+    /// `session_stats`.
+    pub const SESSION_STATS: &str = include_str!("../tests/fixtures/session_stats.json");
+    /// `free_space` for the session's download directory.
+    pub const FREE_SPACE: &str = include_str!("../tests/fixtures/free_space.json");
+    /// `torrent_get` with the list fields and no `ids`: every torrent.
+    pub const TORRENT_GET_LIST: &str = include_str!("../tests/fixtures/torrent_get_list.json");
+    /// `torrent_get` with the list fields and `ids: "recently_active"`: the torrents that
+    /// changed lately and the `removed` ids.
+    pub const TORRENT_GET_RECENT: &str = include_str!("../tests/fixtures/torrent_get_recent.json");
+    /// `torrent_get` with the details fields for one multi-file torrent.
+    pub const TORRENT_GET_DETAILS: &str =
+        include_str!("../tests/fixtures/torrent_get_details.json");
 }
 
 /// A poisoned lock only means a handler panicked in another test thread; the data is still usable.
