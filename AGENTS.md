@@ -107,18 +107,23 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
   by key. The only allowed literal is the product name "4x4".
 - To add a string: add the message to `crates/x4-app/i18n/en/x4.ftl` and fetch it with `t!` from
   `crates/x4-app/src/i18n.rs` (`t!("id")` or `t!("id", name = value)`). `t!` wraps `fl!`, which
-  checks the message id and the argument names against `en` at compile time. Text for a `x4-core`
-  value (size, speed, ETA, subtitle, state, connection) is a helper in `i18n.rs`, so views never
+  checks the message id against `en` at compile time. It checks the argument names only when the
+  call passes at least one argument; a call with none is not checked, so a message that has
+  variables is fetched only inside a helper of `i18n.rs`, and that helper has a test. Text for a
+  `x4-core` value (size, speed, ETA, subtitle, state, connection) is such a helper, so views never
   pick words themselves.
 - Never build sentences by concatenation; use message arguments and plural rules. Pass counts as
   numbers, so that plural selection works (every `{ $n -> }` needs a `*[other]` variant).
 - Pass decimals (sizes, speeds, ratios) as preformatted strings made by `i18n::decimal`: Fluent does
   not format numbers by the rules of a language, and the decimal separator is the message
   `number-decimal-separator`.
-- Another language is one more `crates/x4-app/i18n/<code>/x4.ftl`. The parity test in
+- Another language is one more `crates/x4-app/i18n/<code>/x4.ftl`, and the language must also be
+  selected in code (the loader loads only `en` until then; once it selects languages,
+  `set_use_isolating(false)` must be applied again after each selection). The parity test in
   `src/i18n/parity.rs` covers every language directory: the file parses, defines the same messages
   as `en` and uses the same `$variables` in each. `fl!` checks only `en`, so keep that test green.
-- Sizes use binary IEC units (KiB, MiB, GiB) and are formatted in `x4-core`.
+- Sizes use binary IEC units (KiB, MiB, GiB). `x4-core` scales them (`human_size`, `human_speed`);
+  `x4-app/src/i18n.rs` turns them into text.
 
 ## Dependencies
 

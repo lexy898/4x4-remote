@@ -98,14 +98,17 @@ open on another screen without taking focus) never catch the window you actually
 The interface is in English. Every text the app shows is a message in
 [`crates/x4-app/i18n/en/x4.ftl`](crates/x4-app/i18n/en/x4.ftl), written in
 [Fluent](https://projectfluent.org/), which has plural rules for each language built in ("1 peer",
-"3 peers"). The messages are embedded into the binary. Misspelling a message id or one of its
-arguments in the code is a compile error.
+"3 peers"). The messages are embedded into the binary. Misspelling a message id in the code is a
+compile error, and so is misspelling an argument name in a call that passes arguments. A call
+without arguments is not checked for them, so messages with variables are fetched only through
+the helpers in `crates/x4-app/src/i18n.rs`, which have tests.
 
 Another language is one more file, `crates/x4-app/i18n/<code>/x4.ftl` (for example `ru`), with the
 same messages as the English one. A test checks every language directory: the file must parse,
-define the same messages as `en` and use the same `$variables` in each of them. The English text
-stands in for a message a language does not translate yet. Picking the language from the system
-locale is not wired in yet, so only English is used.
+define the same messages as `en` and use the same `$variables` in each of them, so a language that
+misses a message fails the test. English is only the safety net at run time, should a message be
+missing anyway. Picking the language from the system locale is not wired in yet, so only English is
+used.
 
 Sizes, speeds and ratios are formatted by the app and handed to the messages as ready text, because
 Fluent does not format numbers by the rules of a language. The decimal separator of a language is

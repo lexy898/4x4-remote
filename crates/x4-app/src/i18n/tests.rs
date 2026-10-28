@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
@@ -90,6 +91,15 @@ fn eta_texts() {
         "3 h 15 m"
     );
     assert_eq!(eta_text(&eta((59, TimeUnit::Seconds), None)), "59 s");
+}
+
+#[test]
+fn eta_leaves_out_a_zero_second_unit() {
+    // 86 700 s, a day and five minutes: the hours are zero, so the minutes are not the unit below the days.
+    let duration = CompactDuration::from(Duration::from_hours(24) + Duration::from_mins(5));
+    assert_eq!(duration.major, (1, TimeUnit::Days));
+    assert_eq!(duration.minor, None);
+    assert_eq!(eta_text(&EtaView::In(duration)), "1 d");
 }
 
 #[test]
@@ -197,7 +207,7 @@ fn connection_texts() {
         text(ConnectionState::Unsupported {
             reason: UnsupportedReason::NoVersion
         }),
-        "Transmission 4.1 or newer required (the server reports no version)"
+        "Transmission 4.1 or newer required (server did not report a version)"
     );
     assert_eq!(
         text(ConnectionState::Unsupported {
@@ -207,23 +217,9 @@ fn connection_texts() {
     );
 }
 
-#[test]
-fn reconnecting_says_why_in_a_few_words() {
-    let reconnecting = |attempt, last_error| {
-        connection_text(&ConnectionState::Reconnecting {
-            attempt,
-            last_error,
-        })
-    };
-    assert_eq!(
-        reconnecting(1, ConnectionError::Unreachable),
-        "Reconnecting (attempt 1)… The server cannot be reached"
-    );
-    assert_eq!(
-        reconnecting(12, ConnectionError::Timeout),
-        "Reconnecting (attempt 12)… The server did not answer in time"
-    );
-    let reasons: Vec<SharedString> = [
+/// One of each kind of connection error; the details of the last two must never be shown.
+fn every_connection_error() -> [ConnectionError; 6] {
+    [
         ConnectionError::Unreachable,
         ConnectionError::Timeout,
         ConnectionError::Forbidden,
@@ -231,14 +227,67 @@ fn reconnecting_says_why_in_a_few_words() {
         ConnectionError::Protocol("odd".to_owned()),
         ConnectionError::Server("odd".to_owned()),
     ]
-    .into_iter()
-    .map(|error| reconnecting(2, error))
-    .collect();
-    for (index, reason) in reasons.iter().enumerate() {
-        assert!(
-            !reasons.iter().skip(index + 1).any(|other| other == reason),
-            "two kinds of error read the same: {reason:?}"
-        );
+}
+
+#[test]
+fn reconnecting_names_the_attempt_and_a_short_reason() {
+    let reconnecting = |attempt, last_error| {
+        connection_text(&ConnectionState::Reconnecting {
+            attempt,
+            last_error,
+        })
+    };
+    let expected = [
+        "Reconnecting (attempt 1)… unreachable",
+        "Reconnecting (attempt 1)… timed out",
+        "Reconnecting (attempt 1)… access denied",
+        "Reconnecting (attempt 1)… login required",
+        "Reconnecting (attempt 1)… unexpected answer",
+        "Reconnecting (attempt 1)… server error",
+    ];
+    for (error, expected) in every_connection_error().into_iter().zip(expected) {
+        assert_eq!(reconnecting(1, error), expected);
+    }
+    assert_eq!(
+        reconnecting(12, ConnectionError::Timeout),
+        "Reconnecting (attempt 12)… timed out"
+    );
+}
+
+#[test]
+fn short_reasons_fit_the_status_bar() {
+    let reasons: BTreeSet<String> = every_connection_error()
+        .iter()
+        .map(|error| connection_reason_text(error).to_string())
+        .collect();
+    assert_eq!(
+        reasons.len(),
+        6,
+        "two kinds of error read the same: {reasons:?}"
+    );
+    for reason in &reasons {
+        assert!(reason.split_whitespace().count() <= 3, "{reason:?}");
+    }
+}
+
+#[test]
+fn every_connection_error_has_its_own_sentence_for_a_tooltip() {
+    let sentences: BTreeSet<String> = every_connection_error()
+        .iter()
+        .map(|error| connection_reason_detail_text(error).to_string())
+        .collect();
+    assert_eq!(
+        sentences.len(),
+        6,
+        "two kinds of error read the same: {sentences:?}"
+    );
+    assert_eq!(
+        connection_reason_detail_text(&ConnectionError::Timeout),
+        "The server did not answer in time"
+    );
+    for sentence in &sentences {
+        assert!(sentence.split_whitespace().count() > 3, "{sentence:?}");
+        assert!(!sentence.contains("odd"), "{sentence:?}");
     }
 }
 

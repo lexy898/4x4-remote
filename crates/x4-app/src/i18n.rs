@@ -2,9 +2,11 @@
 //! `x4-core` (sizes, speeds, ETAs, subtitles, states, the connection) into strings.
 //!
 //! Every user-visible string is a message in `i18n/en/x4.ftl`, fetched with [`t!`]: the macro
-//! checks the message id and the argument names against that file at compile time. Another
-//! language is one more `i18n/<code>/x4.ftl`; the `parity` test checks that it defines the same
-//! messages with the same variables.
+//! checks the message id against that file at compile time, and the argument names too when the
+//! call passes any (a call without arguments is not checked for them). So a message with
+//! variables is fetched only by the helpers here, which have tests. Another language is one more
+//! `i18n/<code>/x4.ftl`; the `parity` test checks that it defines the same messages with the same
+//! variables.
 //!
 //! Fluent does not format numbers by the rules of a language, so sizes, speeds and ratios are
 //! formatted here ([`decimal`]) and passed as strings, with the decimal separator taken from the
@@ -36,12 +38,16 @@ struct Localizations;
 ///
 /// If the messages cannot be loaded, the error is logged and every message reads as the loader's
 /// placeholder text, so the app still starts.
+///
+/// Once the language is chosen at run time, `set_use_isolating(false)` (see `load`) must be
+/// applied again after every `load_languages` or `select_languages`: bundles loaded later get the
+/// isolation marks around arguments again.
 pub(crate) static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| load(&Localizations));
 
 /// Fetches a message from [`LOADER`]: `t!("id")` or `t!("id", name = value, ...)`.
 ///
-/// The id and the argument names are checked against `i18n/en/x4.ftl` when the crate compiles.
-/// Counts go in as numbers; sizes, speeds and ratios as strings made by [`decimal`].
+/// The id is checked against `i18n/en/x4.ftl` when the crate compiles, and so are the argument
+/// names, but only when the call passes at least one argument. Counts go in as numbers; sizes, speeds and ratios as strings made by [`decimal`].
 macro_rules! t {
     ($($arguments:tt)*) => {
         ::i18n_embed_fl::fl!($crate::i18n::LOADER, $($arguments)*)
@@ -270,8 +276,9 @@ pub(crate) fn state_text(state: DisplayState) -> SharedString {
 /// What the status bar says about the connection; empty when connected, as the bar then shows
 /// only a dot.
 ///
-/// The details the server gave for a protocol or server error are not part of the text; they
-/// are for a tooltip.
+/// The status bar has little room, so a failed reconnect is named in a few words (see
+/// [`connection_reason_text`]). The details the server gave for a protocol or server error are
+/// not part of the text; they are for a tooltip, together with [`connection_reason_detail_text`].
 #[cfg_attr(
     not(test),
     expect(
@@ -289,7 +296,7 @@ pub(crate) fn connection_text(state: &ConnectionState) -> SharedString {
         } => t!(
             "connection-reconnecting",
             attempt = attempt,
-            reason = reconnect_reason(last_error)
+            reason = connection_reason_text(last_error).to_string()
         ),
         ConnectionState::Unsupported { reason } => match reason {
             UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
@@ -302,7 +309,8 @@ pub(crate) fn connection_text(state: &ConnectionState) -> SharedString {
     .into()
 }
 
-fn reconnect_reason(error: &ConnectionError) -> String {
+/// Why the connection failed, in a few words for the status bar, such as "timed out".
+pub(crate) fn connection_reason_text(error: &ConnectionError) -> SharedString {
     match error {
         ConnectionError::Unreachable => t!("connection-reason-unreachable"),
         ConnectionError::Timeout => t!("connection-reason-timeout"),
@@ -311,4 +319,23 @@ fn reconnect_reason(error: &ConnectionError) -> String {
         ConnectionError::Protocol(_) => t!("connection-reason-protocol"),
         ConnectionError::Server(_) => t!("connection-reason-server"),
     }
+    .into()
+}
+
+/// Why the connection failed, as a sentence for a tooltip. Like [`connection_reason_text`], it
+/// leaves out the details the server gave for a protocol or server error.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the status bar tooltip in the next tasks")
+)]
+pub(crate) fn connection_reason_detail_text(error: &ConnectionError) -> SharedString {
+    match error {
+        ConnectionError::Unreachable => t!("connection-reason-unreachable-detail"),
+        ConnectionError::Timeout => t!("connection-reason-timeout-detail"),
+        ConnectionError::Forbidden => t!("connection-reason-forbidden-detail"),
+        ConnectionError::Unauthorized => t!("connection-reason-unauthorized-detail"),
+        ConnectionError::Protocol(_) => t!("connection-reason-protocol-detail"),
+        ConnectionError::Server(_) => t!("connection-reason-server-detail"),
+    }
+    .into()
 }

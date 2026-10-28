@@ -35,7 +35,8 @@ progress-of = { $percent }% of { $size }
 
 eta-none = —
 eta-unknown = ∞
-# The two largest non-zero units, such as "1 d 2 h"; or just the one, such as "5 m".
+# The largest unit and the one right below it, such as "1 d 2 h"; the second is left out when it is
+# zero, such as "1 d".
 # $major and $minor: amounts (numbers); $major_unit and $minor_unit: unit-day, unit-hour, ...
 eta-major = { $major } { $major_unit }
 eta-major-minor = { $major } { $major_unit } { $minor } { $minor_unit }
@@ -91,16 +92,24 @@ subtitle-tracker-error-generic = Tracker error: no details from the server
 ## The connection to the server (the status bar shows only a dot when connected)
 
 connection-connecting = Connecting…
-# $attempt: failed tries in a row (a number); $reason: one of the connection-reason-* messages.
+# $attempt: failed tries in a row (a number); $reason: one of the connection-reason-* messages. The
+# status bar shows this next to the speeds, so the reasons are a few words each.
 connection-reconnecting = Reconnecting (attempt { $attempt })… { $reason }
-connection-reason-unreachable = The server cannot be reached
-connection-reason-timeout = The server did not answer in time
-connection-reason-forbidden = The server does not accept requests from this computer
-connection-reason-unauthorized = The server rejected the credentials
-connection-reason-protocol = The server answered unexpectedly
-connection-reason-server = The server reported an error
+connection-reason-unreachable = unreachable
+connection-reason-timeout = timed out
+connection-reason-forbidden = access denied
+connection-reason-unauthorized = login required
+connection-reason-protocol = unexpected answer
+connection-reason-server = server error
+# The same reasons in full sentences, for a tooltip.
+connection-reason-unreachable-detail = The server cannot be reached
+connection-reason-timeout-detail = The server did not answer in time
+connection-reason-forbidden-detail = The server does not accept requests from this computer
+connection-reason-unauthorized-detail = The server rejected the credentials
+connection-reason-protocol-detail = The server answered unexpectedly
+connection-reason-server-detail = The server reported an error
 connection-unsupported-legacy = Transmission 4.1 or newer required
-connection-unsupported-no-version = Transmission 4.1 or newer required (the server reports no version)
+connection-unsupported-no-version = Transmission 4.1 or newer required (server did not report a version)
 # $version: the RPC version the server reports.
 connection-unsupported-version = Transmission 4.1 or newer required (server RPC { $version })
 connection-service-stopped = Service stopped
