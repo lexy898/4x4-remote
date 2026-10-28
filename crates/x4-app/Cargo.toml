@@ -1,0 +1,15 @@
+[package]
+name = "x4-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "4x4"
+path = "src/main.rs"
+
+[lints]
+workspace = true
