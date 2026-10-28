@@ -1,0 +1,9 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "path": "/data/torrents/video",
+    "size_bytes": 819158872064,
+    "total_size": 998918365184
+  }
+}

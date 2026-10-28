@@ -7,5 +7,26 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# The `test_support` module: builders for this crate's and dependent crates' tests. It also
+# turns on `x4-rpc`'s `test-support`, whose recorded fixtures `fixture_result` reads.
+test-support = ["dep:serde_json", "x4-rpc/test-support"]
+
+[dependencies]
+async-channel.workspace = true
+crossbeam-channel.workspace = true
+# Only `test_support::fixture_result` uses it outside of tests.
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+tracing.workspace = true
+x4-rpc.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+# Self dev-dependency: `just test` and `just lint` (plain `--workspace --all-targets`) build the
+# crate with its own `test-support` feature, so the module that dependent crates use is
+# compiled and linted without extra flags. The feature brings `x4-rpc`'s fixtures along.
+x4-core = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

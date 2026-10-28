@@ -1,0 +1,17 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "alt_speed_down": 50,
+    "alt_speed_enabled": false,
+    "alt_speed_up": 50,
+    "download_dir": "/data/torrents/video",
+    "rpc_version_semver": "6.0.1",
+    "sequential_download": false,
+    "speed_limit_down": 100,
+    "speed_limit_down_enabled": false,
+    "speed_limit_up": 100,
+    "speed_limit_up_enabled": false,
+    "version": "4.1.3 (838877323f)"
+  }
+}

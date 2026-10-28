@@ -309,6 +309,87 @@ test_guard_allows_lookalikes() {
         $'cat > /tmp/notes <<EOF\ngit commit -n\nEOF\necho done'
 }
 
+test_guard_allows_escaped_backticks_in_double_quotes() {
+    expect_allowed 'git commit -m "docs: explain \`git commit -n\` is blocked"'
+}
+
+test_guard_allows_escaped_dollar_paren() {
+    expect_allowed 'git commit -m "docs: \$(git commit -n) example"'
+}
+
+test_guard_allows_quoted_heredoc_body() {
+    expect_allowed \
+        $'git commit -m "$(cat <<\'EOF\'\ndocs: guard the `git commit --no-verify` form\nEOF\n)"' \
+        $'git commit -m "$(cat <<\\EOF\ndocs: guard the `git commit --no-verify` form\nEOF\n)"' \
+        $'git commit -m "$(cat <<\'EOF\'\ndocs: the $(git commit -n) form\nEOF\n)"' \
+        $'git commit -m "$(cat <<\'EOF\'\ndon\'t run `git commit -n`\nEOF\n)" && echo done' \
+        $'git commit -m "$(cat <<\'EOF\'\nuse ${VAR} and `git commit -n` here\nEOF\n)"' \
+        $'gh pr create --title t --body "$(cat <<\'EOF\'\nuse ${VAR}, the case where `git commit -n` runs\nEOF\n)"' \
+        $'git commit -m $(cat <<"EOF"\ndocs: guard the `git commit --no-verify` form\nEOF\n)' \
+        $'cat <<"EOF"\n$(git commit -n) and `git commit -n`\nEOF' \
+        $'cat <<-\'EOF\'\n\t`git commit -n`\n\tEOF\necho done' \
+        $'cat <<\'A\' <<"B"\n`git commit -n`\nA\n$(git commit -n)\nB\necho done'
+}
+
+test_guard_allows_escaped_backticks_in_pr_body() {
+    expect_allowed 'gh pr create --title t --body "Blocks \`git commit -n\`"'
+}
+
+test_guard_allows_text_around_substitutions() {
+    expect_allowed 'echo "$(date); git commit -n"' \
+        'echo "$(date) \`git commit -n\` $(whoami)"' \
+        $'cat <<EOF\n$(date)\ngit commit -n\nEOF\necho done' \
+        $'cat <<EOF\n\\$(git commit -n) and \\`git commit -n\\`\nEOF\necho done' \
+        $'cat <<EOF\n$(date) \\$(git commit -n)\nEOF\necho done'
+}
+
+test_guard_blocks_unescaped_backticks() {
+    expect_blocked 'git commit -m "x `git commit -n`"' \
+        'git commit -m "x \\`git commit -n`"' \
+        'git commit -m "$(date) `git commit -n`"' \
+        'echo "`echo \`git commit -n\``"'
+}
+
+test_guard_blocks_escape_lookalikes() {
+    expect_blocked 'echo "\\$(git commit -n)"' \
+        'bash -c "echo \$(git commit -n)"' \
+        'bash -c "echo \`git commit -n\`"' \
+        'echo "$(echo a; git commit -n)"' \
+        'echo "$(echo "x")$(git commit -n)"' \
+        $'cat <<EOF\n\\\\$(git commit -n)\nEOF' \
+        $'cat <<\'EOF\'\nx\nEOF\ngit commit -n' \
+        $'cat <<\'EOF\' && git commit -n\nx\nEOF'
+}
+
+# A `)` that does not close the substitution (a case pattern, `${x//)/}`) must not end it.
+test_guard_blocks_ambiguous_close_paren() {
+    expect_blocked 'echo "$(case x in x) git commit -n;; esac)"' \
+        $'echo "$(case $x in\n a) echo a ;;\n *) git commit -n ;;\nesac\n)"' \
+        'gh pr create --body "$(case $x in a) git commit -n;; esac)"' \
+        'echo "$(echo ${x//)/}; git commit -n)"' \
+        $'cat <<EOF\n$(case x in x) git commit -n;; esac)\nEOF' \
+        'echo "$(echo `echo )`; git commit -n)"'
+}
+
+# After the ambiguous `)` the text is still quoted or heredoc text: `#` and an apostrophe
+# pair there hide nothing from the shell, which runs the substitution.
+test_guard_blocks_substitution_after_ambiguous_close_paren() {
+    expect_blocked 'echo "$(case x in x) :;; esac) it'\''s $(git commit -n) don'\''t"' \
+        'echo "$(case x in x) :;; esac) # $(git commit -n)"' \
+        'echo "$(echo ${x//)/}) it'\''s $(git commit -n) don'\''t"' \
+        'echo "$(echo ${x//)/}) # $(git commit -n)"' \
+        'echo "$(echo ${x:-a}) # $(git commit -n)"' \
+        $'cat <<EOF\n$(case x in x) :;; esac) it\'s $(git commit -n) don\'t\nEOF' \
+        $'cat <<EOF\n$(case x in x) :;; esac) # $(git commit -n)\nEOF'
+}
+
+test_guard_blocks_unquoted_heredoc_substitution() {
+    expect_blocked $'cat <<EOF\n$(git commit -n)\nEOF' \
+        $'cat <<EOF\n`git commit -n`\nEOF' \
+        $'cat <<-EOF\n\t$(git commit -n)\n\tEOF' \
+        $'git commit -m "$(cat <<EOF\n$(git commit -n)\nEOF\n)"'
+}
+
 test_guard_ignores_other_tools() {
     run_with_input '{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}' "$guard_hook"
     expect_status 0
@@ -453,6 +534,16 @@ cases=(
     guard_blocks_hooks_path_override
     guard_blocks_hook_state_writes
     guard_allows_lookalikes
+    guard_allows_escaped_backticks_in_double_quotes
+    guard_allows_escaped_dollar_paren
+    guard_allows_quoted_heredoc_body
+    guard_allows_escaped_backticks_in_pr_body
+    guard_allows_text_around_substitutions
+    guard_blocks_unescaped_backticks
+    guard_blocks_escape_lookalikes
+    guard_blocks_ambiguous_close_paren
+    guard_blocks_substitution_after_ambiguous_close_paren
+    guard_blocks_unquoted_heredoc_substitution
     guard_ignores_other_tools
     lint_policy_passes_clean_tree
     lint_policy_rejects_inner_allow_and_expect

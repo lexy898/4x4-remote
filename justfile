@@ -47,6 +47,20 @@ deny:
 machete:
     cargo machete
 
+# Re-record the scrubbed test fixtures from a real daemon (read-only calls). X4_LIVE_URL overrides the endpoint.
+record-fixtures:
+    X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" cargo run -p x4-rpc --example record_fixtures --features test-support --locked
+
+# --no-capture runs the tests one at a time and streams their output, so the hash each test
+# prints for its torrent stays visible even if the run is interrupted (nextest drops the captured
+# output of a cancelled test).
+# Live tests on a torrent they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults.
+test-live:
+    X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" \
+    X4_LIVE_REMOTE_DIR="${X4_LIVE_REMOTE_DIR:-/mnt/hdd/torrents/4x4-test}" \
+    X4_LIVE_LOCAL_DIR="${X4_LIVE_LOCAL_DIR:-/mnt/pi-hdd/torrents/4x4-test}" \
+    cargo nextest run -p x4-rpc --test live --run-ignored only --locked --no-capture
+
 # Enable the git hooks and verify the required tools are installed.
 setup:
     git config core.hooksPath .githooks
