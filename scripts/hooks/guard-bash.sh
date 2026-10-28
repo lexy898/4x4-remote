@@ -591,9 +591,10 @@ judge_expandable() { # <depth> <text>
                 if [[ $consumed == *'${'* || $consumed == *'`'* || $consumed =~ $re_ambiguous_close ]]; then
                     # A `case` pattern, `${x//)/}` or a backtick substitution can hold a `)`
                     # that does not close this one, so the real end is unknown. Judge everything
-                    # after `$(` as shell: a false block is acceptable, a missed command is not.
+                    # after `$(` as shell, and still scan what follows the first `)` as text
+                    # (it may be quoted text, where `#` and `'` hide nothing): a false block is
+                    # acceptable, a missed command is not.
                     judge_text "$((depth + 1))" "$inner"
-                    text=''
                 fi
                 ;;
             '`'*)
