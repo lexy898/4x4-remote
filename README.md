@@ -115,8 +115,9 @@ the rules every change must follow.
 ### Architecture
 
 The workspace has three crates. `x4-rpc` speaks Transmission's JSON-RPC 2.0 protocol over HTTP.
-`x4-core` holds the app's model and logic, with no UI code. `x4-app` is the `4x4` binary with the
-window.
+`x4-core` holds the app's model and logic, with no UI code, down to what the main window shows
+(table rows, subtitles, filter counts, status bar), so the views only draw it. `x4-app` is the `4x4`
+binary with the window.
 
 All network traffic runs on one worker thread, `x4-service`, which `x4-core` starts. It polls the
 daemon on a schedule (faster while the window is visible), reconnects with a growing pause when the

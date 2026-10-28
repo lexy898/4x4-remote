@@ -15,6 +15,10 @@
 //! column headers, and [`playable_prefix`] tells how much of a file can already be played from
 //! its start while it downloads.
 //!
+//! What the main window shows is decided here as well: [`table_model`] turns a [`Snapshot`] and
+//! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts, [`status_model`]
+//! builds the status bar, and [`visibility`] tells whether the user can see the window.
+//!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
 //! [`SkippedRecord`]s that could not be. A [`Snapshot`] is what the UI reads: the torrents, the
@@ -50,6 +54,7 @@ mod state;
 mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+mod view;
 
 pub use action::{Action, ActionError, ActionId};
 pub use details::{FileEntry, TorrentDetails};
@@ -65,3 +70,7 @@ pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
+pub use view::{
+    ColumnId, CompactDuration, EtaView, Row, StatusModel, Subtitle, TableModel, TimeUnit,
+    ViewState, status_model, table_model, visibility,
+};
