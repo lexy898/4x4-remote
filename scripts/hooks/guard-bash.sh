@@ -36,8 +36,9 @@ block() { # <reason>
 # Double-quoted text and unquoted heredoc bodies that contain `$(` or a backtick go to
 # LEX_NESTED; judge_expandable finds the command substitutions in them.
 #
-# With <stop-at-close> = 1 the text is the inside of a `$(...)`: lexing ends at the
-# parenthesis that closes it and LEX_REST holds the text after it.
+# With <stop-at-close> = 1 the text is the inside of a `$(...)`: lexing ends at the first
+# unmatched `)` and LEX_REST holds the text after it. A `)` in a `case` pattern or in
+# `${x//)/}` is unmatched too; judge_expandable detects those and judges the whole text.
 #
 # Bash string operations cost time proportional to the string length, so the lexer works on
 # a small window (`buf`) in front of the unread text (`tail`) to stay fast on long commands.
@@ -49,6 +50,10 @@ re_squote="^'([^']*)'"
 re_ansi="^[\$]'(([^'\\\\]|\\\\.)*)'"
 re_dquote='^"(([^"\\]|\\.)*)"'
 re_run='^[^][:space:]'\''"\;&|()<>`$]+'
+# Text inside `$(...)` that can hold a `)` which does not close it: a `case` pattern.
+# (`${` and backticks are checked next to it.) The lexer does not track these, see
+# judge_expandable.
+re_ambiguous_close='(^|[^[:alnum:]_])case([^[:alnum:]_]|$)'
 
 LEX_TYPES=()
 LEX_VALUES=()
@@ -571,7 +576,7 @@ judge_text() { # <depth> <shell text> [<stop-at-close>]
 # quotes or an unquoted heredoc body): `$(...)` and backticks. A backslash escapes the next
 # character, so `\$(` and `\`` are plain text; everything else is data.
 judge_expandable() { # <depth> <text>
-    local depth=$1 text=$2 before code
+    local depth=$1 text=$2 before code inner consumed
     local specials='[\\`$]'
     while [[ $text == *$specials* ]]; do
         before=${text%%$specials*}
@@ -579,8 +584,17 @@ judge_expandable() { # <depth> <text>
         case $text in
             '\'*) text=${text:2} ;;
             '$('*)
-                judge_text "$((depth + 1))" "${text:2}" 1
+                inner=${text:2}
+                judge_text "$((depth + 1))" "$inner" 1
                 text=$JUDGE_REST
+                consumed=${inner:0:${#inner}-${#text}}
+                if [[ $consumed == *'${'* || $consumed == *'`'* || $consumed =~ $re_ambiguous_close ]]; then
+                    # A `case` pattern, `${x//)/}` or a backtick substitution can hold a `)`
+                    # that does not close this one, so the real end is unknown. Judge everything
+                    # after `$(` as shell: a false block is acceptable, a missed command is not.
+                    judge_text "$((depth + 1))" "$inner"
+                    text=''
+                fi
                 ;;
             '`'*)
                 text=${text:1}

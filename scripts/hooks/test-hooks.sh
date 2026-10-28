@@ -359,6 +359,16 @@ test_guard_blocks_escape_lookalikes() {
         $'cat <<\'EOF\' && git commit -n\nx\nEOF'
 }
 
+# A `)` that does not close the substitution (a case pattern, `${x//)/}`) must not end it.
+test_guard_blocks_ambiguous_close_paren() {
+    expect_blocked 'echo "$(case x in x) git commit -n;; esac)"' \
+        $'echo "$(case $x in\n a) echo a ;;\n *) git commit -n ;;\nesac\n)"' \
+        'gh pr create --body "$(case $x in a) git commit -n;; esac)"' \
+        'echo "$(echo ${x//)/}; git commit -n)"' \
+        $'cat <<EOF\n$(case x in x) git commit -n;; esac)\nEOF' \
+        'echo "$(echo `echo )`; git commit -n)"'
+}
+
 test_guard_blocks_unquoted_heredoc_substitution() {
     expect_blocked $'cat <<EOF\n$(git commit -n)\nEOF' \
         $'cat <<EOF\n`git commit -n`\nEOF' \
@@ -517,6 +527,7 @@ cases=(
     guard_allows_text_around_substitutions
     guard_blocks_unescaped_backticks
     guard_blocks_escape_lookalikes
+    guard_blocks_ambiguous_close_paren
     guard_blocks_unquoted_heredoc_substitution
     guard_ignores_other_tools
     lint_policy_passes_clean_tree
