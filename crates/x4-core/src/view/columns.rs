@@ -244,6 +244,7 @@ mod tests {
         }
         assert_eq!(ColumnId::from_key("bogus"), None);
         assert_eq!(ColumnId::from_key("Name"), None);
+        assert_eq!(ColumnId::from_key("namex"), None);
         assert_eq!(ColumnId::from_key(""), None);
     }
 

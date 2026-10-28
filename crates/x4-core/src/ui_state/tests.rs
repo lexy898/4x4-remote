@@ -1,15 +1,24 @@
 use super::*;
 
-/// Parses `text` and normalizes the result, the way the app reads the file.
+/// Parses `text`, which must be valid.
 fn load(text: &str) -> UiState {
-    UiState::parse(text)
-        .expect("the text is valid")
-        .state
-        .normalized()
+    UiState::parse(text).expect("the text is valid").state
 }
 
 fn column(id: ColumnId, visible: bool, width: f32) -> ColumnState {
     ColumnState { id, visible, width }
+}
+
+/// `first`, followed by the default of every column that `first` does not hold: what `parse`
+/// makes of a file that lists only `first`.
+fn completed(first: &[ColumnState]) -> Vec<ColumnState> {
+    let mut columns = first.to_vec();
+    columns.extend(
+        default_columns()
+            .into_iter()
+            .filter(|default| first.iter().all(|given| given.id != default.id)),
+    );
+    columns
 }
 
 fn ids(columns: &[ColumnState]) -> Vec<ColumnId> {
@@ -226,7 +235,10 @@ fn ui_state_tolerates_unknown_keys() {
             direction: SortDirection::Descending
         }
     );
-    assert_eq!(parsed.state.columns, [column(ColumnId::Name, true, 300.0)]);
+    assert_eq!(
+        parsed.state.columns,
+        completed(&[column(ColumnId::Name, true, 300.0)])
+    );
 }
 
 #[test]
@@ -262,12 +274,13 @@ fn ui_state_unknown_enum_values_fall_back() {
     assert_eq!(state.filter, Filter::All);
     assert_eq!(state.theme, ThemeChoice::System);
     assert_eq!(state.sort, SortState::default());
+    // The unknown column is gone, the known ones are in the order of the file.
     assert_eq!(
         state.columns,
-        [
+        completed(&[
             column(ColumnId::Name, true, 300.0),
             column(ColumnId::Size, false, 95.0)
-        ]
+        ])
     );
 }
 
@@ -370,7 +383,10 @@ fn ui_state_a_column_without_visible_or_width_takes_the_defaults() {
         .state;
 
     // The second entry names no column, so it goes.
-    assert_eq!(state.columns, [column(ColumnId::Ratio, true, 70.0)]);
+    assert_eq!(
+        state.columns,
+        completed(&[column(ColumnId::Ratio, true, 70.0)])
+    );
 }
 
 #[test]
@@ -383,7 +399,10 @@ fn ui_state_reads_integer_sizes() {
 
     assert_eq!(state.window.width, 900.0);
     assert_eq!(state.window.height, 600.0);
-    assert_eq!(state.columns, [column(ColumnId::Name, true, 250.0)]);
+    assert_eq!(
+        state.columns,
+        completed(&[column(ColumnId::Name, true, 250.0)])
+    );
 }
 
 #[test]
@@ -466,15 +485,21 @@ fn ui_state_normalization_repairs_widths_that_are_not_numbers() {
 
 #[test]
 fn ui_state_normalizes_the_window_size() {
-    let too_small = [
+    let unusable = [
         (399.0, 700.0),
         (1100.0, 299.0),
         (10.0, 10.0),
         (-5.0, -5.0),
         (f32::NAN, 700.0),
+        (1100.0, f32::NAN),
+        (f32::INFINITY, 700.0),
         (1100.0, f32::INFINITY),
+        (f32::NEG_INFINITY, 700.0),
+        (16385.0, 700.0),
+        (1100.0, 16385.0),
+        (1.0e9, 1.0e9),
     ];
-    for (width, height) in too_small {
+    for (width, height) in unusable {
         let state = UiState {
             window: WindowState {
                 width,
@@ -495,15 +520,73 @@ fn ui_state_normalizes_the_window_size() {
         );
     }
 
-    let minimum = UiState {
-        window: WindowState {
-            width: 400.0,
-            height: 300.0,
-            maximized: false,
-        },
-        ..UiState::default()
-    };
-    assert_eq!(minimum.clone().normalized(), minimum);
+    // The limits themselves are fine.
+    for (width, height) in [(400.0, 300.0), (16384.0, 16384.0), (400.0, 16384.0)] {
+        let edge = UiState {
+            window: WindowState {
+                width,
+                height,
+                maximized: false,
+            },
+            ..UiState::default()
+        };
+        assert_eq!(edge.clone().normalized(), edge, "{width} x {height}");
+    }
+}
+
+#[test]
+fn ui_state_parse_returns_a_normalized_state() {
+    let text = r#"
+        [window]
+        width = nan
+        height = 700.0
+        maximized = true
+
+        [[columns]]
+        id = "peers"
+        visible = true
+        width = 5000.0
+
+        [[columns]]
+        id = "name"
+        visible = false
+        width = 360.0
+
+        [[columns]]
+        id = "peers"
+        visible = false
+        width = 100.0
+
+        [[columns]]
+        id = "eta"
+        width = inf
+    "#;
+
+    let parsed = UiState::parse(text).expect("a valid file");
+
+    assert!(!parsed.newer);
+    assert_eq!(
+        parsed.state.window,
+        WindowState {
+            maximized: true,
+            ..WindowState::default()
+        }
+    );
+    assert_eq!(
+        parsed.state.columns,
+        [
+            column(ColumnId::Peers, true, 1200.0),
+            column(ColumnId::Name, true, 360.0),
+            column(ColumnId::Eta, true, 80.0),
+            column(ColumnId::Size, true, 90.0),
+            column(ColumnId::Progress, true, 160.0),
+            column(ColumnId::State, true, 110.0),
+            column(ColumnId::Down, true, 90.0),
+            column(ColumnId::Up, true, 90.0),
+            column(ColumnId::Ratio, true, 70.0),
+        ]
+    );
+    assert_eq!(parsed.state.clone().normalized(), parsed.state);
 }
 
 #[test]
@@ -639,4 +722,87 @@ fn ui_state_keeps_the_order_of_the_columns_the_user_chose() {
     let text = reordered.to_toml().expect("the state can be written");
 
     assert_eq!(ids(&load(&text).columns), ids(&reordered.columns));
+}
+
+#[test]
+fn ui_state_a_sort_with_only_a_key_keeps_the_default_direction() {
+    let state = load("[sort]\nkey = \"ratio\"\n");
+
+    assert_eq!(
+        state.sort,
+        SortState {
+            key: SortKey::Ratio,
+            direction: SortDirection::Ascending
+        }
+    );
+}
+
+#[test]
+fn ui_state_a_sort_with_only_a_direction_keeps_the_default_key() {
+    let state = load("[sort]\ndirection = \"descending\"\n");
+
+    assert_eq!(
+        state.sort,
+        SortState {
+            key: SortKey::Name,
+            direction: SortDirection::Descending
+        }
+    );
+}
+
+#[test]
+fn ui_state_writes_numbers_that_are_not_finite_and_reads_them_back_repaired() {
+    let mut state = customized();
+    state.window.width = f32::NAN;
+    state.window.height = f32::INFINITY;
+    for (column, width) in
+        state
+            .columns
+            .iter_mut()
+            .zip([f32::NAN, f32::INFINITY, f32::NEG_INFINITY])
+    {
+        column.width = width;
+    }
+
+    let text = state.to_toml().expect("non-finite numbers can be written");
+    let parsed = UiState::parse(&text).expect("and read");
+
+    assert_eq!(parsed.state, state.normalized(), "{text}");
+}
+
+#[test]
+fn ui_state_parse_errors_never_show_the_values_of_the_file() {
+    let secret = "hunter2";
+    let texts = [
+        format!("[window]\nwidth = \"{secret}\"\n"),
+        format!("version = \"{secret}\"\n"),
+        format!("[[columns]]\nid = \"name\"\nwidth = \"{secret}\"\n"),
+        format!("[[columns]]\nid = \"{secret}\"\nvisible = \"{secret}\"\n"),
+        format!("[sort]\nkey = \"size\"\ndirection = [\"{secret}\"]\n"),
+        format!("filter = 5\nwindow = \"{secret}\"\n"),
+        format!("window = \"{secret}\"\n"),
+    ];
+
+    for text in texts {
+        let Err(error) = UiState::parse(&text) else {
+            panic!("{text}: a wrong type is an error");
+        };
+
+        for shown in [error.to_string(), format!("{error:?}")] {
+            assert!(!shown.contains(secret), "{text}: {shown}");
+            assert!(shown.contains("line "), "{text}: {shown}");
+        }
+    }
+}
+
+#[test]
+fn logged_values_from_the_file_are_cut_short() {
+    use super::wire::shortened;
+
+    assert_eq!(shortened("laser"), "laser");
+    assert_eq!(shortened(""), "");
+    let exactly: String = "a".repeat(32);
+    assert_eq!(shortened(&exactly), exactly);
+    let long = "é".repeat(100);
+    assert_eq!(shortened(&long), format!("{}…", "é".repeat(32)));
 }

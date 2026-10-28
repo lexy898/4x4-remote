@@ -10,6 +10,20 @@ use serde::{Deserialize, Deserializer, Serializer};
 use super::{ColumnState, default_width};
 use crate::view::ColumnId;
 
+/// The longest piece of a value from the file that is logged.
+const LOGGED_CHARS: usize = 32;
+
+/// `value` cut to [`LOGGED_CHARS`] characters (with an ellipsis if it was longer), so that a huge
+/// or odd entry in the file cannot flood the log.
+pub(super) fn shortened(value: &str) -> String {
+    let mut chars = value.chars();
+    let mut shortened: String = chars.by_ref().take(LOGGED_CHARS).collect();
+    if chars.next().is_some() {
+        shortened.push('…');
+    }
+    shortened
+}
+
 /// Reads an enum from its name, and takes the default for a name the enum does not have.
 ///
 /// A file from a newer version may name a filter, a sort key or a theme this one lacks. Losing
@@ -25,7 +39,7 @@ where
     let parsed: Result<T, ValueError> = T::deserialize(name.as_str().into_deserializer());
     Ok(parsed.unwrap_or_else(|_| {
         tracing::warn!(
-            value = %name,
+            value = %shortened(&name),
             setting = type_name::<T>(),
             "unknown value in the state file, using the default"
         );
@@ -49,7 +63,7 @@ impl RawColumn {
             return None;
         };
         let Some(id) = ColumnId::from_key(&key) else {
-            tracing::warn!(column = %key, "unknown column in the state file, dropped");
+            tracing::warn!(column = %shortened(&key), "unknown column in the state file, dropped");
             return None;
         };
         Some(ColumnState {

@@ -3,9 +3,9 @@
 //!
 //! This file is the app's own, so it is rewritten whenever something changes, and nobody is
 //! expected to edit it. It must still never keep the app from starting: unknown keys, unknown
-//! columns and values that a newer version wrote are ignored (see [`UiState::parse`]), and
-//! [`UiState::normalized`] repairs what is left. Only a value of the wrong type is an error, and
-//! the caller then moves the file aside and starts from the defaults.
+//! columns and values that a newer version wrote are ignored, and what is left is repaired (see
+//! [`UiState::parse`] and [`UiState::normalized`]). Only a value of the wrong type is an error,
+//! and the caller then moves the file aside and starts from the defaults.
 //!
 //! Reading and writing the file is the app's job; this module only turns its text into a
 //! [`UiState`] and back.
@@ -29,6 +29,9 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 700.0;
 /// Below this size the window cannot be used.
 const MIN_WINDOW_WIDTH: f32 = 400.0;
 const MIN_WINDOW_HEIGHT: f32 = 300.0;
+/// Above this size in either direction the window is not real: no screen is that large, and the
+/// graphics stack fails on textures beyond it.
+const MAX_WINDOW_SIZE: f32 = 16384.0;
 /// The range a column width is clamped to, so a column can neither vanish nor fill the screen.
 const MIN_COLUMN_WIDTH: f32 = 40.0;
 const MAX_COLUMN_WIDTH: f32 = 1200.0;
@@ -41,8 +44,9 @@ pub struct UiState {
     pub version: u32,
     /// The size of the main window.
     pub window: WindowState,
-    /// The table's columns, in the order shown. Call [`UiState::normalized`] after reading, so
-    /// that every column is in the list exactly once.
+    /// The table's columns, in the order shown. After [`UiState::parse`] every column is in the
+    /// list exactly once; edit the list only in ways that keep it so, or call
+    /// [`UiState::normalized`] again.
     #[serde(deserialize_with = "wire::columns")]
     pub columns: Vec<ColumnState>,
     /// How the list is sorted.
@@ -94,13 +98,11 @@ impl Default for WindowState {
 }
 
 impl WindowState {
-    /// The window as it is, or with the default size if it is too small to use or the size is
-    /// not a number. Whether it is maximized stays.
+    /// The window as it is, or with the default size if it is too small or too large to use or
+    /// the size is not a number. Whether it is maximized stays.
     fn normalized(self) -> Self {
-        let usable = self.width.is_finite()
-            && self.height.is_finite()
-            && self.width >= MIN_WINDOW_WIDTH
-            && self.height >= MIN_WINDOW_HEIGHT;
+        let usable = (MIN_WINDOW_WIDTH..=MAX_WINDOW_SIZE).contains(&self.width)
+            && (MIN_WINDOW_HEIGHT..=MAX_WINDOW_SIZE).contains(&self.height);
         if usable {
             self
         } else {
@@ -165,7 +167,7 @@ pub enum UiStateError {
 /// The result of [`UiState::parse`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedUiState {
-    /// What the file holds, or the defaults if it is [`newer`](Self::newer).
+    /// What the file holds, normalized, or the defaults if it is [`newer`](Self::newer).
     pub state: UiState,
     /// Whether the file was written by a newer version of the app. Then `state` is the defaults,
     /// and the caller must not save it, or the newer file would be overwritten.
@@ -212,8 +214,9 @@ impl UiState {
     ///
     /// The reading is tolerant: an empty text gives the defaults, a missing key takes its
     /// default, unknown keys and tables are ignored, a filter, sort key, direction or theme this
-    /// version does not know becomes the default, and a column it does not know is dropped. The
-    /// result is not repaired further; call [`UiState::normalized`] for that.
+    /// version does not know becomes the default, and a column it does not know is dropped. What
+    /// is left is then repaired by [`UiState::normalized`], so the state returned can be used as
+    /// it is.
     ///
     /// A file from a newer version (`version` above [`UI_STATE_VERSION`]) is not read at all: the
     /// result holds the defaults and has [`ParsedUiState::newer`] set, so that the caller can
@@ -242,7 +245,7 @@ impl UiState {
         // that says it is older is simply the current one.
         state.version = UI_STATE_VERSION;
         Ok(ParsedUiState {
-            state,
+            state: state.normalized(),
             newer: false,
         })
     }
@@ -257,14 +260,15 @@ impl UiState {
     }
 
     /// Repairs a state read from a file, so that the rest of the app can rely on it.
+    /// [`UiState::parse`] does this already; it is public for states changed afterwards.
     ///
     /// - Every column is in the list exactly once: a repeat is dropped (the first one counts) and
     ///   a column that is missing is added at the end, shown, with its default width.
     /// - The name column is always shown.
     /// - A width is clamped to 40 to 1200 pixels; one that is not a number takes the default of
     ///   its column.
-    /// - A window smaller than 400 by 300 pixels, or with a size that is not a number, takes the
-    ///   default size.
+    /// - A window smaller than 400 by 300 pixels, larger than 16384 pixels in either direction,
+    ///   or with a size that is not a number, takes the default size.
     #[must_use]
     pub fn normalized(mut self) -> Self {
         self.window = self.window.normalized();

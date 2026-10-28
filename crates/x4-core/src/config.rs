@@ -36,15 +36,58 @@ impl Default for ConnectionConfig {
 }
 
 /// Why `config.toml` cannot be used.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+///
+/// Neither the display nor the debug output of an error shows the URL, as it may hold a password.
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
     /// The file is not valid TOML, or a key has the wrong type. Holds the position and the
     /// message of the parser.
     #[error("cannot parse config.toml: {0}")]
     Parse(String),
-    /// `connection.url` does not start with `http://`. Holds the URL as written.
-    #[error("connection.url must start with http://, got {0:?}")]
+    /// `connection.url` does not start with `http://`. Holds the URL as written, for callers
+    /// that need to look at it; it must not be logged.
+    #[error("connection.url {}", url_problem(.0))]
     InvalidUrl(String),
+}
+
+impl std::fmt::Debug for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse(message) => f.debug_tuple("Parse").field(message).finish(),
+            // The URL may hold a password, and `{error:?}` is what gets logged by habit.
+            Self::InvalidUrl(_) => f.write_str("InvalidUrl(..)"),
+        }
+    }
+}
+
+/// What is wrong with `url`, without repeating any of it but the scheme.
+fn url_problem(url: &str) -> String {
+    match scheme(url) {
+        Some(scheme) if scheme.eq_ignore_ascii_case("https") => {
+            "must start with http://; https is not supported yet, only plain http".to_owned()
+        }
+        Some(scheme) => format!("must start with http://, but it uses the scheme {scheme:?}"),
+        None => "must start with http://, but it has no scheme".to_owned(),
+    }
+}
+
+/// The scheme of `url`, if it starts with one: letters, digits, `+`, `-` and `.`, beginning
+/// with a letter, then `://`. Anything else before the `://` (a `user:password@host`, say) is not
+/// a scheme.
+fn scheme(url: &str) -> Option<&str> {
+    let (scheme, _) = url.split_once("://")?;
+    let mut chars = scheme.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    valid.then_some(scheme)
+}
+
+/// Whether `url` starts with `http://`. The scheme is case-insensitive (RFC 3986).
+fn is_http(url: &str) -> bool {
+    url.get(.."http://".len())
+        .is_some_and(|start| start.eq_ignore_ascii_case("http://"))
 }
 
 impl Config {
@@ -54,12 +97,13 @@ impl Config {
     /// # Errors
     ///
     /// [`ConfigError::Parse`] if `text` is not valid TOML or a key has the wrong type, and
-    /// [`ConfigError::InvalidUrl`] if `connection.url` does not start with `http://`.
+    /// [`ConfigError::InvalidUrl`] if `connection.url` does not start with `http://` (in any
+    /// case).
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let config: Config =
             toml::from_str(text).map_err(|error| ConfigError::Parse(describe(&error, text)))?;
         // TLS is not built in yet, so `https://` would only fail later with a worse message.
-        if !config.connection.url.starts_with("http://") {
+        if !is_http(&config.connection.url) {
             return Err(ConfigError::InvalidUrl(config.connection.url));
         }
         Ok(config)
@@ -145,17 +189,117 @@ mod tests {
     }
 
     #[test]
+    fn config_accepts_the_http_scheme_in_any_case() {
+        for url in [
+            "http://x/rpc",
+            "HTTP://x/rpc",
+            "Http://x/rpc",
+            "hTTp://x/rpc",
+        ] {
+            let text = format!("[connection]\nurl = {url:?}\n");
+
+            let config = Config::parse(&text).expect("the scheme is case-insensitive");
+
+            // The URL is kept as written.
+            assert_eq!(config.connection.url, url);
+        }
+    }
+
+    #[test]
+    fn config_rejects_urls_that_only_look_like_http() {
+        for url in [
+            "httpx://x",
+            "xhttp://x",
+            "http:/x",
+            "http//x",
+            "http:",
+            "htt",
+            " http://x",
+        ] {
+            let text = format!("[connection]\nurl = {url:?}\n");
+
+            assert_eq!(
+                Config::parse(&text),
+                Err(ConfigError::InvalidUrl(url.to_owned())),
+                "{url:?}"
+            );
+        }
+    }
+
+    #[test]
     fn config_errors_say_what_is_wrong() {
-        let invalid = ConfigError::InvalidUrl("ftp://x".to_owned());
+        let message = |url: &str| ConfigError::InvalidUrl(url.to_owned()).to_string();
 
         assert_eq!(
-            invalid.to_string(),
-            "connection.url must start with http://, got \"ftp://x\""
+            message("ftp://x"),
+            "connection.url must start with http://, but it uses the scheme \"ftp\""
         );
+        assert_eq!(
+            message("https://pi.local/rpc"),
+            "connection.url must start with http://; https is not supported yet, only plain http"
+        );
+        assert_eq!(
+            message("HTTPS://pi.local/rpc"),
+            message("https://pi.local/rpc")
+        );
+        for url in ["192.168.1.5:9091", "", "pi.local/rpc", "http:/x"] {
+            assert_eq!(
+                message(url),
+                "connection.url must start with http://, but it has no scheme",
+                "{url:?}"
+            );
+        }
         assert!(
             ConfigError::Parse("line 1, column 2: boom".to_owned())
                 .to_string()
                 .contains("line 1, column 2: boom")
         );
+    }
+
+    #[test]
+    fn config_errors_never_show_the_url() {
+        let secret = "hunter2";
+        for url in [
+            format!("https://user:{secret}@pi/rpc"),
+            format!("ftp://user:{secret}@pi/rpc"),
+            format!("user:{secret}@pi/rpc"),
+            format!("user:{secret}://pi/rpc"),
+            secret.to_owned(),
+        ] {
+            let text = format!("[connection]\nurl = {url:?}\n");
+
+            let error = Config::parse(&text).expect_err("the scheme is not http");
+
+            assert_eq!(
+                error,
+                ConfigError::InvalidUrl(url.clone()),
+                "the caller can still read it"
+            );
+            for shown in [
+                error.to_string(),
+                format!("{error:?}"),
+                format!("{error:#?}"),
+            ] {
+                assert!(!shown.contains(secret), "{url}: {shown}");
+                assert!(!shown.contains("user"), "{url}: {shown}");
+            }
+        }
+    }
+
+    #[test]
+    fn config_parse_errors_never_show_the_value() {
+        let secret = "hunter2";
+        for text in [
+            format!("connection = \"https://user:{secret}@pi/rpc\"\n"),
+            format!("[connection]\nurl = 5\nother = \"{secret}\"\n"),
+            format!("connection = {{ url = [\"{secret}\"] }}\n"),
+        ] {
+            let Err(ConfigError::Parse(message)) = Config::parse(&text) else {
+                panic!("{text}: a wrong type is a parse error");
+            };
+
+            assert!(!message.contains(secret), "{message}");
+            assert!(!message.contains("user"), "{message}");
+        }
     }
 }

@@ -20,8 +20,8 @@
 //! builds the status bar, and [`visibility`] tells whether the user can see the window.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
-//! the app writes (window, columns, sort order, filter, theme), read tolerantly by
-//! [`UiState::parse`] and repaired by [`UiState::normalized`], and [`Config`] is the owner's
+//! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
+//! [`UiState::parse`] (see also [`UiState::normalized`]), and [`Config`] is the owner's
 //! `config.toml`, which the app only reads. Both turn text into values and back; reading and
 //! writing the files is left to the app.
 //!

@@ -2,14 +2,44 @@
 
 /// Describes `error`, found while parsing `text`, as "line L, column C: message".
 ///
-/// The error's own display repeats the offending line of the file, and the files may hold things
-/// the user does not want in a log. The message and the position say enough to fix the file.
-/// Without a position (the error is about the document as a whole) it is the message alone.
+/// The error's own display repeats the offending line of the file, and serde's "invalid type"
+/// messages quote the value they found. Files may hold things that must not end up in a log (a
+/// URL with a password), so neither is passed on: the position, the kind of value found and what
+/// was expected say enough to fix the file. Without a position (the error is about the document
+/// as a whole) it is the message alone.
 pub(crate) fn describe(error: &toml::de::Error, text: &str) -> String {
+    let message = without_value(error.message());
     match error.span().and_then(|span| position(text, span.start)) {
-        Some((line, column)) => format!("line {line}, column {column}: {}", error.message()),
-        None => error.message().to_owned(),
+        Some((line, column)) => format!("line {line}, column {column}: {message}"),
+        None => message,
     }
+}
+
+/// `message` without the value that serde quotes in `invalid type: string "x", expected y` and
+/// `invalid value: integer `5`, expected y`: it becomes `invalid type: string, expected y`.
+/// Any other message is returned as it is.
+fn without_value(message: &str) -> String {
+    for prefix in ["invalid type: ", "invalid value: "] {
+        let Some(found) = message.strip_prefix(prefix) else {
+            continue;
+        };
+        // The quoted value starts at the first quote. What was expected follows the last comma
+        // of that kind, as the value itself may hold text like it.
+        let Some(quote) = found.find(['"', '`', '\'']) else {
+            return message.to_owned();
+        };
+        let kind = found.get(..quote).unwrap_or_default().trim_end();
+        return match found.rfind(", expected ") {
+            Some(expected) if expected >= quote => {
+                format!(
+                    "{prefix}{kind}{}",
+                    found.get(expected..).unwrap_or_default()
+                )
+            }
+            _ => format!("{prefix}{kind}"),
+        };
+    }
+    message.to_owned()
 }
 
 /// The 1-based line and column (in characters) of the byte `offset` in `text`.
@@ -57,6 +87,52 @@ mod tests {
 
         assert!(!described.contains('\n'), "{described}");
         assert!(!described.contains("number ="), "{described}");
+    }
+
+    #[test]
+    fn does_not_repeat_the_value_that_has_the_wrong_type() {
+        for text in [
+            "number = \"hunter2\"\n",
+            "number = \"a, expected b\"\n",
+            "number = 1.5\n",
+            "number = true\n",
+            "number = -4\n",
+            "number = 5000000000\n",
+        ] {
+            let described = describe_probe(text);
+
+            assert!(described.contains(", expected "), "{described}");
+            for secret in [
+                "hunter2",
+                "a, expected b",
+                "1.5",
+                "true",
+                "-4",
+                "5000000000",
+            ] {
+                if text.contains(secret) {
+                    assert!(!described.contains(secret), "{described}");
+                }
+            }
+        }
+        assert!(
+            describe_probe("number = \"hunter2\"\n")
+                .ends_with("invalid type: string, expected u32")
+        );
+        assert!(describe_probe("number = -4\n").ends_with("invalid value: integer, expected u32"));
+    }
+
+    #[test]
+    fn leaves_other_messages_alone() {
+        assert_eq!(without_value("missing field `a`"), "missing field `a`");
+        assert_eq!(
+            without_value("invalid type: map, expected u32"),
+            "invalid type: map, expected u32"
+        );
+        assert_eq!(
+            without_value("invalid type: string \"x\""),
+            "invalid type: string"
+        );
     }
 
     #[test]
