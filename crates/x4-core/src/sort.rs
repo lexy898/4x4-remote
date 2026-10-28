@@ -470,17 +470,28 @@ mod tests {
 
     #[test]
     fn sort_is_stable_for_torrents_equal_in_every_respect() {
-        let same = |id| Torrent {
-            id: x4_rpc::TorrentId(id),
-            ..torrent("same")
-        };
-        let torrents = [same(2), same(1), same(3)];
+        // 64 torrents in four groups that differ only in `peers_connected`, interleaved. Within a
+        // group they are equal in key, name and hash and differ in `id` alone, so only stability
+        // keeps them in input order. There are more than 20 of them because `sort_unstable_by`
+        // uses insertion sort (which happens to be stable) on short slices, and the groups are
+        // interleaved because an unstable sort leaves a slice that is all equal untouched.
+        let torrents: Vec<Torrent> = (0..64)
+            .map(|id| Torrent {
+                id: x4_rpc::TorrentId(id),
+                peers_connected: u32::try_from(id % 4).unwrap(),
+                ..torrent("same")
+            })
+            .collect();
         let mut refs: Vec<&Torrent> = torrents.iter().collect();
 
         sort(&mut refs, SortKey::Peers, Descending);
 
         let ids: Vec<u64> = refs.iter().map(|t| t.id.0).collect();
-        assert_eq!(ids, [2, 1, 3]);
+        let expected: Vec<u64> = (0..4)
+            .rev()
+            .flat_map(|group| (0..64).filter(move |id| id % 4 == group))
+            .collect();
+        assert_eq!(ids, expected);
     }
 
     #[test]

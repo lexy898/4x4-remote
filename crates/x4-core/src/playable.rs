@@ -9,6 +9,9 @@ use x4_rpc::{FileRecord, Pieces};
 /// and goes on while pieces are present, so the result is the length of the prefix a player can
 /// read. It is 0 when the first piece is missing, when `file_length` or `piece_size` is 0 (a
 /// magnet link without metadata has no piece size yet) and never more than `file_length`.
+///
+/// The arithmetic saturates instead of wrapping, so for values near `u64::MAX`, which no real
+/// torrent has, the result is a lower bound: never more than is really playable, possibly less.
 #[must_use]
 pub fn playable_prefix(
     pieces: &Pieces,
@@ -164,6 +167,9 @@ mod tests {
         // The end of the file and the end of a piece both exceed `u64`.
         assert_eq!(playable_prefix(&all, u64::MAX, 0, u64::MAX), u64::MAX);
         assert_eq!(playable_prefix(&all, 1 << 63, 0, u64::MAX), u64::MAX);
+        // Under saturation the result is a lower bound: never more than is really playable. The
+        // exact answer for the next case is 5, but the end of the file is clamped to `u64::MAX`,
+        // which leaves no piece to count, so it reports 0.
         assert_eq!(playable_prefix(&all, u64::MAX, u64::MAX, 5), 0);
         assert_eq!(playable_prefix(&all, 1, u64::MAX, u64::MAX), 0);
         assert_eq!(playable_prefix(&all, 1, 0, u64::MAX), 128);
