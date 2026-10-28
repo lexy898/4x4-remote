@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Weekly run on the newest stable toolchain to catch breakage early.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # Push and pull requests use the MSRV; the weekly run uses the newest stable.
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ github.event_name == 'schedule' && 'stable' || '1.99' }}
+          components: rustfmt, clippy
+
+      # Build libraries of the GUI toolkit. The app is built and its headless
+      # tests run, but the window is never opened in CI. jq (used by
+      # `just test-hooks`) is preinstalled on the runner image.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libfontconfig-dev libfreetype-dev libx11-xcb-dev libxcb1-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest,cargo-deny,cargo-machete,taplo,typos
+
+      - name: Run the full gate
+        run: just check
