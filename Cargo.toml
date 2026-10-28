@@ -44,6 +44,14 @@ unreachable = "warn"
 unused_result_ok = "warn"
 unwrap_used = "warn"
 
+# Line tables only (enough for backtraces) for our crates and no debug info for dependencies
+# keep links fast (the agent Stop hook builds often) and the CI cache small.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
