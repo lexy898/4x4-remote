@@ -4,8 +4,9 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 
 ## Status
 
-Early development — stage 0 (project foundation). The app opens a window titled "4x4"; nothing
-is usable yet.
+Early development — stage 1 (protocol and core). The libraries can talk to a Transmission daemon
+and keep track of its torrents, but the app still opens an empty window titled "4x4"; nothing is
+usable yet.
 
 ## What it will do
 
@@ -82,6 +83,19 @@ here and `eglinfo` at about 156 MiB, so a Vulkan-only renderer might bring the R
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and
 the rules every change must follow.
+
+### Architecture
+
+The workspace has three crates. `x4-rpc` speaks Transmission's JSON-RPC 2.0 protocol over HTTP.
+`x4-core` holds the app's model and logic, with no UI code. `x4-app` is the `4x4` binary with the
+window.
+
+All network traffic runs on one worker thread, `x4-service`, which `x4-core` starts. It polls the
+daemon on a schedule (faster while the window is visible), reconnects with a growing pause when the
+daemon stops answering, and carries out the actions the user asks for, one request at a time. The
+window (connected to it in the next stage) talks to it through two channels: commands go in, and
+snapshots of the state and the results of actions come out. Sending a command never blocks, and the
+window awaits the events without blocking its thread, so it never waits on the network.
 
 ### Live tests
 

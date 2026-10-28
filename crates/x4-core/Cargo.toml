@@ -8,6 +8,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-channel.workspace = true
+crossbeam-channel.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 x4-rpc.workspace = true

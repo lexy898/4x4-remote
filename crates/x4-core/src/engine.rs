@@ -640,7 +640,7 @@ impl Request {
     }
 
     /// A short name for logs; it carries no torrent names, hashes or paths.
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::CheckServer => "check server",
             Self::SessionGet => "session get",

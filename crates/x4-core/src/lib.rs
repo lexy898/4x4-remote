@@ -25,8 +25,12 @@
 //! names the [`Request`]s that are due, takes each [`Response`] and each [`Command`] of the UI,
 //! and hands out a new [`Snapshot`] only when something changed. It carries out [`Action`]s
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
-//! the [`TorrentDetails`] of the selected torrent every tick. A worker thread sends the requests
-//! and forwards the [`Event`]s.
+//! the [`TorrentDetails`] of the selected torrent every tick.
+//!
+//! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
+//! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
+//! [`Command`]s, which never blocks, and awaits the [`Event`]s on its own executor, so it never
+//! waits on the network.
 
 mod action;
 mod details;
@@ -35,6 +39,7 @@ mod filter;
 mod format;
 mod model;
 mod playable;
+pub mod service;
 mod snapshot;
 mod sort;
 mod state;
