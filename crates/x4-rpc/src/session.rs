@@ -5,7 +5,10 @@
 //! The `*_kbps` fields hold kilobytes per second as the server reports them (`speed_limit_down`,
 //! …); turning them into the app's units is `x4-core`'s job.
 
-use serde::Deserialize;
+use std::fmt;
+
+use serde::de::{Unexpected, Visitor};
+use serde::{Deserialize, Deserializer};
 
 /// The `session_get` fields the app reads, in the order it requests them.
 pub const SESSION_FIELDS: &[&str] = &[
@@ -41,23 +44,61 @@ pub struct SessionInfo {
     /// `alt_speed_enabled`: whether the alternative speed limits apply.
     pub alt_speed_enabled: bool,
     /// `alt_speed_down`: the alternative download limit in kB/s.
-    #[serde(rename = "alt_speed_down")]
+    #[serde(rename = "alt_speed_down", deserialize_with = "kbps")]
     pub alt_speed_down_kbps: u32,
     /// `alt_speed_up`: the alternative upload limit in kB/s.
-    #[serde(rename = "alt_speed_up")]
+    #[serde(rename = "alt_speed_up", deserialize_with = "kbps")]
     pub alt_speed_up_kbps: u32,
     /// `speed_limit_down`: the download limit in kB/s, which applies only when enabled.
-    #[serde(rename = "speed_limit_down")]
+    #[serde(rename = "speed_limit_down", deserialize_with = "kbps")]
     pub speed_limit_down_kbps: u32,
     /// `speed_limit_down_enabled`: whether the download limit applies.
     pub speed_limit_down_enabled: bool,
     /// `speed_limit_up`: the upload limit in kB/s, which applies only when enabled.
-    #[serde(rename = "speed_limit_up")]
+    #[serde(rename = "speed_limit_up", deserialize_with = "kbps")]
     pub speed_limit_up_kbps: u32,
     /// `speed_limit_up_enabled`: whether the upload limit applies.
     pub speed_limit_up_enabled: bool,
     /// `sequential_download`: whether added torrents download sequentially by default.
     pub sequential_download: bool,
+}
+
+/// Reads a speed in kB/s. Transmission 4.1.0 (RPC 6.0.0, which is supported) sent the limits as
+/// floats and 4.1.1 went back to integers, so both are accepted; fractions are truncated.
+fn kbps<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    struct KbpsVisitor;
+
+    impl Visitor<'_> for KbpsVisitor {
+        type Value = u32;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a speed in kB/s: a number from 0 to 4294967295")
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<u32, E> {
+            u32::try_from(value).map_err(|_| E::invalid_value(Unexpected::Unsigned(value), &self))
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<u32, E> {
+            u32::try_from(value).map_err(|_| E::invalid_value(Unexpected::Signed(value), &self))
+        }
+
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the range check above the cast keeps the value within 0..=u32::MAX"
+        )]
+        fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<u32, E> {
+            // Both bounds also reject NaN; JSON has no infinities.
+            if value >= 0.0 && value < f64::from(u32::MAX) + 1.0 {
+                Ok(value as u32)
+            } else {
+                Err(E::invalid_value(Unexpected::Float(value), &self))
+            }
+        }
+    }
+
+    deserializer.deserialize_any(KbpsVisitor)
 }
 
 /// Session settings to change (`session_set`); `None` leaves a setting as it is.

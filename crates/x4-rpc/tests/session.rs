@@ -114,6 +114,72 @@ fn session_get_reads_each_field_from_its_wire_key() {
     );
 }
 
+/// A `session_get` result that differs from the recorded one in the four speed-limit fields.
+fn session_result_with_speeds(down: &Value, up: &Value) -> Value {
+    json!({
+        "version": "4.1.0 (abc)",
+        "rpc_version_semver": "6.0.0",
+        "download_dir": "/downloads",
+        "alt_speed_enabled": false,
+        "alt_speed_down": down,
+        "alt_speed_up": up,
+        "speed_limit_down": down,
+        "speed_limit_down_enabled": false,
+        "speed_limit_up": up,
+        "speed_limit_up_enabled": false,
+        "sequential_download": false,
+    })
+}
+
+#[test]
+fn session_get_accepts_integer_and_float_speed_limits() {
+    // Transmission 4.1.0 (RPC 6.0.0) sent the limits as floats; 4.1.1 went back to integers.
+    for (down, up, expected) in [
+        (json!(100), json!(50), (100, 50)),
+        (json!(100.0), json!(50.0), (100, 50)),
+        (json!(100.9), json!(0.5), (100, 0)),
+        (json!(0.0), json!(4_294_967_295.0), (0, u32::MAX)),
+    ] {
+        let (mut client, _) = client_answering(session_result_with_speeds(&down, &up));
+
+        let session = client.session_get().unwrap();
+
+        let read = [
+            session.alt_speed_down_kbps,
+            session.speed_limit_down_kbps,
+            session.alt_speed_up_kbps,
+            session.speed_limit_up_kbps,
+        ];
+        assert_eq!(
+            read,
+            [expected.0, expected.0, expected.1, expected.1],
+            "{down} {up}"
+        );
+    }
+}
+
+#[test]
+fn session_get_rejects_speed_limits_that_do_not_fit() {
+    for bad in [
+        json!(-1),
+        json!(-1.5),
+        json!(4_294_967_296_u64),
+        json!(4_294_967_296.0),
+        json!(1e300),
+        json!("100"),
+        json!(null),
+    ] {
+        let (mut client, _) = client_answering(session_result_with_speeds(&bad, &json!(1)));
+
+        let error = client.session_get().unwrap_err();
+
+        assert!(
+            matches!(error, RpcError::InvalidResponse(_)),
+            "{bad}: {error:?}"
+        );
+    }
+}
+
 #[test]
 fn session_get_with_a_missing_field_is_an_invalid_response() {
     let (mut client, _) = client_answering(json!({ "version": "4.1.3 (abc)" }));
@@ -355,6 +421,25 @@ fn check_server_rejects_garbage() {
             "{garbage:?}"
         );
     }
+}
+
+#[test]
+fn check_server_rejects_legacy_protocol_reply() {
+    // What Transmission 4.0 and older answer to `session_get`: HTTP 200, no `jsonrpc`, and a
+    // string `result`.
+    let transport = FakeTransport::scripted(vec![Ok(HttpResponse {
+        status: 200,
+        session_id: None,
+        body: br#"{"arguments":{},"result":"method name not recognized"}"#.to_vec(),
+    })]);
+    let mut client = Client::new(transport);
+
+    assert_eq!(
+        client.check_server(),
+        Err(RpcError::UnsupportedServer {
+            rpc_version: "legacy protocol (Transmission 4.0 or older)".to_owned()
+        })
+    );
 }
 
 #[test]

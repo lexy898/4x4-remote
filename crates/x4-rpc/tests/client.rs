@@ -251,14 +251,37 @@ fn rejects_malformed_responses() {
         body: b"<html>not json</html>".to_vec(),
     };
     let neither = json_response(&json!({ "jsonrpc": "2.0", "id": 2 }));
-    let legacy = json_response(&json!({ "result": "success", "arguments": {}, "id": 3 }));
-    let mut client = scripted_client(vec![Ok(not_json), Ok(neither), Ok(legacy)]);
+    // Not the legacy shape: without `jsonrpc`, only a string `result` marks a legacy daemon.
+    let object_result_without_jsonrpc = json_response(&json!({ "result": {}, "id": 3 }));
+    let mut client = scripted_client(vec![
+        Ok(not_json),
+        Ok(neither),
+        Ok(object_result_without_jsonrpc),
+    ]);
 
     for _ in 0..3 {
         let result = client.call_raw("session_stats", None);
         assert!(
             matches!(result, Err(RpcError::InvalidResponse(_))),
             "got {result:?}"
+        );
+    }
+}
+
+#[test]
+fn legacy_protocol_reply_is_an_unsupported_server() {
+    // What Transmission 4.0 and older answer to a JSON-RPC 2.0 method name.
+    let unknown_method =
+        json_response(&json!({ "arguments": {}, "result": "method name not recognized" }));
+    let with_tag = json_response(&json!({ "arguments": {}, "result": "success", "tag": 7 }));
+    let mut client = scripted_client(vec![Ok(unknown_method), Ok(with_tag)]);
+
+    for _ in 0..2 {
+        assert_eq!(
+            client.call_raw("session_stats", None),
+            Err(RpcError::UnsupportedServer {
+                rpc_version: "legacy protocol (Transmission 4.0 or older)".to_owned()
+            })
         );
     }
 }

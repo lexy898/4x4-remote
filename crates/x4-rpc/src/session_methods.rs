@@ -77,7 +77,8 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// Any [`RpcError`] of the call; [`RpcError::UnsupportedServer`] when the server's
-    /// `rpc_version_semver` has a major below 6 (before Transmission 4.1) or is not a version.
+    /// `rpc_version_semver` has a major below 6 (before Transmission 4.1) or is not a version,
+    /// or when the server answers in the legacy protocol of Transmission 4.0 and older.
     pub fn check_server(&mut self) -> Result<ServerVersion, RpcError> {
         let result: VersionResult = self.call(
             "session_get",

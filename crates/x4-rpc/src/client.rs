@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::RpcError;
+use crate::error::{LEGACY_PROTOCOL, RpcError};
 use crate::transport::{HttpRequest, HttpResponse, Transport};
 
 /// The HTTP timeout per request.
@@ -52,7 +52,8 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// Any [`RpcError`]: transport failure, HTTP status, a failed session-id handshake, an invalid
-    /// response or a JSON-RPC error from the server.
+    /// response, a JSON-RPC error from the server, or [`RpcError::UnsupportedServer`] when the
+    /// server answers in the legacy protocol of Transmission 4.0 and older.
     #[cfg(feature = "test-support")]
     #[expect(
         clippy::needless_pass_by_value,
@@ -144,6 +145,14 @@ fn decode_response<R: DeserializeOwned>(method: &str, id: u64, body: &[u8]) -> R
     let Value::Object(mut envelope) = value else {
         return Err(invalid(method, "not a JSON object"));
     };
+    // Transmission 4.0 and older do not know JSON-RPC: they answer 200 with
+    // `{"arguments":{},"result":"method name not recognized"}`. A string `result` and no
+    // `jsonrpc` key is that shape and nothing else, unlike HTML or other garbage.
+    if !envelope.contains_key("jsonrpc") && envelope.get("result").is_some_and(Value::is_string) {
+        return Err(RpcError::UnsupportedServer {
+            rpc_version: LEGACY_PROTOCOL.to_owned(),
+        });
+    }
     if envelope.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return Err(invalid(method, "not a JSON-RPC 2.0 response"));
     }
