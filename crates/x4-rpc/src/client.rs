@@ -43,14 +43,17 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    /// Calls `method` with untyped `params` (omitted when `None`) and returns the untyped `result`.
+    /// Calls `method` with untyped `params` (omitted when `None`) and returns the untyped `result`
+    /// (feature `test-support`).
     ///
-    /// For tools such as the fixture recorder; the app uses the typed methods.
+    /// An untyped escape hatch for tooling such as the fixture recorder; app code must use the
+    /// typed methods, which guarantee non-empty ids and never send empty file lists.
     ///
     /// # Errors
     ///
     /// Any [`RpcError`]: transport failure, HTTP status, a failed session-id handshake, an invalid
     /// response or a JSON-RPC error from the server.
+    #[cfg(feature = "test-support")]
     #[expect(
         clippy::needless_pass_by_value,
         reason = "owned params let callers pass `Some(json!(...))` directly"

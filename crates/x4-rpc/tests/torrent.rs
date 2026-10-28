@@ -414,6 +414,38 @@ fn unknown_status_is_preserved() {
 }
 
 #[test]
+fn malformed_hash_does_not_fail_the_list() {
+    let (mut client, _) = client_answering(json!({
+        "torrents": [
+            { "id": 1, "hash_string": "xyz" },
+            { "id": 2, "hash_string": HASH },
+        ]
+    }));
+
+    let response = client
+        .torrent_get(&GetIds::All, &[TorrentField::Id, TorrentField::HashString])
+        .unwrap();
+
+    assert_eq!(response.torrents.len(), 2);
+    assert_eq!(response.torrents[0].hash_string.as_deref(), Some("xyz"));
+    assert_eq!(response.torrents[1].hash_string.as_deref(), Some(HASH));
+}
+
+#[test]
+fn malformed_hash_in_an_add_response_is_invalid() {
+    let (mut client, _) = client_answering(json!({
+        "torrent_added": { "id": 9, "name": "x", "hash_string": "xyz" }
+    }));
+
+    let outcome = client.torrent_add(&magnet_add());
+
+    assert!(
+        matches!(outcome, Err(x4_rpc::RpcError::InvalidResponse(_))),
+        "{outcome:?}"
+    );
+}
+
+#[test]
 fn pieces_bit_order_is_msb_first() {
     let pieces = Pieces::decode_base64("gA==").unwrap();
 

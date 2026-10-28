@@ -10,7 +10,8 @@
 //! requests and return records with the server's raw values. They never send an empty
 //! file-index list, which Transmission reads as "all files".
 //!
-//! The `test-support` feature adds the `testing` module with a fake transport.
+//! The `test-support` feature adds the `testing` module with a fake transport, and
+//! `Client::call_raw`, an untyped call for tooling such as the fixture recorder.
 
 mod client;
 mod error;

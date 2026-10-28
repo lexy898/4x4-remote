@@ -313,8 +313,11 @@ pub struct FileStatRecord {
 pub struct TorrentRecord {
     /// `id`: valid only until the daemon restarts.
     pub id: Option<TorrentId>,
-    /// `hash_string`: the stable identity.
-    pub hash_string: Option<HashString>,
+    /// `hash_string`: the stable identity, as the server sent it.
+    ///
+    /// Left unvalidated so that one malformed hash cannot fail a whole `torrent_get`; check it
+    /// with [`HashString::parse`] before use.
+    pub hash_string: Option<String>,
     /// `name`
     pub name: Option<String>,
     /// `status`

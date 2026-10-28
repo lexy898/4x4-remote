@@ -26,7 +26,7 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// Any [`RpcError`] of the call; [`RpcError::InvalidResponse`] when the result does not
-    /// decode, for example a torrent with an invalid `hash_string`.
+    /// decode, for example a field of the wrong type.
     pub fn torrent_get(
         &mut self,
         ids: &GetIds,
