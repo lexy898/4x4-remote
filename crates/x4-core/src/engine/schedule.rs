@@ -3,7 +3,6 @@
 use std::time::{Duration, Instant};
 
 use super::{Engine, Request, Visibility};
-use crate::snapshot::ConnectionState;
 
 /// The wait between retries when the configured backoff list is empty.
 const EMPTY_BACKOFF: Duration = Duration::from_secs(30);
@@ -33,6 +32,11 @@ impl Timer {
         self.due_at(now, interval).is_some_and(|at| at <= now)
     }
 
+    /// Whether the poll comes due before `before`.
+    pub(super) fn is_due_before(&self, now: Instant, interval: Duration, before: Instant) -> bool {
+        self.due_at(now, interval).is_some_and(|at| at < before)
+    }
+
     /// The poll was handed out at `now`; the next one is an interval later.
     pub(super) fn sent(&mut self, now: Instant) {
         self.last_sent = Some(now);
@@ -42,6 +46,15 @@ impl Timer {
     /// Makes the poll due now, without waiting for its interval.
     pub(super) fn force(&mut self) {
         self.forced = true;
+    }
+
+    /// The answer to the poll came at `at`: the next one is due an interval after the answer
+    /// if that is later than an interval after the send, so a slow daemon rests a full interval.
+    /// A forced poll stays forced.
+    pub(super) fn answered(&mut self, at: Instant) {
+        if let Some(last_sent) = self.last_sent {
+            self.last_sent = Some(last_sent.max(at));
+        }
     }
 }
 
@@ -65,14 +78,9 @@ impl Engine {
         }
     }
 
-    /// The attempt the next failed server check would be.
+    /// The attempt the next failure to use the daemon would be.
     pub(super) fn next_attempt(&self) -> u32 {
-        match &self.connection {
-            ConnectionState::Reconnecting { attempt, .. } => attempt.saturating_add(1),
-            ConnectionState::Connecting
-            | ConnectionState::Connected
-            | ConnectionState::Unsupported { .. } => 1,
-        }
+        self.attempts.saturating_add(1)
     }
 
     /// The wait before checking the server again after `attempt` failed tries in a row.
@@ -86,14 +94,22 @@ impl Engine {
             due.push(Request::SessionGet);
             self.session_timer.sent(now);
         }
-        let full_list = self
-            .full_list_timer
-            .is_due(now, self.config.full_refresh_interval);
+        let tick_interval = self.tick_interval();
+        let tick = self.tick_timer.is_due(now, tick_interval);
+        // A full list that would come due before the next tick goes with this one, in place of
+        // its recently active torrents: wakeups are a little late, so the two seldom fall due at
+        // the same instant.
+        let full_interval = self.config.full_refresh_interval;
+        let full_list = self.full_list_timer.is_due(now, full_interval)
+            || (tick
+                && now.checked_add(tick_interval).is_some_and(|next_tick| {
+                    self.full_list_timer
+                        .is_due_before(now, full_interval, next_tick)
+                }));
         if full_list {
             due.push(Request::FullList);
             self.full_list_timer.sent(now);
         }
-        let tick = self.tick_timer.is_due(now, self.tick_interval());
         if tick {
             // A full list holds the recently active torrents too.
             if !full_list {
@@ -116,6 +132,21 @@ impl Engine {
             due.push(Request::Details(hash.clone()));
             self.details_now = false;
         }
+    }
+
+    /// Measures the next turn of `poll` from its answer, which came at `now`. Details ride on
+    /// the tick, so their answer counts for the tick.
+    pub(super) fn answered_at(&mut self, poll: &Request, now: Instant) {
+        let timer = match poll {
+            Request::SessionGet => &mut self.session_timer,
+            Request::FullList => &mut self.full_list_timer,
+            Request::FreeSpace(_) => &mut self.free_space_timer,
+            Request::RecentlyActive | Request::SessionStats | Request::Details(_) => {
+                &mut self.tick_timer
+            }
+            Request::CheckServer | Request::Action(..) => return,
+        };
+        timer.answered(now);
     }
 
     /// When the next poll is due while connected.
@@ -180,6 +211,42 @@ mod tests {
 
         timer.sent(base + secs(1));
         assert!(!timer.is_due(base + secs(2), secs(30)));
+    }
+
+    #[test]
+    fn is_due_before_excludes_the_instant_itself() {
+        let base = Instant::now();
+        let mut timer = Timer::default();
+        timer.sent(base);
+
+        assert!(timer.is_due_before(base, secs(30), base + secs(31)));
+        assert!(!timer.is_due_before(base, secs(30), base + secs(30)));
+        timer.force();
+        assert!(timer.is_due_before(base, secs(30), base + secs(1)));
+    }
+
+    #[test]
+    fn an_answer_later_than_the_interval_moves_the_next_turn() {
+        let base = Instant::now();
+        let mut timer = Timer::default();
+        timer.sent(base);
+
+        // An answer within the interval changes nothing; a later one starts it over.
+        timer.answered(base + secs(1));
+        assert_eq!(timer.due_at(base, secs(10)), Some(base + secs(11)));
+        timer.answered(base + secs(3));
+        assert_eq!(timer.due_at(base, secs(10)), Some(base + secs(13)));
+        // Never earlier than an interval after the last answer.
+        timer.answered(base + secs(2));
+        assert_eq!(timer.due_at(base, secs(10)), Some(base + secs(13)));
+        // A forced poll stays due at once.
+        timer.force();
+        timer.answered(base + secs(4));
+        assert_eq!(timer.due_at(base, secs(10)), Some(base));
+        // A timer never sent is not moved by an answer.
+        let mut fresh = Timer::default();
+        fresh.answered(base + secs(4));
+        assert_eq!(fresh.due_at(base, secs(10)), Some(base));
     }
 
     #[test]

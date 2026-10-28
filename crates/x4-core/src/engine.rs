@@ -23,7 +23,7 @@ use crate::details::{DetailsIssue, TorrentDetails};
 use crate::snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 use crate::store::Store;
 
-use answers::SkippedSet;
+use answers::{RefusedPolls, SkippedSet};
 use schedule::Timer;
 
 /// How long the engine sleeps when nothing is scheduled.
@@ -81,7 +81,8 @@ pub enum Command {
     Select(Option<HashString>),
     /// Carry out an action; [`Event::ActionFinished`] with the same id tells how it went.
     Run(ActionId, Action),
-    /// Read everything again now; connect again if the daemon is not connected.
+    /// Read the session, the whole list, the statistics, the free space and the selected
+    /// torrent's details again now; connect again if the daemon is not connected.
     Refresh,
     /// Connect again now, from the first step of the backoff.
     Reconnect,
@@ -155,8 +156,13 @@ pub enum Event {
 /// list and the statistics at once, then each on its own interval, and every tick the recently
 /// active torrents, the statistics and the selected torrent's details. When the daemon stops
 /// answering it becomes [`ConnectionState::Reconnecting`], keeps the last state (marked stale)
-/// and checks the server again after each step of [`EngineConfig::backoff`]. A server too old or
-/// too new makes it [`ConnectionState::Unsupported`] until [`Command::Reconnect`].
+/// and checks the server again after each step of [`EngineConfig::backoff`]; the steps go on
+/// until a full list is read, so a daemon that passes the check but fails the polls is not asked
+/// every second. A server older than Transmission 4.1 (RPC version 6) makes it
+/// [`ConnectionState::Unsupported`] until [`Command::Reconnect`].
+///
+/// Each poll is next due one interval after it was handed out, or after its answer came if that
+/// is later, so a slow daemon rests a full interval between turns.
 ///
 /// Actions are sent only while connected; otherwise they fail at once with
 /// [`ActionError::NotConnected`] instead of waiting.
@@ -167,6 +173,10 @@ pub struct Engine {
     connection: ConnectionState,
     /// When to check the server next; `None` while connected or unsupported.
     check_at: Option<Instant>,
+    /// Failed tries in a row to use the daemon. A successful server check does not reset it;
+    /// the first full list read after connecting does, because only then has the connection
+    /// proved itself.
+    attempts: u32,
     session_timer: Timer,
     full_list_timer: Timer,
     free_space_timer: Timer,
@@ -184,6 +194,7 @@ pub struct Engine {
     rate_down: u64,
     rate_up: u64,
     skipped: SkippedSet,
+    refused: RefusedPolls,
     selected: Option<HashString>,
     details: Option<Arc<TorrentDetails>>,
     /// What was wrong with the selected torrent's last details answer, logged when it changes.
@@ -201,6 +212,7 @@ impl Engine {
             visibility: Visibility::Visible,
             connection: ConnectionState::Connecting,
             check_at: Some(now),
+            attempts: 0,
             session_timer: Timer::default(),
             full_list_timer: Timer::default(),
             free_space_timer: Timer::default(),
@@ -214,6 +226,7 @@ impl Engine {
             rate_down: 0,
             rate_up: 0,
             skipped: SkippedSet::default(),
+            refused: RefusedPolls::default(),
             selected: None,
             details: None,
             details_issues: Vec::new(),
@@ -223,6 +236,7 @@ impl Engine {
 
     /// Takes a command from the UI at `now`; returns the events it causes at once, such as an
     /// action refused because the daemon is not connected.
+    #[must_use]
     pub fn handle_command(&mut self, now: Instant, command: Command) -> Vec<Event> {
         match command {
             Command::SetVisibility(visibility) => {
@@ -239,6 +253,8 @@ impl Engine {
                 self.session_timer.force();
                 self.full_list_timer.force();
                 self.tick_timer.force();
+                // Due only once the download directory is known.
+                self.free_space_timer.force();
                 Vec::new()
             }
             Command::Refresh | Command::Reconnect => self.restart(now),
@@ -250,7 +266,9 @@ impl Engine {
     /// are due, in a fixed order.
     ///
     /// Each poll handed out is next due one interval after `now`, whether or not its answer has
-    /// come back, so a request is never handed out twice for the same turn.
+    /// come back, so a request is never handed out twice for the same turn; an answer that comes
+    /// later than that moves the next turn to one interval after the answer.
+    #[must_use]
     pub fn due_requests(&mut self, now: Instant) -> Vec<Request> {
         let mut due: Vec<Request> = self
             .actions
@@ -298,6 +316,7 @@ impl Engine {
     /// that is not JSON-RPC) starts reconnecting, and an unsupported server stops polling. A
     /// poll the daemon refused is logged and tried again at its next interval. Answers to polls
     /// that are no longer [current](Engine::is_current) are ignored.
+    #[must_use]
     pub fn handle_response(
         &mut self,
         now: Instant,
@@ -314,10 +333,13 @@ impl Engine {
                 );
                 Vec::new()
             }
-            poll => match result {
-                Ok(response) => self.poll_answered(now, poll, response),
-                Err(error) => self.poll_failed(now, poll, &error),
-            },
+            poll => {
+                self.answered_at(poll, now);
+                match result {
+                    Ok(response) => self.poll_answered(now, poll, response),
+                    Err(error) => self.poll_failed(now, poll, &error),
+                }
+            }
         }
     }
 
@@ -364,6 +386,7 @@ impl Engine {
         // The old torrent's details must not show as the new one's.
         self.details = None;
         self.details_issues.clear();
+        self.refused.answered(PollKind::Details);
         self.details_now = hash.is_some();
         self.selected = hash;
     }
@@ -396,6 +419,7 @@ impl Engine {
     fn restart(&mut self, now: Instant) -> Vec<Event> {
         tracing::info!("connecting to the daemon");
         self.check_at = Some(now);
+        self.attempts = 0;
         self.set_connection(ConnectionState::Connecting)
     }
 
@@ -468,6 +492,7 @@ impl Engine {
     /// The daemon cannot be used: wait one more step of the backoff, then check it again.
     fn connect_failed(&mut self, now: Instant, error: &RpcError) -> Vec<Event> {
         let attempt = self.next_attempt();
+        self.attempts = attempt;
         let delay = self.retry_delay(attempt);
         tracing::warn!(attempt, retry_in = ?delay, %error, "the daemon cannot be used; retrying");
         self.check_at = now.checked_add(delay);
@@ -521,18 +546,49 @@ impl Engine {
             Failure::Unusable => self.connection_lost(now, error),
             Failure::Unsupported(rpc_version) => self.unsupported(rpc_version.to_owned()),
             Failure::Refused => {
-                tracing::warn!(
-                    request = poll.name(),
-                    %error,
-                    "the daemon refused a poll; it is tried again at its next interval"
-                );
+                let news = poll
+                    .poll_kind()
+                    .is_some_and(|kind| self.refused.failed(kind));
+                if news {
+                    tracing::warn!(
+                        request = poll.name(),
+                        %error,
+                        "the daemon refused a poll; it is tried again at its next interval"
+                    );
+                } else {
+                    tracing::debug!(request = poll.name(), %error, "the daemon refused a poll again");
+                }
                 Vec::new()
             }
         }
     }
 }
 
+/// A kind of poll, without its arguments: [`Request::SessionGet`] and so on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PollKind {
+    SessionGet,
+    SessionStats,
+    FreeSpace,
+    FullList,
+    RecentlyActive,
+    Details,
+}
+
 impl Request {
+    /// The kind of poll this is; `None` for the server check and actions, which are not polls.
+    fn poll_kind(&self) -> Option<PollKind> {
+        match self {
+            Self::SessionGet => Some(PollKind::SessionGet),
+            Self::SessionStats => Some(PollKind::SessionStats),
+            Self::FreeSpace(_) => Some(PollKind::FreeSpace),
+            Self::FullList => Some(PollKind::FullList),
+            Self::RecentlyActive => Some(PollKind::RecentlyActive),
+            Self::Details(_) => Some(PollKind::Details),
+            Self::CheckServer | Self::Action(..) => None,
+        }
+    }
+
     /// A short name for logs; it carries no torrent names, hashes or paths.
     fn name(&self) -> &'static str {
         match self {

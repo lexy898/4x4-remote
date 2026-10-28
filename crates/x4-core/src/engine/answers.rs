@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use x4_rpc::{FreeSpace, HashString, SessionInfo, SessionStats, TorrentGetResponse, TorrentId};
 
-use super::{Engine, Event, Request, Response, unexpected};
+use super::{Engine, Event, PollKind, Request, Response, unexpected};
 use crate::details::{self, Built, DetailsIssue};
 use crate::model::Torrent;
 use crate::snapshot::SessionSummary;
@@ -21,25 +21,48 @@ impl Engine {
         poll: &Request,
         response: Response,
     ) -> Vec<Event> {
-        match (poll, response) {
-            (Request::SessionGet, Response::Session(info)) => self.session_read(&info),
-            (Request::SessionStats, Response::Stats(stats)) => self.stats_read(&stats),
+        let events = match (poll, response) {
+            (Request::SessionGet, Response::Session(info)) => {
+                self.session_read(&info);
+                Vec::new()
+            }
+            (Request::SessionStats, Response::Stats(stats)) => {
+                self.stats_read(&stats);
+                Vec::new()
+            }
             (Request::FreeSpace(path), Response::FreeSpace(space)) => {
                 self.free_space_read(path, &space);
+                Vec::new()
             }
-            (Request::FullList, Response::Torrents(list)) => self.list_read(list, ListKind::Full),
+            (Request::FullList, Response::Torrents(list)) => {
+                self.list_read(list, ListKind::Full);
+                // The connection has proved itself: a later failure starts the backoff over.
+                self.attempts = 0;
+                Vec::new()
+            }
             (Request::RecentlyActive, Response::Torrents(list)) => {
                 self.list_read(list, ListKind::Recent);
+                Vec::new()
             }
-            (Request::Details(hash), Response::Details(answer)) => {
-                return self.details_read(hash, answer);
-            }
+            (Request::Details(hash), Response::Details(answer)) => self.details_read(hash, answer),
             (poll, other) => return self.poll_failed(now, poll, &unexpected(poll, &other)),
+        };
+        if let Some(kind) = poll.poll_kind() {
+            self.refused.answered(kind);
         }
-        Vec::new()
+        events
     }
 
     fn session_read(&mut self, info: &SessionInfo) {
+        let moved = self
+            .session
+            .as_ref()
+            .is_some_and(|known| known.download_dir != info.download_dir);
+        if moved && self.free_space_bytes.is_some() {
+            // Measured in the old directory; the new one is measured next.
+            self.free_space_bytes = None;
+            self.snapshot_changed = true;
+        }
         let session = Some(SessionSummary::from(info));
         if session != self.session {
             self.session = session;
@@ -204,11 +227,42 @@ impl SkippedSet {
     }
 }
 
+/// The kinds of poll the daemon refused the last time they were sent, so that a refusal that
+/// repeats is logged as a warning once, not at every interval.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct RefusedPolls(pub(super) HashSet<PollKind>);
+
+impl RefusedPolls {
+    /// Notes that the daemon refused a poll of `kind`; tells whether that is news, worth a
+    /// warning: the first refusal, or the first after the poll was answered again.
+    pub(super) fn failed(&mut self, kind: PollKind) -> bool {
+        self.0.insert(kind)
+    }
+
+    /// Notes that the daemon answered a poll of `kind`, so its next refusal is news again.
+    pub(super) fn answered(&mut self, kind: PollKind) {
+        self.0.remove(&kind);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::store::SkipReason;
+
+    #[test]
+    fn a_refused_poll_is_news_once_until_it_is_answered() {
+        let mut refused = RefusedPolls::default();
+
+        assert!(refused.failed(PollKind::FreeSpace));
+        assert!(!refused.failed(PollKind::FreeSpace));
+        assert!(refused.failed(PollKind::SessionStats));
+
+        refused.answered(PollKind::FreeSpace);
+        assert!(refused.failed(PollKind::FreeSpace));
+        assert!(!refused.failed(PollKind::SessionStats));
+    }
 
     #[test]
     fn skipped_records_are_reported_only_when_the_set_changes() {

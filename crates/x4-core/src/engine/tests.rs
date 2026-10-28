@@ -96,6 +96,26 @@ fn answer(request: &Request) -> Response {
     }
 }
 
+/// Hands out what is due at `now` without answering it.
+fn hand_out(engine: &mut Engine, now: Instant) -> Vec<Request> {
+    engine.due_requests(now)
+}
+
+/// Gives the engine a command; returns the events, which the caller may ignore.
+fn command(engine: &mut Engine, now: Instant, command: Command) -> Vec<Event> {
+    engine.handle_command(now, command)
+}
+
+/// Gives the engine an answer; returns the events, which the caller may ignore.
+fn respond(
+    engine: &mut Engine,
+    now: Instant,
+    request: &Request,
+    result: Result<Response, RpcError>,
+) -> Vec<Event> {
+    engine.handle_response(now, request, result)
+}
+
 /// Hands out what is due at `now` and answers all of it like the fixture daemon; returns the
 /// requests and the events their answers caused.
 fn exchange(engine: &mut Engine, now: Instant) -> (Vec<Request>, Vec<Event>) {
@@ -130,7 +150,7 @@ fn loaded(base: Instant) -> Engine {
 /// An engine that lost the connection at `at`, after loading at `base`.
 fn dropped(base: Instant, at: Instant) -> Engine {
     let mut engine = loaded(base);
-    engine.handle_response(at, &Request::RecentlyActive, Err(timeout()));
+    respond(&mut engine, at, &Request::RecentlyActive, Err(timeout()));
     assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
     engine
 }
@@ -211,9 +231,10 @@ fn starts_with_check_server_only() {
 fn unsupported_server_stops_polling() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
-    engine.due_requests(base);
+    hand_out(&mut engine, base);
 
-    engine.handle_response(
+    respond(
+        &mut engine,
         base,
         &Request::CheckServer,
         Ok(Response::Server(version("5.0.0"))),
@@ -228,7 +249,7 @@ fn unsupported_server_stops_polling() {
     // Five minutes of ticks.
     for tick in 0..=200 {
         assert_eq!(
-            engine.due_requests(base + ms(1500 * tick)),
+            hand_out(&mut engine, base + ms(1500 * tick)),
             [],
             "tick {tick}"
         );
@@ -242,10 +263,11 @@ fn unsupported_server_stops_polling() {
 fn unsupported_server_error_stops_polling_too() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
-    engine.due_requests(base);
+    hand_out(&mut engine, base);
     let legacy = "legacy protocol (Transmission 4.0 or older)".to_owned();
 
-    engine.handle_response(
+    respond(
+        &mut engine,
         base,
         &Request::CheckServer,
         Err(RpcError::UnsupportedServer {
@@ -269,7 +291,7 @@ fn connect_triggers_full_refresh() {
 
     assert_eq!(engine.connection, ConnectionState::Connected);
     assert_eq!(
-        engine.due_requests(base),
+        hand_out(&mut engine, base),
         [
             Request::SessionGet,
             Request::FullList,
@@ -277,9 +299,14 @@ fn connect_triggers_full_refresh() {
         ]
     );
     // The directory to measure is known only once the session is read.
-    engine.handle_response(base, &Request::SessionGet, Ok(answer(&Request::SessionGet)));
+    respond(
+        &mut engine,
+        base,
+        &Request::SessionGet,
+        Ok(answer(&Request::SessionGet)),
+    );
     assert_eq!(
-        engine.due_requests(base),
+        hand_out(&mut engine, base),
         [Request::FreeSpace(DOWNLOAD_DIR.to_owned())]
     );
 }
@@ -291,7 +318,7 @@ fn visible_tick_is_1500ms() {
 
     assert_eq!(engine.due_requests(base + ms(1400)), []);
     assert_eq!(
-        engine.due_requests(base + ms(1500)),
+        hand_out(&mut engine, base + ms(1500)),
         [Request::RecentlyActive, Request::SessionStats]
     );
 }
@@ -301,12 +328,16 @@ fn hidden_tick_is_10s() {
     let base = Instant::now();
     let mut engine = loaded(base);
 
-    engine.handle_command(base, Command::SetVisibility(Visibility::Hidden));
+    command(
+        &mut engine,
+        base,
+        Command::SetVisibility(Visibility::Hidden),
+    );
 
     assert_eq!(engine.due_requests(base + ms(1500)), []);
     assert_eq!(engine.due_requests(base + ms(9999)), []);
     assert_eq!(
-        engine.due_requests(base + secs(10)),
+        hand_out(&mut engine, base + secs(10)),
         [Request::RecentlyActive, Request::SessionStats]
     );
 }
@@ -315,13 +346,21 @@ fn hidden_tick_is_10s() {
 fn becoming_visible_ticks_at_once_when_a_tick_is_overdue() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::SetVisibility(Visibility::Hidden));
+    command(
+        &mut engine,
+        base,
+        Command::SetVisibility(Visibility::Hidden),
+    );
 
     let now = base + secs(5);
-    engine.handle_command(now, Command::SetVisibility(Visibility::Visible));
+    command(
+        &mut engine,
+        now,
+        Command::SetVisibility(Visibility::Visible),
+    );
 
     assert_eq!(
-        engine.due_requests(now),
+        hand_out(&mut engine, now),
         [Request::RecentlyActive, Request::SessionStats]
     );
 }
@@ -379,17 +418,17 @@ fn transport_error_backs_off() {
             reconnecting(attempt, ConnectionError::Timeout)
         );
         assert_eq!(
-            engine.due_requests(now + ms(delay * 1000 - 1)),
+            hand_out(&mut engine, now + ms(delay * 1000 - 1)),
             [],
             "attempt {attempt}"
         );
         now += secs(delay);
         assert_eq!(
-            engine.due_requests(now),
+            hand_out(&mut engine, now),
             [Request::CheckServer],
             "attempt {attempt}"
         );
-        engine.handle_response(now, &Request::CheckServer, Err(timeout()));
+        respond(&mut engine, now, &Request::CheckServer, Err(timeout()));
     }
     assert_eq!(engine.connection, reconnecting(8, ConnectionError::Timeout));
 }
@@ -406,7 +445,7 @@ fn backoff_stays_at_its_last_step() {
 
     for delay in [3, 7, 7, 7] {
         assert_eq!(engine.due_requests(now), [Request::CheckServer]);
-        engine.handle_response(now, &Request::CheckServer, Err(timeout()));
+        respond(&mut engine, now, &Request::CheckServer, Err(timeout()));
         assert_eq!(engine.next_wakeup(now), now + secs(delay));
         now += secs(delay);
     }
@@ -420,7 +459,8 @@ fn reconnecting_succeeds_with_a_full_refresh() {
     let retry = at + secs(1);
 
     assert_eq!(engine.due_requests(retry), [Request::CheckServer]);
-    engine.handle_response(
+    respond(
+        &mut engine,
         retry,
         &Request::CheckServer,
         Ok(answer(&Request::CheckServer)),
@@ -428,7 +468,7 @@ fn reconnecting_succeeds_with_a_full_refresh() {
 
     assert_eq!(engine.connection, ConnectionState::Connected);
     assert_eq!(
-        engine.due_requests(retry),
+        hand_out(&mut engine, retry),
         [
             Request::SessionGet,
             Request::FullList,
@@ -445,7 +485,12 @@ fn snapshot_is_stale_while_reconnecting() {
     assert!(!fresh.stale);
     assert_eq!(fresh.torrents.len(), LISTED);
 
-    engine.handle_response(base + ms(1500), &Request::RecentlyActive, Err(timeout()));
+    respond(
+        &mut engine,
+        base + ms(1500),
+        &Request::RecentlyActive,
+        Err(timeout()),
+    );
 
     let stale = engine.take_snapshot().unwrap();
     assert!(stale.stale);
@@ -475,7 +520,12 @@ fn poll_errors_that_make_the_daemon_unusable_reconnect() {
     ] {
         let mut engine = loaded(base);
 
-        engine.handle_response(base, &Request::SessionStats, Err(error.clone()));
+        respond(
+            &mut engine,
+            base,
+            &Request::SessionStats,
+            Err(error.clone()),
+        );
 
         assert_eq!(
             engine.connection,
@@ -484,7 +534,7 @@ fn poll_errors_that_make_the_daemon_unusable_reconnect() {
         );
         assert_eq!(engine.due_requests(base + ms(999)), [], "{error:?}");
         assert_eq!(
-            engine.due_requests(base + secs(1)),
+            hand_out(&mut engine, base + secs(1)),
             [Request::CheckServer],
             "{error:?}"
         );
@@ -506,7 +556,7 @@ fn poll_errors_the_daemon_reports_keep_the_connection() {
     ] {
         let mut engine = loaded(base);
 
-        engine.handle_response(base, &free_space, Err(error.clone()));
+        respond(&mut engine, base, &free_space, Err(error.clone()));
 
         assert_eq!(engine.connection, ConnectionState::Connected, "{error:?}");
         // Tried again at its next interval, not before.
@@ -521,7 +571,8 @@ fn unsupported_server_error_on_a_poll_stops_polling() {
     let base = Instant::now();
     let mut engine = loaded(base);
 
-    engine.handle_response(
+    respond(
+        &mut engine,
         base,
         &Request::FullList,
         Err(RpcError::UnsupportedServer {
@@ -542,14 +593,14 @@ fn unsupported_server_error_on_a_poll_stops_polling() {
 fn a_server_check_the_daemon_refuses_is_retried_with_backoff() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
-    engine.due_requests(base);
+    hand_out(&mut engine, base);
     let error = RpcError::Server {
         code: -32601,
         message: "Method not found".to_owned(),
         detail: None,
     };
 
-    engine.handle_response(base, &Request::CheckServer, Err(error.clone()));
+    respond(&mut engine, base, &Request::CheckServer, Err(error.clone()));
 
     assert_eq!(
         engine.connection,
@@ -562,7 +613,7 @@ fn a_server_check_the_daemon_refuses_is_retried_with_backoff() {
 fn errors_after_the_connection_dropped_do_not_bump_the_attempt() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Run(ActionId(1), stop_first()));
+    command(&mut engine, base, Command::Run(ActionId(1), stop_first()));
     let tick = base + ms(1500);
     let due = engine.due_requests(tick);
     assert_eq!(
@@ -592,9 +643,9 @@ fn errors_after_the_connection_dropped_do_not_bump_the_attempt() {
 fn a_late_action_error_while_reconnecting_does_not_bump_the_attempt() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Run(ActionId(2), stop_first()));
+    command(&mut engine, base, Command::Run(ActionId(2), stop_first()));
     let due = engine.due_requests(base);
-    engine.handle_response(base, &Request::SessionStats, Err(timeout()));
+    respond(&mut engine, base, &Request::SessionStats, Err(timeout()));
 
     let events = engine.handle_response(base, &due[0], Err(timeout()));
 
@@ -633,7 +684,12 @@ fn a_mismatched_answer_counts_as_an_invalid_response() {
     let base = Instant::now();
     let mut engine = loaded(base);
 
-    engine.handle_response(base, &Request::SessionStats, Ok(Response::Done));
+    respond(
+        &mut engine,
+        base,
+        &Request::SessionStats,
+        Ok(Response::Done),
+    );
 
     assert!(
         matches!(
@@ -661,7 +717,7 @@ fn is_current_follows_the_connection_and_the_selection() {
     let action = Request::Action(ActionId(1), stop_first());
     let details = Request::Details(first());
     let mut engine = Engine::new(EngineConfig::default(), base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
 
     // Connecting: only the server check and actions.
     assert!(engine.is_current(&Request::CheckServer));
@@ -675,13 +731,13 @@ fn is_current_follows_the_connection_and_the_selection() {
         assert!(engine.is_current(poll), "{poll:?} while connected");
     }
     assert!(!engine.is_current(&details), "nothing is selected");
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     assert!(engine.is_current(&details));
-    engine.handle_command(base, Command::Select(Some(second())));
+    command(&mut engine, base, Command::Select(Some(second())));
     assert!(!engine.is_current(&details));
     assert!(engine.is_current(&Request::Details(second())));
 
-    engine.handle_response(base, &Request::SessionStats, Err(timeout()));
+    respond(&mut engine, base, &Request::SessionStats, Err(timeout()));
     for poll in polls.iter().chain([&Request::Details(second())]) {
         assert!(!engine.is_current(poll), "{poll:?} while reconnecting");
     }
@@ -711,7 +767,7 @@ fn queued_actions_fail_when_the_connection_drops() {
     let base = Instant::now();
     let mut engine = loaded(base);
     assert_eq!(
-        engine.handle_command(base, Command::Run(ActionId(3), stop_first())),
+        command(&mut engine, base, Command::Run(ActionId(3), stop_first())),
         []
     );
 
@@ -782,7 +838,7 @@ fn action_success_pulls_tick_forward() {
     let mut engine = loaded(base);
     let now = base + ms(500);
     assert_eq!(
-        engine.handle_command(now, Command::Run(ActionId(9), stop_first())),
+        command(&mut engine, now, Command::Run(ActionId(9), stop_first())),
         []
     );
     assert_eq!(engine.next_wakeup(now), now);
@@ -793,7 +849,7 @@ fn action_success_pulls_tick_forward() {
 
     assert_eq!(events, [finished(9, Ok(()))]);
     assert_eq!(
-        engine.due_requests(now),
+        hand_out(&mut engine, now),
         [Request::RecentlyActive, Request::SessionStats]
     );
 }
@@ -808,14 +864,14 @@ fn add_and_remove_success_pull_tick_forward_too() {
     for action in [Action::Add(magnet()), remove] {
         let mut engine = loaded(base);
         let now = base + ms(500);
-        engine.handle_command(now, Command::Run(ActionId(10), action.clone()));
+        command(&mut engine, now, Command::Run(ActionId(10), action.clone()));
 
         let (due, events) = exchange(&mut engine, now);
 
         assert_eq!(due, [Request::Action(ActionId(10), action.clone())]);
         assert_eq!(events, [finished(10, Ok(()))]);
         assert_eq!(
-            engine.due_requests(now),
+            hand_out(&mut engine, now),
             [Request::RecentlyActive, Request::SessionStats],
             "{action:?}"
         );
@@ -827,12 +883,16 @@ fn a_speed_action_reads_the_session_again() {
     let base = Instant::now();
     let mut engine = loaded(base);
     let now = base + ms(500);
-    engine.handle_command(now, Command::Run(ActionId(11), Action::SetAltSpeed(true)));
+    command(
+        &mut engine,
+        now,
+        Command::Run(ActionId(11), Action::SetAltSpeed(true)),
+    );
 
     exchange(&mut engine, now);
 
     assert_eq!(
-        engine.due_requests(now),
+        hand_out(&mut engine, now),
         [
             Request::SessionGet,
             Request::RecentlyActive,
@@ -845,7 +905,7 @@ fn a_speed_action_reads_the_session_again() {
 fn a_refused_action_reports_why_and_keeps_the_connection() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Run(ActionId(12), stop_first()));
+    command(&mut engine, base, Command::Run(ActionId(12), stop_first()));
     let due = engine.due_requests(base);
     let error = RpcError::Server {
         code: 1,
@@ -873,7 +933,7 @@ fn a_refused_action_reports_why_and_keeps_the_connection() {
 fn an_action_that_gets_no_answer_reconnects() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Run(ActionId(13), stop_first()));
+    command(&mut engine, base, Command::Run(ActionId(13), stop_first()));
     let due = engine.due_requests(base);
 
     let events = engine.handle_response(base, &due[0], Err(timeout()));
@@ -896,11 +956,11 @@ fn details_only_for_selection() {
     assert_eq!(due, [Request::RecentlyActive, Request::SessionStats]);
 
     let now = base + ms(2000);
-    engine.handle_command(now, Command::Select(Some(first())));
+    command(&mut engine, now, Command::Select(Some(first())));
     assert_eq!(engine.due_requests(now), [Request::Details(first())]);
     for tick in [3000, 4500] {
         assert_eq!(
-            engine.due_requests(base + ms(tick)),
+            hand_out(&mut engine, base + ms(tick)),
             [
                 Request::RecentlyActive,
                 Request::SessionStats,
@@ -910,9 +970,9 @@ fn details_only_for_selection() {
         );
     }
 
-    engine.handle_command(base + ms(5000), Command::Select(None));
+    command(&mut engine, base + ms(5000), Command::Select(None));
     assert_eq!(
-        engine.due_requests(base + ms(6000)),
+        hand_out(&mut engine, base + ms(6000)),
         [Request::RecentlyActive, Request::SessionStats]
     );
 }
@@ -921,17 +981,18 @@ fn details_only_for_selection() {
 fn a_selection_made_before_connecting_is_read_on_connecting() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     assert_eq!(engine.due_requests(base), [Request::CheckServer]);
 
-    engine.handle_response(
+    respond(
+        &mut engine,
         base,
         &Request::CheckServer,
         Ok(answer(&Request::CheckServer)),
     );
 
     assert_eq!(
-        engine.due_requests(base),
+        hand_out(&mut engine, base),
         [
             Request::SessionGet,
             Request::FullList,
@@ -945,7 +1006,7 @@ fn a_selection_made_before_connecting_is_read_on_connecting() {
 fn details_compute_playable() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
 
     let (due, events) = exchange(&mut engine, base);
 
@@ -963,7 +1024,7 @@ fn details_compute_playable() {
 fn identical_details_send_no_event() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     assert_eq!(details_events(&exchange(&mut engine, base).1).len(), 1);
 
     let (due, events) = exchange(&mut engine, base + ms(1500));
@@ -976,12 +1037,12 @@ fn identical_details_send_no_event() {
 fn selecting_another_torrent_drops_the_details() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     exchange(&mut engine, base);
 
-    engine.handle_command(base, Command::Select(Some(second())));
+    command(&mut engine, base, Command::Select(Some(second())));
     assert_eq!(engine.details, None);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
 
     // The same details again are news: the UI dropped them with the selection.
     let (due, events) = exchange(&mut engine, base);
@@ -993,17 +1054,14 @@ fn selecting_another_torrent_drops_the_details() {
 fn details_for_a_deselected_torrent_are_ignored() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     let due = engine.due_requests(base);
     assert_eq!(due, [Request::Details(first())]);
 
-    engine.handle_command(base, Command::Select(Some(second())));
+    command(&mut engine, base, Command::Select(Some(second())));
 
     assert!(!engine.is_current(&due[0]));
-    assert_eq!(
-        engine.handle_response(base, &due[0], Ok(answer(&due[0]))),
-        []
-    );
+    assert_eq!(respond(&mut engine, base, &due[0], Ok(answer(&due[0]))), []);
     assert_eq!(engine.details, None);
 }
 
@@ -1011,7 +1069,7 @@ fn details_for_a_deselected_torrent_are_ignored() {
 fn an_empty_details_answer_sends_no_event() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     let due = engine.due_requests(base);
 
     let empty = TorrentGetResponse {
@@ -1029,7 +1087,7 @@ fn an_empty_details_answer_sends_no_event() {
 fn details_issues_are_kept_until_they_change() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Select(Some(first())));
+    command(&mut engine, base, Command::Select(Some(first())));
     let other = TorrentGetResponse {
         torrents: vec![TorrentRecord {
             hash_string: Some(SECOND.to_owned()),
@@ -1089,7 +1147,8 @@ fn a_recent_answer_updates_and_removes_torrents() {
     // The sixth torrent of the list has id 7.
     update.removed = vec![TorrentId(7)];
 
-    engine.handle_response(
+    respond(
+        &mut engine,
         base,
         &Request::RecentlyActive,
         Ok(Response::Torrents(update)),
@@ -1129,7 +1188,8 @@ fn unknown_free_space_is_none() {
     let mut engine = loaded(base);
     engine.take_snapshot();
 
-    engine.handle_response(
+    respond(
+        &mut engine,
         base,
         &Request::FreeSpace(DOWNLOAD_DIR.to_owned()),
         Ok(free_space(DOWNLOAD_DIR, -1)),
@@ -1142,26 +1202,36 @@ fn unknown_free_space_is_none() {
 fn free_space_follows_the_download_dir() {
     let base = Instant::now();
     let mut engine = loaded(base);
+    assert!(engine.take_snapshot().is_some());
     let now = base + ms(700);
     let moved = SessionInfo {
         download_dir: "/data/other".to_owned(),
         ..session_info()
     };
 
-    engine.handle_response(now, &Request::SessionGet, Ok(Response::Session(moved)));
+    respond(
+        &mut engine,
+        now,
+        &Request::SessionGet,
+        Ok(Response::Session(moved)),
+    );
 
+    // The value measured in the old directory is gone with it.
+    assert_eq!(engine.take_snapshot().unwrap().free_space_bytes, None);
     assert_eq!(
-        engine.due_requests(now),
+        hand_out(&mut engine, now),
         [Request::FreeSpace("/data/other".to_owned())]
     );
     // A late answer for the old directory is dropped.
-    engine.handle_response(
+    respond(
+        &mut engine,
         now,
         &Request::FreeSpace(DOWNLOAD_DIR.to_owned()),
         Ok(free_space(DOWNLOAD_DIR, 5)),
     );
-    assert_eq!(engine.free_space_bytes, Some(819_158_872_064));
-    engine.handle_response(
+    assert_eq!(engine.free_space_bytes, None);
+    respond(
+        &mut engine,
         now,
         &Request::FreeSpace("/data/other".to_owned()),
         Ok(free_space("/data/other", 5)),
@@ -1184,9 +1254,10 @@ fn renumbered_ids_make_a_full_list_due_now() {
 
     for update in [moved, taken] {
         let mut engine = loaded(base);
-        engine.due_requests(now);
+        hand_out(&mut engine, now);
 
-        engine.handle_response(
+        respond(
+            &mut engine,
             now,
             &Request::RecentlyActive,
             Ok(Response::Torrents(update)),
@@ -1204,9 +1275,14 @@ fn a_new_torrent_under_a_new_id_needs_no_full_list() {
     added.torrents[0].hash_string = Some("00000000000000000000000000000000000000aa".to_owned());
     added.torrents[0].id = Some(TorrentId(8));
     let mut engine = loaded(base);
-    engine.due_requests(now);
+    hand_out(&mut engine, now);
 
-    engine.handle_response(now, &Request::RecentlyActive, Ok(Response::Torrents(added)));
+    respond(
+        &mut engine,
+        now,
+        &Request::RecentlyActive,
+        Ok(Response::Torrents(added)),
+    );
 
     assert_eq!(engine.due_requests(now), []);
     assert_eq!(engine.store.len(), LISTED + 1);
@@ -1219,7 +1295,12 @@ fn the_engine_keeps_the_records_it_could_not_show() {
     let mut broken = list();
     broken.torrents[1].hash_string = Some("not-a-hash".to_owned());
 
-    engine.handle_response(base, &Request::FullList, Ok(Response::Torrents(broken)));
+    respond(
+        &mut engine,
+        base,
+        &Request::FullList,
+        Ok(Response::Torrents(broken)),
+    );
 
     assert_eq!(engine.store.len(), LISTED - 1);
     assert_eq!(
@@ -1229,7 +1310,12 @@ fn the_engine_keeps_the_records_it_could_not_show() {
             reason: SkipReason::InvalidHash,
         }]))
     );
-    engine.handle_response(base, &Request::FullList, Ok(answer(&Request::FullList)));
+    respond(
+        &mut engine,
+        base,
+        &Request::FullList,
+        Ok(answer(&Request::FullList)),
+    );
     assert_eq!(engine.skipped, SkippedSet::default());
 }
 
@@ -1243,11 +1329,12 @@ fn refresh_while_connected_reads_everything_now() {
 
     assert_eq!(engine.connection, ConnectionState::Connected);
     assert_eq!(
-        engine.due_requests(now),
+        hand_out(&mut engine, now),
         [
             Request::SessionGet,
             Request::FullList,
-            Request::SessionStats
+            Request::SessionStats,
+            Request::FreeSpace(DOWNLOAD_DIR.to_owned())
         ]
     );
 }
@@ -1257,8 +1344,13 @@ fn refresh_or_reconnect_while_disconnected_connects_now() {
     let base = Instant::now();
     for command in [Command::Refresh, Command::Reconnect] {
         let mut engine = dropped(base, base);
-        engine.due_requests(base + secs(1));
-        engine.handle_response(base + secs(1), &Request::CheckServer, Err(timeout()));
+        hand_out(&mut engine, base + secs(1));
+        respond(
+            &mut engine,
+            base + secs(1),
+            &Request::CheckServer,
+            Err(timeout()),
+        );
         assert_eq!(engine.connection, reconnecting(2, ConnectionError::Timeout));
 
         let now = base + secs(1) + ms(100);
@@ -1271,7 +1363,7 @@ fn refresh_or_reconnect_while_disconnected_connects_now() {
         );
         assert_eq!(engine.due_requests(now), [Request::CheckServer]);
         // The backoff starts over.
-        engine.handle_response(now, &Request::CheckServer, Err(timeout()));
+        respond(&mut engine, now, &Request::CheckServer, Err(timeout()));
         assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
         assert_eq!(engine.next_wakeup(now), now + secs(1));
     }
@@ -1281,7 +1373,7 @@ fn refresh_or_reconnect_while_disconnected_connects_now() {
 fn reconnect_while_connected_checks_the_server_again() {
     let base = Instant::now();
     let mut engine = loaded(base);
-    engine.handle_command(base, Command::Run(ActionId(14), stop_first()));
+    command(&mut engine, base, Command::Run(ActionId(14), stop_first()));
 
     let events = engine.handle_command(base, Command::Reconnect);
 
@@ -1311,7 +1403,7 @@ fn next_wakeup_is_the_earliest_due_request() {
     assert_eq!(engine.next_wakeup(base + ms(100)), base + ms(1500));
     // An overdue tick is due now, not in the past.
     assert_eq!(engine.next_wakeup(base + secs(5)), base + secs(5));
-    engine.handle_command(base + ms(100), Command::Select(Some(first())));
+    command(&mut engine, base + ms(100), Command::Select(Some(first())));
     assert_eq!(engine.next_wakeup(base + ms(100)), base + ms(100));
 
     let at = base + ms(1500);
@@ -1323,8 +1415,9 @@ fn next_wakeup_is_the_earliest_due_request() {
 fn next_wakeup_is_a_minute_away_when_nothing_is_scheduled() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
-    engine.due_requests(base);
-    engine.handle_response(
+    hand_out(&mut engine, base);
+    respond(
+        &mut engine,
         base,
         &Request::CheckServer,
         Ok(Response::Server(version("5.0.0"))),
@@ -1332,4 +1425,308 @@ fn next_wakeup_is_a_minute_away_when_nothing_is_scheduled() {
 
     let now = base + secs(5);
     assert_eq!(engine.next_wakeup(now), now + secs(60));
+}
+
+#[test]
+fn a_connection_that_fails_its_full_list_keeps_backing_off() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    let mut now = base;
+    let mut attempts = Vec::new();
+    let mut waits = Vec::new();
+
+    for _ in 0..8 {
+        assert_eq!(hand_out(&mut engine, now), [Request::CheckServer]);
+        respond(
+            &mut engine,
+            now,
+            &Request::CheckServer,
+            Ok(answer(&Request::CheckServer)),
+        );
+        assert_eq!(engine.connection, ConnectionState::Connected);
+        for request in hand_out(&mut engine, now) {
+            let result = if request == Request::FullList {
+                Err(RpcError::InvalidResponse(
+                    "torrents: invalid type".to_owned(),
+                ))
+            } else {
+                Ok(answer(&request))
+            };
+            respond(&mut engine, now, &request, result);
+        }
+        let ConnectionState::Reconnecting { attempt, .. } = engine.connection else {
+            panic!("expected reconnecting, got {:?}", engine.connection);
+        };
+        attempts.push(attempt);
+        let next = engine.next_wakeup(now);
+        waits.push(next.duration_since(now));
+        now = next;
+    }
+
+    assert_eq!(attempts, (1..=8).collect::<Vec<u32>>());
+    assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30, 30].map(secs));
+
+    // Once a full list is read the connection has proved itself, and a later failure starts
+    // the backoff over.
+    respond(
+        &mut engine,
+        now,
+        &Request::CheckServer,
+        Ok(answer(&Request::CheckServer)),
+    );
+    while !exchange(&mut engine, now).0.is_empty() {}
+    respond(&mut engine, now, &Request::SessionStats, Err(timeout()));
+    assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
+}
+
+#[test]
+fn an_idle_daemon_changes_no_snapshot() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    assert!(engine.take_snapshot().is_some());
+    let mut sent = Vec::new();
+
+    // A minute and a half tick, so that every poll comes round again.
+    for tick in 1..=41 {
+        let (due, _) = exchange(&mut engine, base + ms(1500 * tick));
+        sent.extend(due);
+        assert_eq!(engine.take_snapshot(), None, "tick {tick}");
+    }
+
+    for poll in [
+        Request::SessionGet,
+        Request::FullList,
+        Request::FreeSpace(DOWNLOAD_DIR.to_owned()),
+        Request::RecentlyActive,
+        Request::SessionStats,
+    ] {
+        assert!(sent.contains(&poll), "{poll:?} was not sent");
+    }
+}
+
+#[test]
+fn a_recent_answer_that_only_removes_a_torrent_changes_the_snapshot() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    engine.take_snapshot();
+    let mut update = recent();
+    // The sixth torrent of the list has id 7.
+    update.removed = vec![TorrentId(7)];
+
+    respond(
+        &mut engine,
+        base,
+        &Request::RecentlyActive,
+        Ok(Response::Torrents(update)),
+    );
+
+    let snapshot = engine.take_snapshot().unwrap();
+    assert_eq!(snapshot.torrents.len(), LISTED - 1);
+    assert!(!snapshot.torrents.iter().any(|t| t.id == TorrentId(7)));
+}
+
+#[test]
+fn late_wakeups_still_send_the_full_list_in_place_of_a_tick() {
+    let base = Instant::now();
+    let mut engine = connected(base);
+    let mut now = base;
+    let mut ticks = 0;
+    let mut recents = 0;
+    let mut full_lists = Vec::new();
+
+    while now < base + secs(181) {
+        let (due, _) = exchange(&mut engine, now);
+        let full_list = due.contains(&Request::FullList);
+        let recent = due.contains(&Request::RecentlyActive);
+        let at = now.duration_since(base);
+        assert!(!(full_list && recent), "both at {at:?}");
+        if due.contains(&Request::SessionStats) {
+            ticks += 1;
+            assert!(full_list || recent, "a tick without torrents at {at:?}");
+        } else {
+            assert!(!full_list && !recent, "torrents outside a tick at {at:?}");
+        }
+        if full_list {
+            full_lists.push(at);
+        }
+        if recent {
+            recents += 1;
+        }
+        // Every wakeup comes a millisecond late.
+        now = engine.next_wakeup(now) + ms(1);
+    }
+
+    assert_eq!(full_lists.len(), 4, "{full_lists:?}");
+    for pair in full_lists.windows(2) {
+        let gap = pair[1].saturating_sub(pair[0]);
+        assert!(gap >= secs(58) && gap <= secs(60), "{full_lists:?}");
+    }
+    assert_eq!(recents + full_lists.len(), ticks);
+}
+
+#[test]
+fn a_slow_answer_gets_a_full_interval_of_rest() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let tick = base + ms(1500);
+    let due = hand_out(&mut engine, tick);
+    assert_eq!(due, [Request::RecentlyActive, Request::SessionStats]);
+
+    let answered = tick + secs(3);
+    for request in &due {
+        respond(&mut engine, answered, request, Ok(answer(request)));
+    }
+
+    assert_eq!(hand_out(&mut engine, answered), []);
+    assert_eq!(hand_out(&mut engine, answered + ms(1499)), []);
+    assert_eq!(
+        hand_out(&mut engine, answered + ms(1500)),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
+}
+
+#[test]
+fn next_wakeup_follows_each_poll_timer() {
+    let base = Instant::now();
+    let config = EngineConfig {
+        visible_interval: secs(100),
+        hidden_interval: secs(100),
+        session_interval: secs(5),
+        free_space_interval: secs(7),
+        full_refresh_interval: secs(11),
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(config, base);
+    hand_out(&mut engine, base);
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(answer(&Request::CheckServer)),
+    );
+    while !exchange(&mut engine, base).0.is_empty() {}
+
+    let mut now = base;
+    let mut wakeups = Vec::new();
+    for _ in 0..4 {
+        now = engine.next_wakeup(now);
+        let (due, _) = exchange(&mut engine, now);
+        wakeups.push((now.duration_since(base), due));
+    }
+
+    assert_eq!(
+        wakeups,
+        [
+            (secs(5), vec![Request::SessionGet]),
+            (secs(7), vec![Request::FreeSpace(DOWNLOAD_DIR.to_owned())]),
+            (secs(10), vec![Request::SessionGet]),
+            (secs(11), vec![Request::FullList]),
+        ]
+    );
+}
+
+#[test]
+fn polls_forced_between_ticks_wake_at_once() {
+    let base = Instant::now();
+    let now = base + ms(500);
+
+    // Renumbered ids force a full list.
+    let mut engine = loaded(base);
+    let mut moved = recent();
+    moved.torrents[0].id = Some(TorrentId(9));
+    respond(
+        &mut engine,
+        now,
+        &Request::RecentlyActive,
+        Ok(Response::Torrents(moved)),
+    );
+    assert_eq!(engine.next_wakeup(now), now);
+
+    // A new download directory forces its free space.
+    let mut engine = loaded(base);
+    let moved = SessionInfo {
+        download_dir: "/data/other".to_owned(),
+        ..session_info()
+    };
+    respond(
+        &mut engine,
+        now,
+        &Request::SessionGet,
+        Ok(Response::Session(moved)),
+    );
+    assert_eq!(engine.next_wakeup(now), now);
+}
+
+#[test]
+fn selecting_the_same_torrent_again_keeps_its_details() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    command(&mut engine, base, Command::Select(Some(first())));
+    assert_eq!(details_events(&exchange(&mut engine, base).1).len(), 1);
+
+    let now = base + ms(200);
+    assert_eq!(
+        engine.handle_command(now, Command::Select(Some(first()))),
+        []
+    );
+
+    assert!(engine.details.is_some());
+    assert_eq!(hand_out(&mut engine, now), []);
+}
+
+#[test]
+fn an_action_answered_by_an_unsupported_server_stops_polling() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    command(&mut engine, base, Command::Run(ActionId(15), stop_first()));
+    let due = hand_out(&mut engine, base);
+    let error = RpcError::UnsupportedServer {
+        rpc_version: "5.4.0".to_owned(),
+    };
+
+    let events = engine.handle_response(base, &due[0], Err(error.clone()));
+
+    assert_eq!(
+        events,
+        [finished(
+            15,
+            Err(ActionError::Rpc(ConnectionError::from(&error)))
+        )]
+    );
+    assert_eq!(
+        engine.connection,
+        ConnectionState::Unsupported {
+            rpc_version: "5.4.0".to_owned()
+        }
+    );
+    assert_eq!(hand_out(&mut engine, base + secs(60)), []);
+}
+
+#[test]
+fn the_engine_remembers_which_polls_the_daemon_refuses() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let free_space = Request::FreeSpace(DOWNLOAD_DIR.to_owned());
+    let refusal = RpcError::Server {
+        code: 5,
+        message: "system error".to_owned(),
+        detail: Some("No such file or directory".to_owned()),
+    };
+    let only_free_space = RefusedPolls(HashSet::from([PollKind::FreeSpace]));
+
+    respond(&mut engine, base, &free_space, Err(refusal.clone()));
+    assert_eq!(engine.refused, only_free_space);
+    // So the next refusal is a repeat, not news.
+    assert!(!engine.refused.clone().failed(PollKind::FreeSpace));
+
+    respond(&mut engine, base + secs(30), &free_space, Err(refusal));
+    assert_eq!(engine.refused, only_free_space);
+
+    respond(
+        &mut engine,
+        base + secs(60),
+        &free_space,
+        Ok(answer(&free_space)),
+    );
+    assert_eq!(engine.refused, RefusedPolls::default());
 }
