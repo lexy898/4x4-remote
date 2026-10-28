@@ -59,9 +59,21 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
 ## Performance
 
-`just measure` builds the release binary, starts it, waits 5 seconds and prints the time to the
-first rendered frame, the resident memory (RSS), its private (anonymous, `RssAnon`) part and the
-binary size.
+`just measure` builds the release binary, starts it, waits 5 seconds and prints one line: the time to
+the first rendered frame, then the memory as proportional (`pss_mib`), unique (`uss_mib`),
+anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the thread count, whether Mesa's OpenGL
+stack is loaded (`gl_stack_mapped`) and the binary size. A figure over its target (the table below;
+`gl_stack_mapped` should be `no` where a Vulkan driver is installed) adds a `WARN:` line on stderr.
+The exit code stays 0 unless the measurement itself failed.
+
+The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS. RSS
+counts every resident page the app maps, including shared driver libraries (`libLLVM`, `libgallium`)
+that the desktop shell and the browser already keep in memory anyway, so it overstates what 4x4
+costs and swings with the page cache. PSS divides each shared page among the processes that map it,
+which is the fair share, though it depends on what else is running. Private memory is what 4x4 alone
+holds and what only swap can take back. USS (private clean and dirty pages) adds the file pages only
+4x4 maps, such as its own code, which the kernel can drop without swap. The RSS stays in the report as
+a reference.
 
 4x4 creates its GPU context Vulkan-first: it uses a hardware Vulkan adapter when there is one and
 loads the OpenGL driver only when Vulkan cannot draw the window (no Vulkan driver, some virtual
@@ -74,21 +86,23 @@ driver threads) loaded next to the Vulkan one, so 4x4 builds a patched copy of G
 Medians of three runs on 2026-10-28 under the same conditions (KDE Plasma 6 on Wayland, AMD Radeon
 780M with RADV, the window on the built-in screen without focus), before and after that change:
 
-| Metric                    | Target    | Vulkan and OpenGL | Vulkan-first |
-| ------------------------- | --------- | ----------------- | ------------ |
-| First frame               | ≤ 500 ms  | 210 ms            | 197 ms       |
-| Resident memory (RSS)     | ≤ 100 MiB | 150.0 MiB         | 110.6 MiB    |
-| Proportional memory (PSS) | —         | 60.8 MiB          | 48.4 MiB     |
-| Private memory            | —         | 17.2 MiB          | 12.6 MiB     |
-| Threads                   | —         | 33                | 26           |
-| Binary size               | —         | 31.4 MiB          | 31.4 MiB     |
+| Metric                     | Target               | Vulkan and OpenGL | Vulkan-first |
+| -------------------------- | -------------------- | ----------------- | ------------ |
+| First frame                | ≤ 500 ms             | 210 ms            | 197 ms       |
+| Private memory (`RssAnon`) | ≤ 16 MiB             | 17.2 MiB          | 12.6 MiB     |
+| Proportional memory (PSS)  | ≤ 55 MiB             | 60.8 MiB          | 48.4 MiB     |
+| Resident memory (RSS)      | ≤ 120 MiB, reference | 150.0 MiB         | 110.6 MiB    |
+| Threads                    | —                    | 33                | 26           |
+| Binary size                | —                    | 31.4 MiB          | 31.4 MiB     |
 
-The RSS target is still missed, but RSS mostly counts shared, file-backed pages: RADV itself links
-`libLLVM` (about 61 MiB resident in any Vulkan process here), and the 4x4 binary adds about
-24 MiB. PSS shares such pages out among the processes that map them; the private memory belongs
-to 4x4 alone and can only be moved to swap. RSS also varies with how much of the shared driver
-code stays resident. Without Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB of
+RSS mostly counts shared, file-backed pages: RADV itself links `libLLVM` (about 61 MiB resident in any
+Vulkan process here), and the 4x4 binary adds about 24 MiB. PSS shares such pages out among the
+processes that map them. Without Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB of
 private memory.
+
+These figures vary with how much of the shared driver stays resident: on a machine with about 15 GiB in
+swap, the median of three runs showed 61 MiB RSS and 51 MiB PSS, with the same 12.6 MiB of private
+memory.
 
 ## Development
 

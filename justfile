@@ -78,7 +78,7 @@ run *args:
 release:
     cargo build -p x4-app --release --locked
 
-# Startup time to the first frame, resident memory and binary size of the release build.
+# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build.
 measure:
     scripts/measure.sh
 
