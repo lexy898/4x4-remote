@@ -16,9 +16,10 @@
 //! its start while it downloads.
 //!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
-//! [`torrents_from_records`] fills it from a `torrent_get` answer. A [`Snapshot`] is what the UI
-//! reads: the torrents, the [`SessionSummary`], the totals and the [`ConnectionState`], whose
-//! [`ConnectionError`] says in the user's terms why the daemon cannot be used.
+//! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
+//! [`SkippedRecord`]s that could not be. A [`Snapshot`] is what the UI reads: the torrents, the
+//! [`SessionSummary`], the totals and the [`ConnectionState`], whose [`ConnectionError`] says in
+//! the user's terms why the daemon cannot be used.
 
 mod filter;
 mod format;
@@ -41,4 +42,4 @@ pub use playable::{file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
-pub use store::{Store, torrents_from_records};
+pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};

@@ -6,7 +6,7 @@ use x4_rpc::{HashString, TorrentId, TorrentRecord};
 
 use crate::model::{ModelError, Torrent};
 
-/// How much of a hash a log line may show.
+/// How much of a hash a [`SkippedRecord`] keeps.
 const HASH_PREFIX_CHARS: usize = 8;
 
 /// The torrents of the daemon, found by their stable hash.
@@ -102,57 +102,80 @@ impl Store {
     }
 }
 
-/// Turns the records of a `torrent_get` answer into torrents, skipping those that cannot be.
-///
-/// # Skipped records
-///
-/// A record without the fields a torrent needs, or with an invalid hash, is dropped with a
-/// warning and the rest are kept, in order. One bad record does not hide the others: the daemon
-/// can hold a torrent the app cannot show, and the list should still load.
-///
-/// The warning names the first 8 characters of the hash the record carried, if any, and never the
-/// torrent's name.
-#[must_use]
-pub fn torrents_from_records(records: Vec<TorrentRecord>) -> Vec<Torrent> {
-    records
-        .into_iter()
-        .filter_map(|record| {
-            // Taken before the conversion consumes the record. Characters, not bytes: the value
-            // is whatever the server sent and may not be ASCII.
-            let hash_prefix: Option<String> = record
-                .hash_string
-                .as_deref()
-                .map(|hash| hash.chars().take(HASH_PREFIX_CHARS).collect());
+/// The result of [`torrents_from_records`]: the torrents, and the records that were left out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Converted {
+    /// The torrents that could be built, in the order of the records.
+    pub torrents: Vec<Torrent>,
+    /// The records that could not, in the order of the records.
+    pub skipped: Vec<SkippedRecord>,
+}
 
-            match Torrent::from_record(record) {
-                Ok(torrent) => Some(torrent),
-                Err(error) => {
-                    // `ModelError::InvalidHash` carries the whole raw hash, so the error is
-                    // described here instead of printed. No wildcard: a new variant has to
-                    // decide what may be logged.
-                    let (reason, field) = match &error {
-                        ModelError::MissingField(field) => {
-                            ("a required field is missing", Some(*field))
-                        }
-                        ModelError::InvalidHash(_) => ("the hash is not a valid info hash", None),
-                    };
-                    tracing::warn!(
-                        reason,
-                        field,
-                        hash = hash_prefix.as_deref(),
-                        "skipped a torrent record that cannot be shown"
-                    );
-                    None
-                }
+/// A record that could not become a torrent, described without anything that identifies the
+/// torrent: no name, and no more of the hash than its first 8 characters.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SkippedRecord {
+    /// The first 8 characters of the hash the record carried, as sent (so it may not be valid);
+    /// `None` when the record had no hash.
+    pub hash_prefix: Option<String>,
+    /// Why the record was left out.
+    pub reason: SkipReason,
+}
+
+/// Why a record could not become a torrent.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SkipReason {
+    /// The record lacks a field a torrent cannot do without; holds its name.
+    MissingField(&'static str),
+    /// The record's hash is not a valid info hash. The raw value is not kept.
+    InvalidHash,
+}
+
+/// Turns the records of a `torrent_get` answer into torrents, leaving out those that cannot be.
+///
+/// A record without the fields a torrent needs, or with an invalid hash, is reported in
+/// [`Converted::skipped`] and the rest are converted, in order. One bad record does not hide the
+/// others: the daemon can hold a torrent the app cannot show, and the list should still load.
+///
+/// This function does not log. It is called on every poll, so the caller decides when a skipped
+/// record is worth a message, for instance when the set of skipped records changes.
+#[must_use]
+pub fn torrents_from_records(records: Vec<TorrentRecord>) -> Converted {
+    let mut converted = Converted {
+        torrents: Vec::with_capacity(records.len()),
+        skipped: Vec::new(),
+    };
+    for record in records {
+        // Taken before the conversion consumes the record. Characters, not bytes: the value is
+        // whatever the server sent and may not be ASCII.
+        let hash_prefix: Option<String> = record
+            .hash_string
+            .as_deref()
+            .map(|hash| hash.chars().take(HASH_PREFIX_CHARS).collect());
+
+        match Torrent::from_record(record) {
+            Ok(torrent) => converted.torrents.push(torrent),
+            Err(error) => {
+                // `ModelError::InvalidHash` carries the whole raw hash, so the reason is
+                // rebuilt instead of copied. No wildcard: a new variant has to decide what may
+                // be kept.
+                let reason = match error {
+                    ModelError::MissingField(field) => SkipReason::MissingField(field),
+                    ModelError::InvalidHash(_) => SkipReason::InvalidHash,
+                };
+                converted.skipped.push(SkippedRecord {
+                    hash_prefix,
+                    reason,
+                });
             }
-        })
-        .collect()
+        }
+    }
+    converted
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::{Arc, Mutex};
+    use std::collections::HashSet;
 
     use x4_rpc::Status;
 
@@ -173,36 +196,6 @@ mod tests {
             status: Some(Status::Stopped),
             ..TorrentRecord::default()
         }
-    }
-
-    /// Collects what `tracing` events write while a test runs.
-    #[derive(Clone, Default)]
-    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl io::Write for LogBuffer {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// Runs `work` and returns its result with everything it logged, formatted as text.
-    fn logged<T>(work: impl FnOnce() -> T) -> (T, String) {
-        let buffer = LogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer({
-                let buffer = buffer.clone();
-                move || buffer.clone()
-            })
-            .with_ansi(false)
-            .finish();
-        let result = tracing::subscriber::with_default(subscriber, work);
-        let text = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
-        (result, text)
     }
 
     #[test]
@@ -405,6 +398,39 @@ mod tests {
     }
 
     #[test]
+    fn an_orphaned_torrent_updated_later_leaves_the_id_it_lost_alone() {
+        let a = Torrent {
+            id: TorrentId(1),
+            ..torrent("a")
+        };
+        let b = Torrent {
+            id: TorrentId(2),
+            ..torrent("b")
+        };
+        let mut store = Store::new();
+        store.replace_all(vec![a.clone(), b.clone()]);
+
+        // `b` takes the id `a` had, which orphans `a` ...
+        let b_with_a_id = Torrent {
+            id: TorrentId(1),
+            ..b.clone()
+        };
+        store.apply_recent(vec![b_with_a_id], &[]);
+        // ... and when `a` is reported again, under a new id, it must not take id 1 down with
+        // it: that id is `b`'s now.
+        let a_renumbered = Torrent {
+            id: TorrentId(3),
+            ..a.clone()
+        };
+        store.apply_recent(vec![a_renumbered], &[]);
+
+        assert_eq!(store.hash_for_id(TorrentId(1)), Some(&b.hash));
+        assert_eq!(store.hash_for_id(TorrentId(3)), Some(&a.hash));
+        assert_eq!(store.hash_for_id(TorrentId(2)), None);
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
     fn recent_drops_removed_ids_before_it_applies_the_updates() {
         let a = Torrent {
             id: TorrentId(1),
@@ -461,13 +487,14 @@ mod tests {
 
     #[test]
     fn records_become_torrents_in_order() {
-        let torrents = torrents_from_records(vec![
+        let converted = torrents_from_records(vec![
             record(1, GOOD_HASH_A, "a"),
             record(2, GOOD_HASH_B, "b"),
         ]);
 
-        let ids: Vec<TorrentId> = torrents.iter().map(|t| t.id).collect();
+        let ids: Vec<TorrentId> = converted.torrents.iter().map(|t| t.id).collect();
         assert_eq!(ids, [TorrentId(1), TorrentId(2)]);
+        assert_eq!(converted.skipped, Vec::new());
     }
 
     #[test]
@@ -478,58 +505,110 @@ mod tests {
             ..record(4, GOOD_HASH_B, "")
         };
 
-        let torrents = torrents_from_records(vec![
+        let converted = torrents_from_records(vec![
             record(1, GOOD_HASH_A, "a"),
             bad_hash,
             record(3, GOOD_HASH_C, "c"),
             missing_name,
         ]);
 
-        let names: Vec<&str> = torrents.iter().map(|t| t.name.as_str()).collect();
+        let names: Vec<&str> = converted.torrents.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["a", "c"]);
+        assert_eq!(
+            converted.skipped,
+            [
+                SkippedRecord {
+                    hash_prefix: Some("not-a-ha".to_owned()),
+                    reason: SkipReason::InvalidHash,
+                },
+                SkippedRecord {
+                    hash_prefix: Some("bbbbbbbb".to_owned()),
+                    reason: SkipReason::MissingField("name"),
+                },
+            ]
+        );
     }
 
     #[test]
-    fn no_records_give_no_torrents() {
-        assert_eq!(torrents_from_records(Vec::new()), Vec::new());
+    fn no_records_give_nothing() {
+        let converted = torrents_from_records(Vec::new());
+
+        assert_eq!(converted.torrents, Vec::new());
+        assert_eq!(converted.skipped, Vec::new());
     }
 
     #[test]
-    fn a_skipped_record_is_logged_without_its_name_or_more_than_eight_hash_characters() {
-        let long_bad_hash = "zzzzzzzzzzzzzzzzzzzzzzzz";
-        let bad_hash = record(1, long_bad_hash, "Secret Name");
-        let missing_name = TorrentRecord {
-            name: None,
-            ..record(2, GOOD_HASH_B, "")
+    fn a_record_without_a_hash_is_skipped_without_one() {
+        let converted = torrents_from_records(vec![TorrentRecord::default()]);
+
+        assert_eq!(
+            converted.skipped,
+            [SkippedRecord {
+                hash_prefix: None,
+                reason: SkipReason::MissingField("id"),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_skipped_record_keeps_at_most_eight_characters_of_the_hash() {
+        let skipped_prefix = |hash: &str| {
+            let converted = torrents_from_records(vec![record(1, hash, "Secret Name")]);
+            assert_eq!(converted.torrents, Vec::new(), "{hash:?} became a torrent");
+            let [skipped] = <[SkippedRecord; 1]>::try_from(converted.skipped).unwrap();
+            assert_eq!(skipped.reason, SkipReason::InvalidHash, "{hash:?}");
+            skipped.hash_prefix
         };
 
-        let (torrents, log) = logged(|| torrents_from_records(vec![bad_hash, missing_name]));
-
-        assert_eq!(torrents, Vec::new());
-        assert!(log.contains("WARN"), "no warning in {log:?}");
-        assert!(log.contains("zzzzzzzz"), "no hash prefix in {log:?}");
-        assert!(
-            !log.contains("zzzzzzzzz"),
-            "more than 8 characters in {log:?}"
+        // Longer than 8 characters.
+        assert_eq!(
+            skipped_prefix("zzzzzzzzzzzzzzzzzzzzzzzz").as_deref(),
+            Some("zzzzzzzz")
         );
-        assert!(log.contains("bbbbbbbb"), "no hash prefix in {log:?}");
-        assert!(
-            !log.contains("bbbbbbbbb"),
-            "more than 8 characters in {log:?}"
-        );
-        assert!(!log.contains("Secret Name"), "a name leaked into {log:?}");
-        assert!(
-            log.contains("name"),
-            "the missing field is not named in {log:?}"
-        );
+        // Exactly 8 and fewer.
+        assert_eq!(skipped_prefix("12345678").as_deref(), Some("12345678"));
+        assert_eq!(skipped_prefix("abc").as_deref(), Some("abc"));
+        assert_eq!(skipped_prefix("").as_deref(), Some(""));
+        // Counted in characters, not bytes: each of these is two bytes long, and cutting at byte
+        // 8 would keep only 4 of them.
+        let greek = skipped_prefix("αβγδεζηθικλμ").unwrap();
+        assert_eq!(greek, "αβγδεζηθ");
+        assert_eq!(greek.chars().count(), 8);
     }
 
     #[test]
-    fn a_skipped_record_without_a_hash_is_logged_without_one() {
-        let (torrents, log) = logged(|| torrents_from_records(vec![TorrentRecord::default()]));
+    fn a_skipped_record_never_shows_the_name_or_the_rest_of_the_hash() {
+        let long_bad_hash = "zzzzzzzzzzzzzzzzzzzzzzzz";
+        let missing_status = TorrentRecord {
+            status: None,
+            ..record(2, GOOD_HASH_B, "Another Secret")
+        };
 
-        assert_eq!(torrents, Vec::new());
-        assert!(log.contains("WARN"), "no warning in {log:?}");
-        assert!(!log.contains("hash="), "a hash field in {log:?}");
+        let converted = torrents_from_records(vec![
+            record(1, long_bad_hash, "Secret Name"),
+            missing_status,
+        ]);
+
+        let shown = format!("{:?}", converted.skipped);
+        assert_eq!(converted.skipped.len(), 2, "{shown}");
+        assert!(!shown.contains("Secret Name"), "a name in {shown}");
+        assert!(!shown.contains("Another Secret"), "a name in {shown}");
+        assert!(!shown.contains("zzzzzzzzz"), "too much hash in {shown}");
+        assert!(!shown.contains("bbbbbbbbb"), "too much hash in {shown}");
+        assert!(shown.contains("zzzzzzzz"), "no hash prefix in {shown}");
+        assert!(shown.contains("bbbbbbbb"), "no hash prefix in {shown}");
+    }
+
+    #[test]
+    fn skipped_records_can_be_compared_as_a_set() {
+        let skip = |hash: &str| {
+            torrents_from_records(vec![record(1, hash, "a")])
+                .skipped
+                .into_iter()
+                .collect::<HashSet<_>>()
+        };
+
+        assert_eq!(skip("not-a-hash"), skip("not-a-hash"));
+        assert_ne!(skip("not-a-hash"), skip("another-one"));
     }
 }

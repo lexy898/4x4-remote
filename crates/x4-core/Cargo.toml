@@ -9,13 +9,10 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-tracing.workspace = true
 x4-rpc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-# Captures the log output of the tests that check what is (and is not) logged.
-tracing-subscriber.workspace = true
 # The fixtures of the `testing` module; `just test` builds without extra feature flags.
 x4-rpc = { workspace = true, features = ["test-support"] }
 
