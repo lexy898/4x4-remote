@@ -58,18 +58,20 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 ## Performance
 
 `just measure` builds the release binary, starts it, waits 5 seconds and prints the time to the
-first rendered frame, the resident memory (RSS) and the binary size. Medians of three runs on
-2026-10-28 (KDE Plasma 6.8 on Wayland, AMD Radeon 780M with RADV):
+first rendered frame, the resident memory (RSS), its private (anonymous, `RssAnon`) part and the
+binary size. Medians of three runs on 2026-10-28 (KDE Plasma 6.8 on Wayland, AMD Radeon 780M with
+RADV); the private memory is from one later run:
 
 | Metric          | Target     | Measured  |
 | --------------- | ---------- | --------- |
 | First frame     | ≤ 500 ms   | 140 ms    |
 | Resident memory | ≤ 100 MiB  | 170.2 MiB |
+| Private memory  | —          | 17.2 MiB  |
 | Binary size     | —          | 31.4 MiB  |
 
-The memory target is missed. In a separate run, the app's private (anonymous) memory was about
-17 MiB and shared, file-backed pages about 152 MiB. The largest mappings were `libLLVM` (90 MiB),
-`libgallium` (25 MiB), the 4x4 binary (24 MiB) and `libvulkan_radeon` (5.5 MiB).
+The memory target is missed, but almost all of the RSS is shared, file-backed pages (about
+152 MiB in a separate run). The largest mappings were `libLLVM` (90 MiB), `libgallium` (25 MiB),
+the 4x4 binary (24 MiB) and `libvulkan_radeon` (5.5 MiB).
 
 A likely cause, not yet verified: GPUI's renderer asks wgpu for both the Vulkan and the OpenGL
 backends, so Mesa's OpenGL/EGL driver is mapped in addition to the Vulkan driver (RADV). RADV
