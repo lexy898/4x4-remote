@@ -129,3 +129,5 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - No AI attribution of any kind in commits, PRs or other git metadata.
 - `.specs/` is local working material and is never committed.
 - One branch per stage or feature, merged through a PR once CI is green.
+- Work in place in this checkout on a branch per stage/feature; do not create git worktrees — the
+  Stop hook and the build cache live in this directory.
