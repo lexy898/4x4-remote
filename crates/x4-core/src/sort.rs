@@ -2,13 +2,17 @@
 
 use std::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{Eta, Ratio, Torrent};
 use crate::state::{DisplayState, QueueKind};
 
-/// The column the list is sorted by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The column the list is sorted by. It is written to the state file by its `snake_case` name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortKey {
     /// The name, ignoring case.
+    #[default]
     Name,
     /// The size of the wanted files.
     Size,
@@ -30,10 +34,13 @@ pub enum SortKey {
     Added,
 }
 
-/// Which way a [`SortKey`] orders the list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Which way a [`SortKey`] orders the list. It is written to the state file by its `snake_case`
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortDirection {
     /// Smallest first.
+    #[default]
     Ascending,
     /// Largest first.
     Descending,

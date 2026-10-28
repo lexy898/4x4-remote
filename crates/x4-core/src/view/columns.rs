@@ -57,6 +57,13 @@ impl ColumnId {
         }
     }
 
+    /// The column that [`key`](Self::key) names, or `None` for a name no column has (a state file
+    /// from a newer version may list one).
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|column| column.key() == key)
+    }
+
     /// The key a click on this column's header sorts the list by.
     #[must_use]
     pub fn sort_key(self) -> SortKey {
@@ -228,6 +235,16 @@ mod tests {
         );
         let unique: std::collections::HashSet<_> = keys.into_iter().collect();
         assert_eq!(unique.len(), ColumnId::ALL.len());
+    }
+
+    #[test]
+    fn from_key_inverts_key_and_rejects_unknown_names() {
+        for column in ColumnId::ALL {
+            assert_eq!(ColumnId::from_key(column.key()), Some(column));
+        }
+        assert_eq!(ColumnId::from_key("bogus"), None);
+        assert_eq!(ColumnId::from_key("Name"), None);
+        assert_eq!(ColumnId::from_key(""), None);
     }
 
     #[test]

@@ -19,6 +19,12 @@
 //! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts, [`status_model`]
 //! builds the status bar, and [`visibility`] tells whether the user can see the window.
 //!
+//! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
+//! the app writes (window, columns, sort order, filter, theme), read tolerantly by
+//! [`UiState::parse`] and repaired by [`UiState::normalized`], and [`Config`] is the owner's
+//! `config.toml`, which the app only reads. Both turn text into values and back; reading and
+//! writing the files is left to the app.
+//!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
 //! [`SkippedRecord`]s that could not be. A [`Snapshot`] is what the UI reads: the torrents, the
@@ -41,6 +47,7 @@
 //! `x4-rpc`'s `test-support`, whose recorded fixtures the builders work with.
 
 mod action;
+mod config;
 mod details;
 mod engine;
 mod filter;
@@ -54,9 +61,12 @@ mod state;
 mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+mod toml_error;
+mod ui_state;
 mod view;
 
 pub use action::{Action, ActionError, ActionId};
+pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails};
 pub use engine::{Command, Engine, EngineConfig, Event, Request, Response, Visibility};
 pub use filter::{Filter, FilterCounts, counts, matches_search};
@@ -70,6 +80,10 @@ pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
+pub use ui_state::{
+    ColumnState, ParsedUiState, SortState, ThemeChoice, UI_STATE_VERSION, UiState, UiStateError,
+    WindowState, default_columns,
+};
 pub use view::{
     ColumnId, CompactDuration, EtaView, Row, StatusModel, Subtitle, TableModel, TimeUnit,
     ViewState, status_model, table_model, visibility,

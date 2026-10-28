@@ -1,12 +1,17 @@
 //! The sidebar filters, their counts and the name search.
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::Torrent;
 use crate::state::{Attention, DisplayState, QueueKind};
 
-/// A sidebar filter over the torrent list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A sidebar filter over the torrent list. It is written to the state file by its `snake_case`
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Filter {
     /// Every torrent.
+    #[default]
     All,
     /// Downloading, or waiting in the download queue.
     Downloading,
