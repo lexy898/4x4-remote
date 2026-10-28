@@ -9,7 +9,9 @@
 //! next command, whichever comes first.
 
 use std::any::Any;
+use std::io;
 use std::ops::ControlFlow;
+use std::panic::{self, AssertUnwindSafe};
 use std::slice;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -28,13 +30,15 @@ const THREAD_NAME: &str = "x4-service";
 
 /// The UI's end of the service thread: commands go in, events come out.
 ///
-/// Dropping the handle stops the thread and waits for it, as [`ServiceHandle::shutdown`] does.
+/// Dropping the handle asks the thread to stop and returns at once, so the UI thread never waits
+/// on the network. The thread ends on its own once the request in flight, if any, has come back.
+/// [`ServiceHandle::shutdown`] also waits for that.
 #[derive(Debug)]
 #[must_use = "dropping the handle stops the service"]
 pub struct ServiceHandle {
     commands: Sender<Command>,
     events: async_channel::Receiver<Event>,
-    /// `None` once the thread has been joined, or when it could not be started.
+    /// `None` once the handle has let go of the thread.
     thread: Option<JoinHandle<()>>,
 }
 
@@ -48,8 +52,8 @@ impl ServiceHandle {
     ///
     /// # Errors
     ///
-    /// [`ServiceStopped`] when the thread has stopped: after a [`Command::Shutdown`], after the
-    /// UI closed [`ServiceHandle::events`], or when it could not be started.
+    /// [`ServiceStopped`] when the thread has stopped: after a [`Command::Shutdown`] or after the
+    /// UI closed [`ServiceHandle::events`].
     pub fn send(&self, command: Command) -> Result<(), ServiceStopped> {
         self.commands.send(command).map_err(|_| ServiceStopped)
     }
@@ -73,19 +77,14 @@ impl ServiceHandle {
 
     /// Stops the service thread and waits until it has ended.
     ///
-    /// The thread first finishes the request it is sending, if any, which the client's timeout
-    /// bounds; actions it has not sent yet are dropped.
+    /// The thread first finishes the request it is sending, if any, so this can block for as long
+    /// as the client's timeout, twice if the daemon rotates its session id. It is not meant for
+    /// the UI thread, which drops the handle instead. Actions not sent yet are dropped.
     pub fn shutdown(mut self) {
-        self.stop();
-    }
-
-    fn stop(&mut self) {
         let Some(thread) = self.thread.take() else {
             return;
         };
-        if self.commands.send(Command::Shutdown).is_err() {
-            tracing::debug!("the service thread had already stopped");
-        }
+        self.ask_to_stop();
         if let Err(payload) = thread.join() {
             tracing::error!(
                 panic = panic_message(payload.as_ref()),
@@ -93,11 +92,21 @@ impl ServiceHandle {
             );
         }
     }
+
+    fn ask_to_stop(&self) {
+        if self.commands.send(Command::Shutdown).is_err() {
+            tracing::debug!("the service thread had already stopped");
+        }
+    }
 }
 
 impl Drop for ServiceHandle {
+    /// Asks the thread to stop and lets it go without waiting: dropping its [`JoinHandle`]
+    /// detaches it.
     fn drop(&mut self) {
-        self.stop();
+        if self.thread.take().is_some() {
+            self.ask_to_stop();
+        }
     }
 }
 
@@ -106,29 +115,23 @@ impl Drop for ServiceHandle {
 /// The engine starts connecting at once, and the first [`Event::Snapshot`] says so before the
 /// daemon has answered.
 ///
-/// If the system cannot start a thread, the failure is logged and the handle comes back already
-/// stopped: [`ServiceHandle::send`] fails with [`ServiceStopped`] and [`ServiceHandle::events`]
-/// is closed, so the UI sees what it sees when the thread stops.
-pub fn spawn<T: Transport + 'static>(client: Client<T>, config: EngineConfig) -> ServiceHandle {
+/// # Errors
+///
+/// The system's [`io::Error`] when it cannot start a thread.
+pub fn spawn<T: Transport + 'static>(
+    client: Client<T>,
+    config: EngineConfig,
+) -> io::Result<ServiceHandle> {
     let (commands, command_rx) = crossbeam_channel::unbounded();
     let (event_tx, events) = async_channel::unbounded();
-    let started = thread::Builder::new()
+    let thread = thread::Builder::new()
         .name(THREAD_NAME.to_owned())
-        .spawn(move || Worker::new(client, config, command_rx, event_tx).run());
-    let thread = match started {
-        Ok(thread) => Some(thread),
-        Err(error) => {
-            // The closure is dropped with the error, and with it the thread's ends of both
-            // channels, which closes them.
-            tracing::error!(%error, "cannot start the service thread");
-            None
-        }
-    };
-    ServiceHandle {
+        .spawn(move || guarded(|| Worker::new(client, config, command_rx, event_tx).run()))?;
+    Ok(ServiceHandle {
         commands,
         events,
-        thread,
-    }
+        thread: Some(thread),
+    })
 }
 
 /// Sends `request` through `client` and returns the answer in the form the engine takes.
@@ -190,7 +193,7 @@ fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), 
             priority,
         } => client.torrent_set(
             &selection(slice::from_ref(hash))?,
-            &priority_set(files, *priority),
+            &priority_set(named_files(action, files)?, *priority),
         ),
         Action::SetFilesWanted {
             hash,
@@ -198,7 +201,7 @@ fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), 
             wanted,
         } => client.torrent_set(
             &selection(slice::from_ref(hash))?,
-            &wanted_set(files, *wanted),
+            &wanted_set(named_files(action, files)?, *wanted),
         ),
         Action::SetAltSpeed(enabled) => client.session_set(&SessionSet {
             alt_speed_enabled: Some(*enabled),
@@ -219,6 +222,19 @@ fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), 
 /// a missing `ids` as every torrent.
 fn selection(hashes: &[HashString]) -> Result<TorrentSelection, RpcError> {
     TorrentSelection::from_hashes(hashes.iter().cloned()).map_err(RpcError::Selection)
+}
+
+/// The file indices `action` names. An empty list is refused before anything goes out: on the
+/// wire it means every file, and the client, which never sends one, would send a call that
+/// changes nothing.
+fn named_files<'a>(action: &Action, files: &'a [usize]) -> Result<&'a [usize], RpcError> {
+    if files.is_empty() {
+        return Err(RpcError::InvalidRequest(format!(
+            "{}: names no files, which the daemon reads as every file",
+            action.name()
+        )));
+    }
+    Ok(files)
 }
 
 fn priority_set(files: &[usize], priority: FilePriority) -> TorrentSet {
@@ -265,6 +281,17 @@ fn speed_limits(down_kbps: Option<u32>, up_kbps: Option<u32>) -> SessionSet {
     }
 }
 
+/// Runs the body of the service thread and logs a panic in it: the thread is usually detached,
+/// so no one joins it to hear of the panic.
+fn guarded(body: impl FnOnce()) {
+    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(body)) {
+        tracing::error!(
+            panic = panic_message(payload.as_ref()),
+            "the service thread panicked"
+        );
+    }
+}
+
 fn panic_message(payload: &(dyn Any + Send)) -> &str {
     payload
         .downcast_ref::<&str>()
@@ -299,24 +326,24 @@ impl<T: Transport> Worker<T> {
 
     fn run(mut self) {
         tracing::info!("service started");
-        // The UI hears that the service is connecting before the first answer, which can take as
-        // long as the client's timeout.
-        let mut flow = self.publish_snapshot();
-        while flow.is_continue() {
-            flow = self.step();
-        }
+        while self.step().is_continue() {}
         tracing::info!("service stopped");
     }
 
     /// One turn of the loop: take the commands that are waiting, so that actions lead the batch;
-    /// send the requests that are due; publish the snapshot if it changed; then wait for the
-    /// next wakeup or command.
+    /// publish the snapshot if it changed; send the requests that are due; publish it again;
+    /// then wait for the next wakeup or command.
+    ///
+    /// The snapshot goes out before the batch too, because an answer can take as long as the
+    /// client's timeout: the first snapshot, and the one after a reconnect, show `Connecting`
+    /// while the server check is still out.
     fn step(&mut self) -> ControlFlow<()> {
         if self.events.is_closed() {
             tracing::debug!("the UI closed its events");
             return ControlFlow::Break(());
         }
         self.take_waiting_commands()?;
+        self.publish_snapshot()?;
         self.send_due_requests()?;
         self.publish_snapshot()?;
         self.wait()
@@ -698,20 +725,62 @@ mod tests {
 
     #[test]
     fn an_empty_selection_never_reaches_the_wire() {
+        let no_torrents = Err(RpcError::Selection(IdError::EmptySelection));
+        let no_files = |action: &str| {
+            Err(RpcError::InvalidRequest(format!(
+                "{action}: names no files, which the daemon reads as every file"
+            )))
+        };
         let empty = [
-            Action::Stop(Vec::new()),
-            Action::Remove {
-                hashes: Vec::new(),
-                data: RemoveData::Delete,
-            },
+            (Action::Stop(Vec::new()), no_torrents.clone()),
+            (
+                Action::Remove {
+                    hashes: Vec::new(),
+                    data: RemoveData::Delete,
+                },
+                no_torrents,
+            ),
+            (
+                Action::SetFilePriority {
+                    hash: hash("a"),
+                    files: Vec::new(),
+                    priority: FilePriority::Low,
+                },
+                no_files("set file priority"),
+            ),
+            (
+                Action::SetFilesWanted {
+                    hash: hash("a"),
+                    files: Vec::new(),
+                    wanted: false,
+                },
+                no_files("set files wanted"),
+            ),
         ];
 
-        for action in empty {
+        for (action, refused) in empty {
             let (result, sent) = execute_one(&Request::Action(ActionId(1), action));
 
-            assert_eq!(result, Err(RpcError::Selection(IdError::EmptySelection)));
+            assert_eq!(result, refused);
             assert!(sent.is_empty(), "{sent:?}");
         }
+    }
+
+    #[test]
+    fn a_panic_in_the_thread_body_is_caught() {
+        guarded(|| panic!("the worker broke"));
+        guarded(|| panic::panic_any(String::from("the worker broke")));
+    }
+
+    #[test]
+    fn the_panic_message_is_read_from_either_payload() {
+        let text: Box<dyn Any + Send> = Box::new("a text");
+        let owned: Box<dyn Any + Send> = Box::new(String::from("an owned text"));
+        let other: Box<dyn Any + Send> = Box::new(7_u8);
+
+        assert_eq!(panic_message(text.as_ref()), "a text");
+        assert_eq!(panic_message(owned.as_ref()), "an owned text");
+        assert_eq!(panic_message(other.as_ref()), "a panic without a message");
     }
 
     #[test]

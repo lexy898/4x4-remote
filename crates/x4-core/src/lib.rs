@@ -29,8 +29,8 @@
 //!
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
-//! [`Command`]s, which never blocks, and awaits the [`Event`]s on its own executor, so it never
-//! waits on the network.
+//! [`Command`]s, which never blocks, awaits the [`Event`]s on its own executor, and drops the
+//! handle to stop the thread without waiting for it, so it never waits on the network.
 
 mod action;
 mod details;

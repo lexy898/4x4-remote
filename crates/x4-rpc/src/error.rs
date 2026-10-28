@@ -24,7 +24,8 @@ pub enum RpcError {
     /// HTTP 409 again right after retrying with the session id the server sent.
     #[error("the server rejected its own X-Transmission-Session-Id twice in a row")]
     SessionIdRejected,
-    /// The request could not be encoded as JSON.
+    /// The request could not be built: its params do not encode as JSON, or they name nothing
+    /// where the daemon would read nothing as everything (an empty file list).
     #[error("cannot encode the request: {0}")]
     InvalidRequest(String),
     /// The body is not a JSON-RPC 2.0 response to the request: not JSON, a different id,

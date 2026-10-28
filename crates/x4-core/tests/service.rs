@@ -160,7 +160,7 @@ fn action_result(handle: &ServiceHandle, id: ActionId) -> Option<Result<(), Acti
 
 #[test]
 fn service_publishes_first_snapshot() {
-    let handle = service::spawn(Client::new(recorded_daemon()), fast());
+    let handle = service::spawn(Client::new(recorded_daemon()), fast()).unwrap();
 
     let snapshot = snapshot_where(&handle, connected).unwrap();
 
@@ -180,7 +180,7 @@ fn the_ui_hears_that_the_service_is_connecting_before_the_daemon_answers() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake), fast());
+    let handle = service::spawn(Client::new(fake), fast()).unwrap();
 
     let first = snapshot_where(&handle, |_| true).unwrap();
     open_tx.send(()).unwrap();
@@ -191,9 +191,34 @@ fn the_ui_hears_that_the_service_is_connecting_before_the_daemon_answers() {
 }
 
 #[test]
+fn a_reconnect_shows_connecting_before_the_server_check_answers() {
+    let (release_tx, release) = crossbeam_channel::unbounded::<()>();
+    let checks = AtomicUsize::new(0);
+    let fake = FakeTransport::routed(move |method, params| {
+        let server_check = params["fields"] == json!(["version", "rpc_version_semver"]);
+        // The check after the reconnect hangs until the test has seen the snapshot.
+        if method == "session_get" && server_check && checks.fetch_add(1, Ordering::SeqCst) == 1 {
+            release.recv_timeout(WAIT).unwrap();
+        }
+        Ok(daemon(method, params))
+    });
+    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    snapshot_where(&handle, connected).unwrap();
+
+    handle.send(Command::Reconnect).unwrap();
+
+    let connecting = snapshot_where(&handle, |snapshot| {
+        snapshot.connection == ConnectionState::Connecting
+    });
+    release_tx.send(()).unwrap();
+    assert!(connecting.is_some_and(|snapshot| snapshot.stale));
+    snapshot_where(&handle, connected).unwrap();
+}
+
+#[test]
 fn service_runs_actions() {
     let fake = recorded_daemon();
-    let handle = service::spawn(Client::new(fake.clone()), fast());
+    let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
     snapshot_where(&handle, connected).unwrap();
     let hash = HashString::parse(FIXTURE_HASH).unwrap();
 
@@ -220,7 +245,7 @@ fn a_failed_action_is_not_retried() {
             Ok(daemon(method, params))
         }
     });
-    let handle = service::spawn(Client::new(fake.clone()), fast());
+    let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     handle
@@ -249,7 +274,7 @@ fn a_failed_action_is_not_retried() {
 fn service_reports_unreachable() {
     let unreachable =
         FakeTransport::routed(|_, _| Err(TransportError::Connect("connection refused".to_owned())));
-    let handle = service::spawn(Client::new(unreachable), fast());
+    let handle = service::spawn(Client::new(unreachable), fast()).unwrap();
 
     let snapshot = snapshot_where(&handle, reconnecting_at_least(1)).unwrap();
 
@@ -275,7 +300,7 @@ fn polls_that_are_no_longer_current_are_not_sent() {
             Ok(daemon(method, params))
         }
     });
-    let handle = service::spawn(Client::new(fake.clone()), fast());
+    let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
 
     snapshot_where(&handle, reconnecting_at_least(2)).unwrap();
     handle.shutdown();
@@ -302,7 +327,7 @@ fn a_slow_daemon_rests_a_full_interval_after_each_answer() {
         log.lock().unwrap().push((received, Instant::now()));
         Ok(answer)
     });
-    let handle = service::spawn(Client::new(fake), ticking_every(tick));
+    let handle = service::spawn(Client::new(fake), ticking_every(tick)).unwrap();
 
     assert!(eventually(|| stats_calls.lock().unwrap().len() >= 4));
     handle.shutdown();
@@ -333,7 +358,7 @@ fn commands_queued_during_a_batch_are_all_taken_before_the_next() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake.clone()), ticking_every(WAIT));
+    let handle = service::spawn(Client::new(fake.clone()), ticking_every(WAIT)).unwrap();
     entered.recv_timeout(WAIT).unwrap();
     let hash = HashString::parse(FIXTURE_HASH).unwrap();
 
@@ -369,7 +394,7 @@ fn the_worker_thread_is_named_x4_service() {
             .push(thread::current().name().map(str::to_owned));
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake), fast());
+    let handle = service::spawn(Client::new(fake), fast()).unwrap();
 
     snapshot_where(&handle, connected).unwrap();
     handle.shutdown();
@@ -386,7 +411,7 @@ fn the_worker_thread_is_named_x4_service() {
 
 #[test]
 fn service_shuts_down_cleanly() {
-    let handle = service::spawn(Client::new(recorded_daemon()), fast());
+    let handle = service::spawn(Client::new(recorded_daemon()), fast()).unwrap();
     let events = handle.events().clone();
     let commands = handle.commands();
     snapshot_where(&handle, connected).unwrap();
@@ -407,17 +432,14 @@ fn service_shuts_down_cleanly() {
 
 #[test]
 fn dropping_handle_stops_thread() {
-    let requests = Arc::new(AtomicUsize::new(0));
     let (probe, transport_gone) = crossbeam_channel::bounded::<()>(0);
-    let counter = Arc::clone(&requests);
     // No clone of this transport stays here: the worker holds the only one, so the probe
     // disconnects when the worker thread has dropped its client.
     let transport = FakeTransport::routed(move |method, params| {
         let _alive = &probe;
-        counter.fetch_add(1, Ordering::SeqCst);
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(transport), fast());
+    let handle = service::spawn(Client::new(transport), fast()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     drop(handle);
@@ -426,14 +448,38 @@ fn dropping_handle_stops_thread() {
         transport_gone.recv_timeout(WAIT),
         Err(RecvTimeoutError::Disconnected)
     );
-    let after_drop = requests.load(Ordering::SeqCst);
-    thread::sleep(Duration::from_millis(200));
-    assert_eq!(requests.load(Ordering::SeqCst), after_drop);
+}
+
+#[test]
+fn dropping_the_handle_does_not_wait_for_the_request_in_flight() {
+    let (entered_tx, entered) = crossbeam_channel::unbounded();
+    let (release_tx, release) = crossbeam_channel::unbounded::<()>();
+    let (freed_tx, freed) = crossbeam_channel::unbounded();
+    let first_request = AtomicBool::new(true);
+    let fake = FakeTransport::routed(move |method, params| {
+        if first_request.swap(false, Ordering::SeqCst) {
+            entered_tx.send(()).unwrap();
+            // Whether the release or the timeout ends the wait.
+            freed_tx.send(release.recv_timeout(WAIT)).unwrap();
+        }
+        Ok(daemon(method, params))
+    });
+    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    entered.recv_timeout(WAIT).unwrap();
+
+    // A drop that waited for the thread would return only after the handler timed out.
+    drop(handle);
+
+    assert!(
+        release_tx.send(()).is_ok(),
+        "the request in flight ended before the drop returned"
+    );
+    assert_eq!(freed.recv_timeout(WAIT), Ok(Ok(())));
 }
 
 #[test]
 fn the_worker_stops_when_the_ui_closes_its_events() {
-    let handle = service::spawn(Client::new(recorded_daemon()), fast());
+    let handle = service::spawn(Client::new(recorded_daemon()), fast()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     handle.events().close();

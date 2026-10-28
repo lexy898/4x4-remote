@@ -94,8 +94,9 @@ All network traffic runs on one worker thread, `x4-service`, which `x4-core` sta
 daemon on a schedule (faster while the window is visible), reconnects with a growing pause when the
 daemon stops answering, and carries out the actions the user asks for, one request at a time. The
 window (connected to it in the next stage) talks to it through two channels: commands go in, and
-snapshots of the state and the results of actions come out. Sending a command never blocks, and the
-window awaits the events without blocking its thread, so it never waits on the network.
+snapshots of the state and the results of actions come out. Sending a command never blocks, the
+window awaits the events without blocking its thread, and closing it does not wait for the worker
+to finish its last request, so the window never waits on the network.
 
 ### Live tests
 
