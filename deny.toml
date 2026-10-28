@@ -37,6 +37,17 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 
+# The crates.io `gpui` crate (0.2.x) is an older, unrelated GPUI; the app uses gpui-kit.
+[[bans.deny]]
+crate = "gpui"
+reason = "use gpui-kit, not the crates.io gpui crate"
+
+# Only the app crate talks to the UI toolkit (AGENTS.md, Architecture).
+[[bans.deny]]
+crate = "gpui-kit"
+wrappers = ["x4-app"]
+reason = "only x4-app may depend on the UI toolkit"
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"

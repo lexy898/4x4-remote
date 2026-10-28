@@ -4,13 +4,13 @@ default:
     @just --list
 
 # Full gate. The only definition of "done"; CI runs exactly this.
-check: fmt-check toml-check spell lint test test-hooks doc-test doc deny machete
+check: fmt-check toml-check spell lint-policy lint test test-hooks doc-test doc deny machete
 
 # Fast gate run by the agent Stop hook.
 check-fast: fmt-check lint test
 
 # Run by .githooks/pre-commit.
-pre-commit: fmt-check toml-check spell lint
+pre-commit: fmt-check toml-check spell lint-policy lint
 
 fmt:
     cargo fmt --all
@@ -24,6 +24,10 @@ toml-check:
 
 spell:
     typos
+
+# AGENTS.md rules clippy cannot express: lint exceptions, workspace lints, dependency direction.
+lint-policy:
+    scripts/lint-policy.sh
 
 lint:
     cargo clippy --workspace --all-targets --locked -- -D warnings

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Tests for the agent and git hook scripts. Every case works in a throwaway
-# directory under a temp root; the real repository and its target/.agent-hooks
-# state are never touched. Prints "ok <case>" per case, exits 1 on the first failure.
+# Tests for the agent and git hook scripts and the repository's helper scripts.
+# Every case works in a throwaway directory under a temp root; the real repository
+# and its target/.agent-hooks state are never touched. Prints "ok <case>" per case,
+# exits 1 on the first failure.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -9,6 +10,7 @@ format_hook=$root/scripts/hooks/format-rust-file.sh
 stop_hook=$root/scripts/hooks/stop-check.sh
 guard_hook=$root/scripts/hooks/guard-bash.sh
 check_tools=$root/scripts/check-tools.sh
+lint_policy=$root/scripts/lint-policy.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
@@ -321,6 +323,88 @@ test_check_tools_passes_when_all_present() {
     expect_status 0
 }
 
+# A minimal repository layout for lint-policy.sh, plus a stub `cargo` whose `cargo tree`
+# output per crate comes from tree-<crate>.txt next to it (clean by default).
+new_policy_root() {
+    local dir crate
+    dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
+    for crate in x4-core x4-rpc; do
+        mkdir -p "$dir/crates/$crate/src"
+        printf '[package]\nname = "%s"\n\n[lints]\nworkspace = true\n' "$crate" >"$dir/crates/$crate/Cargo.toml"
+        printf '//! %s\n\n#[expect(clippy::too_many_lines, reason = "warnings are fine here")]\nfn f() {}\n' \
+            "$crate" >"$dir/crates/$crate/src/lib.rs"
+        printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
+    done
+    printf '#!/usr/bin/env bash\nwhile (($#)); do [[ $1 == -p ]] && crate=$2; shift; done\ncat "%s/tree-$crate.txt"\n' \
+        "$dir" >"$dir/cargo"
+    chmod +x "$dir/cargo"
+    echo "$dir"
+}
+
+run_policy() { # <root>
+    run_with_input '' env PATH="$1:$PATH" "$lint_policy" "$1"
+}
+
+test_lint_policy_passes_clean_tree() {
+    local dir
+    dir=$(new_policy_root)
+    run_policy "$dir"
+    expect_status 0
+}
+
+test_lint_policy_rejects_inner_allow_and_expect() {
+    local dir
+    dir=$(new_policy_root)
+    printf '#![allow(dead_code)]\n' >>"$dir/crates/x4-core/src/lib.rs"
+    printf '#![expect(\n    clippy::module_name_repetitions,\n    reason = "x"\n)]\n' >"$dir/crates/x4-rpc/src/a.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "crates/x4-core/src/lib.rs: crate-wide lint exception #![allow(dead_code)]" "$stderr" stderr
+    expect_contains "crates/x4-rpc/src/a.rs: crate-wide lint exception" "$stderr" stderr
+}
+
+test_lint_policy_rejects_group_exceptions() {
+    local dir
+    dir=$(new_policy_root)
+    printf '#[expect(clippy::pedantic, reason = "x")]\nfn g() {}\n' >>"$dir/crates/x4-core/src/lib.rs"
+    printf '#[allow(\n    warnings\n)]\nfn h() {}\n' >"$dir/crates/x4-rpc/src/b.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "crates/x4-core/src/lib.rs: lint exception for a whole lint group or for warnings" "$stderr" stderr
+    expect_contains "crates/x4-rpc/src/b.rs: lint exception for a whole lint group or for warnings" "$stderr" stderr
+}
+
+test_lint_policy_ignores_exceptions_in_comments() {
+    local dir
+    dir=$(new_policy_root)
+    printf '/// Never write `#![allow(clippy::all)]`.\n// #[allow(warnings)]\nfn k() {}\n' \
+        >>"$dir/crates/x4-core/src/lib.rs"
+    run_policy "$dir"
+    expect_status 0
+}
+
+test_lint_policy_rejects_missing_workspace_lints() {
+    local dir
+    dir=$(new_policy_root)
+    printf '[package]\nname = "x4-rpc"\n' >"$dir/crates/x4-rpc/Cargo.toml"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "crates/x4-rpc/Cargo.toml: missing [lints] workspace = true" "$stderr" stderr
+}
+
+test_lint_policy_rejects_wrong_dependency_direction() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'gpui-kit v0.8.1\nanyhow v1.0.104\nserde v1.0.0\n' >>"$dir/tree-x4-core.txt"
+    printf 'x4-core v0.1.0 (%s)\n' "$dir/crates/x4-core" >>"$dir/tree-x4-rpc.txt"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-core: depends on gpui-kit" "$stderr" stderr
+    expect_contains "x4-core: depends on anyhow" "$stderr" stderr
+    expect_contains "x4-rpc: depends on x4-core" "$stderr" stderr
+    [[ $stderr != *serde* ]] || fail "serde is an allowed dependency, got: $stderr"
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -344,6 +428,12 @@ cases=(
     guard_blocks_hook_state_writes
     guard_allows_lookalikes
     guard_ignores_other_tools
+    lint_policy_passes_clean_tree
+    lint_policy_rejects_inner_allow_and_expect
+    lint_policy_rejects_group_exceptions
+    lint_policy_ignores_exceptions_in_comments
+    lint_policy_rejects_missing_workspace_lints
+    lint_policy_rejects_wrong_dependency_direction
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
