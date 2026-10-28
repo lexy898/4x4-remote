@@ -11,5 +11,14 @@ publish.workspace = true
 name = "4x4"
 path = "src/main.rs"
 
+[dependencies]
+anyhow.workspace = true
+gpui-kit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

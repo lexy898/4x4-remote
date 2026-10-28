@@ -4,7 +4,8 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 
 ## Status
 
-Early development — stage 0 (project foundation). Nothing is usable yet.
+Early development — stage 0 (project foundation). The app opens a window titled "4x4"; nothing
+is usable yet.
 
 ## What it will do
 
@@ -36,7 +37,8 @@ More is planned after that.
 ## Requirements
 
 - Transmission 4.1 or newer
-- Linux (other platforms are not supported yet)
+- Linux (other platforms are not supported yet) with a Wayland or X11 session
+- A Vulkan driver (for example `vulkan-radeon`, `vulkan-intel` or `nvidia-utils`)
 
 ## Build from source
 
@@ -44,9 +46,31 @@ On Arch Linux:
 
 ```bash
 sudo pacman -S --needed just cargo-nextest cargo-deny cargo-machete taplo-cli typos
+sudo pacman -S --needed base-devel pkgconf fontconfig freetype2 libxkbcommon libxkbcommon-x11 \
+    libxcb wayland vulkan-icd-loader
 just setup
 just run
 ```
+
+The second command installs the system libraries the GUI toolkit builds and links against; Wayland and
+the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
+
+## Performance
+
+`just measure` builds the release binary, starts it, waits 5 seconds and prints the time to the
+first rendered frame, the resident memory (RSS) and the binary size. Medians of three runs on
+2026-10-28 (KDE Plasma 6.8 on Wayland, AMD Radeon 780M with RADV):
+
+| Metric          | Target     | Measured  |
+| --------------- | ---------- | --------- |
+| First frame     | ≤ 500 ms   | 140 ms    |
+| Resident memory | ≤ 100 MiB  | 170.2 MiB |
+| Binary size     | —          | 31.4 MiB  |
+
+The memory target is missed: about 115 MiB of the RSS is Mesa's OpenGL driver (`libgallium` and
+`libLLVM`), which GPUI maps while probing the OpenGL adapter at startup even though it renders
+with Vulkan. These are shared, file-backed pages; the app's private (anonymous) memory is about
+17 MiB.
 
 ## Development
 

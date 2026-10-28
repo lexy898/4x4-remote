@@ -1,5 +1,18 @@
 [advisories]
 yanked = "deny"
+# Unmaintained crates pulled in transitively by the pinned GUI stack (gpui-kit =0.8.1), with no
+# maintained release to upgrade to. Each entry is narrow so that new advisories still fail the
+# gate; re-check every entry when bumping gpui-kit and drop the ones that disappear.
+ignore = [
+  { id = "RUSTSEC-2024-0384", reason = "instant: transitive via gpui-base and gpui-component" },
+  { id = "RUSTSEC-2024-0436", reason = "paste: transitive via gpui-component, metal and image" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: transitive via gpui-kit-assets" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser: transitive via the GPUI font and SVG stack" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz: transitive via the GPUI font and SVG stack" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: transitive via the GPUI Linux accessibility bridge (AT-SPI)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: transitive via the GPUI Linux accessibility bridge (AT-SPI)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: transitive via the GPUI Linux accessibility bridge (AT-SPI)" },
+]
 
 [licenses]
 allow = [
@@ -8,6 +21,7 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",
   "BSD-3-Clause",
+  "0BSD",
   "ISC",
   "Zlib",
   "Unicode-3.0",

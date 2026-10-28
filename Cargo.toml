@@ -13,6 +13,10 @@ publish = false
 [workspace.dependencies]
 x4-rpc = { path = "crates/x4-rpc" }
 x4-core = { path = "crates/x4-core" }
+anyhow = "1.0.104"
+gpui-kit = "=0.8.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
