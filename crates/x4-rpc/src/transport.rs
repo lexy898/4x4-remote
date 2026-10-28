@@ -374,6 +374,8 @@ mod tests {
         }
     }
 
+    // The real resolver is not tested: a lookup through it may send a DNS query, and default
+    // tests never touch the network. The mapping of a failed lookup is the same for any resolver.
     #[test]
     fn a_failed_lookup_is_a_connect_error() {
         let transport = UreqTransport::with_resolver(
@@ -394,27 +396,6 @@ mod tests {
                  Temporary failure in name resolution"
                     .to_owned()
             ))
-        );
-    }
-
-    #[test]
-    fn a_host_that_does_not_resolve_is_a_connect_error() {
-        // `.invalid` never resolves (RFC 6761) and local resolvers answer it without asking the
-        // network; the trailing dot skips search domains. On a resolver that silently drops
-        // queries this would end as `Timeout` after 3 s instead of hanging.
-        let transport = UreqTransport::new(
-            "http://no-such-host.invalid.:9091/transmission/rpc",
-            Duration::from_secs(3),
-        );
-
-        let response = transport.post(&HttpRequest {
-            body: b"{}",
-            session_id: None,
-        });
-
-        assert!(
-            matches!(response, Err(TransportError::Connect(_))),
-            "got {response:?}"
         );
     }
 }
