@@ -83,6 +83,32 @@ here and `eglinfo` at about 156 MiB, so a Vulkan-only renderer might bring the R
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and
 the rules every change must follow.
 
+### Live tests
+
+`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` against a real Transmission 4.1+
+daemon; `just test` and `just check` skip them. They never touch existing torrents or the daemon's
+settings. Each test writes a random 3 MiB file into a test directory, adds it as a trackerless
+torrent, works only on that torrent (stop, start, verify, reannounce, sequential download, file
+priority, adding it twice), removes it together with its file, and checks that every other
+torrent kept its status, sequential mode and file priorities. The torrent and the file are
+removed even when a test fails.
+
+The test directory is one directory seen from both sides: the daemon reads it under one path and
+this machine writes to it under another (for example over NFS), so both must be able to write
+there. A test creates it if it is missing (its parent must exist) and then removes it again; a
+directory that already existed is left in place. No torrent may already download into it.
+
+| Variable             | Meaning                                  | Default                                    |
+| -------------------- | ---------------------------------------- | ------------------------------------------ |
+| `X4_LIVE_URL`        | the daemon's RPC endpoint                | `http://192.168.1.5:9091/transmission/rpc` |
+| `X4_LIVE_REMOTE_DIR` | the test directory as the daemon sees it | `/mnt/hdd/torrents/4x4-test`               |
+| `X4_LIVE_LOCAL_DIR`  | the same directory on this machine       | `/mnt/pi-hdd/torrents/4x4-test`            |
+
+```bash
+X4_LIVE_URL=http://my-daemon:9091/transmission/rpc \
+X4_LIVE_REMOTE_DIR=/srv/torrents/4x4-test X4_LIVE_LOCAL_DIR=/mnt/daemon/4x4-test just test-live
+```
+
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

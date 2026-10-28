@@ -19,6 +19,7 @@ thiserror.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
+sha1.workspace = true
 # Self dev-dependency: the integration tests in tests/ use the `testing` module, and
 # `just test` (plain `cargo nextest run --workspace`) must build them without extra flags.
 x4-rpc = { workspace = true, features = ["test-support"] }
