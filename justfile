@@ -42,7 +42,7 @@ doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
 deny:
-    cargo deny check
+    cargo deny check --hide-inclusion-graph
 
 machete:
     cargo machete

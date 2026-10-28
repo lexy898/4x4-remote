@@ -104,6 +104,8 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - `gpui-kit` is pinned with `=`; bump it in a dedicated commit with `just update` and a manual app run.
 - After changing dependencies run `just deny` and `just machete`. GPL, LGPL and AGPL licenses are
   not allowed; if one appears, stop and ask the owner.
+- Never add advisory `ignore` entries, `skip`/`skip-tree` entries, license `allow` entries or
+  `exceptions` in `deny.toml` without the owner's explicit approval; stop and ask.
 
 ## Library Documentation
 
