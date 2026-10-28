@@ -53,17 +53,17 @@ expect_contains() { # <needle> <haystack> <what>
     [[ $2 == *"$1"* ]] || fail "expected $3 to contain '$1', got: $2"
 }
 
-run_format() { # <file>
+run_format() { # <file> <project-dir>
     local json
     json=$(jq -n --arg path "$1" '{tool_input: {file_path: $path}}')
-    run_with_input "$json" "$format_hook"
+    run_with_input "$json" env CLAUDE_PROJECT_DIR="$2" "$format_hook"
 }
 
 test_format_hook_formats_rust_file() {
     local dir
     dir=$(new_repo)
     printf 'fn  main( ){}' >"$dir/a.rs"
-    run_format "$dir/a.rs"
+    run_format "$dir/a.rs" "$dir"
     expect_status 0
     [[ $(<"$dir/a.rs") == 'fn main() {}' ]] || fail "a.rs was not formatted: $(<"$dir/a.rs")"
 }
@@ -72,20 +72,44 @@ test_format_hook_ignores_non_rust() {
     local dir
     dir=$(new_repo)
     printf 'fn  main( ){}' >"$dir/a.md"
-    run_format "$dir/a.md"
+    run_format "$dir/a.md" "$dir"
     expect_status 0
     [[ $(<"$dir/a.md") == 'fn  main( ){}' ]] || fail "a.md was modified"
+}
+
+test_format_hook_ignores_files_outside_project() {
+    local project outside
+    project=$(new_repo)
+    outside=$(new_repo)
+    printf 'fn  main( ){}' >"$outside/a.rs"
+    run_format "$outside/a.rs" "$project"
+    expect_status 0
+    [[ $(<"$outside/a.rs") == 'fn  main( ){}' ]] || fail "a file outside the project was formatted"
 }
 
 test_format_hook_reports_syntax_error() {
     local dir
     dir=$(new_repo)
     printf 'fn main( {' >"$dir/a.rs"
-    run_format "$dir/a.rs"
+    run_format "$dir/a.rs" "$dir"
     expect_status 2
-    [[ -n $stderr ]] || fail "expected the rustfmt error on stderr"
+    expect_contains "rustfmt failed on $dir/a.rs" "$stderr" stderr
+    # A missing module file does not hide a syntax error.
+    printf 'mod missing;\nfn main( {' >"$dir/b.rs"
+    run_format "$dir/b.rs" "$dir"
+    expect_status 2
+    expect_contains "unclosed delimiter" "$stderr" stderr
 }
 
+test_format_hook_tolerates_unresolved_module() {
+    local dir
+    dir=$(new_repo)
+    printf 'mod missing;\nfn  main( ){}\n' >"$dir/a.rs"
+    run_format "$dir/a.rs" "$dir"
+    expect_status 0
+    [[ -z $stderr ]] || fail "expected no complaint, got: $stderr"
+    [[ $(<"$dir/a.rs") == $'mod missing;\nfn  main( ){}' ]] || fail "a.rs must be left as it is"
+}
 
 # The stop-hook cases share one repo on purpose: they exercise the state kept
 # between consecutive stops (last green fingerprint, block counter).
@@ -408,7 +432,9 @@ test_lint_policy_rejects_wrong_dependency_direction() {
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
+    format_hook_ignores_files_outside_project
     format_hook_reports_syntax_error
+    format_hook_tolerates_unresolved_module
     stop_hook_runs_and_records_green
     stop_hook_skips_unchanged
     stop_hook_blocks_on_failure
