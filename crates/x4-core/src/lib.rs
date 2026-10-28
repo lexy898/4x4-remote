@@ -14,13 +14,20 @@
 //! [`Filter`] and [`counts`] drive the sidebar, [`matches_search`] the search box, [`sort()`] the
 //! column headers, and [`playable_prefix`] tells how much of a file can already be played from
 //! its start while it downloads.
+//!
+//! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
+//! [`torrents_from_records`] fills it from a `torrent_get` answer. A [`Snapshot`] is what the UI
+//! reads: the torrents, the [`SessionSummary`], the totals and the [`ConnectionState`], whose
+//! [`ConnectionError`] says in the user's terms why the daemon cannot be used.
 
 mod filter;
 mod format;
 mod model;
 mod playable;
+mod snapshot;
 mod sort;
 mod state;
+mod store;
 #[cfg(test)]
 mod test_support;
 
@@ -31,5 +38,7 @@ pub use format::{
 };
 pub use model::{Eta, ModelError, Ratio, Torrent};
 pub use playable::{file_offsets, playable_prefix};
+pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
+pub use store::{Store, torrents_from_records};
