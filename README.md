@@ -45,7 +45,7 @@ More is planned after that.
 On Arch Linux:
 
 ```bash
-sudo pacman -S --needed just cargo-nextest cargo-deny cargo-machete taplo-cli typos
+sudo pacman -S --needed rust just cargo-nextest cargo-deny cargo-machete taplo-cli typos jq
 sudo pacman -S --needed base-devel pkgconf fontconfig freetype2 libxkbcommon libxkbcommon-x11 \
     libxcb wayland vulkan-icd-loader
 just setup

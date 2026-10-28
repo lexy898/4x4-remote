@@ -13,10 +13,13 @@ This file is the rulebook for every change. Product scope lives in the owner's l
 ## Commands
 
 ```bash
-just check        # full gate: fmt, TOML, spelling, clippy, tests, doc tests, docs, deny, machete
+just check        # full gate: fmt, TOML, spelling, lint policy, clippy, tests, hook tests,
+                  # doc tests, docs, deny, machete
 just check-fast   # fmt + clippy + tests (run by the agent Stop hook)
 just fmt          # format Rust and TOML
 just test         # tests via nextest
+just test-hooks   # tests for the hook and helper scripts in scripts/
+just lint-policy  # lint exceptions, workspace lints, dependency direction (scripts/lint-policy.sh)
 just run          # run the app (debug build)
 just release      # optimized build
 just measure      # startup time and memory of the release build
@@ -26,12 +29,17 @@ just setup        # enable git hooks and verify required tools
 
 ## Definition of Done
 
-- `just check` passes with zero warnings.
+- `just check` exits 0; cargo-deny duplicate-version warnings are expected.
 - New behavior is covered by tests that fail without the change.
 - `README.md` reflects every user-visible change.
-- Hooks enforce this: `.claude/settings.json` formats each edited `.rs` file and runs `just check-fast`
-  before an agent may finish; `.githooks/pre-commit` runs `just pre-commit`. Never bypass them
+- Hooks enforce this. `.claude/settings.json` formats each edited `.rs` file; a guard hook refuses
+  Bash commands that bypass the gates (`git commit --no-verify` or `-n`, `git push --no-verify`,
+  changing `core.hooksPath`, writing to `target/.agent-hooks`); and an agent may not finish while
+  `just check-fast` is red. The Stop hook skips the check when nothing it depends on changed since
+  the last green run, and gives up after 3 blocked stops on the same state — then tell the owner
+  that the checks are still red. `.githooks/pre-commit` runs `just pre-commit`. Never bypass them
   (`--no-verify`, disabling hooks, weakening hook scripts or lints to get green).
+- After a toolchain upgrade brings new lints, fix them in a dedicated `chore:` commit.
 
 ## Architecture
 
