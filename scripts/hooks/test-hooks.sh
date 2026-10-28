@@ -7,6 +7,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 format_hook=$root/scripts/hooks/format-rust-file.sh
 stop_hook=$root/scripts/hooks/stop-check.sh
+guard_hook=$root/scripts/hooks/guard-bash.sh
 check_tools=$root/scripts/check-tools.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
@@ -210,6 +211,83 @@ test_stop_hook_default_toolchain_id_works() {
     expect_check_ran # the real rustc/clippy versions differ from the stubbed id
 }
 
+run_guard() { # <command>
+    local json
+    json=$(jq -n --arg command "$1" '{tool_name: "Bash", tool_input: {command: $command}}')
+    run_with_input "$json" "$guard_hook"
+}
+
+expect_blocked() { # <command...>
+    local command
+    for command in "$@"; do
+        run_guard "$command"
+        [[ $status -eq 2 ]] || fail "expected exit 2 for: $command (got $status)"
+        expect_contains "guard-bash: blocked:" "$stderr" "stderr for: $command"
+    done
+}
+
+expect_allowed() { # <command...>
+    local command
+    for command in "$@"; do
+        run_guard "$command"
+        [[ $status -eq 0 ]] || fail "expected exit 0 for: $command (got $status, stderr: $stderr)"
+        [[ -z $stdout$stderr ]] || fail "expected no output for: $command, got: $stdout$stderr"
+    done
+}
+
+test_guard_blocks_commit_no_verify() {
+    expect_blocked 'git commit --no-verify -m x' 'git commit -m x --no-verify' \
+        'git commit --no-ver -m x' 'cd /tmp && git -C . commit --no-verify' \
+        'bash -c "git commit --no-verify -m x"' 'echo "$(git commit --no-verify -m x)"'
+}
+
+test_guard_blocks_commit_short_n() {
+    expect_blocked 'git commit -n -m x' 'git commit -an -m x' 'git commit -anm x' \
+        'FOO=1 git commit -nm x' 'timeout 60 git commit -n' '/usr/bin/git commit -n'
+}
+
+test_guard_blocks_push_no_verify() {
+    expect_blocked 'git push --no-verify' 'git push origin master --no-verify' \
+        'sh -lc "git push --no-verify"'
+}
+
+test_guard_blocks_hooks_path_change() {
+    expect_blocked 'git config core.hooksPath /dev/null' 'git config --unset core.hooksPath' \
+        'git config --global core.hooksPath .githooks' 'git config set core.hooksPath x' \
+        'git config core.hookspath .githooks-off' 'git config --remove-section core'
+}
+
+test_guard_blocks_hooks_path_override() {
+    expect_blocked 'git -c core.hooksPath=/dev/null commit -m x' \
+        'git -c core.hookspath= push' 'git --config-env=core.hooksPath=EMPTY commit -m x' \
+        "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x"
+}
+
+test_guard_blocks_hook_state_writes() {
+    expect_blocked 'echo x > target/.agent-hooks/last-green' \
+        'echo x >>target/.agent-hooks/blocks' 'echo x 2>target/.agent-hooks/last-green' \
+        'echo x | tee target/.agent-hooks/last-green' 'rm -rf target/.agent-hooks' \
+        'mv /tmp/x target/.agent-hooks/last-green' 'cp /tmp/x target/.agent-hooks/last-green' \
+        'touch target/.agent-hooks/last-green' 'sed -i s/a/b/ target/.agent-hooks/last-green'
+}
+
+test_guard_allows_lookalikes() {
+    expect_allowed 'grep no-verify AGENTS.md' 'grep -rn -- --no-verify scripts' \
+        'cat target/.agent-hooks/last-green' 'ls target/.agent-hooks' \
+        'git commit -m "docs: never use --no-verify or -n"' 'git commit -am "x" 2>&1' \
+        'git commit -m -n' 'git commit -F /tmp/message.txt' 'git log -n 5 --oneline' \
+        'git push -n origin master' 'git push origin master' \
+        'git config core.hooksPath .githooks' 'git config --get core.hooksPath' \
+        'cargo clean && rm -rf target' 'git status # git commit -n' \
+        $'git commit -m "$(cat <<\'EOF\'\nfix: x\n\ngit commit --no-verify is blocked\nEOF\n)"' \
+        $'cat > /tmp/notes <<EOF\ngit commit -n\nEOF\necho done'
+}
+
+test_guard_ignores_other_tools() {
+    run_with_input '{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}' "$guard_hook"
+    expect_status 0
+}
+
 # A PATH holding stub executables for every required tool except those given.
 stub_path_without() { # <missing-tool...>
     local bin tool skip missing
@@ -258,6 +336,14 @@ cases=(
     stop_hook_reruns_on_deleted_file
     stop_hook_reruns_on_toolchain_change
     stop_hook_default_toolchain_id_works
+    guard_blocks_commit_no_verify
+    guard_blocks_commit_short_n
+    guard_blocks_push_no_verify
+    guard_blocks_hooks_path_change
+    guard_blocks_hooks_path_override
+    guard_blocks_hook_state_writes
+    guard_allows_lookalikes
+    guard_ignores_other_tools
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
