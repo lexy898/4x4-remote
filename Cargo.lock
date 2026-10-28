@@ -8519,6 +8519,11 @@ dependencies = [
 [[package]]
 name = "x4-core"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.21",
+ "x4-rpc",
+]
 
 [[package]]
 name = "x4-rpc"
