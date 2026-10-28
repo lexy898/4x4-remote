@@ -1815,3 +1815,77 @@ fn the_engine_remembers_which_polls_the_daemon_refuses() {
     );
     assert_eq!(engine.refused, RefusedPolls::default());
 }
+
+#[test]
+fn an_action_sent_with_a_tick_does_not_pull_another_tick_forward() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let tick = base + ms(1500);
+    command(&mut engine, tick, Command::Run(ActionId(16), stop_first()));
+
+    let (due, events) = exchange(&mut engine, tick);
+
+    assert_eq!(
+        due,
+        [
+            Request::Action(ActionId(16), stop_first()),
+            Request::RecentlyActive,
+            Request::SessionStats
+        ]
+    );
+    assert_eq!(events, [finished(16, Ok(()))]);
+    // That tick went out after the action, so its answer already shows the change.
+    assert_eq!(hand_out(&mut engine, tick), []);
+    assert_eq!(
+        hand_out(&mut engine, base + ms(3000)),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
+}
+
+#[test]
+fn a_late_details_answer_moves_the_next_tick() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    command(&mut engine, base, Command::Select(Some(first())));
+    exchange(&mut engine, base);
+    let tick = base + ms(1500);
+    let due = hand_out(&mut engine, tick);
+    assert_eq!(
+        due,
+        [
+            Request::RecentlyActive,
+            Request::SessionStats,
+            Request::Details(first())
+        ]
+    );
+
+    respond(&mut engine, tick, &due[0], Ok(answer(&due[0])));
+    respond(&mut engine, tick, &due[1], Ok(answer(&due[1])));
+    let answered = tick + secs(3);
+    respond(&mut engine, answered, &due[2], Ok(answer(&due[2])));
+
+    assert_eq!(hand_out(&mut engine, answered), []);
+    assert_eq!(hand_out(&mut engine, answered + ms(1499)), []);
+    assert_eq!(hand_out(&mut engine, answered + ms(1500)), due);
+}
+
+#[test]
+fn a_new_selection_makes_a_details_refusal_news_again() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    command(&mut engine, base, Command::Select(Some(first())));
+    let refusal = RpcError::Server {
+        code: 1,
+        message: "system error".to_owned(),
+        detail: None,
+    };
+
+    respond(&mut engine, base, &Request::Details(first()), Err(refusal));
+    assert_eq!(
+        engine.refused,
+        RefusedPolls(HashSet::from([PollKind::Details]))
+    );
+
+    command(&mut engine, base, Command::Select(Some(second())));
+    assert_eq!(engine.refused, RefusedPolls::default());
+}

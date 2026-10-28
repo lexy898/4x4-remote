@@ -10,7 +10,7 @@ mod schedule;
 #[cfg(test)]
 mod tests;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -164,8 +164,9 @@ pub enum Event {
 /// answering it becomes [`ConnectionState::Reconnecting`], keeps the last state (marked stale)
 /// and checks the server again after each step of [`EngineConfig::backoff`]; the steps go on
 /// until the connection has stayed up for [`EngineConfig::stable_after`], so a daemon that passes
-/// the check but fails a poll every time is not asked every second. A server older than Transmission 4.1 (RPC version 6) makes it
-/// [`ConnectionState::Unsupported`] until [`Command::Reconnect`].
+/// the check but fails a poll every time is not asked every second. A server older than
+/// Transmission 4.1 (RPC version 6) makes it [`ConnectionState::Unsupported`] until
+/// [`Command::Reconnect`].
 ///
 /// Each poll is next due one interval after it was handed out, or after its answer came if that
 /// is later, so a slow daemon rests a full interval between turns.
@@ -193,6 +194,12 @@ pub struct Engine {
     details_now: bool,
     /// Actions accepted while connected and not handed out yet.
     actions: VecDeque<(ActionId, Action)>,
+    /// How many times requests were handed out; numbers the batches.
+    batch: u64,
+    /// The batch the last tick went out in.
+    tick_batch: Option<u64>,
+    /// The batch each action that has no answer yet went out in.
+    action_batches: HashMap<ActionId, u64>,
     store: Store,
     session: Option<SessionSummary>,
     /// The directory whose free space is read; known once this connection read the session.
@@ -227,6 +234,9 @@ impl Engine {
             tick_timer: Timer::default(),
             details_now: false,
             actions: VecDeque::new(),
+            batch: 0,
+            tick_batch: None,
+            action_batches: HashMap::new(),
             store: Store::new(),
             session: None,
             download_dir: None,
@@ -278,11 +288,12 @@ impl Engine {
     /// later than that moves the next turn to one interval after the answer.
     #[must_use]
     pub fn due_requests(&mut self, now: Instant) -> Vec<Request> {
-        let mut due: Vec<Request> = self
-            .actions
-            .drain(..)
-            .map(|(id, action)| Request::Action(id, action))
-            .collect();
+        self.batch = self.batch.wrapping_add(1);
+        let mut due = Vec::with_capacity(self.actions.len());
+        for (id, action) in self.actions.drain(..) {
+            self.action_batches.insert(id, self.batch);
+            due.push(Request::Action(id, action));
+        }
         match self.connection {
             ConnectionState::Connecting | ConnectionState::Reconnecting { .. } => {
                 if self.check_at.is_some_and(|at| at <= now) {
@@ -319,6 +330,9 @@ impl Engine {
 
     /// Takes the answer to `request`, which was handed out by [`Engine::due_requests`], at `now`;
     /// returns the events it causes.
+    ///
+    /// `now` must be the time this answer arrived, not the time its batch was handed out: the
+    /// next turn of the poll is measured from it, so a slow daemon gets its rest.
     ///
     /// A failed poll that means the daemon cannot be used (no answer, an HTTP error, an answer
     /// that is not JSON-RPC) starts reconnecting, and an unsupported server stops polling. A
@@ -544,10 +558,17 @@ impl Engine {
         action: &Action,
         result: Result<Response, RpcError>,
     ) -> Vec<Event> {
+        let sent_in = self.action_batches.remove(&id);
         let Err(error) = result else {
             tracing::info!(action = action.name(), "action done");
-            // Its effect shows in the next tick; bring that tick forward.
-            self.tick_timer.force();
+            // Its effect shows in the next tick; bring that tick forward, unless a tick already
+            // went out with the action or after it (polls follow actions in a batch).
+            let seen = sent_in
+                .zip(self.tick_batch)
+                .is_some_and(|(action_batch, tick_batch)| tick_batch >= action_batch);
+            if !seen {
+                self.tick_timer.force();
+            }
             if action.changes_session() {
                 self.session_timer.force();
             }
@@ -581,7 +602,11 @@ impl Engine {
                         "the daemon refused a poll; it is tried again at its next interval"
                     );
                 } else {
-                    tracing::debug!(request = poll.name(), %error, "the daemon refused a poll again");
+                    tracing::debug!(
+                        request = poll.name(),
+                        %error,
+                        "the daemon refused a poll again"
+                    );
                 }
                 Vec::new()
             }

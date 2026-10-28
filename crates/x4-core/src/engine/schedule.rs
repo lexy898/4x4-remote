@@ -117,6 +117,7 @@ impl Engine {
             }
             due.push(Request::SessionStats);
             self.tick_timer.sent(now);
+            self.tick_batch = Some(self.batch);
         }
         if let Some(dir) = &self.download_dir
             && self
@@ -231,7 +232,7 @@ mod tests {
         let mut timer = Timer::default();
         timer.sent(base);
 
-        // An answer within the interval changes nothing; a later one starts it over.
+        // The next turn is an interval after the latest answer, never sooner.
         timer.answered(base + secs(1));
         assert_eq!(timer.due_at(base, secs(10)), Some(base + secs(11)));
         timer.answered(base + secs(3));
