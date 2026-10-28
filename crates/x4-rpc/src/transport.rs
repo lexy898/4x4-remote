@@ -6,7 +6,12 @@
 use std::io;
 use std::time::Duration;
 
+use ureq::config::Config;
 use ureq::http::Uri;
+// ureq's `unversioned` API may change in a minor release; a break shows up as a build error
+// on `just update`.
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
 /// The CSRF header Transmission requires on every request (rpc-spec §2.2.1).
 const SESSION_ID_HEADER: &str = "X-Transmission-Session-Id";
@@ -58,6 +63,10 @@ pub trait Transport: Send {
 }
 
 /// A blocking HTTP transport over `ureq`, plain HTTP only.
+///
+/// It always connects directly to the daemon: the proxy environment variables (`HTTP_PROXY`,
+/// `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are ignored. `NO_PROXY` cannot exempt a LAN range, so
+/// honouring them would send requests for a LAN daemon to the proxy. A proxy option is future work.
 #[derive(Debug, Clone)]
 pub struct UreqTransport {
     agent: ureq::Agent,
@@ -72,18 +81,51 @@ impl UreqTransport {
     /// [`TransportError::Connect`].
     #[must_use]
     pub fn new(url: &str, timeout: Duration) -> Self {
-        let agent = ureq::Agent::config_builder()
+        Self::with_resolver(url, timeout, DefaultResolver::default())
+    }
+
+    /// [`UreqTransport::new`] with a bespoke name resolver, so tests can fail lookups offline.
+    fn with_resolver(url: &str, timeout: Duration, resolver: impl Resolver) -> Self {
+        let config = ureq::Agent::config_builder()
             // 401, 403 and 409 are part of the protocol; the client interprets every status.
             .http_status_as_error(false)
             .timeout_global(Some(timeout))
-            .build()
-            .new_agent();
+            .proxy(None)
+            .build();
+        let agent =
+            ureq::Agent::with_parts(config, DefaultConnector::new(), LookupResolver(resolver));
         Self {
             agent,
             url: url.to_owned(),
         }
     }
 }
+
+/// Marks name-resolution failures, which std reports as uncategorised I/O errors that would
+/// otherwise look like a failure on an open connection.
+#[derive(Debug)]
+struct LookupResolver<R>(R);
+
+impl<R: Resolver> Resolver for LookupResolver<R> {
+    fn resolve(
+        &self,
+        uri: &Uri,
+        config: &Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        self.0
+            .resolve(uri, config, timeout)
+            .map_err(|error| match error {
+                ureq::Error::Io(io) => ureq::Error::Other(Box::new(HostLookupError(io))),
+                other => other,
+            })
+    }
+}
+
+/// The host name of the RPC URL could not be resolved.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot resolve the host name: {0}")]
+struct HostLookupError(io::Error);
 
 impl Transport for UreqTransport {
     fn post(&self, request: &HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
@@ -119,6 +161,9 @@ fn transport_error(error: ureq::Error) -> TransportError {
         }
         ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::BadUri(_) => {
             TransportError::Connect(error.to_string())
+        }
+        ureq::Error::Other(inner) if inner.is::<HostLookupError>() => {
+            TransportError::Connect(inner.to_string())
         }
         other => TransportError::Io(other.to_string()),
     }
@@ -287,6 +332,80 @@ mod tests {
     #[test]
     fn an_invalid_url_is_a_connect_error() {
         let transport = UreqTransport::new("not a url", TIMEOUT);
+
+        let response = transport.post(&HttpRequest {
+            body: b"{}",
+            session_id: None,
+        });
+
+        assert!(
+            matches!(response, Err(TransportError::Connect(_))),
+            "got {response:?}"
+        );
+    }
+
+    #[test]
+    fn proxy_environment_variables_are_ignored() {
+        // Environment variables cannot be set here (`set_var` is unsafe), so check the agent's
+        // configuration: ureq's default would pick up HTTP_PROXY and friends.
+        let transport = UreqTransport::new("http://127.0.0.1:9091/transmission/rpc", TIMEOUT);
+
+        assert!(
+            transport.agent.config().proxy().is_none(),
+            "{:?}",
+            transport.agent.config().proxy()
+        );
+    }
+
+    /// Fails every lookup the way std does: an uncategorised I/O error.
+    #[derive(Debug)]
+    struct FailingLookup;
+
+    impl Resolver for FailingLookup {
+        fn resolve(
+            &self,
+            _uri: &Uri,
+            _config: &Config,
+            _timeout: NextTimeout,
+        ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+            Err(ureq::Error::Io(io::Error::other(
+                "failed to lookup address information: Temporary failure in name resolution",
+            )))
+        }
+    }
+
+    #[test]
+    fn a_failed_lookup_is_a_connect_error() {
+        let transport = UreqTransport::with_resolver(
+            "http://daemon.example:9091/transmission/rpc",
+            TIMEOUT,
+            FailingLookup,
+        );
+
+        let response = transport.post(&HttpRequest {
+            body: b"{}",
+            session_id: None,
+        });
+
+        assert_eq!(
+            response,
+            Err(TransportError::Connect(
+                "cannot resolve the host name: failed to lookup address information: \
+                 Temporary failure in name resolution"
+                    .to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_host_that_does_not_resolve_is_a_connect_error() {
+        // `.invalid` never resolves (RFC 6761) and local resolvers answer it without asking the
+        // network; the trailing dot skips search domains. On a resolver that silently drops
+        // queries this would end as `Timeout` after 3 s instead of hanging.
+        let transport = UreqTransport::new(
+            "http://no-such-host.invalid.:9091/transmission/rpc",
+            Duration::from_secs(3),
+        );
 
         let response = transport.post(&HttpRequest {
             body: b"{}",
