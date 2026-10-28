@@ -215,6 +215,7 @@ fn default_config_has_the_planned_values() {
         config.backoff,
         [secs(1), secs(2), secs(4), secs(8), secs(16), secs(30)]
     );
+    assert_eq!(config.stable_after, secs(30));
 }
 
 #[test]
@@ -1427,47 +1428,94 @@ fn next_wakeup_is_a_minute_away_when_nothing_is_scheduled() {
     assert_eq!(engine.next_wakeup(now), now + secs(60));
 }
 
-#[test]
-fn a_connection_that_fails_its_full_list_keeps_backing_off() {
+/// Runs an engine against a daemon that passes the server check but answers every `failing`
+/// poll with an invalid response, until the connection has failed `rounds` times. Returns the
+/// attempt after each failure and the wait from it to the next server check.
+fn back_off_while_failing(failing: &Request, rounds: usize) -> (Vec<u32>, Vec<Duration>) {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
+    command(&mut engine, base, Command::Select(Some(first())));
     let mut now = base;
     let mut attempts = Vec::new();
     let mut waits = Vec::new();
 
-    for _ in 0..8 {
-        assert_eq!(hand_out(&mut engine, now), [Request::CheckServer]);
-        respond(
-            &mut engine,
-            now,
-            &Request::CheckServer,
-            Ok(answer(&Request::CheckServer)),
-        );
-        assert_eq!(engine.connection, ConnectionState::Connected);
+    while attempts.len() < rounds {
+        let was_connected = engine.connection == ConnectionState::Connected;
         for request in hand_out(&mut engine, now) {
-            let result = if request == Request::FullList {
-                Err(RpcError::InvalidResponse(
-                    "torrents: invalid type".to_owned(),
-                ))
+            let result = if &request == failing {
+                Err(RpcError::InvalidResponse("invalid type".to_owned()))
             } else {
                 Ok(answer(&request))
             };
             respond(&mut engine, now, &request, result);
         }
-        let ConnectionState::Reconnecting { attempt, .. } = engine.connection else {
-            panic!("expected reconnecting, got {:?}", engine.connection);
-        };
-        attempts.push(attempt);
         let next = engine.next_wakeup(now);
-        waits.push(next.duration_since(now));
+        if let ConnectionState::Reconnecting { attempt, .. } = engine.connection
+            && was_connected
+        {
+            attempts.push(attempt);
+            waits.push(next.duration_since(now));
+        }
+        assert!(
+            now.duration_since(base) < secs(600),
+            "{failing:?} never failed"
+        );
         now = next;
     }
+    (attempts, waits)
+}
 
-    assert_eq!(attempts, (1..=8).collect::<Vec<u32>>());
-    assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30, 30].map(secs));
+/// The attempts and waits of eight failures in a row: the backoff, and then its last step.
+fn eight_failures() -> (Vec<u32>, Vec<Duration>) {
+    (
+        (1..=8).collect(),
+        [1, 2, 4, 8, 16, 30, 30, 30].map(secs).to_vec(),
+    )
+}
 
-    // Once a full list is read the connection has proved itself, and a later failure starts
-    // the backoff over.
+#[test]
+fn a_connection_that_fails_its_full_list_keeps_backing_off() {
+    assert_eq!(
+        back_off_while_failing(&Request::FullList, 8),
+        eight_failures()
+    );
+}
+
+#[test]
+fn a_connection_that_fails_its_stats_keeps_backing_off() {
+    assert_eq!(
+        back_off_while_failing(&Request::SessionStats, 8),
+        eight_failures()
+    );
+}
+
+#[test]
+fn every_poll_that_keeps_failing_backs_off() {
+    for poll in [
+        Request::SessionGet,
+        Request::FreeSpace(DOWNLOAD_DIR.to_owned()),
+        Request::RecentlyActive,
+        Request::Details(first()),
+    ] {
+        assert_eq!(
+            back_off_while_failing(&poll, 8),
+            eight_failures(),
+            "{poll:?}"
+        );
+    }
+}
+
+/// An engine that failed `checks` server checks in a row and then connected and read
+/// everything; returns it and the time it connected.
+fn connected_after_failures(base: Instant, checks: u32) -> (Engine, Instant) {
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    let mut now = base;
+    for _ in 0..checks {
+        assert_eq!(hand_out(&mut engine, now), [Request::CheckServer]);
+        respond(&mut engine, now, &Request::CheckServer, Err(timeout()));
+        now = engine.next_wakeup(now);
+    }
+    assert_eq!(hand_out(&mut engine, now), [Request::CheckServer]);
     respond(
         &mut engine,
         now,
@@ -1475,8 +1523,45 @@ fn a_connection_that_fails_its_full_list_keeps_backing_off() {
         Ok(answer(&Request::CheckServer)),
     );
     while !exchange(&mut engine, now).0.is_empty() {}
-    respond(&mut engine, now, &Request::SessionStats, Err(timeout()));
+    (engine, now)
+}
+
+#[test]
+fn a_failure_after_a_stable_connection_starts_the_backoff_over() {
+    let base = Instant::now();
+    let (mut engine, connected_at) = connected_after_failures(base, 3);
+    // Thirty seconds of healthy ticks.
+    for tick in 1..=20 {
+        exchange(&mut engine, connected_at + ms(1500 * tick));
+    }
+    let failed_at = connected_at + secs(30);
+
+    respond(
+        &mut engine,
+        failed_at,
+        &Request::SessionStats,
+        Err(timeout()),
+    );
+
     assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
+    assert_eq!(engine.next_wakeup(failed_at), failed_at + secs(1));
+}
+
+#[test]
+fn a_failure_before_the_connection_is_stable_keeps_counting() {
+    let base = Instant::now();
+    let (mut engine, connected_at) = connected_after_failures(base, 3);
+    let failed_at = connected_at + ms(29_999);
+
+    respond(
+        &mut engine,
+        failed_at,
+        &Request::SessionStats,
+        Err(timeout()),
+    );
+
+    assert_eq!(engine.connection, reconnecting(4, ConnectionError::Timeout));
+    assert_eq!(engine.next_wakeup(failed_at), failed_at + secs(8));
 }
 
 #[test]

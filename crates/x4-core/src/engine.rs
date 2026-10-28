@@ -46,11 +46,16 @@ pub struct EngineConfig {
     /// The wait before each try to reach a daemon that does not answer, the first try first;
     /// the last wait repeats. An empty list waits 30 s.
     pub backoff: Vec<Duration>,
+    /// How long the connection must stay up before a failure starts the backoff from its first
+    /// step again; until then the steps go on, so a daemon that passes the server check but
+    /// fails a poll every time is not asked every second.
+    pub stable_after: Duration,
 }
 
 impl Default for EngineConfig {
     /// Ticks of 1.5 s while visible and 10 s while hidden, the full list and the session every
-    /// minute, the free space every 30 s, and retries after 1, 2, 4, 8, 16 and then every 30 s.
+    /// minute, the free space every 30 s, and retries after 1, 2, 4, 8, 16 and then every 30 s,
+    /// starting over once the connection has stayed up for 30 s.
     fn default() -> Self {
         Self {
             visible_interval: Duration::from_millis(1500),
@@ -59,6 +64,7 @@ impl Default for EngineConfig {
             session_interval: Duration::from_secs(60),
             free_space_interval: Duration::from_secs(30),
             backoff: [1, 2, 4, 8, 16, 30].map(Duration::from_secs).to_vec(),
+            stable_after: Duration::from_secs(30),
         }
     }
 }
@@ -157,8 +163,8 @@ pub enum Event {
 /// active torrents, the statistics and the selected torrent's details. When the daemon stops
 /// answering it becomes [`ConnectionState::Reconnecting`], keeps the last state (marked stale)
 /// and checks the server again after each step of [`EngineConfig::backoff`]; the steps go on
-/// until a full list is read, so a daemon that passes the check but fails the polls is not asked
-/// every second. A server older than Transmission 4.1 (RPC version 6) makes it
+/// until the connection has stayed up for [`EngineConfig::stable_after`], so a daemon that passes
+/// the check but fails a poll every time is not asked every second. A server older than Transmission 4.1 (RPC version 6) makes it
 /// [`ConnectionState::Unsupported`] until [`Command::Reconnect`].
 ///
 /// Each poll is next due one interval after it was handed out, or after its answer came if that
@@ -173,10 +179,11 @@ pub struct Engine {
     connection: ConnectionState,
     /// When to check the server next; `None` while connected or unsupported.
     check_at: Option<Instant>,
-    /// Failed tries in a row to use the daemon. A successful server check does not reset it;
-    /// the first full list read after connecting does, because only then has the connection
-    /// proved itself.
+    /// Failed tries in a row to use the daemon. A successful server check does not reset it:
+    /// only a connection that stays up for [`EngineConfig::stable_after`] has proved itself.
     attempts: u32,
+    /// When the daemon last passed the server check.
+    connected_since: Option<Instant>,
     session_timer: Timer,
     full_list_timer: Timer,
     free_space_timer: Timer,
@@ -213,6 +220,7 @@ impl Engine {
             connection: ConnectionState::Connecting,
             check_at: Some(now),
             attempts: 0,
+            connected_since: None,
             session_timer: Timer::default(),
             full_list_timer: Timer::default(),
             free_space_timer: Timer::default(),
@@ -451,7 +459,9 @@ impl Engine {
             return Vec::new();
         }
         match result {
-            Ok(Response::Server(version)) if version.is_supported() => self.connected(&version),
+            Ok(Response::Server(version)) if version.is_supported() => {
+                self.connected(now, &version)
+            }
             Ok(Response::Server(version)) => self.unsupported(version.rpc_semver),
             Ok(other) => self.connect_failed(now, &unexpected(&Request::CheckServer, &other)),
             Err(RpcError::UnsupportedServer { rpc_version }) => self.unsupported(rpc_version),
@@ -460,14 +470,15 @@ impl Engine {
         }
     }
 
-    /// The server answered and is supported: read everything at once.
-    fn connected(&mut self, version: &ServerVersion) -> Vec<Event> {
+    /// The server answered at `now` and is supported: read everything at once.
+    fn connected(&mut self, now: Instant, version: &ServerVersion) -> Vec<Event> {
         tracing::info!(
             version = %version.version,
             rpc_version = %version.rpc_semver,
             "connected to the daemon"
         );
         self.check_at = None;
+        self.connected_since = Some(now);
         // A timer never sent is due at once. The tick brings the statistics and the details;
         // its recently active torrents come with the full list.
         self.session_timer = Timer::default();
@@ -490,7 +501,13 @@ impl Engine {
     }
 
     /// The daemon cannot be used: wait one more step of the backoff, then check it again.
+    ///
+    /// A connection that stayed up long enough to prove itself starts the backoff over; one
+    /// that fails sooner, even after a successful server check, goes on to the next step.
     fn connect_failed(&mut self, now: Instant, error: &RpcError) -> Vec<Event> {
+        if self.connection == ConnectionState::Connected && self.was_stable(now) {
+            self.attempts = 0;
+        }
         let attempt = self.next_attempt();
         self.attempts = attempt;
         let delay = self.retry_delay(attempt);
@@ -500,6 +517,14 @@ impl Engine {
             attempt,
             last_error: ConnectionError::from(error),
         })
+    }
+
+    /// Whether the connection has been up without a failure for [`EngineConfig::stable_after`]
+    /// at `now`. A connection-class failure ends it at once, so "up" is enough.
+    fn was_stable(&self, now: Instant) -> bool {
+        self.connected_since
+            .and_then(|since| since.checked_add(self.config.stable_after))
+            .is_some_and(|stable_at| now >= stable_at)
     }
 
     /// Reconnects after an error that shows the daemon cannot be used, unless that is already

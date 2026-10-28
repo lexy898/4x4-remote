@@ -36,8 +36,6 @@ impl Engine {
             }
             (Request::FullList, Response::Torrents(list)) => {
                 self.list_read(list, ListKind::Full);
-                // The connection has proved itself: a later failure starts the backoff over.
-                self.attempts = 0;
                 Vec::new()
             }
             (Request::RecentlyActive, Response::Torrents(list)) => {
