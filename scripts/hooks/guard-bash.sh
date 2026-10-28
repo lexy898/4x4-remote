@@ -11,7 +11,9 @@
 # Everything else exits 0 silently. Mentions inside quoted arguments, heredoc bodies and
 # read-only commands (`grep no-verify`, `cat target/.agent-hooks/last-green`) are allowed:
 # the command is split into words and simple commands roughly the way the shell does it,
-# and only the command words are judged.
+# and only the command words are judged. Commands that the shell would really run from
+# inside double quotes or an unquoted heredoc (`$(...)`, backticks) are judged too; escaped
+# ones (`\$(`, `\``) and the body of a heredoc with a quoted delimiter are plain text.
 #
 # This is a guard against mistakes and shortcuts, not a sandbox: a determined workaround
 # (an alias, a script file, an encoded string) is not detected.
@@ -31,7 +33,11 @@ block() { # <reason>
 # --- Lexer --------------------------------------------------------------------------------
 # lex <text> fills LEX_TYPES / LEX_VALUES with words (W), operators that end a simple
 # command (O) and redirection operators (R), with quotes and escapes removed from words.
-# Command substitutions found inside double quotes go to LEX_NESTED for a separate pass.
+# Double-quoted text and unquoted heredoc bodies that contain `$(` or a backtick go to
+# LEX_NESTED; judge_expandable finds the command substitutions in them.
+#
+# With <stop-at-close> = 1 the text is the inside of a `$(...)`: lexing ends at the
+# parenthesis that closes it and LEX_REST holds the text after it.
 #
 # Bash string operations cost time proportional to the string length, so the lexer works on
 # a small window (`buf`) in front of the unread text (`tail`) to stay fast on long commands.
@@ -47,13 +53,16 @@ re_run='^[^][:space:]'\''"\;&|()<>`$]+'
 LEX_TYPES=()
 LEX_VALUES=()
 LEX_NESTED=()
+LEX_REST=''
 
-lex() { # <text>
-    local buf='' tail=$1 word='' have_word=0 want_delim=0 strip_tabs=0 c text prefix entry delim
+lex() { # <text> [<stop-at-close>]
+    local buf='' tail=$1 stop=${2:-0} word='' have_word=0 word_quoted=0 want_delim=0 strip_tabs=0
+    local c text prefix entry delim delim_quoted body parens=0
     local -a heredocs=()
     LEX_TYPES=()
     LEX_VALUES=()
     LEX_NESTED=()
+    LEX_REST=''
 
     while :; do
         if ((${#buf} < 256)) && [[ -n $tail ]]; then
@@ -74,10 +83,12 @@ lex() { # <text>
                 LEX_VALUES+=($'\n')
                 buf=${buf:1}
                 if ((${#heredocs[@]} > 0)); then
-                    # Heredoc bodies start after the line that declared them; they are data.
+                    # Heredoc bodies start after the line that declared them. The shell expands
+                    # a body unless the delimiter was quoted, so only then can it run commands.
                     text=$'\n'$buf$tail
                     for entry in "${heredocs[@]}"; do
-                        strip_tabs=${entry%%:*}
+                        strip_tabs=${entry:0:1}
+                        delim_quoted=${entry:1:1}
                         delim=${entry#*:}
                         if ((strip_tabs)); then
                             prefix=${text%%$'\n'*($'\t')"$delim"$'\n'*}
@@ -85,10 +96,15 @@ lex() { # <text>
                             prefix=${text%%$'\n'"$delim"$'\n'*}
                         fi
                         if [[ $prefix == "$text" ]]; then
+                            body=$text
                             text='' # unterminated, or terminated by the end of the text
                         else
+                            body=$prefix
                             text=${text:${#prefix}+1}
                             text=$'\n'${text#*$'\n'}
+                        fi
+                        if ((!delim_quoted)); then
+                            lex_queue_expansions "$body"
                         fi
                     done
                     buf=''
@@ -109,6 +125,7 @@ lex() { # <text>
                         # `2>file`: the digits name a file descriptor, not an argument.
                         word=''
                         have_word=0
+                        word_quoted=0
                     else
                         lex_finish_word
                     fi
@@ -147,17 +164,31 @@ lex_finish_word() {
         LEX_TYPES+=(W)
         LEX_VALUES+=("$word")
         if ((want_delim)); then
-            heredocs+=("$strip_tabs:$word")
+            heredocs+=("$strip_tabs$word_quoted:$word")
             want_delim=0
         fi
     fi
     word=''
     have_word=0
+    word_quoted=0
 }
 
 lex_operator() {
     lex_finish_word
     [[ $buf =~ $re_op ]]
+    case ${BASH_REMATCH[0]} in
+        '(') parens=$((parens + 1)) ;;
+        ')')
+            if ((parens > 0)); then
+                parens=$((parens - 1))
+            elif ((stop)); then
+                LEX_REST=${buf:1}$tail # the text after the parenthesis that closes `$(`
+                buf=''
+                tail=''
+                return
+            fi
+            ;;
+    esac
     LEX_TYPES+=(O)
     LEX_VALUES+=("${BASH_REMATCH[0]}")
     buf=${buf:${#BASH_REMATCH[0]}}
@@ -197,12 +228,14 @@ lex_quoted_or_special() {
                 lex_finish_word
                 LEX_TYPES+=(O)
                 LEX_VALUES+=('(')
+                parens=$((parens + 1))
                 buf=${buf:2}
                 return
             fi
             if [[ $buf == "\$'"* ]] && lex_match "$re_ansi"; then
                 word+=${BASH_REMATCH[1]}
                 consumed=${#BASH_REMATCH[0]}
+                word_quoted=1
             else
                 word+=$c
             fi
@@ -211,6 +244,7 @@ lex_quoted_or_special() {
             if lex_match "$re_squote"; then
                 word+=${BASH_REMATCH[1]}
                 consumed=${#BASH_REMATCH[0]}
+                word_quoted=1
             else
                 word+=$c # unterminated: keep it literally
             fi
@@ -219,17 +253,20 @@ lex_quoted_or_special() {
             if lex_match "$re_dquote"; then
                 consumed=${#BASH_REMATCH[0]}
                 text=${BASH_REMATCH[1]}
-                lex_collect_substitutions "$text"
-                text=${text//\\\"/\"}
-                text=${text//\\\\/\\}
-                word+=$text
+                lex_queue_expansions "$text"
+                lex_unescape "$text"
+                word+=$REPLY
+                word_quoted=1
             else
                 word+=$c
             fi
             ;;
         '\')
             if ((${#buf} >= 2)); then
-                [[ ${buf:1:1} == $'\n' ]] || word+=${buf:1:1}
+                if [[ ${buf:1:1} != $'\n' ]]; then
+                    word+=${buf:1:1}
+                    word_quoted=1
+                fi
                 consumed=2
             else
                 word+=$c
@@ -240,25 +277,32 @@ lex_quoted_or_special() {
     have_word=1
 }
 
-# `$(...)` and backticks inside double quotes still run commands; queue their text.
-lex_collect_substitutions() { # <double-quoted text>
-    local text=$1 before
-    while :; do
-        before=${text%%'$('*}
-        ((${#before} < ${#text})) || break
-        text=${text:${#before}+2}
-        LEX_NESTED+=("$text")
+# Double quotes and unquoted heredoc bodies still run `$(...)` and backticks: queue the text
+# for judge_expandable. Plain text is not worth a second pass.
+lex_queue_expansions() { # <text the shell would expand>
+    if [[ $1 == *'$('* || $1 == *'`'* ]]; then
+        LEX_NESTED+=("$1")
+    fi
+}
+
+# Removes the escapes the shell removes inside double quotes: a backslash only escapes
+# `"`, `$`, backtick, `\` and a newline (a line continuation). Sets REPLY.
+lex_unescape() { # <double-quoted text>
+    local rest=$1 out='' before
+    while [[ $rest == *'\'* ]]; do
+        before=${rest%%'\'*}
+        out+=$before
+        rest=${rest:${#before}+1}
+        case ${rest:0:1} in
+            '"' | '$' | '`' | '\')
+                out+=${rest:0:1}
+                rest=${rest:1}
+                ;;
+            $'\n') rest=${rest:1} ;;
+            *) out+='\' ;;
+        esac
     done
-    text=$1
-    while :; do
-        before=${text%%'`'*}
-        ((${#before} < ${#text})) || break
-        text=${text:${#before}+1}
-        LEX_NESTED+=("${text%%'`'*}")
-        before=${text%%'`'*}
-        text=${text:${#before}}
-        [[ -n $text ]] && text=${text:1}
-    done
+    REPLY=$out$rest
 }
 
 # --- Judging simple commands --------------------------------------------------------------
@@ -487,10 +531,14 @@ judge_simple() { # <depth> <word...> (redirections are judged by the caller)
     esac
 }
 
-judge_text() { # <depth> <shell text>
+# Judges <shell text>. With <stop-at-close> = 1 the text is the inside of a `$(...)`: only the
+# part before the closing parenthesis is judged and JUDGE_REST is the text after it.
+judge_text() { # <depth> <shell text> [<stop-at-close>]
     local depth=$1
+    JUDGE_REST=''
     ((depth <= max_depth)) || return 0
-    lex "$2"
+    lex "$2" "${3:-0}"
+    local rest=$LEX_REST
     local -a types=("${LEX_TYPES[@]}") values=("${LEX_VALUES[@]}") nested=("${LEX_NESTED[@]}")
     local -a words=()
     local i n=${#types[@]} redirect=''
@@ -514,7 +562,52 @@ judge_text() { # <depth> <shell text>
     done
     local text
     for text in "${nested[@]}"; do
-        judge_text "$((depth + 1))" "$text"
+        judge_expandable "$depth" "$text"
+    done
+    JUDGE_REST=$rest
+}
+
+# Judges the commands that the shell would run while expanding <text> (the inside of double
+# quotes or an unquoted heredoc body): `$(...)` and backticks. A backslash escapes the next
+# character, so `\$(` and `\`` are plain text; everything else is data.
+judge_expandable() { # <depth> <text>
+    local depth=$1 text=$2 before code
+    local specials='[\\`$]'
+    while [[ $text == *$specials* ]]; do
+        before=${text%%$specials*}
+        text=${text:${#before}}
+        case $text in
+            '\'*) text=${text:2} ;;
+            '$('*)
+                judge_text "$((depth + 1))" "${text:2}" 1
+                text=$JUDGE_REST
+                ;;
+            '`'*)
+                text=${text:1}
+                code=''
+                while :; do
+                    before=${text%%[\\\`]*}
+                    code+=$before
+                    text=${text:${#before}}
+                    case $text in
+                        '\'*)
+                            case ${text:1:1} in
+                                '`' | '$' | '\') code+=${text:1:1} ;; # escapes inside backticks
+                                *) code+=${text:0:2} ;;
+                            esac
+                            text=${text:2}
+                            ;;
+                        '`'*)
+                            text=${text:1}
+                            break
+                            ;;
+                        *) break ;; # unterminated
+                    esac
+                done
+                judge_text "$((depth + 1))" "$code"
+                ;;
+            *) text=${text:1} ;; # a lone `$`
+        esac
     done
 }
 
