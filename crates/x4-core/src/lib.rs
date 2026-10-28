@@ -29,7 +29,9 @@
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
 //! [`SkippedRecord`]s that could not be. A [`Snapshot`] is what the UI reads: the torrents, the
 //! [`SessionSummary`], the totals and the [`ConnectionState`], whose [`ConnectionError`] says in
-//! the user's terms why the daemon cannot be used.
+//! the user's terms why the daemon cannot be used (a daemon whose version is too old is a
+//! [`ConnectionState::Unsupported`] with an [`UnsupportedReason`], which is re-exported from
+//! `x4-rpc`).
 //!
 //! The [`Engine`] runs the polling without doing any I/O itself: given the current time it
 //! names the [`Request`]s that are due, takes each [`Response`] and each [`Command`] of the UI,
@@ -88,3 +90,6 @@ pub use view::{
     ColumnId, CompactDuration, EtaView, Row, StatusModel, Subtitle, TableModel, TimeUnit,
     ViewState, status_model, table_model, visibility,
 };
+// The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
+// x4-rpc.
+pub use x4_rpc::UnsupportedReason;

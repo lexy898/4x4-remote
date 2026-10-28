@@ -21,7 +21,14 @@ base64 = "0.23.1"
 crossbeam-channel = "0.5.17"
 # Where the config, the UI state and the logs live (XDG directories on Linux).
 directories = "6.0.0"
+# Parses the .ftl files in the localization parity test (dev-dependency only).
+fluent-syntax = "0.12.0"
 gpui-kit = "=0.8.1"
+# Fluent messages for every user-visible string; `fl!` checks ids and arguments at compile time.
+i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
+i18n-embed-fl = "0.10.1"
+# Embeds the .ftl files into the binary (read from disk in debug builds).
+rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # SHA-1 for the metainfo the live tests create (dev-dependency only).

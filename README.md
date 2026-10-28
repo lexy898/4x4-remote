@@ -93,6 +93,24 @@ instead of `io.github.lexy898.FourByFour`, so window rules made for test windows
 open on another screen without taking focus) never catch the window you actually use. Set
 `X4_DEVEL=1` to give a release build the same id; `just measure` does.
 
+## Localization
+
+The interface is in English. Every text the app shows is a message in
+[`crates/x4-app/i18n/en/x4.ftl`](crates/x4-app/i18n/en/x4.ftl), written in
+[Fluent](https://projectfluent.org/), which has plural rules for each language built in ("1 peer",
+"3 peers"). The messages are embedded into the binary. Misspelling a message id or one of its
+arguments in the code is a compile error.
+
+Another language is one more file, `crates/x4-app/i18n/<code>/x4.ftl` (for example `ru`), with the
+same messages as the English one. A test checks every language directory: the file must parse,
+define the same messages as `en` and use the same `$variables` in each of them. The English text
+stands in for a message a language does not translate yet. Picking the language from the system
+locale is not wired in yet, so only English is used.
+
+Sizes, speeds and ratios are formatted by the app and handed to the messages as ready text, because
+Fluent does not format numbers by the rules of a language. The decimal separator of a language is
+the message `number-decimal-separator` (a dot in English).
+
 ## Performance
 
 `just measure` builds the release binary, starts it, waits 5 seconds and prints one line: the time to
@@ -153,7 +171,7 @@ the rules every change must follow.
 The workspace has three crates. `x4-rpc` speaks Transmission's JSON-RPC 2.0 protocol over HTTP.
 `x4-core` holds the app's model and logic, with no UI code, down to what the main window shows
 (table rows, subtitles, filter counts, status bar), so the views only draw it. `x4-app` is the `4x4`
-binary with the window.
+binary with the window and the Fluent messages that word everything it shows.
 
 All network traffic runs on one worker thread, `x4-service`, which `x4-core` starts. It polls the
 daemon on a schedule (faster while the window is visible), reconnects with a growing pause when the

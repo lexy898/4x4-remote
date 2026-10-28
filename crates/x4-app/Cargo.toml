@@ -15,6 +15,9 @@ path = "src/main.rs"
 anyhow.workspace = true
 directories.workspace = true
 gpui-kit.workspace = true
+i18n-embed.workspace = true
+i18n-embed-fl.workspace = true
+rust-embed.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -23,6 +26,7 @@ tracing-subscriber.workspace = true
 x4-core.workspace = true
 
 [dev-dependencies]
+fluent-syntax.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]
