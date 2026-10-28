@@ -1,0 +1,9 @@
+#!/bin/sh
+# Enabled by `just setup` (core.hooksPath). Refuses commits that fail the
+# formatting, TOML, spelling and lint checks.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+scripts/check-tools.sh
+exec just pre-commit

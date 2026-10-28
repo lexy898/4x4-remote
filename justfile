@@ -4,7 +4,7 @@ default:
     @just --list
 
 # Full gate. The only definition of "done"; CI runs exactly this.
-check: fmt-check toml-check spell lint test doc-test doc deny machete
+check: fmt-check toml-check spell lint test test-hooks doc-test doc deny machete
 
 # Fast gate run by the agent Stop hook.
 check-fast: fmt-check lint test
@@ -42,6 +42,15 @@ deny:
 
 machete:
     cargo machete
+
+# Enable the git hooks and verify the required tools are installed.
+setup:
+    git config core.hooksPath .githooks
+    scripts/check-tools.sh
+
+# Tests for the agent and git hook scripts.
+test-hooks:
+    bash scripts/hooks/test-hooks.sh
 
 run *args:
     cargo run -p x4-app --locked -- {{args}}
