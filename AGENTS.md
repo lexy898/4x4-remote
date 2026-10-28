@@ -13,18 +13,20 @@ This file is the rulebook for every change. Product scope lives in the owner's l
 ## Commands
 
 ```bash
-just check        # full gate: fmt, TOML, spelling, lint policy, clippy, tests, hook tests,
-                  # doc tests, docs, deny, machete
-just check-fast   # fmt + clippy + tests (run by the agent Stop hook)
-just fmt          # format Rust and TOML
-just test         # tests via nextest
-just test-hooks   # tests for the hook and helper scripts in scripts/
-just lint-policy  # lint exceptions, workspace lints, dependency direction (scripts/lint-policy.sh)
-just run          # run the app (debug build)
-just release      # optimized build
-just measure      # startup time and memory of the release build
-just update       # update dependencies, then run the full gate
-just setup        # enable git hooks and verify required tools
+just check            # full gate: fmt, TOML, spelling, lint policy, clippy, tests, hook tests,
+                      # doc tests, docs, deny, machete
+just check-fast       # fmt + clippy + tests (run by the agent Stop hook)
+just fmt              # format Rust and TOML
+just test             # tests via nextest
+just test-hooks       # tests for the hook and helper scripts in scripts/
+just test-live        # live tests against the owner's daemon; never part of check
+just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
+just lint-policy      # lint exceptions, workspace lints, dependency direction (scripts/lint-policy.sh)
+just run              # run the app (debug build)
+just release          # optimized build
+just measure          # startup time and memory of the release build
+just update           # update dependencies, then run the full gate
+just setup            # enable git hooks and verify required tools
 ```
 
 ## Definition of Done
