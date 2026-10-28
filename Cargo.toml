@@ -56,6 +56,10 @@ unreachable = "warn"
 unused_result_ok = "warn"
 unwrap_used = "warn"
 
+# A vendored copy of the gpui-pre-wgpu that gpui-kit pulls in, kept unchanged for now.
+[patch.crates-io]
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+
 # Line tables only (enough for backtraces) for our crates and no debug info for dependencies
 # keep links fast (the agent Stop hook builds often) and the CI cache small.
 [profile.dev]
