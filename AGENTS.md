@@ -21,7 +21,8 @@ just test             # tests via nextest
 just test-hooks       # tests for the hook and helper scripts in scripts/
 just test-live        # live tests against the owner's daemon; never part of check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
-just lint-policy      # lint exceptions, workspace lints, dependency direction (scripts/lint-policy.sh)
+just lint-policy      # lint exceptions, workspace lints, dependency direction, the vendored
+                      # gpui-pre-wgpu patch (scripts/lint-policy.sh)
 just run              # run the app (debug build)
 just release          # optimized build
 just measure          # startup time and memory of the release build
@@ -111,7 +112,14 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 
 - Declare every dependency in `[workspace.dependencies]` and use it with `workspace = true`.
 - Prefer small, maintained crates; justify heavy ones in the commit message. No git dependencies.
-- `gpui-kit` is pinned with `=`; bump it in a dedicated commit with `just update` and a manual app run.
+- `gpui-kit` is pinned with `=`; bump it in a dedicated commit and run the app by hand. Follow
+  `vendor/gpui-pre-wgpu/PATCHED.md` (`cargo update -p gpui-kit`), not `just update`: that updates
+  everything and fails lint-policy partway through. The same commit re-vendors `gpui-pre-wgpu` and
+  re-applies its patch; `just lint-policy` stays red until the vendored copy is the version
+  `gpui-kit` asks for and is patched.
+- `vendor/` holds third-party code used through `[patch.crates-io]`. Change it only by re-vendoring
+  and patching as its `PATCHED.md` describes. Our formatting, lint and spelling rules do not apply
+  to it, and the gates skip it.
 - After changing dependencies run `just deny` and `just machete`. GPL, LGPL and AGPL licenses are
   not allowed; if one appears, stop and ask the owner.
 - Never add advisory `ignore` entries, `skip`/`skip-tree` entries, license `allow` entries or

@@ -3,11 +3,23 @@
 #
 # Builds the release binary, starts it with only the 4x4 lifecycle log enabled, waits for the UI
 # to settle, then prints one line:
-#     first_frame_ms=<n> rss_mib=<n> rss_anon_mib=<n> binary_mib=<n>
-# rss_mib is the whole resident set (VmRSS, including shared libraries mapped from disk);
-# rss_anon_mib is its anonymous part (RssAnon): heap, stacks and other private allocations.
-# Exits non-zero only if the app failed to start or did not log its first frame. The targets
-# (first frame <= 500 ms, RSS <= 100 MiB) are reported in README.md, not enforced here.
+#     first_frame_ms=<n> pss_mib=<n> uss_mib=<n> rss_anon_mib=<n> rss_mib=<n> threads=<n>
+#     gl_stack_mapped=yes|no binary_mib=<n>
+# pss_mib is the proportional set size (Pss in /proc/<pid>/smaps_rollup): every shared page counts
+# divided by the number of processes that map it, so it is the app's fair share.
+# uss_mib is the unique set size (Private_Clean + Private_Dirty): what exiting the app frees.
+# rss_anon_mib is the anonymous resident memory (RssAnon): heap, stacks and other private
+# allocations, which only swap can take back.
+# rss_mib is the whole resident set (VmRSS), shared libraries included. It is a reference only.
+# gl_stack_mapped says whether Mesa's OpenGL stack (libgallium, libEGL_mesa or libGLX_mesa) is
+# mapped, found in /proc/<pid>/maps; a Vulkan-only process does not map it.
+#
+# The reference limits checked in scripts/measure-lib.sh are rss_anon_mib <= 16, pss_mib <= 55,
+# rss_mib <= 120 and gl_stack_mapped=no; they are not the targets in README.md (rss_mib <= 120 is
+# looser than its 100 MiB target). A breach prints a "WARN: ..." line on stderr and does not
+# change the exit code, which is non-zero only if the measurement itself failed: the app did not
+# start, did not log its first frame, or its /proc files could not be read. The first-frame
+# target (<= 500 ms) is reported in README.md, not checked here.
 #
 # Env: X4_MEASURE_SETTLE_SECONDS (default: 5), CARGO_TARGET_DIR (default: target).
 set -euo pipefail
@@ -15,17 +27,19 @@ set -euo pipefail
 settle_seconds=${X4_MEASURE_SETTLE_SECONDS:-5}
 
 cd "$(dirname "$0")/.."
+source scripts/measure-lib.sh
 just release >&2
 binary=${CARGO_TARGET_DIR:-target}/release/4x4
 
 log=$(mktemp)
+snapshot=$(mktemp -d)
 app_pid=""
 cleanup() {
     if [[ -n $app_pid ]] && kill -0 "$app_pid" 2>/dev/null; then
         kill "$app_pid" 2>/dev/null || true
         wait "$app_pid" 2>/dev/null || true
     fi
-    rm -f "$log"
+    rm -rf "$log" "$snapshot"
 }
 trap cleanup EXIT
 
@@ -46,18 +60,18 @@ if ! kill -0 "$app_pid" 2>/dev/null; then
     fail "the app exited during startup"
 fi
 
-status=$(<"/proc/$app_pid/status") || fail "could not read /proc/$app_pid/status"
-rss_kib=$(awk '/^VmRSS:/ { print $2 }' <<<"$status")
-[[ -n $rss_kib ]] || fail "could not read VmRSS of pid $app_pid"
-rss_anon_kib=$(awk '/^RssAnon:/ { print $2 }' <<<"$status")
-[[ -n $rss_anon_kib ]] || fail "could not read RssAnon of pid $app_pid"
+# Copy the /proc files once, so every figure comes from the same moment and the parsing in
+# scripts/measure-lib.sh works on plain files.
+for name in smaps_rollup status maps; do
+    cat "/proc/$app_pid/$name" >"$snapshot/$name" || fail "could not read /proc/$app_pid/$name"
+done
 
 first_frame_ms=$(sed -n 's/.*first frame rendered.*elapsed_ms=\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
 [[ -n $first_frame_ms ]] || fail "the app did not log 'first frame rendered' within ${settle_seconds} s"
 
 binary_bytes=$(stat -c %s "$binary")
 
-awk -v ms="$first_frame_ms" -v rss="$rss_kib" -v anon="$rss_anon_kib" -v bin="$binary_bytes" 'BEGIN {
-    printf "first_frame_ms=%d rss_mib=%.1f rss_anon_mib=%.1f binary_mib=%.1f\n",
-        ms, rss / 1024, anon / 1024, bin / 1048576
-}'
+report_line "$first_frame_ms" "$snapshot/smaps_rollup" "$snapshot/status" "$snapshot/maps" "$binary_bytes" ||
+    fail "could not read the memory figures of pid $app_pid"
+report_warnings "$snapshot/smaps_rollup" "$snapshot/status" "$snapshot/maps" ||
+    fail "could not read the memory figures of pid $app_pid"

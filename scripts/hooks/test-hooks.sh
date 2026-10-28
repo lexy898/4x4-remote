@@ -11,6 +11,7 @@ stop_hook=$root/scripts/hooks/stop-check.sh
 guard_hook=$root/scripts/hooks/guard-bash.sh
 check_tools=$root/scripts/check-tools.sh
 lint_policy=$root/scripts/lint-policy.sh
+measure_lib=$root/scripts/measure-lib.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
@@ -429,7 +430,9 @@ test_check_tools_passes_when_all_present() {
 }
 
 # A minimal repository layout for lint-policy.sh, plus a stub `cargo` whose `cargo tree`
-# output per crate comes from tree-<crate>.txt next to it (clean by default).
+# output per crate comes from tree-<crate>.txt next to it, and its stderr from
+# tree-<crate>.stderr if that exists. Each call appends its arguments to cargo-args.txt.
+# Clean by default: x4-app's tree is the vendored crate, and the vendored renderer is patched.
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
@@ -440,8 +443,16 @@ new_policy_root() {
             "$crate" >"$dir/crates/$crate/src/lib.rs"
         printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
     done
-    printf '#!/usr/bin/env bash\nwhile (($#)); do [[ $1 == -p ]] && crate=$2; shift; done\ncat "%s/tree-$crate.txt"\n' \
-        "$dir" >"$dir/cargo"
+    printf 'gpui-pre-wgpu v0.3.10 (%s/vendor/gpui-pre-wgpu)\n' "$dir" >"$dir/tree-x4-app.txt"
+    mkdir -p "$dir/vendor/gpui-pre-wgpu/src"
+    printf 'fn create_context_vulkan_first() {}\n' >"$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
+    cat >"$dir/cargo" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"$dir/cargo-args.txt"
+while ((\$#)); do [[ \$1 == -p ]] && crate=\$2; shift; done
+if [[ -f "$dir/tree-\$crate.stderr" ]]; then cat "$dir/tree-\$crate.stderr" >&2; fi
+cat "$dir/tree-\$crate.txt"
+EOF
     chmod +x "$dir/cargo"
     echo "$dir"
 }
@@ -451,10 +462,17 @@ run_policy() { # <root>
 }
 
 test_lint_policy_passes_clean_tree() {
-    local dir
+    local dir args
     dir=$(new_policy_root)
     run_policy "$dir"
     expect_status 0
+    # Locked, so the check sees what the build gets; every target, so it works on any host;
+    # never --offline, which fails on a cold registry cache (CI, `just update`, Dependabot).
+    args=$(grep -e '-i gpui-pre-wgpu' "$dir/cargo-args.txt") || fail "cargo tree -i gpui-pre-wgpu was not run"
+    expect_contains "-p x4-app" "$args" "cargo arguments"
+    expect_contains "--locked" "$args" "cargo arguments"
+    expect_contains "--target all" "$args" "cargo arguments"
+    [[ $args != *--offline* ]] || fail "cargo tree must not run --offline, got: $args"
 }
 
 test_lint_policy_rejects_inner_allow_and_expect() {
@@ -510,6 +528,173 @@ test_lint_policy_rejects_wrong_dependency_direction() {
     [[ $stderr != *serde* ]] || fail "serde is an allowed dependency, got: $stderr"
 }
 
+# What a gpui-kit bump to another gpui-pre-wgpu version looks like: the registry crate is built.
+test_lint_policy_rejects_registry_gpui_pre_wgpu() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'gpui-pre-wgpu v0.3.11\n└── gpui-pre-linux v0.3.11\n' >"$dir/tree-x4-app.txt"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-app: gpui-pre-wgpu resolves to 'gpui-pre-wgpu v0.3.11', not vendor/gpui-pre-wgpu" \
+        "$stderr" stderr
+    expect_contains "vendor/gpui-pre-wgpu/PATCHED.md" "$stderr" stderr
+}
+
+test_lint_policy_rejects_unused_gpui_pre_wgpu_patch() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'warning: patch `gpui-pre-wgpu v0.3.10 (%s/vendor/gpui-pre-wgpu)` was not used in the crate graph\n' \
+        "$dir" >"$dir/tree-x4-app.stderr"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-app: Cargo reports the vendored gpui-pre-wgpu patch as unused" "$stderr" stderr
+}
+
+# A re-vendored copy whose patch was not re-applied: Cargo builds it, but it loads OpenGL again.
+test_lint_policy_rejects_unpatched_vendored_gpui_pre_wgpu() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'fn create_context() {}\n' >"$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "vendor/gpui-pre-wgpu/src/wgpu_renderer.rs: has no create_context_vulkan_first" \
+        "$stderr" stderr
+    rm "$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "vendor/gpui-pre-wgpu/src/wgpu_renderer.rs: has no create_context_vulkan_first" \
+        "$stderr" stderr
+}
+
+test_lint_policy_rejects_failed_gpui_pre_wgpu_lookup() {
+    local dir
+    dir=$(new_policy_root)
+    rm "$dir/tree-x4-app.txt" # the stub cargo then fails, like an ambiguous or missing package
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "x4-app: cargo tree failed, cannot check that gpui-pre-wgpu is the vendored copy" \
+        "$stderr" stderr
+}
+
+# Canned copies of /proc/<pid>/smaps_rollup, status and maps in a fresh directory, as
+# scripts/measure.sh takes them. Sizes are in kB. The extra lines are decoys: keys that start
+# like the ones to read (Pss_Dirty, VmHWM, RssFile) and mappings of other libraries.
+# write_proc_files <pss> <private-clean> <private-dirty> <vmrss> <rssanon> <threads> [<mapped library>...]
+proc_dir=
+write_proc_files() {
+    local pss=$1 clean=$2 dirty=$3 rss=$4 anon=$5 threads=$6 library
+    shift 6
+    proc_dir=$(mktemp -d "$tmp_root/proc.XXXXXX")
+    {
+        printf '560000000000-7ffd5a2fa000 ---p 00000000 00:00 0                          [rollup]\n'
+        printf 'Rss:            %8d kB\n' "$rss"
+        printf 'Pss:            %8d kB\n' "$pss"
+        printf 'Pss_Dirty:      %8d kB\n' 11111
+        printf 'Pss_Anon:       %8d kB\n' 22222
+        printf 'Shared_Clean:   %8d kB\n' 33333
+        printf 'Shared_Dirty:   %8d kB\n' 44444
+        printf 'Private_Clean:  %8d kB\n' "$clean"
+        printf 'Private_Dirty:  %8d kB\n' "$dirty"
+        printf 'Anonymous:      %8d kB\n' 55555
+    } >"$proc_dir/smaps_rollup"
+    {
+        printf 'Name:\t4x4\nState:\tS (sleeping)\nVmPeak:\t  999999 kB\n'
+        printf 'VmHWM:\t  %d kB\n' 888888
+        printf 'VmRSS:\t  %d kB\n' "$rss"
+        printf 'RssAnon:\t  %d kB\n' "$anon"
+        printf 'RssFile:\t  %d kB\n' 77777
+        printf 'Threads:\t%d\n' "$threads"
+    } >"$proc_dir/status"
+    {
+        printf '55d0c0000000-55d0c1000000 r-xp 00000000 08:01 100   /home/u/4x4/target/release/4x4\n'
+        printf '7f0000000000-7f0000100000 r-xp 00000000 08:01 101   /usr/lib/libvulkan.so.1.4.0\n'
+        printf '7f0000200000-7f0000300000 r-xp 00000000 08:01 102   /usr/lib/libEGL.so.1.1.0\n'
+        printf '7f0000400000-7f0000500000 r-xp 00000000 08:01 103   /usr/lib/libGLdispatch.so.0.0.0\n'
+        for library in "$@"; do
+            printf '7f0000600000-7f0000700000 r-xp 00000000 08:01 104   %s\n' "$library"
+        done
+        printf '7ffd5a2da000-7ffd5a2fb000 rw-p 00000000 00:00 0                          [stack]\n'
+    } >"$proc_dir/maps"
+}
+
+# run_measure <function> <args...>: runs a function of scripts/measure-lib.sh in its own shell,
+# so the library's names cannot collide with this script's.
+run_measure() {
+    run_with_input '' bash -c 'source "$1"; shift; "$@"' _ "$measure_lib" "$@"
+}
+
+test_measure_report_line_has_every_metric_in_order() {
+    write_proc_files 49152 10240 13312 112640 12800 26
+    run_measure report_line 210 "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps" 33554432
+    expect_status 0
+    [[ $stdout == 'first_frame_ms=210 pss_mib=48.0 uss_mib=23.0 rss_anon_mib=12.5 rss_mib=110.0 threads=26 gl_stack_mapped=no binary_mib=32.0' ]] ||
+        fail "unexpected report line: $stdout"
+    [[ -z $stderr ]] || fail "expected no complaint, got: $stderr"
+}
+
+test_measure_report_line_flags_each_gl_stack_library() {
+    local library
+    for library in /usr/lib/libgallium-26.0.0.so /usr/lib/libEGL_mesa.so.0.0.0 /usr/lib/libGLX_mesa.so.0.0.0 \
+        '/usr/lib/libgallium-26.0.0.so (deleted)'; do
+        write_proc_files 49152 10240 13312 112640 12800 26 "$library"
+        run_measure report_line 210 "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps" 33554432
+        expect_status 0
+        expect_contains 'gl_stack_mapped=yes' "$stdout" "the report line with $library mapped"
+    done
+}
+
+test_measure_report_line_rejects_unreadable_metrics() {
+    write_proc_files 49152 10240 13312 112640 12800 26
+    sed -i '/^Pss:/d' "$proc_dir/smaps_rollup"
+    run_measure report_line 210 "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps" 33554432
+    expect_status 1
+    expect_contains "Pss:" "$stderr" stderr
+    [[ -z $stdout ]] || fail "expected no report line, got: $stdout"
+    write_proc_files 49152 10240 13312 112640 12800 26
+    sed -i '/^Threads:/d' "$proc_dir/status"
+    run_measure report_line 210 "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps" 33554432
+    expect_status 1
+    expect_contains "Threads:" "$stderr" stderr
+    write_proc_files 49152 10240 13312 112640 12800 26
+    run_measure report_line 210 "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/missing-maps" 33554432
+    expect_status 1
+}
+
+test_measure_warnings_are_silent_within_the_targets() {
+    # Exactly on each limit: RssAnon 16 MiB, PSS 55 MiB, RSS 120 MiB.
+    write_proc_files 56320 10240 13312 122880 16384 26
+    run_measure report_warnings "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps"
+    expect_status 0
+    [[ -z $stdout && -z $stderr ]] || fail "expected no output, got stdout: $stdout, stderr: $stderr"
+}
+
+test_measure_warnings_name_every_breach_on_stderr_and_keep_exit_zero() {
+    write_proc_files 56321 10240 13312 122881 16385 26 /usr/lib/libgallium-26.0.0.so
+    run_measure report_warnings "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps"
+    expect_status 0
+    [[ -z $stdout ]] || fail "warnings belong on stderr, got stdout: $stdout"
+    expect_contains 'WARN: rss_anon_mib=16.0 is above the 16 MiB target' "$stderr" stderr
+    expect_contains 'WARN: pss_mib=55.0 is above the 55 MiB target' "$stderr" stderr
+    expect_contains 'WARN: rss_mib=120.0 is above the 120 MiB reference limit' "$stderr" stderr
+    expect_contains 'WARN: gl_stack_mapped=yes' "$stderr" stderr
+    [[ $(grep -c '^WARN: ' <<<"$stderr") -eq 4 ]] || fail "expected exactly four warnings, got: $stderr"
+}
+
+test_measure_warnings_report_one_breach_alone() {
+    write_proc_files 49152 10240 13312 112640 17408 26
+    run_measure report_warnings "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps"
+    expect_status 0
+    [[ $stderr == 'WARN: rss_anon_mib=17.0 is above the 16 MiB target' ]] || fail "unexpected warnings: $stderr"
+}
+
+test_measure_warnings_fail_only_when_a_metric_is_unreadable() {
+    write_proc_files 49152 10240 13312 112640 12800 26
+    sed -i '/^RssAnon:/d' "$proc_dir/status"
+    run_measure report_warnings "$proc_dir/smaps_rollup" "$proc_dir/status" "$proc_dir/maps"
+    expect_status 1
+    expect_contains "RssAnon:" "$stderr" stderr
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -551,6 +736,17 @@ cases=(
     lint_policy_ignores_exceptions_in_comments
     lint_policy_rejects_missing_workspace_lints
     lint_policy_rejects_wrong_dependency_direction
+    lint_policy_rejects_registry_gpui_pre_wgpu
+    lint_policy_rejects_unused_gpui_pre_wgpu_patch
+    lint_policy_rejects_unpatched_vendored_gpui_pre_wgpu
+    lint_policy_rejects_failed_gpui_pre_wgpu_lookup
+    measure_report_line_has_every_metric_in_order
+    measure_report_line_flags_each_gl_stack_library
+    measure_report_line_rejects_unreadable_metrics
+    measure_warnings_are_silent_within_the_targets
+    measure_warnings_name_every_breach_on_stderr_and_keep_exit_zero
+    measure_warnings_report_one_breach_alone
+    measure_warnings_fail_only_when_a_metric_is_unreadable
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
