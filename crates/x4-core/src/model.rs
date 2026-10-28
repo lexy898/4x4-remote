@@ -22,7 +22,7 @@ pub enum Eta {
 pub enum Ratio {
     /// Nothing to compare yet (wire `-1`, or any other invalid value).
     NotAvailable,
-    /// Uploaded data but downloaded none (wire `-2`).
+    /// Uploaded data but downloaded none (wire `-2`; a positive infinity also maps here).
     Infinite,
     /// A finite ratio, 0 or more.
     Value(f64),
@@ -170,13 +170,15 @@ impl Eta {
 }
 
 impl Ratio {
-    /// `-2` is infinite; `-1`, any other negative value and NaN are "not available".
+    /// `-2` and positive infinity are infinite; `-1`, any other negative value and NaN are "not
+    /// available"; a negative zero becomes a plain zero.
     fn from_wire(ratio: f64) -> Self {
         match ratio {
             -2.0 => Self::Infinite,
             r if r.is_nan() || r < 0.0 => Self::NotAvailable,
             r if r.is_infinite() => Self::Infinite,
-            r => Self::Value(r),
+            // `abs` turns -0.0 into 0.0 and leaves every other value alone.
+            r => Self::Value(r.abs()),
         }
     }
 }
@@ -212,6 +214,14 @@ mod tests {
 
     fn torrent(record: TorrentRecord) -> Torrent {
         Torrent::from_record(record).unwrap()
+    }
+
+    /// The records of the recorded `torrent_get` list: the `result` of the JSON-RPC envelope.
+    fn fixture_records() -> Vec<TorrentRecord> {
+        let envelope: serde_json::Value = serde_json::from_str(TORRENT_GET_LIST).unwrap();
+        let response: TorrentGetResponse =
+            serde_json::from_value(envelope["result"].clone()).unwrap();
+        response.torrents
     }
 
     fn at(seconds: u64) -> SystemTime {
@@ -445,6 +455,20 @@ mod tests {
     }
 
     #[test]
+    fn negative_zero_ratio_is_a_plain_zero() {
+        let record = TorrentRecord {
+            upload_ratio: Some(-0.0),
+            ..minimal()
+        };
+        // `-0.0 == 0.0`, so the sign has to be checked on its own.
+        let Ratio::Value(value) = torrent(record).ratio else {
+            panic!("a zero ratio is a value");
+        };
+        assert!(value.is_sign_positive(), "{value:?} keeps its minus sign");
+        assert_eq!(Ratio::Value(value), Ratio::Value(0.0));
+    }
+
+    #[test]
     fn date_edges() {
         let dates = |added, done| {
             let t = torrent(TorrentRecord {
@@ -567,12 +591,10 @@ mod tests {
 
     #[test]
     fn from_fixture_list() {
-        let envelope: serde_json::Value = serde_json::from_str(TORRENT_GET_LIST).unwrap();
-        let response: TorrentGetResponse =
-            serde_json::from_value(envelope["result"].clone()).unwrap();
-        assert_ne!(response.torrents.len(), 0, "the fixture has no torrents");
+        let records = fixture_records();
+        assert_ne!(records.len(), 0, "the fixture has no torrents");
 
-        for record in response.torrents {
+        for record in records {
             let id = record.id;
             let converted = Torrent::from_record(record);
             assert!(converted.is_ok(), "torrent {id:?}: {converted:?}");
@@ -581,11 +603,7 @@ mod tests {
 
     #[test]
     fn fixture_torrents_are_complete_and_seeding() {
-        let envelope: serde_json::Value = serde_json::from_str(TORRENT_GET_LIST).unwrap();
-        let response: TorrentGetResponse =
-            serde_json::from_value(envelope["result"].clone()).unwrap();
-
-        for record in response.torrents {
+        for record in fixture_records() {
             let t = torrent(record);
             assert_eq!(t.state, DisplayState::Seeding, "{}", t.name);
             assert_eq!(t.attention, None, "{}", t.name);

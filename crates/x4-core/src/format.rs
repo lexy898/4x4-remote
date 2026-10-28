@@ -136,11 +136,11 @@ const BASE: f64 = 1024.0;
 /// display; a value that rounds up to 1024 moves up one more unit if there is one.
 ///
 /// `base` is the unit of `amount` itself; `larger` lists the following units in order.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "the value is only shown, rounded to at most one decimal"
-)]
 fn scale<U: Copy>(amount: u64, base: U, larger: &[U]) -> (f64, U) {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the value is only shown, rounded to at most one decimal"
+    )]
     let mut value = amount as f64;
     let mut unit = base;
     let mut steps = larger.iter();
@@ -237,11 +237,22 @@ mod tests {
     fn human_size_does_not_carry_below_the_rounding_edge() {
         // 1023.3 KiB rounds to 1023, which stays in KiB.
         assert_eq!(human_size(1_047_900), size(1023.0, SizeUnit::KiB));
+        // Just under the half: 1023.499 KiB.
+        assert_eq!(human_size(1_048_063), size(1023.0, SizeUnit::KiB));
+    }
+
+    #[test]
+    fn human_size_carries_when_the_value_is_exactly_halfway_to_1024() {
+        // 1023.5 KiB is exact in binary and rounds half up to 1024, which moves up a unit.
+        assert_eq!(human_size(1_048_064), size(1.0, SizeUnit::MiB));
+        assert_eq!(human_speed(1_048_064), speed(1.0, SpeedUnit::MiBPerSec));
     }
 
     #[test]
     fn human_size_stays_in_tib_beyond_the_top_unit() {
         assert_eq!(human_size(2_000 * TIB), size(2_000.0, SizeUnit::TiB));
+        // 1023.999... TiB rounds to 1024 TiB and has no larger unit to move to.
+        assert_eq!(human_size((1 << 50) - 1), size(1_024.0, SizeUnit::TiB));
         // u64::MAX is 2^64 - 1 bytes, which rounds to 2^24 TiB.
         assert_eq!(human_size(u64::MAX), size(16_777_216.0, SizeUnit::TiB));
     }
@@ -251,6 +262,8 @@ mod tests {
         assert_eq!(human_speed(MIB - 1), speed(1.0, SpeedUnit::MiBPerSec));
         assert_eq!(human_speed(GIB - 1), speed(1.0, SpeedUnit::GiBPerSec));
         assert_eq!(human_speed(TIB), speed(1_024.0, SpeedUnit::GiBPerSec));
+        // 1023.999... GiB/s rounds to 1024 GiB/s and has no larger unit to move to.
+        assert_eq!(human_speed(TIB - 1), speed(1_024.0, SpeedUnit::GiBPerSec));
         // u64::MAX is 2^64 - 1 bytes/s, which rounds to 2^34 GiB/s.
         assert_eq!(
             human_speed(u64::MAX),
