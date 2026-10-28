@@ -67,10 +67,14 @@ first rendered frame, the resident memory (RSS) and the binary size. Medians of 
 | Resident memory | ≤ 100 MiB  | 170.2 MiB |
 | Binary size     | —          | 31.4 MiB  |
 
-The memory target is missed: about 115 MiB of the RSS is Mesa's OpenGL driver (`libgallium` and
-`libLLVM`), which GPUI maps while probing the OpenGL adapter at startup even though it renders
-with Vulkan. These are shared, file-backed pages; the app's private (anonymous) memory is about
-17 MiB.
+The memory target is missed. In a separate run, the app's private (anonymous) memory was about
+17 MiB and shared, file-backed pages about 152 MiB. The largest mappings were `libLLVM` (90 MiB),
+`libgallium` (25 MiB), the 4x4 binary (24 MiB) and `libvulkan_radeon` (5.5 MiB).
+
+A likely cause, not yet verified: GPUI's renderer asks wgpu for both the Vulkan and the OpenGL
+backends, so Mesa's OpenGL/EGL driver is mapped in addition to the Vulkan driver (RADV). RADV
+itself also links `libLLVM`. For comparison, `vulkaninfo --summary` alone peaks at about 99 MiB
+here and `eglinfo` at about 156 MiB, so a Vulkan-only renderer might bring the RSS near 100 MiB.
 
 ## Development
 
