@@ -21,7 +21,9 @@
 # start, did not log its first frame, or its /proc files could not be read. The first-frame
 # target (<= 500 ms) is reported in README.md, not checked here.
 #
-# Env: X4_MEASURE_SETTLE_SECONDS (default: 5), CARGO_TARGET_DIR (default: target).
+# Env: X4_MEASURE_SETTLE_SECONDS (default: 5), CARGO_TARGET_DIR (default: target). The app is
+# started with X4_DEVEL=1 (the development app id) and also writes its log file under
+# ~/.local/state/4x4/.
 set -euo pipefail
 
 settle_seconds=${X4_MEASURE_SETTLE_SECONDS:-5}
@@ -52,7 +54,9 @@ fail() {
     exit 1
 }
 
-RUST_LOG=x4_app=info "$binary" 2>"$log" &
+# X4_DEVEL=1 gives the window the development app id, as in a debug build, so the measurement
+# window is not mistaken for the owner's own (the window rule for test windows matches that id).
+X4_DEVEL=1 RUST_LOG=x4_app=info "$binary" 2>"$log" &
 app_pid=$!
 sleep "$settle_seconds"
 

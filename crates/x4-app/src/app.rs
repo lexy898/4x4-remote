@@ -1,6 +1,8 @@
 //! Application startup: global actions and key bindings, the main window and the first-frame log.
 
 use std::cell::RefCell;
+use std::env;
+use std::ffi::OsStr;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -12,10 +14,17 @@ use gpui_kit::{
 };
 
 use crate::PRODUCT_NAME;
+use crate::files::{read_config, read_ui_state};
+use crate::paths::AppPaths;
 use crate::root_view::RootView;
 
 /// Identifies the application to the desktop environment (the Wayland `app_id`).
 const APP_ID: &str = "io.github.lexy898.FourByFour";
+/// The id of development runs, so that window rules written for test windows (placing them on
+/// a particular screen without focus) never catch the owner's real window.
+const DEVEL_APP_ID: &str = "io.github.lexy898.FourByFour.Devel";
+/// Set to `1` to give a release build the development id, as `just measure` does.
+const DEVEL_ENV: &str = "X4_DEVEL";
 
 actions!(
     x4,
@@ -25,13 +34,17 @@ actions!(
     ]
 );
 
-/// Runs the application until it quits: initializes the UI, opens the main window and logs
-/// `first frame rendered` with the time elapsed since `started`.
+/// Runs the application until it quits: reads the config and the saved state from `paths`
+/// (`None` when the home directory is unknown), initializes the UI, opens the main window and
+/// logs `first frame rendered` with the time elapsed since `started`.
 ///
 /// # Errors
 ///
 /// Returns an error if the main window cannot be opened.
-pub fn run(started: Instant) -> anyhow::Result<()> {
+pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
+    if let Some(paths) = paths {
+        load_files(paths);
+    }
     let launch_error = Rc::new(RefCell::new(None));
     let launch_error_slot = Rc::clone(&launch_error);
     gpui_kit::application().run(move |cx| {
@@ -46,6 +59,34 @@ pub fn run(started: Instant) -> anyhow::Result<()> {
         }
     });
     launch_error.take().map_or(Ok(()), Err)
+}
+
+/// Reads `config.toml` and `state.toml` and logs what happened. Nothing uses the values yet: the
+/// connection and the window state are wired in by later stages. A broken file never stops the
+/// app; the defaults are used and the problem is logged.
+fn load_files(paths: &AppPaths) {
+    match read_config(&paths.config_file) {
+        Ok(config) => {
+            // Only the scheme: the rest of the URL may hold a password.
+            let scheme = config
+                .connection
+                .url
+                .split_once("://")
+                .map_or("", |(scheme, _)| scheme);
+            tracing::info!(path = %paths.config_file.display(), scheme, "config loaded");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "config not loaded; using the defaults");
+        }
+    }
+    match read_ui_state(&paths.state_file) {
+        Ok(loaded) => {
+            tracing::info!(path = %paths.state_file.display(), writable = loaded.writable, "UI state loaded");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "UI state not loaded; using the defaults");
+        }
+    }
 }
 
 /// Initializes the UI libraries and registers the application-wide actions and key bindings.
@@ -70,7 +111,7 @@ pub fn open_main_window(cx: &mut App) -> anyhow::Result<(AnyWindowHandle, Entity
             title: Some(PRODUCT_NAME.into()),
             ..Default::default()
         }),
-        app_id: Some(APP_ID.to_owned()),
+        app_id: Some(app_id().to_owned()),
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
@@ -78,6 +119,21 @@ pub fn open_main_window(cx: &mut App) -> anyhow::Result<(AnyWindowHandle, Entity
         cx.new(|_| RootView)
     })
     .context("failed to open the main window")
+}
+
+/// The Wayland `app_id` of this run: the development id in debug builds and when `X4_DEVEL=1`,
+/// the real one otherwise.
+pub(crate) fn app_id() -> &'static str {
+    if cfg!(debug_assertions) || devel_requested(env::var_os(DEVEL_ENV).as_deref()) {
+        DEVEL_APP_ID
+    } else {
+        APP_ID
+    }
+}
+
+/// Whether the value of `X4_DEVEL` asks for the development id.
+fn devel_requested(value: Option<&OsStr>) -> bool {
+    value == Some(OsStr::new("1"))
 }
 
 /// Matches the light or dark theme to the system appearance now and whenever it changes.
@@ -100,4 +156,34 @@ fn log_first_frame(window: AnyWindowHandle, started: Instant, cx: &mut App) -> a
             });
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_id_is_devel_in_debug_builds() {
+        if cfg!(debug_assertions) {
+            assert_eq!(app_id(), "io.github.lexy898.FourByFour.Devel");
+        }
+    }
+
+    #[test]
+    fn app_id_ends_in_devel_only_for_development_runs() {
+        let devel = cfg!(debug_assertions) || devel_requested(env::var_os(DEVEL_ENV).as_deref());
+
+        assert_eq!(app_id().ends_with(".Devel"), devel);
+        assert_eq!(APP_ID, "io.github.lexy898.FourByFour");
+        assert_eq!(DEVEL_APP_ID, format!("{APP_ID}.Devel"));
+    }
+
+    #[test]
+    fn x4_devel_one_requests_the_development_id() {
+        assert!(devel_requested(Some(OsStr::new("1"))));
+        for other in ["0", "", "true", "yes", " 1"] {
+            assert!(!devel_requested(Some(OsStr::new(other))), "{other:?}");
+        }
+        assert!(!devel_requested(None));
+    }
 }

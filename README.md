@@ -57,6 +57,42 @@ just run
 The second command installs the system libraries the GUI toolkit builds and links against; Wayland and
 the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
+## Files and logs
+
+4x4 keeps its files in the XDG directories (`$XDG_CONFIG_HOME` and `$XDG_STATE_HOME`, which default
+to `~/.config` and `~/.local/state`):
+
+| File                                | What it is                                                              |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| `~/.config/4x4/config.toml`         | Your settings. 4x4 only reads it and never changes it.                  |
+| `~/.local/state/4x4/state.toml`     | What 4x4 remembers between runs. It is safe to delete.                  |
+| `~/.local/state/4x4/4x4.<date>.log` | The log, one file per day (UTC date), the last 7 days kept.             |
+
+`config.toml` is optional. It holds the daemon's address; only plain `http://` is supported, and a
+missing key takes the default:
+
+```toml
+[connection]
+url = "http://192.168.1.5:9091/transmission/rpc"
+```
+
+4x4 reads it at startup, but the window does not connect with it yet. A file it cannot use is
+reported in the log and the defaults are used; the log never shows the URL, which may hold a
+password.
+
+4x4 writes `state.toml` atomically, so a crash cannot leave half a file. If the file cannot be
+parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
+file written by a newer version of 4x4 is left alone, and 4x4 does not save over it.
+
+The log lines also go to stderr. `RUST_LOG` sets the level for both (for example
+`RUST_LOG=x4_app=debug`); without it 4x4 logs its own lifecycle events and the problems of its
+libraries. If the log directory cannot be used, 4x4 logs to stderr only and still starts.
+
+Debug builds (`just run`) give the window the Wayland app id `io.github.lexy898.FourByFour.Devel`
+instead of `io.github.lexy898.FourByFour`, so window rules made for test windows (for example,
+open on another screen without taking focus) never catch the window you actually use. Set
+`X4_DEVEL=1` to give a release build the same id; `just measure` does.
+
 ## Performance
 
 `just measure` builds the release binary, starts it, waits 5 seconds and prints one line: the time to
