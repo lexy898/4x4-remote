@@ -1,2 +1,2 @@
 [files]
-extend-exclude = [".specs/", "tests/fixtures/", "target/"]
+extend-exclude = [".specs/", "**/tests/fixtures/", "target/"]
