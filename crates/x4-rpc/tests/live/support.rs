@@ -2,8 +2,9 @@
 //! itself, and a fingerprint of every other torrent on the daemon.
 //!
 //! The safety rules (AGENTS.md, Hard Rules) live here:
-//! - a [`TestTorrent`] exists only for a torrent `torrent_add` reported as newly added, and every
-//!   selection it builds holds nothing but the hash `torrent_add` returned;
+//! - a [`TestTorrent`] exists only for a torrent `torrent_add` reported as newly added under the
+//!   info hash of the metainfo this run built (or, when the reply was lost, that the daemon lists
+//!   under that hash), and every selection it builds holds nothing but that hash;
 //! - [`TestTorrent::remove_with_data`] and the drop guard share one removal path, the only use of
 //!   `RemoveData::Delete` in the tests, and it deletes data only after the daemon has confirmed
 //!   that the torrent lives in the test directory;
@@ -12,18 +13,17 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
-use std::hash::{BuildHasher, RandomState};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use sha1::{Digest, Sha1};
 use x4_rpc::{
     AddOutcome, AddSource, Client, DEFAULT_TIMEOUT, FilePriority, GetIds, HashString, RemoveData,
     Status, TorrentAdd, TorrentField, TorrentId, TorrentRecord, TorrentSelection, UreqTransport,
 };
+
+use crate::metainfo::{random_bytes, random_seed, single_file_metainfo};
 
 /// The size of the test torrent's file.
 const FILE_SIZE: usize = 3 * 1024 * 1024;
@@ -135,6 +135,7 @@ impl TestTorrent {
         let name = format!("4x4-live-{seed:016x}.bin");
         let data = random_bytes(seed, FILE_SIZE);
         let metainfo = single_file_metainfo(&name, &data, PIECE_LENGTH);
+        let hash = metainfo.info_hash;
         let file = LocalFile::write(&env.local_dir, &name, &data)
             .expect("cannot write the test file into X4_LIVE_LOCAL_DIR");
         let add = TorrentAdd {
@@ -146,42 +147,81 @@ impl TestTorrent {
             priority_low: Vec::new(),
             sequential_download: None,
         };
-        let added = match client.torrent_add(&add) {
-            Ok(AddOutcome::Added(added)) => added,
-            Ok(AddOutcome::Duplicate(duplicate)) => panic!(
-                "the daemon already has torrent {}, which this run did not add; not touching it",
-                duplicate.hash
-            ),
-            Err(error) => panic!(
-                "torrent_add failed: {error}; if the daemon added it anyway, remove torrent {} \
-                 by hash",
-                metainfo.info_hash
-            ),
+        let id = match client.torrent_add(&add) {
+            Ok(outcome) => {
+                accept_added(&outcome, &hash).unwrap_or_else(|problem| panic!("{problem}"))
+            }
+            Err(error) => {
+                // The reply may be lost after the daemon added the torrent. This run's random
+                // data makes the hash this run's alone, so a torrent listed under it is ours.
+                let lookup = torrent_by_hash(client, &hash);
+                let listed_id = match &lookup {
+                    Ok(Some(record)) => record.id,
+                    Ok(None) | Err(_) => None,
+                };
+                let what_now = match &lookup {
+                    Ok(Some(_)) if listed_id.is_some() => {
+                        "the daemon added it anyway; the guard removes it"
+                    }
+                    Ok(None) => "the daemon does not have it",
+                    Ok(Some(_)) | Err(_) => {
+                        "if the daemon has it, remove it by hash together with its data"
+                    }
+                };
+                // Unwinding drops the guard, which removes the torrent.
+                let _guard = listed_id.map(|id| Self::guard(hash.clone(), id, add, env, file));
+                panic!("torrent_add of {hash} failed: {error}; {what_now} (lookup: {lookup:?})");
+            }
         };
         // The guard is armed before anything else can fail.
-        let torrent = Self {
-            hash: added.hash,
-            id: added.id,
+        let torrent = Self::guard(hash, id, add, env, file);
+        torrent.announce();
+        torrent.wait_for(client, Status::Seeding, SEEDING_AFTER_ADD);
+        torrent
+    }
+
+    /// The guard of the torrent `hash` the daemon added from `add`, with the local `file`.
+    fn guard(
+        hash: HashString,
+        id: TorrentId,
+        add: TorrentAdd,
+        env: &LiveEnv,
+        file: LocalFile,
+    ) -> Self {
+        Self {
+            hash,
+            id,
             add,
             url: env.url.clone(),
             remote_dir: env.remote_dir.clone(),
             file,
             removed: false,
-        };
-        assert_eq!(
-            torrent.hash, metainfo.info_hash,
-            "the daemon reports another info hash than the metainfo has"
-        );
-        torrent.wait_for(client, Status::Seeding, SEEDING_AFTER_ADD);
-        torrent
+        }
     }
 
-    /// The torrent's info hash, as `torrent_add` returned it.
+    /// Names the torrent and its file on stderr as soon as the daemon has it: an interrupted run
+    /// (Ctrl-C, a killed process) skips every guard, and this line says what it left behind.
+    #[expect(
+        clippy::print_stderr,
+        reason = "test support: the tests install no tracing subscriber, and `just test-live` \
+                  streams stderr so the line survives an interrupted run"
+    )]
+    fn announce(&self) {
+        eprintln!(
+            "live test: added torrent {} with data file {}; if this run is interrupted, remove \
+             that torrent together with its data",
+            self.hash,
+            self.file.path.display()
+        );
+    }
+
+    /// The torrent's info hash: the one of the metainfo this run built, as `torrent_add`
+    /// confirmed it.
     pub(crate) fn hash(&self) -> &HashString {
         &self.hash
     }
 
-    /// The torrent's id, as `torrent_add` returned it.
+    /// The torrent's id, as the daemon reported it.
     pub(crate) fn id(&self) -> TorrentId {
         self.id
     }
@@ -420,6 +460,22 @@ impl Drop for LocalFile {
     }
 }
 
+/// The id of the torrent `torrent_add` reported, if it is the one this run built: newly added,
+/// under the info hash of this run's metainfo. Anything else is not this run's to remove.
+fn accept_added(outcome: &AddOutcome, expected: &HashString) -> Result<TorrentId, String> {
+    match outcome {
+        AddOutcome::Added(added) if added.hash == *expected => Ok(added.id),
+        AddOutcome::Added(added) => Err(format!(
+            "the daemon added torrent {} for metainfo with info hash {expected}; not touching it",
+            added.hash
+        )),
+        AddOutcome::Duplicate(duplicate) => Err(format!(
+            "the daemon already has torrent {}, which this run did not add; not touching it",
+            duplicate.hash
+        )),
+    }
+}
+
 /// Whether nothing is at `path` any more.
 ///
 /// Opening asks the server, whereas a `stat` over NFS may answer from a cache for a while.
@@ -499,9 +555,10 @@ fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: 
     );
 }
 
-/// What the tests must leave untouched on every other torrent: status, sequential download and
-/// file priorities (`None` while a magnet link has no metadata).
-pub(crate) type Fingerprint = BTreeMap<HashString, (Status, bool, Option<Vec<FilePriority>>)>;
+/// What the tests must leave untouched on every other torrent: status, sequential download, and
+/// the priority and wanted flag of every file (`None` while a magnet link has no metadata).
+pub(crate) type Fingerprint =
+    BTreeMap<HashString, (Status, bool, Option<Vec<(FilePriority, bool)>>)>;
 
 /// Reads the [`Fingerprint`] of every torrent on the daemon except `own`, the test's torrent.
 #[expect(
@@ -538,9 +595,12 @@ pub(crate) fn others_fingerprint(
                 record
                     .sequential_download
                     .expect("a torrent without sequential_download"),
-                record
-                    .file_stats
-                    .map(|stats| stats.iter().map(|stat| stat.priority).collect()),
+                record.file_stats.map(|stats| {
+                    stats
+                        .iter()
+                        .map(|stat| (stat.priority, stat.wanted))
+                        .collect()
+                }),
             );
             (Some(&hash) != own).then_some((hash, fingerprint))
         })
@@ -575,155 +635,42 @@ pub(crate) fn assert_others_unchanged(
     );
 }
 
-/// A seed that differs between runs: the standard library's per-process random hash keys,
-/// mixed with the time and the process id.
-fn random_seed() -> u64 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    RandomState::new().hash_one((nanos, process::id()))
-}
-
-/// `len` pseudo-random bytes from `SplitMix64` seeded with `seed`: fresh content (so a fresh info
-/// hash) for every run, without a dependency.
-fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
-    let mut state = seed;
-    let mut bytes = Vec::with_capacity(len + 8);
-    while bytes.len() < len {
-        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut value = state;
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        bytes.extend_from_slice(&(value ^ (value >> 31)).to_le_bytes());
-    }
-    bytes.truncate(len);
-    bytes
-}
-
-/// A bencode value: as much of the format as single-file metainfo needs.
-#[derive(Debug)]
-enum Bencode<'a> {
-    Int(usize),
-    Bytes(&'a [u8]),
-    /// Encoded with its keys sorted, as bencode requires.
-    Dict(Vec<(&'a str, Bencode<'a>)>),
-}
-
-impl Bencode<'_> {
-    fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        self.encode_into(&mut out);
-        out
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        match self {
-            Self::Int(value) => out.extend_from_slice(format!("i{value}e").as_bytes()),
-            Self::Bytes(bytes) => {
-                out.extend_from_slice(format!("{}:", bytes.len()).as_bytes());
-                out.extend_from_slice(bytes);
-            }
-            Self::Dict(entries) => {
-                let mut sorted: Vec<_> = entries.iter().collect();
-                // `str` orders by bytes, which is the order bencode wants.
-                sorted.sort_by_key(|(key, _)| *key);
-                out.push(b'd');
-                for (key, value) in sorted {
-                    Bencode::Bytes(key.as_bytes()).encode_into(out);
-                    value.encode_into(out);
-                }
-                out.push(b'e');
-            }
-        }
-    }
-}
-
-/// A `.torrent` file and the info hash the daemon will report for it.
-#[derive(Debug)]
-struct Metainfo {
-    bytes: Vec<u8>,
-    info_hash: HashString,
-}
-
-/// The metainfo of a single-file torrent `name` holding `data`, without trackers.
-#[expect(
-    clippy::expect_used,
-    reason = "a SHA-1 digest in hex is always a valid hash"
-)]
-fn single_file_metainfo(name: &str, data: &[u8], piece_length: usize) -> Metainfo {
-    let pieces: Vec<u8> = data.chunks(piece_length).flat_map(Sha1::digest).collect();
-    let info = Bencode::Dict(vec![
-        ("length", Bencode::Int(data.len())),
-        ("name", Bencode::Bytes(name.as_bytes())),
-        ("piece length", Bencode::Int(piece_length)),
-        ("pieces", Bencode::Bytes(&pieces)),
-    ]);
-    let info_hash = HashString::parse(&to_hex(&Sha1::digest(info.encode())))
-        .expect("a SHA-1 digest in hex is a valid hash");
-    let bytes = Bencode::Dict(vec![("info", info)]).encode();
-    Metainfo { bytes, info_hash }
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .flat_map(|byte| [byte >> 4, byte & 0x0f])
-        .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    use x4_rpc::AddedTorrent;
+
     use super::*;
 
-    fn from_hex(hex: &str) -> Vec<u8> {
-        (0..hex.len())
-            .step_by(2)
-            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
-            .collect()
+    fn hash(digit: char) -> HashString {
+        HashString::parse(&digit.to_string().repeat(40)).unwrap()
+    }
+
+    fn torrent(hash: HashString) -> AddedTorrent {
+        AddedTorrent {
+            id: TorrentId(9),
+            name: "4x4-live-0.bin".to_owned(),
+            hash,
+        }
     }
 
     #[test]
-    fn bencode_sorts_keys_and_prefixes_strings_with_their_length() {
-        let value = Bencode::Dict(vec![
-            ("name", Bencode::Bytes(b"a")),
-            ("length", Bencode::Int(11)),
-            ("info", Bencode::Dict(Vec::new())),
-        ]);
+    fn a_new_torrent_with_the_built_hash_is_accepted() {
+        let outcome = AddOutcome::Added(torrent(hash('a')));
 
-        assert_eq!(value.encode(), b"d4:infode6:lengthi11e4:name1:ae");
+        assert_eq!(accept_added(&outcome, &hash('a')), Ok(TorrentId(9)));
     }
 
     #[test]
-    fn metainfo_hashes_every_piece_and_the_info_dictionary() {
-        // Expected values computed independently with Python's hashlib.
-        let pieces = from_hex(concat!(
-            "a5cec7af5f7aab769cf0d4aa440e01c7bfc371b2", // "hell"
-            "1085cd1a2f46b0902dac61890f31072561978deb", // "o wo"
-            "c466b3a33e6f6dc170438d34fcddf7860d3658fb", // "rld"
-        ));
-        let mut info = b"d6:lengthi11e4:name5:a.bin12:piece lengthi4e6:pieces60:".to_vec();
-        info.extend_from_slice(&pieces);
-        info.push(b'e');
-        let mut torrent = b"d4:info".to_vec();
-        torrent.extend_from_slice(&info);
-        torrent.push(b'e');
+    fn a_new_torrent_with_another_hash_is_rejected() {
+        let outcome = AddOutcome::Added(torrent(hash('b')));
 
-        let metainfo = single_file_metainfo("a.bin", b"hello world", 4);
-
-        assert_eq!(metainfo.bytes, torrent);
-        assert_eq!(
-            metainfo.info_hash.as_str(),
-            "420ae9d2244908beea4a3022d6a186dd308f0dca"
-        );
+        assert!(accept_added(&outcome, &hash('a')).is_err());
     }
 
     #[test]
-    fn random_bytes_have_the_requested_length_and_follow_the_seed() {
-        let first = random_bytes(1, 13);
+    fn a_duplicate_is_rejected_even_with_the_built_hash() {
+        let outcome = AddOutcome::Duplicate(torrent(hash('a')));
 
-        assert_eq!(first.len(), 13);
-        assert_eq!(random_bytes(1, 13), first);
-        assert_ne!(random_bytes(2, 13), first);
+        assert!(accept_added(&outcome, &hash('a')).is_err());
     }
 }

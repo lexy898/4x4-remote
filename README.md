@@ -87,11 +87,19 @@ the rules every change must follow.
 
 `just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` against a real Transmission 4.1+
 daemon; `just test` and `just check` skip them. They never touch existing torrents or the daemon's
-settings. Each test writes a random 3 MiB file into a test directory, adds it as a trackerless
-torrent, works only on that torrent (stop, start, verify, reannounce, sequential download, file
-priority, adding it twice), removes it together with its file, and checks that every other
-torrent kept its status, sequential mode and file priorities. The torrent and the file are
-removed even when a test fails.
+settings. One test only reads the server version. Each of the others writes a random 3 MiB file
+into a test directory, adds it as a trackerless torrent, works only on that torrent (stop, start,
+verify, reannounce, sequential download, file priority, adding it twice), and removes it together
+with its file. Every test checks that every other torrent kept its status, sequential mode, file
+priorities and wanted files. The torrent and the file are removed even when a test fails.
+
+An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and
+the file of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with
+data file <path>`). To recover, remove the torrent with that hash in any Transmission client,
+choosing to delete its local data. If no such line was printed, the run most likely stopped before
+the torrent was added: delete the single `4x4-live-<hex>.bin` file from the test directory instead.
+The next run refuses to start while any torrent downloads into the test directory, so a leftover
+torrent cannot go unnoticed; remove it the same way.
 
 The test directory is one directory seen from both sides: the daemon reads it under one path and
 this machine writes to it under another (for example over NFS), so both must be able to write

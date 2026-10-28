@@ -3,13 +3,18 @@
 //! They act on nothing but a torrent they create themselves: a random file written into a
 //! dedicated test directory (`X4_LIVE_LOCAL_DIR`, the same directory the daemon sees as
 //! `X4_LIVE_REMOTE_DIR`) and added as a trackerless torrent. Every request that changes a
-//! torrent names that torrent by the hash `torrent_add` returned, `session_set` is never called,
-//! and each test checks that every other torrent kept its status, sequential mode and file
-//! priorities. A drop guard removes the test torrent with its data, the local file and the
-//! directory it created on every path, including a failed assertion.
+//! torrent names that torrent by the info hash of the metainfo the test built, once
+//! `torrent_add` has confirmed it; `session_set` is never called, and each test checks that every
+//! other torrent kept its status, sequential mode, file priorities and wanted files. A drop guard
+//! removes the test torrent with its data, the local file and the directory it created on every
+//! path, including a failed assertion. An interrupted run skips the guards, so each new torrent
+//! is named on stderr as soon as it is added.
 //!
-//! The offline tests of the support code (bencode, piece hashes) run in `just test` too.
+//! The offline tests of the support code (bencode, piece hashes, accepting the added torrent)
+//! run in `just test` too.
 
+#[path = "live/metainfo.rs"]
+mod metainfo;
 #[path = "live/support.rs"]
 mod support;
 
