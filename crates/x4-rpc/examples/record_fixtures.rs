@@ -11,22 +11,7 @@ use std::{env, fs};
 
 use serde_json::{Value, json};
 use x4_rpc::testing::scrub::Scrubber;
-use x4_rpc::{Client, DEFAULT_TIMEOUT, RpcError, TorrentField, UreqTransport};
-
-/// Fields of the app's session request.
-const SESSION_FIELDS: [&str; 11] = [
-    "version",
-    "rpc_version_semver",
-    "download_dir",
-    "alt_speed_enabled",
-    "alt_speed_down",
-    "alt_speed_up",
-    "speed_limit_down",
-    "speed_limit_down_enabled",
-    "speed_limit_up",
-    "speed_limit_up_enabled",
-    "sequential_download",
-];
+use x4_rpc::{Client, DEFAULT_TIMEOUT, RpcError, SESSION_FIELDS, TorrentField, UreqTransport};
 
 #[derive(Debug, thiserror::Error)]
 enum RecordError {

@@ -1,0 +1,194 @@
+//! Session wire types: the settings and statistics of the daemon, the free-space report and the
+//! server version (rpc-spec §4.1, §4.2, §4.7), and the inputs and outcomes of the session methods
+//! on [`Client`](crate::Client).
+//!
+//! The `*_kbps` fields hold kilobytes per second as the server reports them (`speed_limit_down`,
+//! …); turning them into the app's units is `x4-core`'s job.
+
+use serde::Deserialize;
+
+/// The `session_get` fields the app reads, in the order it requests them.
+pub const SESSION_FIELDS: &[&str] = &[
+    "version",
+    "rpc_version_semver",
+    "download_dir",
+    "alt_speed_enabled",
+    "alt_speed_down",
+    "alt_speed_up",
+    "speed_limit_down",
+    "speed_limit_down_enabled",
+    "speed_limit_up",
+    "speed_limit_up_enabled",
+    "sequential_download",
+];
+
+/// The oldest `rpc_version_semver` major 4x4 supports: 6 is JSON-RPC 2.0, Transmission 4.1.
+const MIN_RPC_MAJOR: u64 = 6;
+
+/// The session settings the app reads (`session_get` with [`SESSION_FIELDS`]).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a record of the daemon's independent on/off settings, as the wire has them"
+)]
+pub struct SessionInfo {
+    /// `version`: the daemon's long version string, `$version ($revision)`.
+    pub version: String,
+    /// `rpc_version_semver`: the RPC API version.
+    pub rpc_version_semver: String,
+    /// `download_dir`: where new torrents download to by default.
+    pub download_dir: String,
+    /// `alt_speed_enabled`: whether the alternative speed limits apply.
+    pub alt_speed_enabled: bool,
+    /// `alt_speed_down`: the alternative download limit in kB/s.
+    #[serde(rename = "alt_speed_down")]
+    pub alt_speed_down_kbps: u32,
+    /// `alt_speed_up`: the alternative upload limit in kB/s.
+    #[serde(rename = "alt_speed_up")]
+    pub alt_speed_up_kbps: u32,
+    /// `speed_limit_down`: the download limit in kB/s, which applies only when enabled.
+    #[serde(rename = "speed_limit_down")]
+    pub speed_limit_down_kbps: u32,
+    /// `speed_limit_down_enabled`: whether the download limit applies.
+    pub speed_limit_down_enabled: bool,
+    /// `speed_limit_up`: the upload limit in kB/s, which applies only when enabled.
+    #[serde(rename = "speed_limit_up")]
+    pub speed_limit_up_kbps: u32,
+    /// `speed_limit_up_enabled`: whether the upload limit applies.
+    pub speed_limit_up_enabled: bool,
+    /// `sequential_download`: whether added torrents download sequentially by default.
+    pub sequential_download: bool,
+}
+
+/// Session settings to change (`session_set`); `None` leaves a setting as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionSet {
+    /// `alt_speed_enabled`
+    pub alt_speed_enabled: Option<bool>,
+    /// `speed_limit_down`, in kB/s.
+    pub speed_limit_down_kbps: Option<u32>,
+    /// `speed_limit_down_enabled`
+    pub speed_limit_down_enabled: Option<bool>,
+    /// `speed_limit_up`, in kB/s.
+    pub speed_limit_up_kbps: Option<u32>,
+    /// `speed_limit_up_enabled`
+    pub speed_limit_up_enabled: Option<bool>,
+}
+
+/// Transfer totals over one period (rpc-spec §4.2, "stats object").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct StatsBlock {
+    /// `downloaded_bytes`
+    pub downloaded_bytes: u64,
+    /// `uploaded_bytes`
+    pub uploaded_bytes: u64,
+    /// `files_added`: how many torrents were added.
+    pub files_added: u64,
+    /// `seconds_active`
+    pub seconds_active: u64,
+    /// `session_count`: how many times the daemon started.
+    pub session_count: u64,
+}
+
+/// The daemon's speeds, torrent counts and transfer totals (`session_stats`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SessionStats {
+    /// `download_speed` in bytes/s.
+    pub download_speed: u64,
+    /// `upload_speed` in bytes/s.
+    pub upload_speed: u64,
+    /// `active_torrent_count`
+    pub active_torrent_count: u32,
+    /// `paused_torrent_count`
+    pub paused_torrent_count: u32,
+    /// `torrent_count`
+    pub torrent_count: u32,
+    /// `current_stats`: since the daemon started.
+    pub current_stats: StatsBlock,
+    /// `cumulative_stats`: over every run of the daemon.
+    pub cumulative_stats: StatsBlock,
+}
+
+/// How much room a directory on the server has (`free_space`).
+///
+/// The server reports `-1` for a size it could not read, hence the signed sizes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FreeSpace {
+    /// `path`: the directory that was asked about.
+    pub path: String,
+    /// `size_bytes`: free space in bytes.
+    pub size_bytes: i64,
+    /// `total_size`: capacity in bytes.
+    pub total_size: i64,
+}
+
+/// What a server calls itself, as [`Client::check_server`](crate::Client::check_server) read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerVersion {
+    /// `version`: the daemon's long version string, `$version ($revision)`.
+    pub version: String,
+    /// `rpc_version_semver`: the RPC API version, as the server wrote it.
+    pub rpc_semver: String,
+}
+
+impl ServerVersion {
+    /// The major number of [`rpc_semver`](Self::rpc_semver), or `None` when it does not start
+    /// with a number and a dot.
+    #[must_use]
+    pub fn rpc_major(&self) -> Option<u64> {
+        let (major, _) = self.rpc_semver.split_once('.')?;
+        // `u64::from_str` would also accept a leading `+`.
+        if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        major.parse().ok()
+    }
+
+    /// Whether 4x4 can talk to this server: its RPC major is 6 (Transmission 4.1) or later.
+    #[must_use]
+    pub fn is_supported(&self) -> bool {
+        self.rpc_major().is_some_and(|major| major >= MIN_RPC_MAJOR)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn version(rpc_semver: &str) -> ServerVersion {
+        ServerVersion {
+            version: "4.1.3 (838877323f)".to_owned(),
+            rpc_semver: rpc_semver.to_owned(),
+        }
+    }
+
+    #[test]
+    fn rpc_major_reads_the_number_before_the_first_dot() {
+        assert_eq!(version("6.0.1").rpc_major(), Some(6));
+        assert_eq!(version("10.2.0").rpc_major(), Some(10));
+        assert_eq!(version("6.0.0-beta.1").rpc_major(), Some(6));
+    }
+
+    #[test]
+    fn rpc_major_is_none_for_text_that_is_not_a_version() {
+        for text in [
+            "", "abc", ".1", "6", "v6.0.1", "+6.0.1", "-6.0.1", " 6.0.1", "a.6.0",
+        ] {
+            assert_eq!(version(text).rpc_major(), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn rpc_major_is_none_when_the_number_overflows() {
+        assert_eq!(version("99999999999999999999999.0.0").rpc_major(), None);
+    }
+
+    #[test]
+    fn support_starts_at_rpc_major_6() {
+        assert!(!version("5.4.0").is_supported());
+        assert!(!version("0.0.0").is_supported());
+        assert!(version("6.0.0").is_supported());
+        assert!(version("7.0.0").is_supported());
+        assert!(!version("").is_supported());
+    }
+}
