@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # Stop / SubagentStop hook: an agent may not finish while `just check-fast` is red.
 #
-# The check only runs when Rust-relevant files changed since the last green run
-# (fingerprint of path + content of *.rs, *.toml, Cargo.lock, *.ftl). A red
-# result blocks the stop (exit 2, output on stderr goes to the agent). After
-# 3 blocked stops on the same fingerprint the hook gives up (exit 0) so a
-# check the agent cannot fix never traps it in a loop.
+# The check only runs when one of its inputs changed since the last green run. The
+# fingerprint covers path + content of every tracked or untracked, non-ignored file
+# except Markdown and the license texts, plus the toolchain versions, so a toolchain
+# upgrade (which can bring new lints) invalidates the last green. A red result blocks
+# the stop (exit 2, output on stderr goes to the agent). After 3 blocked stops on the
+# same fingerprint the hook gives up (exit 0) so a check the agent cannot fix never
+# traps it in a loop.
 #
-# Env: CLAUDE_PROJECT_DIR (default: $PWD), X4_STOP_CHECK_CMD (default: just check-fast).
+# Env: CLAUDE_PROJECT_DIR (default: $PWD), X4_STOP_CHECK_CMD (default: just check-fast),
+# X4_TOOLCHAIN_ID_CMD (default: rustc -Vv; cargo clippy -V).
 set -euo pipefail
 
 project_dir=${CLAUDE_PROJECT_DIR:-$PWD}
 state_dir=$project_dir/target/.agent-hooks
 check_cmd=${X4_STOP_CHECK_CMD:-just check-fast}
+toolchain_cmd=${X4_TOOLCHAIN_ID_CMD:-rustc -Vv; cargo clippy -V}
 max_blocks=3
 output_lines=80
 
@@ -20,15 +24,20 @@ cd "$project_dir"
 mkdir -p "$state_dir"
 
 fingerprint() {
-    git ls-files -co --exclude-standard -z -- '*.rs' '*.toml' 'Cargo.lock' '*.ftl' |
-        LC_ALL=C sort -zu |
-        while IFS= read -r -d '' file; do
-            # Tracked files deleted from the work tree are still listed; skipping
-            # them makes the deletion itself change the fingerprint.
-            if [[ -f $file ]]; then
-                sha256sum -- "$file"
-            fi
-        done |
+    {
+        git ls-files -co --exclude-standard -z -- . ':!*.md' ':!LICENSE-*' |
+            LC_ALL=C sort -zu |
+            while IFS= read -r -d '' file; do
+                # Tracked files deleted from the work tree are still listed; skipping
+                # them makes the deletion itself change the fingerprint.
+                if [[ -f $file ]]; then
+                    sha256sum -- "$file"
+                fi
+            done
+        # A missing tool still yields a stable id (its error text); the check itself
+        # then fails and reports it.
+        bash -c "$toolchain_cmd" </dev/null 2>&1 || true
+    } |
         sha256sum |
         cut -d' ' -f1
 }

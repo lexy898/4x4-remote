@@ -10,7 +10,7 @@ stop_hook=$root/scripts/hooks/stop-check.sh
 check_tools=$root/scripts/check-tools.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
 
 tmp_root=$(mktemp -d)
 trap 'rm -rf "$tmp_root"' EXIT
@@ -56,15 +56,6 @@ run_format() { # <file>
     run_with_input "$json" "$format_hook"
 }
 
-# The stop-hook cases share one repo on purpose: they exercise the state kept
-# between consecutive stops (last green fingerprint, block counter).
-stop_dir=
-
-run_stop() { # <check-command>
-    run_with_input '{"hook_event_name":"Stop","stop_hook_active":false}' \
-        env CLAUDE_PROJECT_DIR="$stop_dir" X4_STOP_CHECK_CMD="$1" "$stop_hook"
-}
-
 test_format_hook_formats_rust_file() {
     local dir
     dir=$(new_repo)
@@ -92,23 +83,54 @@ test_format_hook_reports_syntax_error() {
     [[ -n $stderr ]] || fail "expected the rustfmt error on stderr"
 }
 
+
+# The stop-hook cases share one repo on purpose: they exercise the state kept
+# between consecutive stops (last green fingerprint, block counter).
+stop_dir=
+toolchain_id=toolchain-1
+check_ran=$tmp_root/check-ran
+
+run_stop() { # <check-command>
+    run_with_input '{"hook_event_name":"Stop","stop_hook_active":false}' \
+        env CLAUDE_PROJECT_DIR="$stop_dir" X4_STOP_CHECK_CMD="$1" \
+        X4_TOOLCHAIN_ID_CMD="echo $toolchain_id" "$stop_hook"
+}
+
+# A green check that leaves a marker, so a case can tell whether it ran or was skipped.
+run_stop_green() {
+    rm -f "$check_ran"
+    run_stop "touch $(printf %q "$check_ran")"
+    expect_status 0
+}
+
+expect_check_ran() {
+    [[ -e $check_ran ]] || fail "expected the check to run"
+}
+
+expect_check_skipped() {
+    [[ ! -e $check_ran ]] || fail "expected the check to be skipped"
+}
+
 test_stop_hook_runs_and_records_green() {
     stop_dir=$(new_repo)
+    # Like the real repository: the hook state under target/ is ignored.
+    printf '/target/\n' >"$stop_dir/.gitignore"
     printf 'fn main() {}\n' >"$stop_dir/b.rs"
-    run_stop true
-    expect_status 0
+    run_stop_green
+    expect_check_ran
     [[ -s $stop_dir/target/.agent-hooks/last-green ]] || fail "fingerprint file was not written"
 }
 
 test_stop_hook_skips_unchanged() {
-    run_stop false
-    expect_status 0
+    run_stop_green
+    expect_check_skipped
 }
 
 test_stop_hook_blocks_on_failure() {
     printf 'fn main() { }\n' >"$stop_dir/b.rs"
     run_stop "echo boom; false"
     expect_status 2
+    expect_contains "echo boom; false failed — fix before finishing:" "$stderr" stderr
     expect_contains boom "$stderr" stderr
 }
 
@@ -129,12 +151,63 @@ test_stop_hook_gives_up_after_three() {
         fail "expected stdout to be exactly one systemMessage JSON object, got: $stdout"
 }
 
-test_stop_hook_ignores_non_rust_change() {
-    run_stop true # the previous case left the tree red; go green first
-    expect_status 0
-    echo 'notes' >"$stop_dir/notes.md"
+test_stop_hook_green_clears_blocks() {
+    printf 'fn main() { let _y = 2; }\n' >"$stop_dir/b.rs"
     run_stop false
+    expect_status 2
+    [[ -f $stop_dir/target/.agent-hooks/blocks ]] || fail "a red run must record the block count"
+    run_stop_green
+    expect_check_ran
+    [[ ! -e $stop_dir/target/.agent-hooks/blocks ]] || fail "a green run must clear the block count"
+}
+
+test_stop_hook_skips_markdown_change() {
+    echo 'notes' >"$stop_dir/notes.md"
+    echo 'license text' >"$stop_dir/LICENSE-MIT"
+    run_stop_green
+    expect_check_skipped
+}
+
+test_stop_hook_reruns_on_fixture_change() {
+    mkdir -p "$stop_dir/tests/fixtures"
+    echo '{"result": "success"}' >"$stop_dir/tests/fixtures/x.json"
+    run_stop_green
+    expect_check_ran
+    echo '{"result": "error"}' >"$stop_dir/tests/fixtures/x.json"
+    run_stop_green
+    expect_check_ran
+}
+
+test_stop_hook_reruns_on_new_untracked_rs() {
+    printf 'pub fn c() {}\n' >"$stop_dir/c.rs"
+    run_stop_green
+    expect_check_ran
+}
+
+test_stop_hook_reruns_on_deleted_file() {
+    git -C "$stop_dir" add b.rs
+    run_stop_green
+    expect_check_skipped # staging alone changes no input
+    rm "$stop_dir/b.rs"
+    run_stop_green
+    expect_check_ran
+    run_stop_green
+    expect_check_skipped
+}
+
+test_stop_hook_reruns_on_toolchain_change() {
+    toolchain_id=toolchain-2
+    run_stop_green
+    expect_check_ran
+}
+
+test_stop_hook_default_toolchain_id_works() {
+    rm -f "$check_ran"
+    run_with_input '{"hook_event_name":"Stop","stop_hook_active":false}' \
+        env -u X4_TOOLCHAIN_ID_CMD CLAUDE_PROJECT_DIR="$stop_dir" \
+        X4_STOP_CHECK_CMD="touch $(printf %q "$check_ran")" "$stop_hook"
     expect_status 0
+    expect_check_ran # the real rustc/clippy versions differ from the stubbed id
 }
 
 # A PATH holding stub executables for every required tool except those given.
@@ -178,7 +251,13 @@ cases=(
     stop_hook_skips_unchanged
     stop_hook_blocks_on_failure
     stop_hook_gives_up_after_three
-    stop_hook_ignores_non_rust_change
+    stop_hook_green_clears_blocks
+    stop_hook_skips_markdown_change
+    stop_hook_reruns_on_fixture_change
+    stop_hook_reruns_on_new_untracked_rs
+    stop_hook_reruns_on_deleted_file
+    stop_hook_reruns_on_toolchain_change
+    stop_hook_default_toolchain_id_works
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
