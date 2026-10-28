@@ -7,7 +7,7 @@ use x4_rpc::testing::fixtures::{FREE_SPACE, SESSION_GET, SESSION_STATS};
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
 use x4_rpc::{
     Client, HttpResponse, RpcError, SESSION_FIELDS, SessionInfo, SessionSet, SessionStats,
-    StatsBlock,
+    StatsBlock, UnsupportedReason,
 };
 
 /// The `result` of a recorded fixture envelope; null if the fixture is malformed, which
@@ -403,24 +403,33 @@ fn check_server_rejects_5() {
     assert_eq!(
         error,
         RpcError::UnsupportedServer {
-            rpc_version: "5.4.0".to_owned()
+            reason: UnsupportedReason::Version("5.4.0".to_owned())
         }
     );
 }
 
 #[test]
-fn check_server_rejects_garbage() {
-    for garbage in ["", "abc"] {
-        let error = check_server_reporting(garbage).unwrap_err();
+fn check_server_rejects_a_missing_version_as_no_version() {
+    let error = check_server_reporting("").unwrap_err();
 
-        assert_eq!(
-            error,
-            RpcError::UnsupportedServer {
-                rpc_version: garbage.to_owned()
-            },
-            "{garbage:?}"
-        );
-    }
+    assert_eq!(
+        error,
+        RpcError::UnsupportedServer {
+            reason: UnsupportedReason::NoVersion
+        }
+    );
+}
+
+#[test]
+fn check_server_rejects_a_version_that_is_not_one_with_the_text_it_sent() {
+    let error = check_server_reporting("abc").unwrap_err();
+
+    assert_eq!(
+        error,
+        RpcError::UnsupportedServer {
+            reason: UnsupportedReason::Version("abc".to_owned())
+        }
+    );
 }
 
 #[test]
@@ -437,7 +446,7 @@ fn check_server_rejects_legacy_protocol_reply() {
     assert_eq!(
         client.check_server(),
         Err(RpcError::UnsupportedServer {
-            rpc_version: "legacy protocol (Transmission 4.0 or older)".to_owned()
+            reason: UnsupportedReason::Legacy
         })
     );
 }

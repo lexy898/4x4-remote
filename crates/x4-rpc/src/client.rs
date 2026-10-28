@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{LEGACY_PROTOCOL, RpcError};
+use crate::error::{RpcError, UnsupportedReason};
 use crate::transport::{HttpRequest, HttpResponse, Transport};
 
 /// The HTTP timeout per request.
@@ -150,7 +150,7 @@ fn decode_response<R: DeserializeOwned>(method: &str, id: u64, body: &[u8]) -> R
     // `jsonrpc` key is that shape and nothing else, unlike HTML or other garbage.
     if !envelope.contains_key("jsonrpc") && envelope.get("result").is_some_and(Value::is_string) {
         return Err(RpcError::UnsupportedServer {
-            rpc_version: LEGACY_PROTOCOL.to_owned(),
+            reason: UnsupportedReason::Legacy,
         });
     }
     if envelope.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {

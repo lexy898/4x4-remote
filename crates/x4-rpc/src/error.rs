@@ -1,5 +1,7 @@
 //! Errors of an RPC call.
 
+use std::fmt;
+
 use crate::ids::IdError;
 use crate::transport::TransportError;
 
@@ -43,31 +45,54 @@ pub enum RpcError {
         detail: Option<String>,
     },
     /// The server speaks an RPC version 4x4 does not support (needs Transmission 4.1+).
-    #[error(
-        "unsupported server: {}; 4x4 needs Transmission 4.1 or later (RPC version 6.0)",
-        describe_version(.rpc_version)
-    )]
+    #[error("unsupported server: {reason}; 4x4 needs Transmission 4.1 or later (RPC version 6.0)")]
     UnsupportedServer {
-        /// The server's `rpc_version_semver`, or `"legacy protocol (Transmission 4.0 or
-        /// older)"` when it answers in the protocol of those versions, which has no such field.
-        rpc_version: String,
+        /// What the server reported that makes it unsupported.
+        reason: UnsupportedReason,
     },
     /// The request named no torrents or an invalid hash.
     #[error("invalid torrent selection: {0}")]
     Selection(IdError),
 }
 
-/// The `rpc_version` of [`RpcError::UnsupportedServer`] for a daemon that answers in the legacy
-/// (pre-JSON-RPC) protocol of Transmission 4.0 and older.
-pub(crate) const LEGACY_PROTOCOL: &str = "legacy protocol (Transmission 4.0 or older)";
+/// Why a server's RPC version is not supported (see [`RpcError::UnsupportedServer`]).
+///
+/// A UI picks its text by variant, through its i18n layer; the `Display` text is for logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnsupportedReason {
+    /// The server answers in the legacy (pre-JSON-RPC) protocol of Transmission 4.0 and older,
+    /// which has no `rpc_version_semver`.
+    Legacy,
+    /// The server reports no RPC version: its `rpc_version_semver` is empty.
+    NoVersion,
+    /// The server reports an RPC version below 6 (before Transmission 4.1), or one that is not a
+    /// version; holds its `rpc_version_semver` as the server wrote it.
+    Version(String),
+}
 
-fn describe_version(rpc_version: &str) -> String {
-    if rpc_version.is_empty() {
-        "it reports no RPC version".to_owned()
-    } else if rpc_version == LEGACY_PROTOCOL {
-        format!("it speaks the {LEGACY_PROTOCOL}")
-    } else {
-        format!("its RPC version is {rpc_version:?}")
+impl UnsupportedReason {
+    /// The reason for a server whose `rpc_version_semver` is `rpc_version_semver` and is not
+    /// supported: [`NoVersion`](Self::NoVersion) when it is empty, else
+    /// [`Version`](Self::Version) with the text as sent.
+    #[must_use]
+    pub fn from_rpc_semver(rpc_version_semver: &str) -> Self {
+        if rpc_version_semver.is_empty() {
+            Self::NoVersion
+        } else {
+            Self::Version(rpc_version_semver.to_owned())
+        }
+    }
+}
+
+impl fmt::Display for UnsupportedReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Legacy => {
+                formatter.write_str("it speaks the legacy protocol (Transmission 4.0 or older)")
+            }
+            Self::NoVersion => formatter.write_str("it reports no RPC version"),
+            Self::Version(version) => write!(formatter, "its RPC version is {version:?}"),
+        }
     }
 }
 
@@ -108,27 +133,40 @@ mod tests {
 
     #[test]
     fn unsupported_server_message_says_what_the_server_reported() {
-        let message = |rpc_version: &str| {
-            RpcError::UnsupportedServer {
-                rpc_version: rpc_version.to_owned(),
-            }
-            .to_string()
-        };
+        let message =
+            |reason: UnsupportedReason| RpcError::UnsupportedServer { reason }.to_string();
         let needs = "4x4 needs Transmission 4.1 or later (RPC version 6.0)";
 
         assert_eq!(
-            message("5.4.0"),
+            message(UnsupportedReason::Version("5.4.0".to_owned())),
             format!("unsupported server: its RPC version is \"5.4.0\"; {needs}")
         );
         assert_eq!(
-            message(""),
+            message(UnsupportedReason::NoVersion),
             format!("unsupported server: it reports no RPC version; {needs}")
         );
         assert_eq!(
-            message(LEGACY_PROTOCOL),
+            message(UnsupportedReason::Legacy),
             format!(
                 "unsupported server: it speaks the legacy protocol (Transmission 4.0 or older); {needs}"
             )
+        );
+    }
+
+    #[test]
+    fn a_reported_version_becomes_a_reason() {
+        assert_eq!(
+            UnsupportedReason::from_rpc_semver(""),
+            UnsupportedReason::NoVersion
+        );
+        assert_eq!(
+            UnsupportedReason::from_rpc_semver("5.4.0"),
+            UnsupportedReason::Version("5.4.0".to_owned())
+        );
+        // A version string that is no version is still what the server sent.
+        assert_eq!(
+            UnsupportedReason::from_rpc_semver("abc"),
+            UnsupportedReason::Version("abc".to_owned())
         );
     }
 

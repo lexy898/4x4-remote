@@ -8,7 +8,7 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
-use crate::error::RpcError;
+use crate::error::{RpcError, UnsupportedReason};
 use crate::session::{
     FreeSpace, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats,
 };
@@ -77,8 +77,10 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// Any [`RpcError`] of the call; [`RpcError::UnsupportedServer`] when the server's
-    /// `rpc_version_semver` has a major below 6 (before Transmission 4.1) or is not a version,
-    /// or when the server answers in the legacy protocol of Transmission 4.0 and older.
+    /// `rpc_version_semver` has a major below 6 (before Transmission 4.1) or is not a version
+    /// ([`UnsupportedReason::Version`], or [`UnsupportedReason::NoVersion`] when it is empty), or
+    /// when the server answers in the legacy protocol of Transmission 4.0 and older
+    /// ([`UnsupportedReason::Legacy`]).
     pub fn check_server(&mut self) -> Result<ServerVersion, RpcError> {
         let result: VersionResult = self.call(
             "session_get",
@@ -94,7 +96,7 @@ impl<T: Transport> Client<T> {
             Ok(version)
         } else {
             Err(RpcError::UnsupportedServer {
-                rpc_version: version.rpc_semver,
+                reason: UnsupportedReason::from_rpc_semver(&version.rpc_semver),
             })
         }
     }

@@ -1,6 +1,6 @@
 //! What the UI reads: the torrents, the session, the totals and how the connection is doing.
 
-use x4_rpc::{RpcError, SessionInfo, TransportError};
+use x4_rpc::{RpcError, SessionInfo, TransportError, UnsupportedReason};
 
 use crate::model::Torrent;
 
@@ -20,8 +20,8 @@ pub enum ConnectionState {
     },
     /// The daemon answers, but speaks an RPC version 4x4 cannot use.
     Unsupported {
-        /// The version the daemon reported.
-        rpc_version: String,
+        /// What the daemon reported that makes it unsupported; the UI words it by variant.
+        reason: UnsupportedReason,
     },
 }
 
@@ -214,7 +214,7 @@ mod tests {
         protocol(RpcError::InvalidResponse("not JSON".to_owned()));
         protocol(RpcError::InvalidRequest("bad value".to_owned()));
         protocol(RpcError::UnsupportedServer {
-            rpc_version: "5.4.0".to_owned(),
+            reason: UnsupportedReason::Version("5.4.0".to_owned()),
         });
         protocol(RpcError::Selection(
             x4_rpc::TorrentSelection::new(Vec::new()).unwrap_err(),

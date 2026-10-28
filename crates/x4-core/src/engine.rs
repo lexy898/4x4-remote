@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use x4_rpc::{
     FreeSpace, HashString, RpcError, ServerVersion, SessionInfo, SessionStats, TorrentGetResponse,
+    UnsupportedReason,
 };
 
 use crate::action::{Action, ActionError, ActionId};
@@ -476,9 +477,11 @@ impl Engine {
             Ok(Response::Server(version)) if version.is_supported() => {
                 self.connected(now, &version)
             }
-            Ok(Response::Server(version)) => self.unsupported(version.rpc_semver),
+            Ok(Response::Server(version)) => {
+                self.unsupported(UnsupportedReason::from_rpc_semver(&version.rpc_semver))
+            }
             Ok(other) => self.connect_failed(now, &unexpected(&Request::CheckServer, &other)),
-            Err(RpcError::UnsupportedServer { rpc_version }) => self.unsupported(rpc_version),
+            Err(RpcError::UnsupportedServer { reason }) => self.unsupported(reason),
             // Even an error the daemon reports means there is nothing to poll yet.
             Err(error) => self.connect_failed(now, &error),
         }
@@ -505,13 +508,13 @@ impl Engine {
         self.set_connection(ConnectionState::Connected)
     }
 
-    fn unsupported(&mut self, rpc_version: String) -> Vec<Event> {
+    fn unsupported(&mut self, reason: UnsupportedReason) -> Vec<Event> {
         tracing::error!(
-            rpc_version = %rpc_version,
+            %reason,
             "the daemon's RPC version is not supported; 4x4 needs Transmission 4.1 or later"
         );
         self.check_at = None;
-        self.set_connection(ConnectionState::Unsupported { rpc_version })
+        self.set_connection(ConnectionState::Unsupported { reason })
     }
 
     /// The daemon cannot be used: wait one more step of the backoff, then check it again.
@@ -581,7 +584,7 @@ impl Engine {
         }];
         events.extend(match Failure::of(&error) {
             Failure::Unusable => self.connection_lost(now, &error),
-            Failure::Unsupported(rpc_version) => self.unsupported(rpc_version.to_owned()),
+            Failure::Unsupported(reason) => self.unsupported(reason.clone()),
             Failure::Refused => Vec::new(),
         });
         events
@@ -590,7 +593,7 @@ impl Engine {
     fn poll_failed(&mut self, now: Instant, poll: &Request, error: &RpcError) -> Vec<Event> {
         match Failure::of(error) {
             Failure::Unusable => self.connection_lost(now, error),
-            Failure::Unsupported(rpc_version) => self.unsupported(rpc_version.to_owned()),
+            Failure::Unsupported(reason) => self.unsupported(reason.clone()),
             Failure::Refused => {
                 let news = poll
                     .poll_kind()
@@ -683,8 +686,8 @@ enum Failure<'a> {
     /// The daemon cannot be used: it does not answer, refuses this host or does not speak
     /// JSON-RPC. Reconnect.
     Unusable,
-    /// The daemon speaks an RPC version 4x4 does not support; holds the version.
-    Unsupported(&'a str),
+    /// The daemon speaks an RPC version 4x4 does not support; holds why.
+    Unsupported(&'a UnsupportedReason),
     /// The daemon answered and refused this one call. The connection is fine.
     Refused,
 }
@@ -700,7 +703,7 @@ impl<'a> Failure<'a> {
             | RpcError::SessionIdMissing
             | RpcError::SessionIdRejected
             | RpcError::InvalidResponse(_) => Self::Unusable,
-            RpcError::UnsupportedServer { rpc_version } => Self::Unsupported(rpc_version),
+            RpcError::UnsupportedServer { reason } => Self::Unsupported(reason),
             RpcError::Server { .. } | RpcError::InvalidRequest(_) | RpcError::Selection(_) => {
                 Self::Refused
             }

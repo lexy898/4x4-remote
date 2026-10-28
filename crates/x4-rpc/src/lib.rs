@@ -30,7 +30,7 @@ mod torrent_methods;
 mod transport;
 
 pub use client::{Client, DEFAULT_TIMEOUT};
-pub use error::RpcError;
+pub use error::{RpcError, UnsupportedReason};
 pub use ids::{GetIds, HashString, IdError, TorrentId, TorrentRef, TorrentSelection};
 pub use session::{
     FreeSpace, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats, StatsBlock,

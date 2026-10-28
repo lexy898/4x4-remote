@@ -244,7 +244,7 @@ fn unsupported_server_stops_polling() {
     assert_eq!(
         engine.connection,
         ConnectionState::Unsupported {
-            rpc_version: "5.0.0".to_owned()
+            reason: UnsupportedReason::Version("5.0.0".to_owned())
         }
     );
     // Five minutes of ticks.
@@ -265,24 +265,44 @@ fn unsupported_server_error_stops_polling_too() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
     hand_out(&mut engine, base);
-    let legacy = "legacy protocol (Transmission 4.0 or older)".to_owned();
 
     respond(
         &mut engine,
         base,
         &Request::CheckServer,
         Err(RpcError::UnsupportedServer {
-            rpc_version: legacy.clone(),
+            reason: UnsupportedReason::Legacy,
         }),
     );
 
     assert_eq!(
         engine.connection,
         ConnectionState::Unsupported {
-            rpc_version: legacy
+            reason: UnsupportedReason::Legacy
         }
     );
     assert_eq!(engine.due_requests(base + secs(60)), []);
+}
+
+#[test]
+fn a_server_check_without_a_version_is_unsupported_for_that_reason() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    hand_out(&mut engine, base);
+
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(version(""))),
+    );
+
+    assert_eq!(
+        engine.connection,
+        ConnectionState::Unsupported {
+            reason: UnsupportedReason::NoVersion
+        }
+    );
 }
 
 #[test]
@@ -577,14 +597,14 @@ fn unsupported_server_error_on_a_poll_stops_polling() {
         base,
         &Request::FullList,
         Err(RpcError::UnsupportedServer {
-            rpc_version: "5.4.0".to_owned(),
+            reason: UnsupportedReason::Version("5.4.0".to_owned()),
         }),
     );
 
     assert_eq!(
         engine.connection,
         ConnectionState::Unsupported {
-            rpc_version: "5.4.0".to_owned()
+            reason: UnsupportedReason::Version("5.4.0".to_owned())
         }
     );
     assert_eq!(engine.due_requests(base + secs(60)), []);
@@ -1766,7 +1786,7 @@ fn an_action_answered_by_an_unsupported_server_stops_polling() {
     command(&mut engine, base, Command::Run(ActionId(15), stop_first()));
     let due = hand_out(&mut engine, base);
     let error = RpcError::UnsupportedServer {
-        rpc_version: "5.4.0".to_owned(),
+        reason: UnsupportedReason::Version("5.4.0".to_owned()),
     };
 
     let events = engine.handle_response(base, &due[0], Err(error.clone()));
@@ -1781,7 +1801,7 @@ fn an_action_answered_by_an_unsupported_server_stops_polling() {
     assert_eq!(
         engine.connection,
         ConnectionState::Unsupported {
-            rpc_version: "5.4.0".to_owned()
+            reason: UnsupportedReason::Version("5.4.0".to_owned())
         }
     );
     assert_eq!(hand_out(&mut engine, base + secs(60)), []);

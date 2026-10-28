@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use x4_rpc::testing::{self, FakeTransport};
 use x4_rpc::{
     Client, HashString, HttpRequest, HttpResponse, IdError, RpcError, TorrentSelection, Transport,
-    TransportError,
+    TransportError, UnsupportedReason,
 };
 
 /// A scripted fake that also keeps the raw request bodies, to inspect the envelope itself.
@@ -280,7 +280,7 @@ fn legacy_protocol_reply_is_an_unsupported_server() {
         assert_eq!(
             client.call_raw("session_stats", None),
             Err(RpcError::UnsupportedServer {
-                rpc_version: "legacy protocol (Transmission 4.0 or older)".to_owned()
+                reason: UnsupportedReason::Legacy
             })
         );
     }
