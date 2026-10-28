@@ -31,6 +31,10 @@
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
 //! [`Command`]s, which never blocks, awaits the [`Event`]s on its own executor, and drops the
 //! handle to stop the thread without waiting for it, so it never waits on the network.
+//!
+//! The `test-support` feature adds the `test_support` module with builders for tests of
+//! dependent crates (a complete [`Torrent`], a recorded fixture's `result`) and turns on
+//! `x4-rpc`'s `test-support`, whose recorded fixtures the builders work with.
 
 mod action;
 mod details;
@@ -44,8 +48,8 @@ mod snapshot;
 mod sort;
 mod state;
 mod store;
-#[cfg(test)]
-mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use action::{Action, ActionError, ActionId};
 pub use details::{FileEntry, TorrentDetails};

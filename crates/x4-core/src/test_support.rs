@@ -1,4 +1,9 @@
-//! Builders shared by the unit tests of this crate.
+//! Builders for tests (feature `test-support`): a complete [`Torrent`] and the `result` of a
+//! recorded fixture.
+//!
+//! The unit tests of this crate use them, and so can the tests of dependent crates, which enable
+//! the feature as a dev-dependency. The feature also turns on `x4-rpc`'s `test-support`, so
+//! `x4_rpc::testing::fixtures` is there to feed [`fixture_result`]. Not for production code.
 
 use x4_rpc::{HashString, TorrentId};
 
@@ -7,7 +12,16 @@ use crate::state::DisplayState;
 
 /// The `result` of a recorded JSON-RPC response from `x4_rpc::testing::fixtures`; deserialize it
 /// into the type the method returns.
-pub(crate) fn fixture_result(envelope: &str) -> serde_json::Value {
+///
+/// # Panics
+///
+/// When `envelope` is not JSON or has no `result`, which is a broken fixture.
+#[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper: a broken fixture should fail the test that reads it"
+)]
+pub fn fixture_result(envelope: &str) -> serde_json::Value {
     let mut envelope: serde_json::Value =
         serde_json::from_str(envelope).expect("a fixture is valid JSON");
     envelope
@@ -21,7 +35,8 @@ pub(crate) fn fixture_result(envelope: &str) -> serde_json::Value {
 /// Override fields with struct-update syntax: `Torrent { rate_up: 5, ..torrent("a") }`. The hash
 /// is derived from the name: equal names give equal hashes and different names (in practice)
 /// different ones, so a test that depends on the order of hashes sets `hash` itself.
-pub(crate) fn torrent(name: &str) -> Torrent {
+#[must_use]
+pub fn torrent(name: &str) -> Torrent {
     Torrent {
         id: TorrentId(0),
         hash: hash_for(name),
@@ -55,6 +70,10 @@ pub(crate) fn torrent(name: &str) -> Torrent {
 ///
 /// FNV is spelled out here, rather than taken from `DefaultHasher`, because the standard hasher
 /// does not promise the same output across Rust versions.
+#[expect(
+    clippy::expect_used,
+    reason = "sixteen plus sixteen plus eight hex digits is always a valid hash"
+)]
 fn hash_for(name: &str) -> HashString {
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     const BASIS: u64 = 0xcbf2_9ce4_8422_2325;
