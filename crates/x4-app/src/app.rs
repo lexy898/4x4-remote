@@ -66,17 +66,11 @@ pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
 /// app; the defaults are used and the problem is logged.
 fn load_files(paths: &AppPaths) {
     match read_config(&paths.config_file) {
-        Ok(config) => {
-            // Only the scheme: the rest of the URL may hold a password.
-            let scheme = config
-                .connection
-                .url
-                .split_once("://")
-                .map_or("", |(scheme, _)| scheme);
-            tracing::info!(path = %paths.config_file.display(), scheme, "config loaded");
+        Ok(_) => {
+            tracing::info!(path = %paths.config_file.display(), "config loaded");
         }
         Err(error) => {
-            tracing::warn!(%error, "config not loaded; using the defaults");
+            tracing::warn!(error = %error.report(), "config not loaded; using the defaults");
         }
     }
     match read_ui_state(&paths.state_file) {
@@ -84,7 +78,7 @@ fn load_files(paths: &AppPaths) {
             tracing::info!(path = %paths.state_file.display(), writable = loaded.writable, "UI state loaded");
         }
         Err(error) => {
-            tracing::warn!(%error, "UI state not loaded; using the defaults");
+            tracing::warn!(error = %error.report(), "UI state not loaded; using the defaults");
         }
     }
 }
@@ -124,16 +118,17 @@ pub fn open_main_window(cx: &mut App) -> anyhow::Result<(AnyWindowHandle, Entity
 /// The Wayland `app_id` of this run: the development id in debug builds and when `X4_DEVEL=1`,
 /// the real one otherwise.
 pub(crate) fn app_id() -> &'static str {
-    if cfg!(debug_assertions) || devel_requested(env::var_os(DEVEL_ENV).as_deref()) {
+    app_id_for(cfg!(debug_assertions), env::var_os(DEVEL_ENV).as_deref())
+}
+
+/// The id for a debug or release build and the value of `X4_DEVEL`, if it is set. Only the value
+/// `1` asks for the development id.
+fn app_id_for(debug_build: bool, devel_env: Option<&OsStr>) -> &'static str {
+    if debug_build || devel_env == Some(OsStr::new("1")) {
         DEVEL_APP_ID
     } else {
         APP_ID
     }
-}
-
-/// Whether the value of `X4_DEVEL` asks for the development id.
-fn devel_requested(value: Option<&OsStr>) -> bool {
-    value == Some(OsStr::new("1"))
 }
 
 /// Matches the light or dark theme to the system appearance now and whenever it changes.
@@ -164,26 +159,36 @@ mod tests {
 
     #[test]
     fn app_id_is_devel_in_debug_builds() {
+        assert_eq!(app_id_for(true, None), "io.github.lexy898.FourByFour.Devel");
         if cfg!(debug_assertions) {
             assert_eq!(app_id(), "io.github.lexy898.FourByFour.Devel");
         }
     }
 
     #[test]
-    fn app_id_ends_in_devel_only_for_development_runs() {
-        let devel = cfg!(debug_assertions) || devel_requested(env::var_os(DEVEL_ENV).as_deref());
+    fn app_id_for_covers_every_build_and_environment() {
+        let one = Some(OsStr::new("1"));
 
-        assert_eq!(app_id().ends_with(".Devel"), devel);
-        assert_eq!(APP_ID, "io.github.lexy898.FourByFour");
-        assert_eq!(DEVEL_APP_ID, format!("{APP_ID}.Devel"));
+        assert_eq!(app_id_for(true, one), DEVEL_APP_ID);
+        assert_eq!(app_id_for(true, None), DEVEL_APP_ID);
+        assert_eq!(app_id_for(false, one), DEVEL_APP_ID);
+        assert_eq!(app_id_for(false, None), APP_ID);
     }
 
     #[test]
-    fn x4_devel_one_requests_the_development_id() {
-        assert!(devel_requested(Some(OsStr::new("1"))));
-        for other in ["0", "", "true", "yes", " 1"] {
-            assert!(!devel_requested(Some(OsStr::new(other))), "{other:?}");
+    fn only_x4_devel_one_makes_a_release_build_a_development_run() {
+        for other in ["0", "", "true", "yes", " 1", "11"] {
+            assert_eq!(
+                app_id_for(false, Some(OsStr::new(other))),
+                APP_ID,
+                "{other:?}"
+            );
         }
-        assert!(!devel_requested(None));
+    }
+
+    #[test]
+    fn the_two_ids_differ_only_in_the_devel_suffix() {
+        assert_eq!(APP_ID, "io.github.lexy898.FourByFour");
+        assert_eq!(DEVEL_APP_ID, format!("{APP_ID}.Devel"));
     }
 }

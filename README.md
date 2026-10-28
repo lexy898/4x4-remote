@@ -66,7 +66,7 @@ to `~/.config` and `~/.local/state`):
 | ----------------------------------- | ----------------------------------------------------------------------- |
 | `~/.config/4x4/config.toml`         | Your settings. 4x4 only reads it and never changes it.                  |
 | `~/.local/state/4x4/state.toml`     | What 4x4 remembers between runs. It is safe to delete.                  |
-| `~/.local/state/4x4/4x4.<date>.log` | The log, one file per day (UTC date), the last 7 days kept.             |
+| `~/.local/state/4x4/4x4.<date>.log` | The log, one file per day (UTC date); the last 7 daily files are kept.  |
 
 `config.toml` is optional. It holds the daemon's address; only plain `http://` is supported, and a
 missing key takes the default:

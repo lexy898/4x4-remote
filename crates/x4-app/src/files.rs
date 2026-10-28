@@ -11,11 +11,14 @@ use std::{fs, str};
 use tempfile::NamedTempFile;
 use x4_core::{Config, ConfigError, UiState, UiStateError};
 
-/// Why a file could not be read or written. Every variant holds the path of the file.
+use crate::private_dir::create_private_dir;
+
+/// Why a file could not be read or written. Every variant holds the path of the file and the
+/// cause, which is not part of the message: [`FilesError::report`] gives both.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FilesError {
     /// The file exists but cannot be read.
-    #[error("cannot read {}: {source}", path.display())]
+    #[error("cannot read {}", path.display())]
     Read {
         /// The file.
         path: PathBuf,
@@ -23,7 +26,7 @@ pub(crate) enum FilesError {
         source: io::Error,
     },
     /// The config file is there, but its contents are unusable.
-    #[error("invalid config file {}: {source}", path.display())]
+    #[error("invalid config file {}", path.display())]
     Config {
         /// The file.
         path: PathBuf,
@@ -31,7 +34,7 @@ pub(crate) enum FilesError {
         source: ConfigError,
     },
     /// The directory for the file cannot be created.
-    #[error("cannot create the directory {}: {source}", path.display())]
+    #[error("cannot create the directory {}", path.display())]
     CreateDir {
         /// The directory.
         path: PathBuf,
@@ -39,7 +42,7 @@ pub(crate) enum FilesError {
         source: io::Error,
     },
     /// The state cannot be turned into TOML.
-    #[error("cannot serialize the state for {}: {source}", path.display())]
+    #[error("cannot serialize the state for {}", path.display())]
     Serialize {
         /// The file the state was meant for.
         path: PathBuf,
@@ -47,13 +50,29 @@ pub(crate) enum FilesError {
         source: UiStateError,
     },
     /// The file cannot be written.
-    #[error("cannot write {}: {source}", path.display())]
+    #[error("cannot write {}", path.display())]
     Write {
         /// The file.
         path: PathBuf,
         /// What the system said.
         source: io::Error,
     },
+}
+
+impl FilesError {
+    /// The message and the causes behind it on one line (`cannot read /x/state.toml: Is a
+    /// directory (os error 21)`), for logs and for showing to the user. No cause repeats a value
+    /// from the file.
+    pub(crate) fn report(&self) -> String {
+        let mut report = self.to_string();
+        let mut cause = std::error::Error::source(self);
+        while let Some(error) = cause {
+            report.push_str(": ");
+            report.push_str(&error.to_string());
+            cause = error.source();
+        }
+        report
+    }
 }
 
 /// What [`read_ui_state`] found.
@@ -157,7 +176,7 @@ pub(crate) fn write_ui_state(path: &Path, state: &UiState) -> Result<(), FilesEr
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(dir).map_err(|source| FilesError::CreateDir {
+    create_private_dir(dir).map_err(|source| FilesError::CreateDir {
         path: dir.to_path_buf(),
         source,
     })?;
@@ -165,7 +184,9 @@ pub(crate) fn write_ui_state(path: &Path, state: &UiState) -> Result<(), FilesEr
         path: path.to_path_buf(),
         source,
     };
-    // In the same directory, so the rename stays on one file system and is atomic.
+    // In the same directory, so the rename stays on one file system and is atomic. A crash between
+    // creating the file and renaming it leaves a `.tmpXXXXXX` file behind; it is harmless and
+    // nothing sweeps it.
     let mut temporary = NamedTempFile::new_in(dir).map_err(write_error)?;
     temporary.write_all(text.as_bytes()).map_err(write_error)?;
     // `persist` renames without flushing, and a rename that reaches the disk before the data
@@ -399,6 +420,23 @@ mod tests {
             read_ui_state(&path).expect("readable").state,
             UiState::default()
         );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            for created in [
+                path.parent().expect("a parent"),
+                dir.path().join("a").as_path(),
+            ] {
+                let mode = fs::metadata(created)
+                    .expect("metadata")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o700, "{}", created.display());
+            }
+            let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+            assert_eq!(mode & 0o077, 0, "the state file is private too");
+        }
     }
 
     #[test]
@@ -540,6 +578,110 @@ mod tests {
         assert!(
             error.to_string().contains(&*path.to_string_lossy()),
             "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_write_into_a_read_only_dir_fails_and_keeps_the_old_file() {
+        let root = dir();
+        let state_dir = root.path().join("state");
+        fs::create_dir(&state_dir).expect("a directory");
+        let path = state_dir.join("state.toml");
+        let old = UiState {
+            theme: ThemeChoice::Light,
+            ..UiState::default()
+        };
+        write_ui_state(&path, &old).expect("written");
+        let Some(_locked) = crate::test_dirs::make_read_only(&state_dir) else {
+            return;
+        };
+
+        let error = write_ui_state(
+            &path,
+            &UiState {
+                theme: ThemeChoice::Dark,
+                ..UiState::default()
+            },
+        )
+        .expect_err("the directory cannot be written");
+
+        assert!(
+            matches!(&error, FilesError::Write { path: failed, .. } if failed == &path),
+            "{error:?}"
+        );
+        assert_eq!(read_ui_state(&path).expect("readable").state, old);
+        assert_eq!(
+            names(&state_dir),
+            ["state.toml"],
+            "no temporary file is left"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_write_that_cannot_create_its_directory_names_the_directory() {
+        let root = dir();
+        let parent = root.path().join("locked");
+        fs::create_dir(&parent).expect("a directory");
+        let Some(_locked) = crate::test_dirs::make_read_only(&parent) else {
+            return;
+        };
+        let state_dir = parent.join("4x4");
+
+        let error = write_ui_state(&state_dir.join("state.toml"), &UiState::default())
+            .expect_err("the parent cannot be written");
+
+        assert!(
+            matches!(&error, FilesError::CreateDir { path, .. } if path == &state_dir),
+            "{error:?}"
+        );
+        assert!(!state_dir.exists());
+    }
+
+    #[test]
+    fn report_holds_the_message_and_the_cause_once() {
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        fs::create_dir(&path).expect("a directory");
+        let read = read_config(&path).expect_err("a directory cannot be read as a file");
+        fs::write(path.with_file_name("other.toml"), "[connection]\nurl = 5\n").expect("written");
+        let parse = read_config(&path.with_file_name("other.toml")).expect_err("a number");
+
+        let read = read.report();
+        let parse = parse.report();
+
+        assert!(
+            read.starts_with(&format!("cannot read {}: ", path.display())),
+            "{read}"
+        );
+        assert_eq!(read.matches(&*path.to_string_lossy()).count(), 1, "{read}");
+        assert!(
+            read.len() > format!("cannot read {}: ", path.display()).len(),
+            "{read}"
+        );
+        assert!(
+            parse.contains(": cannot parse config.toml: line 2, column 7: "),
+            "{parse}"
+        );
+        assert_eq!(
+            parse.matches("cannot parse config.toml").count(),
+            1,
+            "{parse}"
+        );
+    }
+
+    #[test]
+    fn display_leaves_the_cause_to_the_source() {
+        let error = FilesError::Config {
+            path: "/x/config.toml".into(),
+            source: ConfigError::Parse("line 1, column 2: boom".to_owned()),
+        };
+
+        assert_eq!(error.to_string(), "invalid config file /x/config.toml");
+        assert_eq!(
+            std::error::Error::source(&error).map(ToString::to_string),
+            Some("cannot parse config.toml: line 1, column 2: boom".to_owned())
         );
     }
 }

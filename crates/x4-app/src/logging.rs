@@ -9,10 +9,12 @@ use std::path::Path;
 
 use anyhow::Context as _;
 use tracing::Subscriber;
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
 use tracing_appender::rolling::{InitError, RollingFileAppender, Rotation};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
+
+use crate::private_dir::create_private_dir;
 
 /// Used when `RUST_LOG` is unset: lifecycle events from our crates, problems from the rest.
 const DEFAULT_LOG_FILTER: &str = "warn,x4_app=info,x4_core=info,x4_rpc=info";
@@ -22,6 +24,8 @@ const LOG_FILE_PREFIX: &str = "4x4";
 const LOG_FILE_SUFFIX: &str = "log";
 /// How many daily files are kept, the current one included.
 const LOG_FILES_KEPT: usize = 7;
+/// How many log lines wait for the writer thread before new ones are dropped.
+const LOG_BUFFER_LINES: usize = 1024;
 
 /// Starts logging to stderr and, in `log_dir`, to a daily file `4x4.<date>.log`, keeping the last
 /// 7 files. The level comes from `RUST_LOG`, or from a default that shows the lifecycle of the
@@ -69,7 +73,7 @@ fn build(
 ) {
     let (file_writer, guard, problem) = match log_dir.map(open_log_file) {
         Some(Ok(appender)) => {
-            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let (writer, guard) = file_writer_builder().finish(appender);
             (Some(writer), Some(guard), None)
         }
         Some(Err(error)) => (None, None, Some(error)),
@@ -82,13 +86,25 @@ fn build(
     (subscriber, guard, problem)
 }
 
+/// The settings of the thread that writes the log file.
+///
+/// The default buffer is 128 000 lines, and the channel behind it is allocated and touched up
+/// front, which costs about 4 MiB of private memory: a quarter of the app's 16 MiB budget. 1024
+/// lines is far more than the app logs between two wakeups of the writer. If the disk stalls
+/// for longer, dropping lines is better than blocking the thread that logs, which may be the UI.
+fn file_writer_builder() -> NonBlockingBuilder {
+    NonBlockingBuilder::default()
+        .buffered_lines_limit(LOG_BUFFER_LINES)
+        .lossy(true)
+}
+
 /// Opens today's log file in `dir`, creating the directory if needed and deleting the oldest
 /// files beyond the last 7.
 ///
 /// The builder is used on purpose: the helpers of `tracing_appender::rolling` panic when the
 /// file cannot be opened.
 fn open_log_file(dir: &Path) -> Result<RollingFileAppender, String> {
-    std::fs::create_dir_all(dir)
+    create_private_dir(dir)
         .map_err(|error| format!("cannot create the log directory {}: {error}", dir.display()))?;
     RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
@@ -151,6 +167,17 @@ mod tests {
         assert!(text.contains("torrent=\"abc\""), "{text}");
         assert!(!text.contains("filtered out"), "{text}");
         assert!(!text.contains('\u{1b}'), "no colors in the file: {text:?}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            for created in [log_dir.as_path(), log_dir.parent().expect("a parent")] {
+                let mode = fs::metadata(created)
+                    .expect("metadata")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o700, "{}", created.display());
+            }
+        }
     }
 
     #[test]
@@ -229,5 +256,40 @@ mod tests {
         let error = parse_filter(value).expect_err("not unicode");
 
         assert!(error.to_string().contains("RUST_LOG"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_dir_that_cannot_be_written_falls_back_to_stderr_only() {
+        let root = tempfile::tempdir().expect("a temporary directory");
+        // The directory exists, so creating it succeeds and opening the file inside it fails.
+        let log_dir = root.path().join("logs");
+        fs::create_dir(&log_dir).expect("a directory");
+        let Some(_locked) = crate::test_dirs::make_read_only(&log_dir) else {
+            return;
+        };
+
+        let (subscriber, guard, problem) = build(EnvFilter::new("info"), Some(&log_dir), false);
+
+        assert!(guard.is_none());
+        let problem = problem.expect("the problem is reported");
+        assert!(
+            problem.starts_with("cannot open the log file in "),
+            "{problem}"
+        );
+        assert!(problem.contains(&*log_dir.to_string_lossy()), "{problem}");
+        // The subscriber still works.
+        tracing::subscriber::with_default(subscriber, || tracing::info!("still logging"));
+    }
+
+    #[test]
+    fn the_file_writer_buffers_a_thousand_lines_and_drops_the_rest() {
+        // The buffer is allocated up front: the default of 128 000 lines costs about 4 MiB of
+        // private memory. The builder has no getters, so its debug output pins the settings.
+        let builder = format!("{:?}", file_writer_builder());
+
+        assert!(builder.contains("buffered_lines_limit: 1024"), "{builder}");
+        assert!(builder.contains("is_lossy: true"), "{builder}");
+        assert_eq!(LOG_BUFFER_LINES, 1024);
     }
 }

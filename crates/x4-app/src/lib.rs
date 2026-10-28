@@ -9,7 +9,10 @@ pub mod app;
 mod files;
 pub mod logging;
 pub mod paths;
+mod private_dir;
 pub mod root_view;
+#[cfg(test)]
+mod test_dirs;
 
 /// The product name: the only user-visible literal allowed before the i18n layer exists.
 const PRODUCT_NAME: &str = "4x4";
