@@ -14,8 +14,9 @@
 # gl_stack_mapped says whether Mesa's OpenGL stack (libgallium, libEGL_mesa or libGLX_mesa) is
 # mapped, found in /proc/<pid>/maps; a Vulkan-only process does not map it.
 #
-# The memory targets are checked in scripts/measure-lib.sh: rss_anon_mib <= 16, pss_mib <= 55,
-# rss_mib <= 120 and gl_stack_mapped=no. A breach prints a "WARN: ..." line on stderr and does not
+# The reference limits checked in scripts/measure-lib.sh are rss_anon_mib <= 16, pss_mib <= 55,
+# rss_mib <= 120 and gl_stack_mapped=no; they are not the targets in README.md (rss_mib <= 120 is
+# looser than its 100 MiB target). A breach prints a "WARN: ..." line on stderr and does not
 # change the exit code, which is non-zero only if the measurement itself failed: the app did not
 # start, did not log its first frame, or its /proc files could not be read. The first-frame
 # target (<= 500 ms) is reported in README.md, not checked here.

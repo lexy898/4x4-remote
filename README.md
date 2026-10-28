@@ -62,9 +62,10 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 `just measure` builds the release binary, starts it, waits 5 seconds and prints one line: the time to
 the first rendered frame, then the memory as proportional (`pss_mib`), unique (`uss_mib`),
 anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the thread count, whether Mesa's OpenGL
-stack is loaded (`gl_stack_mapped`) and the binary size. A figure over its target (the table below;
-`gl_stack_mapped` should be `no` where a Vulkan driver is installed) adds a `WARN:` line on stderr.
-The exit code stays 0 unless the measurement itself failed.
+stack is loaded (`gl_stack_mapped`) and the binary size. It adds a `WARN:` line on stderr when a figure
+is above one of its own reference limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when
+the OpenGL stack is mapped, which it should not be where a Vulkan driver is installed. The exit
+code stays 0 unless the measurement itself failed.
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS. RSS
 counts every resident page the app maps, including shared driver libraries (`libLLVM`, `libgallium`)
@@ -86,22 +87,24 @@ driver threads) loaded next to the Vulkan one, so 4x4 builds a patched copy of G
 Medians of three runs on 2026-10-28 under the same conditions (KDE Plasma 6 on Wayland, AMD Radeon
 780M with RADV, the window on the built-in screen without focus), before and after that change:
 
-| Metric                     | Target               | Vulkan and OpenGL | Vulkan-first |
-| -------------------------- | -------------------- | ----------------- | ------------ |
-| First frame                | ≤ 500 ms             | 210 ms            | 197 ms       |
-| Private memory (`RssAnon`) | ≤ 16 MiB             | 17.2 MiB          | 12.6 MiB     |
-| Proportional memory (PSS)  | ≤ 55 MiB             | 60.8 MiB          | 48.4 MiB     |
-| Resident memory (RSS)      | ≤ 120 MiB, reference | 150.0 MiB         | 110.6 MiB    |
-| Threads                    | —                    | 33                | 26           |
-| Binary size                | —                    | 31.4 MiB          | 31.4 MiB     |
+| Metric                     | Target              | Vulkan and OpenGL | Vulkan-first         |
+| -------------------------- | ------------------- | ----------------- | -------------------- |
+| First frame                | ≤ 500 ms            | 210 ms            | 197 ms               |
+| Resident memory (RSS)      | ≤ 100 MiB           | 150.0 MiB         | 110.6 MiB (not met)  |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 60.8 MiB          | 48.4 MiB             |
+| Unique memory (USS)        | —                   | 51.3 MiB          | 41.6 MiB             |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 17.2 MiB          | 12.6 MiB             |
+| Threads                    | —                   | 33                | 26                   |
+| Binary size                | —                   | 31.4 MiB          | 31.4 MiB             |
 
-RSS mostly counts shared, file-backed pages: RADV itself links `libLLVM` (about 61 MiB resident in any
-Vulkan process here), and the 4x4 binary adds about 24 MiB. PSS shares such pages out among the
-processes that map them. Without Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB of
-private memory.
+The 100 MiB RSS target is still missed, but RSS mostly counts shared, file-backed pages: RADV
+itself links `libLLVM` (about 61 MiB resident in any Vulkan process here, and every Vulkan app maps
+it), and the 4x4 binary adds about 24 MiB. PSS shares such pages out among the processes that map
+them. 16 MiB of private memory and 55 MiB of PSS are proposed working targets, for the owner to
+accept. Without Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB of private memory.
 
-These figures vary with how much of the shared driver stays resident: on a machine with about 15 GiB in
-swap, the median of three runs showed 61 MiB RSS and 51 MiB PSS, with the same 12.6 MiB of private
+These figures vary with how much of the shared driver stays resident: on the same laptop under heavy
+memory pressure (about 15 GiB in swap), a run showed 61 MiB RSS and the same 12.6 MiB of private
 memory.
 
 ## Development

@@ -102,10 +102,10 @@ before (checked during the investigation).
        patch -d vendor/gpui-pre-wgpu -p1
    ```
 
-5. Update the version, the checksum and the patch in this file. Run `just check`, then start the
-   release build and check that the window renders, that `grep -c gallium /proc/<pid>/maps` prints
-   0, and that with `VK_DRIVER_FILES=/nonexistent/icd.json` the window still renders (through
-   OpenGL) after the warning.
+5. Update the version, the checksum and the patch in this file. Run `just check`, then
+   `just measure`: it must print `gl_stack_mapped=no` and no GL `WARN:` line. Start the release
+   build with `VK_DRIVER_FILES=/nonexistent/icd.json` and check that the window still renders
+   (through OpenGL) after the warning.
 6. Commit the `gpui-kit` bump, the new copy and the re-applied patch together.
 
 Why one commit: every commit must pass `just check`, and lint-policy refuses an unpatched copy.
