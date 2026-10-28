@@ -11,56 +11,7 @@ use std::{env, fs};
 
 use serde_json::{Value, json};
 use x4_rpc::testing::scrub::Scrubber;
-use x4_rpc::{Client, DEFAULT_TIMEOUT, RpcError, UreqTransport};
-
-/// Fields of the app's torrent list request.
-const LIST_FIELDS: [&str; 26] = [
-    "id",
-    "hash_string",
-    "name",
-    "status",
-    "error",
-    "error_string",
-    "percent_done",
-    "metadata_percent_complete",
-    "rate_download",
-    "rate_upload",
-    "eta",
-    "upload_ratio",
-    "total_size",
-    "size_when_done",
-    "left_until_done",
-    "peers_connected",
-    "peers_getting_from_us",
-    "peers_sending_to_us",
-    "download_dir",
-    "added_date",
-    "done_date",
-    "queue_position",
-    "sequential_download",
-    "recheck_progress",
-    "is_finished",
-    "labels",
-];
-
-/// Fields of the app's torrent details request.
-const DETAILS_FIELDS: [&str; 15] = [
-    "id",
-    "hash_string",
-    "comment",
-    "creator",
-    "date_created",
-    "magnet_link",
-    "is_private",
-    "piece_count",
-    "piece_size",
-    "pieces",
-    "files",
-    "file_stats",
-    "downloaded_ever",
-    "uploaded_ever",
-    "total_size",
-];
+use x4_rpc::{Client, DEFAULT_TIMEOUT, RpcError, TorrentField, UreqTransport};
 
 /// Fields of the app's session request.
 const SESSION_FIELDS: [&str; 11] = [
@@ -132,11 +83,15 @@ fn run() -> Result<(), RecordError> {
         .to_owned();
     let session_stats = call(&mut client, "session_stats", json!({}))?;
     let free_space = call(&mut client, "free_space", json!({ "path": download_dir }))?;
-    let list = call(&mut client, "torrent_get", json!({ "fields": LIST_FIELDS }))?;
+    let list = call(
+        &mut client,
+        "torrent_get",
+        json!({ "fields": TorrentField::LIST }),
+    )?;
     let recent = call(
         &mut client,
         "torrent_get",
-        json!({ "fields": LIST_FIELDS, "ids": "recently_active" }),
+        json!({ "fields": TorrentField::LIST, "ids": "recently_active" }),
     )?;
     // The details fixture should cover multi-file data, which the list fields cannot tell.
     let file_counts = call(
@@ -148,7 +103,7 @@ fn run() -> Result<(), RecordError> {
     let details = call(
         &mut client,
         "torrent_get",
-        json!({ "fields": DETAILS_FIELDS, "ids": [details_id] }),
+        json!({ "fields": TorrentField::DETAILS, "ids": [details_id] }),
     )?;
 
     // The torrent list goes first, so torrent numbers follow the list order.
