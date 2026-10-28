@@ -7,5 +7,20 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# Test doubles (`testing` module) for this crate's and dependent crates' tests.
+test-support = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+# Self dev-dependency: the integration tests in tests/ use the `testing` module, and
+# `just test` (plain `cargo nextest run --workspace`) must build them without extra flags.
+x4-rpc = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

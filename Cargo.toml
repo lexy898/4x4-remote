@@ -14,9 +14,15 @@ publish = false
 x4-rpc = { path = "crates/x4-rpc" }
 x4-core = { path = "crates/x4-core" }
 anyhow = "1.0.104"
+base64 = "0.23.1"
 gpui-kit = "=0.8.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# Plain HTTP only: the daemon is reached over http:// on the local network, so no TLS stack.
+ureq = { version = "3.5.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
