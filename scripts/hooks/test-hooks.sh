@@ -430,7 +430,8 @@ test_check_tools_passes_when_all_present() {
 
 # A minimal repository layout for lint-policy.sh, plus a stub `cargo` whose `cargo tree`
 # output per crate comes from tree-<crate>.txt next to it, and its stderr from
-# tree-<crate>.stderr if that exists (clean by default: x4-app's tree is the vendored crate).
+# tree-<crate>.stderr if that exists. Each call appends its arguments to cargo-args.txt.
+# Clean by default: x4-app's tree is the vendored crate, and the vendored renderer is patched.
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
@@ -442,8 +443,11 @@ new_policy_root() {
         printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
     done
     printf 'gpui-pre-wgpu v0.3.10 (%s/vendor/gpui-pre-wgpu)\n' "$dir" >"$dir/tree-x4-app.txt"
+    mkdir -p "$dir/vendor/gpui-pre-wgpu/src"
+    printf 'fn create_context_vulkan_first() {}\n' >"$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
     cat >"$dir/cargo" <<EOF
 #!/usr/bin/env bash
+echo "\$*" >>"$dir/cargo-args.txt"
 while ((\$#)); do [[ \$1 == -p ]] && crate=\$2; shift; done
 if [[ -f "$dir/tree-\$crate.stderr" ]]; then cat "$dir/tree-\$crate.stderr" >&2; fi
 cat "$dir/tree-\$crate.txt"
@@ -457,10 +461,17 @@ run_policy() { # <root>
 }
 
 test_lint_policy_passes_clean_tree() {
-    local dir
+    local dir args
     dir=$(new_policy_root)
     run_policy "$dir"
     expect_status 0
+    # Locked, so the check sees what the build gets; every target, so it works on any host;
+    # never --offline, which fails on a cold registry cache (CI, `just update`, Dependabot).
+    args=$(grep -e '-i gpui-pre-wgpu' "$dir/cargo-args.txt") || fail "cargo tree -i gpui-pre-wgpu was not run"
+    expect_contains "-p x4-app" "$args" "cargo arguments"
+    expect_contains "--locked" "$args" "cargo arguments"
+    expect_contains "--target all" "$args" "cargo arguments"
+    [[ $args != *--offline* ]] || fail "cargo tree must not run --offline, got: $args"
 }
 
 test_lint_policy_rejects_inner_allow_and_expect() {
@@ -538,6 +549,22 @@ test_lint_policy_rejects_unused_gpui_pre_wgpu_patch() {
     expect_contains "x4-app: Cargo reports the vendored gpui-pre-wgpu patch as unused" "$stderr" stderr
 }
 
+# A re-vendored copy whose patch was not re-applied: Cargo builds it, but it loads OpenGL again.
+test_lint_policy_rejects_unpatched_vendored_gpui_pre_wgpu() {
+    local dir
+    dir=$(new_policy_root)
+    printf 'fn create_context() {}\n' >"$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "vendor/gpui-pre-wgpu/src/wgpu_renderer.rs: has no create_context_vulkan_first" \
+        "$stderr" stderr
+    rm "$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "vendor/gpui-pre-wgpu/src/wgpu_renderer.rs: has no create_context_vulkan_first" \
+        "$stderr" stderr
+}
+
 test_lint_policy_rejects_failed_gpui_pre_wgpu_lookup() {
     local dir
     dir=$(new_policy_root)
@@ -591,6 +618,7 @@ cases=(
     lint_policy_rejects_wrong_dependency_direction
     lint_policy_rejects_registry_gpui_pre_wgpu
     lint_policy_rejects_unused_gpui_pre_wgpu_patch
+    lint_policy_rejects_unpatched_vendored_gpui_pre_wgpu
     lint_policy_rejects_failed_gpui_pre_wgpu_lookup
     check_tools_names_missing_tool
     check_tools_passes_when_all_present

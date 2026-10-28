@@ -7,8 +7,8 @@
 #   (c) every crates/*/Cargo.toml inherits the workspace lints (`[lints]` `workspace = true`)
 #   (d) dependencies point one way: x4-core and x4-rpc never depend directly on GPUI crates,
 #       gpui-kit, anyhow or x4-app, and x4-rpc never depends on x4-core
-#   (e) the gpui-pre-wgpu patch is applied: x4-app builds the vendored, patched copy in
-#       vendor/gpui-pre-wgpu (see its PATCHED.md), not the registry crate
+#   (e) the gpui-pre-wgpu patch is applied: x4-app builds the vendored copy in
+#       vendor/gpui-pre-wgpu, not the registry crate, and that copy is patched (see its PATCHED.md)
 #
 # Prints one line per violation (file or crate, and the rule) and exits 1 if there is any.
 # Usage: scripts/lint-policy.sh [repository root] (default: the repository of this script).
@@ -78,12 +78,18 @@ check_direction x4-rpc '^(gpui(-.*)?|anyhow|x4-app|x4-core)$' \
     "x4-rpc has no UI dependencies, returns thiserror errors and depends on no other 4x4 crate"
 
 # (e) A gpui-kit bump that brings another gpui-pre-wgpu version leaves the patch unused, and
-# Cargo only warns about that while it builds the unpatched registry crate.
+# Cargo only warns about that while it builds the unpatched registry crate. A re-vendored copy
+# without the patch re-applied resolves fine but loads OpenGL again, so the patched renderer
+# function must be there too.
 check_vendored_patch() {
-    local tree warnings package
+    local tree warnings package renderer=vendor/gpui-pre-wgpu/src/wgpu_renderer.rs
     local redo='re-vendor it and re-apply the patch (vendor/gpui-pre-wgpu/PATCHED.md)'
+    if ! grep -qsE 'fn create_context_vulkan_first\b' "$renderer"; then
+        violation "$renderer" \
+            "has no create_context_vulkan_first, so the vendored copy is not patched; $redo"
+    fi
     warnings=$(mktemp)
-    if ! tree=$(cargo tree -p x4-app -i gpui-pre-wgpu --locked --offline --target all 2>"$warnings"); then
+    if ! tree=$(cargo tree -p x4-app -i gpui-pre-wgpu --locked --target all 2>"$warnings"); then
         violation x4-app "cargo tree failed, cannot check that gpui-pre-wgpu is the vendored copy: $(<"$warnings")"
         rm -f "$warnings"
         return

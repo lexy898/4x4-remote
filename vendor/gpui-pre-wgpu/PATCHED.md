@@ -64,6 +64,8 @@ before (checked during the investigation).
 - `just lint-policy` fails unless `cargo tree -p x4-app -i gpui-pre-wgpu` resolves to this
   directory, and when Cargo reports the patch as unused. That is what happens when a `gpui-kit`
   bump brings another `gpui-pre-wgpu` version: Cargo only warns and builds the registry crate.
+- It also fails when `src/wgpu_renderer.rs` has no `create_context_vulkan_first`, so a copy that was
+  re-vendored but not patched again cannot slip through.
 - Our gates leave this directory alone: `rustfmt.toml` here disables formatting (for `cargo fmt`,
   the format hook and editors), `_typos.toml` and `.taplo.toml` exclude `vendor/`, `just machete`
   only looks at `crates/`, and clippy only runs on workspace members.
@@ -91,8 +93,8 @@ before (checked during the investigation).
    ```
 
    Run `cargo tree -p x4-app -i gpui-pre-wgpu` without `--locked`, so Cargo updates `Cargo.lock`:
-   it shows the `vendor/` path again, and `just check` passes. Commit the bump together with
-   this unchanged copy, so the re-applied patch can be reviewed alone in the next commit.
+   it shows the `vendor/` path again. `just lint-policy` still fails, because the copy is not
+   patched yet. Do not commit yet.
 4. Re-apply the patch below. If a hunk does not apply, make the same changes by hand.
 
    ```bash
@@ -104,6 +106,13 @@ before (checked during the investigation).
    release build and check that the window renders, that `grep -c gallium /proc/<pid>/maps` prints
    0, and that with `VK_DRIVER_FILES=/nonexistent/icd.json` the window still renders (through
    OpenGL) after the warning.
+6. Commit the `gpui-kit` bump, the new copy and the re-applied patch together.
+
+Why one commit: every commit must pass `just check`, and lint-policy refuses an unpatched copy.
+A separate "vendored unchanged" commit could only pass if the check had a way to be skipped, and
+that would be the same hole the check closes. The patch can still be reviewed on its own: the
+commit's diff of "The patch" below shows how the patch changed, and comparing the vendored
+directory with the extracted `.crate` (`diff -ru`) shows the whole patch against the new version.
 
 ## The patch
 

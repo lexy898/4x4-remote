@@ -86,10 +86,9 @@ Medians of three runs on 2026-10-28 under the same conditions (KDE Plasma 6 on W
 The RSS target is still missed, but RSS mostly counts shared, file-backed pages: RADV itself links
 `libLLVM` (about 61 MiB resident in any Vulkan process here), and the 4x4 binary adds about
 24 MiB. PSS shares such pages out among the processes that map them; the private memory belongs
-to 4x4 alone and can only be moved to swap. RSS also depends on what the system keeps in memory:
-two runs on 2026-10-29, with the machine swapping heavily, showed the same 12.6 MiB of private
-memory but an RSS of 49 and 63 MiB, because most shared driver pages were not resident. Without
-Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB of private memory.
+to 4x4 alone and can only be moved to swap. RSS also varies with how much of the shared driver
+code stays resident. Without Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB of
+private memory.
 
 ## Development
 
