@@ -21,6 +21,20 @@ pub struct StatusModel {
     pub alt_speed: bool,
 }
 
+impl Default for StatusModel {
+    /// The status bar before the first answer: connecting, no traffic, nothing known.
+    fn default() -> Self {
+        Self {
+            rate_down: human_speed(0),
+            rate_up: human_speed(0),
+            free_space: None,
+            connection: ConnectionState::Connecting,
+            stale: false,
+            alt_speed: false,
+        }
+    }
+}
+
 /// The status bar for `snapshot`.
 #[must_use]
 pub fn status_model(snapshot: &Snapshot) -> StatusModel {
@@ -108,6 +122,18 @@ mod tests {
             ..snapshot()
         });
         assert!(!normal.alt_speed);
+    }
+
+    #[test]
+    fn the_default_status_is_connecting_with_nothing_known() {
+        let status = StatusModel::default();
+
+        assert_eq!(status.connection, ConnectionState::Connecting);
+        assert_eq!(status.rate_down, human_speed(0));
+        assert_eq!(status.rate_up, human_speed(0));
+        assert_eq!(status.free_space, None);
+        assert!(!status.stale);
+        assert!(!status.alt_speed);
     }
 
     #[test]

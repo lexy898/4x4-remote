@@ -19,16 +19,18 @@ pub enum TimeUnit {
     Seconds,
 }
 
-/// A duration reduced to its two largest non-zero units, as the ETA column shows it: `1 d 1 h`,
-/// `2 m 5 s`, `59 s`.
+/// A duration reduced to its largest non-zero unit and the unit right below it, as the ETA column
+/// shows it: `1 d 1 h`, `1 h 2 m`, `59 s`.
 ///
-/// Units in between that are zero are skipped, so a day and five minutes is `1 d 5 m`. A zero
-/// duration is `0 s`. The UI words the units through its i18n layer.
+/// The second unit is always the next smaller one and is left out when it is zero, so a day and
+/// five minutes is `1 d`, not `1 d 5 m`. A zero duration is `0 s`. The UI words the units through
+/// its i18n layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompactDuration {
     /// The largest non-zero unit and its amount.
     pub major: (u64, TimeUnit),
-    /// The next non-zero unit below `major`; `None` when nothing is left.
+    /// The unit right below `major` and its amount; `None` when that amount is zero or `major`
+    /// is seconds.
     pub minor: Option<(u64, TimeUnit)>,
 }
 
@@ -43,10 +45,10 @@ impl From<Duration> for CompactDuration {
             (u64::from(parts.seconds), TimeUnit::Seconds),
         ]
         .into_iter()
-        .filter(|&(amount, _)| amount > 0);
+        .skip_while(|&(amount, _)| amount == 0);
         Self {
             major: units.next().unwrap_or((0, TimeUnit::Seconds)),
-            minor: units.next(),
+            minor: units.next().filter(|&(amount, _)| amount > 0),
         }
     }
 }
@@ -77,6 +79,7 @@ impl EtaView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::QueueKind;
     use crate::test_support::torrent;
 
     fn compact(seconds: u64) -> CompactDuration {
@@ -109,20 +112,35 @@ mod tests {
     }
 
     #[test]
-    fn compact_duration_skips_zero_units_between_the_two_it_shows() {
-        // 1 d 0 h 5 m, and 1 h 0 m 1 s.
+    fn compact_duration_shows_only_the_unit_right_below_the_largest() {
+        // 1 d 0 h 5 m, 1 h 0 m 1 s and 2 d 0 h 30 m: a zero next unit hides the one after it.
         assert_eq!(
             compact(86_700),
             CompactDuration {
                 major: (1, TimeUnit::Days),
-                minor: Some((5, TimeUnit::Minutes)),
+                minor: None,
             }
         );
         assert_eq!(
             compact(3_601),
             CompactDuration {
                 major: (1, TimeUnit::Hours),
-                minor: Some((1, TimeUnit::Seconds)),
+                minor: None,
+            }
+        );
+        assert_eq!(
+            compact(2 * 86_400 + 30 * 60),
+            CompactDuration {
+                major: (2, TimeUnit::Days),
+                minor: None,
+            }
+        );
+        // The same units with the next one set.
+        assert_eq!(
+            compact(3_660),
+            CompactDuration {
+                major: (1, TimeUnit::Hours),
+                minor: Some((1, TimeUnit::Minutes)),
             }
         );
     }
@@ -170,6 +188,17 @@ mod tests {
         );
         assert_eq!(
             EtaView::of(&in_state(DisplayState::Paused, ninety_seconds)),
+            EtaView::None
+        );
+        assert_eq!(
+            EtaView::of(&in_state(DisplayState::Checking, ninety_seconds)),
+            EtaView::None
+        );
+        assert_eq!(
+            EtaView::of(&in_state(
+                DisplayState::Queued(QueueKind::Download),
+                ninety_seconds
+            )),
             EtaView::None
         );
         assert_eq!(

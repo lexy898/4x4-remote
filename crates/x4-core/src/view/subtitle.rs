@@ -47,15 +47,20 @@ pub enum Subtitle {
 impl Subtitle {
     /// What `torrent` needs the user to see first: an error or a warning, then the metadata
     /// fetch, and only then what the torrent is doing.
+    ///
+    /// A paused torrent says so even when its metadata is incomplete: nothing is being fetched
+    /// while it is stopped, so "fetching" would be false.
     pub(crate) fn of(torrent: &Torrent) -> Self {
         match &torrent.attention {
             Some(Attention::LocalError(text)) => Self::Error(text.clone()),
             Some(Attention::TrackerError(text)) => Self::TrackerError(text.clone()),
             Some(Attention::TrackerWarning(text)) => Self::TrackerWarning(text.clone()),
-            Some(Attention::FetchingMetadata) => Self::FetchingMetadata {
-                percent: percent(torrent.metadata_progress),
-            },
-            None => Self::of_state(torrent),
+            Some(Attention::FetchingMetadata) if torrent.state != DisplayState::Paused => {
+                Self::FetchingMetadata {
+                    percent: percent(torrent.metadata_progress),
+                }
+            }
+            Some(Attention::FetchingMetadata) | None => Self::of_state(torrent),
         }
     }
 
@@ -154,6 +159,36 @@ mod tests {
                 ..in_state(DisplayState::Seeding)
             }),
             Subtitle::Seeding { to_peers: 2 }
+        );
+    }
+
+    #[test]
+    fn a_paused_magnet_says_paused_not_fetching() {
+        assert_eq!(
+            Subtitle::of(&Torrent {
+                metadata_progress: 0.3,
+                ..with_attention(DisplayState::Paused, Attention::FetchingMetadata)
+            }),
+            Subtitle::Paused
+        );
+        // Errors and tracker problems still win over the paused state.
+        assert_eq!(
+            Subtitle::of(&with_attention(
+                DisplayState::Paused,
+                Attention::TrackerError("unregistered".to_owned())
+            )),
+            Subtitle::TrackerError("unregistered".to_owned())
+        );
+        // Once started it fetches again.
+        assert_eq!(
+            Subtitle::of(&Torrent {
+                metadata_progress: 0.3,
+                ..with_attention(
+                    DisplayState::Queued(QueueKind::Download),
+                    Attention::FetchingMetadata
+                )
+            }),
+            Subtitle::FetchingMetadata { percent: 30 }
         );
     }
 

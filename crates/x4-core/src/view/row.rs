@@ -7,7 +7,7 @@ use crate::model::{Ratio, Torrent};
 use crate::state::DisplayState;
 
 use super::eta::EtaView;
-use super::percent::percent;
+use super::percent::{fraction, percent};
 use super::subtitle::Subtitle;
 
 /// Everything the table shows for one torrent, decided; the view only draws it.
@@ -25,7 +25,7 @@ pub struct Row {
     pub subtitle: Subtitle,
     /// Progress in whole percent; 100 only when the torrent is done.
     pub percent: u8,
-    /// Progress from 0.0 to 1.0, for the width of the bar.
+    /// Progress limited to 0.0 to 1.0, for the width of the bar.
     pub progress: f64,
     /// The size of the wanted files.
     pub size: HumanSize,
@@ -54,7 +54,7 @@ impl From<&Torrent> for Row {
             dimmed: is_dimmed(torrent),
             subtitle: Subtitle::of(torrent),
             percent: percent(torrent.progress),
-            progress: torrent.progress,
+            progress: fraction(torrent.progress),
             size: human_size(torrent.size_when_done),
             rate_down: human_speed(torrent.rate_down),
             rate_up: human_speed(torrent.rate_up),
@@ -79,8 +79,12 @@ fn is_dimmed(torrent: &Torrent) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::model::Eta;
     use crate::test_support::torrent;
+    use crate::view::eta::{CompactDuration, TimeUnit};
 
     fn in_state(state: DisplayState) -> Torrent {
         Torrent {
@@ -141,11 +145,14 @@ mod tests {
     #[test]
     fn a_row_carries_the_values_of_its_torrent() {
         let source = Torrent {
-            progress: 0.634,
+            progress: 0.29,
             size_when_done: 24_592_841_836,
             total_size: 1,
             ratio: Ratio::Value(1.5),
             peers_connected: 12,
+            peers_sending_to_us: 5,
+            peers_getting_from_us: 2,
+            eta: Eta::In(Duration::from_secs(3_725)),
             ..in_state(DisplayState::Downloading)
         };
 
@@ -154,11 +161,42 @@ mod tests {
         assert_eq!(row.hash, source.hash);
         assert_eq!(row.name, "a");
         assert_eq!(row.state, DisplayState::Downloading);
-        assert_eq!(row.percent, 63);
-        assert!((row.progress - 0.634).abs() < f64::EPSILON);
+        // 0.29 * 100.0 is 28.999999999999996 in f64; the row still says 29.
+        assert_eq!(row.percent, 29);
+        assert!((row.progress - 0.29).abs() < f64::EPSILON);
         assert_eq!(row.size, human_size(24_592_841_836));
+        assert_eq!(
+            row.subtitle,
+            Subtitle::Downloading {
+                from_peers: 5,
+                connected: 12
+            }
+        );
+        assert_eq!(
+            row.eta,
+            EtaView::In(CompactDuration {
+                major: (1, TimeUnit::Hours),
+                minor: Some((2, TimeUnit::Minutes)),
+            })
+        );
         assert_eq!(row.ratio, Ratio::Value(1.5));
         assert_eq!(row.peers, 12);
+    }
+
+    #[test]
+    fn the_progress_of_the_bar_stays_within_the_track() {
+        let progress_of = |progress: f64| {
+            Row::from(&Torrent {
+                progress,
+                ..in_state(DisplayState::Downloading)
+            })
+            .progress
+        };
+
+        assert!((progress_of(0.5) - 0.5).abs() < f64::EPSILON);
+        assert!((progress_of(1.5) - 1.0).abs() < f64::EPSILON);
+        assert!((progress_of(-0.5)).abs() < f64::EPSILON);
+        assert!((progress_of(f64::NAN)).abs() < f64::EPSILON);
     }
 
     #[test]

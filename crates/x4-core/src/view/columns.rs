@@ -40,6 +40,23 @@ impl ColumnId {
         Self::Peers,
     ];
 
+    /// A stable name for the column, for the state file and the table's column keys. It never
+    /// changes between versions and is never shown to the user.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Size => "size",
+            Self::Progress => "progress",
+            Self::State => "state",
+            Self::Down => "down",
+            Self::Up => "up",
+            Self::Eta => "eta",
+            Self::Ratio => "ratio",
+            Self::Peers => "peers",
+        }
+    }
+
     /// The key a click on this column's header sorts the list by.
     #[must_use]
     pub fn sort_key(self) -> SortKey {
@@ -197,6 +214,20 @@ mod tests {
 
         assert_eq!(view.filter, Filter::Paused);
         assert_eq!(view.search, "abc");
+    }
+
+    #[test]
+    fn column_keys_are_unique_snake_case_names() {
+        let keys = ColumnId::ALL.map(ColumnId::key);
+
+        assert_eq!(
+            keys,
+            [
+                "name", "size", "progress", "state", "down", "up", "eta", "ratio", "peers"
+            ]
+        );
+        let unique: std::collections::HashSet<_> = keys.into_iter().collect();
+        assert_eq!(unique.len(), ColumnId::ALL.len());
     }
 
     #[test]

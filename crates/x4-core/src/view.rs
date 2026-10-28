@@ -19,16 +19,20 @@ pub use row::Row;
 pub use status::{StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
 
+use std::sync::Arc;
+
 use crate::filter::{FilterCounts, counts, matches_search};
 use crate::model::Torrent;
 use crate::snapshot::Snapshot;
 use crate::sort::sort;
 
 /// The rows of the table and the counts of the sidebar.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TableModel {
-    /// The torrents that match the filter and the search, in the chosen order.
-    pub rows: Vec<Row>,
+    /// The torrents that match the filter and the search, in the chosen order. Shared, so the
+    /// view and the table behind it hold the rows of one snapshot without copying thousands of
+    /// them.
+    pub rows: Arc<[Row]>,
     /// How many torrents each filter matches, over all torrents: neither the filter nor the
     /// search changes them.
     pub counts: FilterCounts,
@@ -45,9 +49,11 @@ pub fn table_model(snapshot: &Snapshot, view: &ViewState) -> TableModel {
         })
         .collect();
     sort(&mut shown, view.sort_key, view.sort_direction);
+    // Only the rows that are shown are built, so the strings of the others are never copied.
+    let mut rows = Vec::with_capacity(shown.len());
+    rows.extend(shown.into_iter().map(Row::from));
     TableModel {
-        // Only the rows that are shown are built, so the strings of the others are never copied.
-        rows: shown.into_iter().map(Row::from).collect(),
+        rows: rows.into(),
         counts: counts(&snapshot.torrents),
     }
 }
@@ -181,17 +187,5 @@ mod tests {
 
         assert_eq!(names(&model), Vec::<&str>::new());
         assert_eq!(model.counts, FilterCounts::default());
-    }
-
-    #[test]
-    fn a_row_is_built_from_its_torrent() {
-        let source = Torrent {
-            size_when_done: 2048,
-            ..named("one", DisplayState::Paused)
-        };
-
-        let model = table_model(&snapshot(vec![source.clone()]), &ViewState::default());
-
-        assert_eq!(model.rows, [Row::from(&source)]);
     }
 }
