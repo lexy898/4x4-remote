@@ -20,7 +20,17 @@
 //! [`SkippedRecord`]s that could not be. A [`Snapshot`] is what the UI reads: the torrents, the
 //! [`SessionSummary`], the totals and the [`ConnectionState`], whose [`ConnectionError`] says in
 //! the user's terms why the daemon cannot be used.
+//!
+//! The [`Engine`] runs the polling without doing any I/O itself: given the current time it
+//! names the [`Request`]s that are due, takes each [`Response`] and each [`Command`] of the UI,
+//! and hands out a new [`Snapshot`] only when something changed. It carries out [`Action`]s
+//! only while the daemon is connected, refuses those that name no torrent or no file, and reads
+//! the [`TorrentDetails`] of the selected torrent every tick. A worker thread sends the requests
+//! and forwards the [`Event`]s.
 
+mod action;
+mod details;
+mod engine;
 mod filter;
 mod format;
 mod model;
@@ -32,6 +42,9 @@ mod store;
 #[cfg(test)]
 mod test_support;
 
+pub use action::{Action, ActionError, ActionId};
+pub use details::{FileEntry, TorrentDetails};
+pub use engine::{Command, Engine, EngineConfig, Event, Request, Response, Visibility};
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,

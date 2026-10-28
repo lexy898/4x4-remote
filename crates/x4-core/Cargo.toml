@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tracing.workspace = true
 x4-rpc.workspace = true
 
 [dev-dependencies]

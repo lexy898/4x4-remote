@@ -5,6 +5,17 @@ use x4_rpc::{HashString, TorrentId};
 use crate::model::{Eta, Ratio, Torrent};
 use crate::state::DisplayState;
 
+/// The `result` of a recorded JSON-RPC response from `x4_rpc::testing::fixtures`; deserialize it
+/// into the type the method returns.
+pub(crate) fn fixture_result(envelope: &str) -> serde_json::Value {
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(envelope).expect("a fixture is valid JSON");
+    envelope
+        .get_mut("result")
+        .map(serde_json::Value::take)
+        .expect("a fixture is a success response with a result")
+}
+
 /// A complete, idle, seeding torrent called `name`, with every other field neutral.
 ///
 /// Override fields with struct-update syntax: `Torrent { rate_up: 5, ..torrent("a") }`. The hash

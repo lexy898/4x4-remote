@@ -185,7 +185,7 @@ impl Ratio {
 
 /// Unix seconds as a time; zero, negative values (the server's "unset") and times that
 /// `SystemTime` cannot hold are `None`.
-fn date_from_wire(seconds: i64) -> Option<SystemTime> {
+pub(crate) fn date_from_wire(seconds: i64) -> Option<SystemTime> {
     let seconds = u64::try_from(seconds).ok().filter(|&seconds| seconds > 0)?;
     SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
 }
