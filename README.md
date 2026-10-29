@@ -155,7 +155,7 @@ Two notes on the clipboard:
 - the magnet links reach the clipboard only if 4x4 still has the focus when the daemon's answer
   comes, a moment after `Ctrl+C`: on Wayland an app that does not have the focus cannot set the
   clipboard. If you have switched to another app by then, nothing is copied and a notification asks
-  for `Ctrl+C` again. The hashes are copied at once, so this never happens to them;
+  you to copy them again. The hashes are copied at once, so this never happens to them;
 - on Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
   lost when 4x4 quits, unless a clipboard manager keeps it.
 

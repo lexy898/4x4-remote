@@ -441,8 +441,9 @@ copy-magnet-partial =
        *[other] { $missing } torrents are
     } no longer on the server
 # The magnet links came from the server while another window had the focus, so they were not
-# copied: on Wayland only the window in focus may set the clipboard.
-copy-magnet-not-in-focus = The magnet links are ready, but 4x4 was not in focus — press Ctrl+C again
+# copied: 4x4 writes the clipboard only while it is in focus. It names no key: the links can be
+# copied from the context menu too, and the keys may change.
+copy-magnet-not-in-focus = The magnet links are ready, but 4x4 was not in focus — copy them again
 
 ## The sidebar
 

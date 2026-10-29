@@ -1102,7 +1102,7 @@ fn links_that_arrive_while_4x4_is_not_in_focus_ask_for_another_press(cx: &mut Te
     assert_eq!(clipboard(cx).as_deref(), Some("other"));
     assert_eq!(
         window.last_failure(cx).as_deref(),
-        Some("The magnet links are ready, but 4x4 was not in focus — press Ctrl+C again")
+        Some("The magnet links are ready, but 4x4 was not in focus — copy them again")
     );
     assert_eq!(window.notifications(cx), 1);
 }
@@ -1133,7 +1133,7 @@ fn a_magnet_copy_that_succeeds_removes_the_notices_of_the_ones_that_did_not(
         Some(magnet_lines(&["a", "b", "c"]).as_str())
     );
 
-    // "Press Ctrl+C again" goes once the user has.
+    // "Copy them again" goes once the user has.
     window.press("ctrl-c", cx);
     let (id, _) = window.sent_read();
     window.deactivate(cx);
