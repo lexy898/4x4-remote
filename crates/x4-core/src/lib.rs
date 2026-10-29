@@ -19,7 +19,10 @@
 //! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts (and, for an
 //! empty table, the [`EmptyTable`] reason it gives), [`status_model`] builds the status bar,
 //! whose [`Indicator`] says which of the [`ServiceStatus`] and the [`ConnectionState`] the
-//! connection dot shows, and [`visibility`] tells whether the user can see the window.
+//! connection dot shows, and [`visibility`] tells whether the user can see the window. What the
+//! user does to the rows is decided here too: a [`Selection`] holds the selected hashes and
+//! follows clicks and arrow keys, its `targets` are the rows an action reaches, and
+//! [`availability()`] and [`toggle_kind`] tell which actions those rows allow.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
@@ -94,8 +97,9 @@ pub use ui_state::{
     default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
-    ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, Row, ServiceStatus, StatusModel,
-    Subtitle, TableModel, TimeUnit, ViewState, status_model, table_model, visibility,
+    Availability, ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, Row, Selection,
+    ServiceStatus, StatusModel, Subtitle, TableModel, TimeUnit, ToggleKind, ViewState,
+    availability, status_model, table_model, toggle_kind, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

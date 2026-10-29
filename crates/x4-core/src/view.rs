@@ -5,17 +5,25 @@
 //! text: the [`Subtitle`] under the name, the [`EtaView`], the dimming and the whole percent are
 //! picked here, and the UI words them through its i18n layer. [`status_model`] does the same for
 //! the status bar, and [`visibility`] tells the engine whether the user can see the window.
+//!
+//! A [`Selection`] is the set of selected rows by hash, which clicks and arrow keys change and
+//! whose `targets` are the rows an action reaches. [`availability()`] tells which actions those
+//! targets allow, and [`toggle_kind`] what the Space key does to them.
 
+mod availability;
 mod columns;
 mod eta;
 mod percent;
 mod row;
+mod selection;
 mod status;
 mod subtitle;
 
+pub use availability::{Availability, ToggleKind, availability, toggle_kind};
 pub use columns::{ColumnId, ViewState};
 pub use eta::{CompactDuration, EtaView, TimeUnit};
 pub use row::Row;
+pub use selection::Selection;
 pub use status::{Indicator, ServiceStatus, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
 
