@@ -16,7 +16,7 @@ mod subtitle;
 pub use columns::{ColumnId, ViewState};
 pub use eta::{CompactDuration, EtaView, TimeUnit};
 pub use row::Row;
-pub use status::{StatusModel, status_model, visibility};
+pub use status::{Indicator, ServiceStatus, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
 
 use std::sync::Arc;

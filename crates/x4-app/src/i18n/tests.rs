@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
-    CompactDuration, ConnectionError, ConnectionState, DisplayState, EtaView, HumanSize, QueueKind,
-    Ratio, SizeUnit, Subtitle, TimeUnit, UnsupportedReason, human_size, human_speed,
+    CompactDuration, ConnectionError, DisplayState, EtaView, HumanSize, QueueKind, Ratio, SizeUnit,
+    Subtitle, TimeUnit, UnsupportedReason, human_size, human_speed,
 };
 
 use super::*;
@@ -194,26 +194,44 @@ fn state_texts() {
 
 #[test]
 fn connection_texts() {
-    let text = |state| connection_text(&state);
-    assert_eq!(text(ConnectionState::Connecting), "Connecting…");
-    assert_eq!(text(ConnectionState::Connected), "");
+    let text = |indicator| connection_text(&indicator);
+    assert_eq!(text(Indicator::Connecting), "Connecting…");
+    assert_eq!(text(Indicator::Connected), "");
+    assert_eq!(text(Indicator::ServiceStopped), "Service stopped");
+    assert_eq!(text(Indicator::ServiceFailed), "Service could not start");
     assert_eq!(
-        text(ConnectionState::Unsupported {
-            reason: UnsupportedReason::Legacy
-        }),
+        text(Indicator::Unsupported(UnsupportedReason::Legacy)),
         "Transmission 4.1 or newer required"
     );
     assert_eq!(
-        text(ConnectionState::Unsupported {
-            reason: UnsupportedReason::NoVersion
-        }),
+        text(Indicator::Unsupported(UnsupportedReason::NoVersion)),
         "Transmission 4.1 or newer required (server did not report a version)"
     );
     assert_eq!(
-        text(ConnectionState::Unsupported {
-            reason: UnsupportedReason::Version("5.0.1".to_owned())
-        }),
+        text(Indicator::Unsupported(UnsupportedReason::Version(
+            "5.0.1".to_owned()
+        ))),
         "Transmission 4.1 or newer required (server RPC 5.0.1)"
+    );
+}
+
+#[test]
+fn config_problem_texts() {
+    assert_eq!(
+        config_problem_text(ConfigProblem::Unreadable),
+        "config.toml cannot be read, so the defaults are used"
+    );
+    assert_eq!(
+        config_problem_text(ConfigProblem::Invalid { line: 2, column: 7 }),
+        "config.toml has an error at line 2, column 7, so the defaults are used"
+    );
+    assert_eq!(
+        config_problem_text(ConfigProblem::Malformed),
+        "config.toml is not valid, so the defaults are used"
+    );
+    assert_eq!(
+        config_problem_text(ConfigProblem::UnsupportedUrl),
+        "The address in config.toml must start with http://, so the defaults are used"
     );
 }
 
@@ -224,10 +242,6 @@ fn status_bar_texts() {
     assert_eq!(download_rate_text(human_speed(0)), "↓ 0 B/s");
     assert_eq!(free_space_text(human_size(24_592_841_836)), "22.9 GiB free");
     assert_eq!(free_space_text(human_size(0)), "0 B free");
-    assert_eq!(
-        config_problem_detail_text("invalid config file /x/config.toml"),
-        "The defaults are used instead: invalid config file /x/config.toml"
-    );
 }
 
 #[test]
@@ -253,7 +267,7 @@ fn every_connection_error() -> [ConnectionError; 6] {
 #[test]
 fn reconnecting_names_the_attempt_and_a_short_reason() {
     let reconnecting = |attempt, last_error| {
-        connection_text(&ConnectionState::Reconnecting {
+        connection_text(&Indicator::Reconnecting {
             attempt,
             last_error,
         })
@@ -318,7 +332,7 @@ fn the_details_of_protocol_and_server_errors_stay_out_of_the_status_text() {
         ConnectionError::Protocol("secret detail".to_owned()),
         ConnectionError::Server("secret detail".to_owned()),
     ] {
-        let text = connection_text(&ConnectionState::Reconnecting {
+        let text = connection_text(&Indicator::Reconnecting {
             attempt: 1,
             last_error: error,
         });
@@ -333,9 +347,10 @@ fn texts_carry_no_invisible_isolation_marks() {
         subtitle_text(&Subtitle::Seeding { to_peers: 3 }),
         progress_text(63, human_size(24_592_841_836)),
         eta_text(&eta((1, TimeUnit::Days), Some((2, TimeUnit::Hours)))),
-        connection_text(&ConnectionState::Unsupported {
-            reason: UnsupportedReason::Version("5.0.1".to_owned()),
-        }),
+        connection_text(&Indicator::Unsupported(UnsupportedReason::Version(
+            "5.0.1".to_owned(),
+        ))),
+        config_problem_text(ConfigProblem::Invalid { line: 2, column: 7 }),
     ];
     for text in texts {
         assert!(!text.contains(['\u{2068}', '\u{2069}']), "{text:?}");

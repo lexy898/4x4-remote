@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::{fs, str};
 
 use tempfile::NamedTempFile;
-use x4_core::{Config, ConfigError, UiState, UiStateError};
+use x4_core::{Config, ConfigError, TextPosition, UiState, UiStateError};
 
 use crate::private_dir::create_private_dir;
 
@@ -102,9 +102,14 @@ pub(crate) fn read_config(path: &Path) -> Result<Config, FilesError> {
         path: path.to_path_buf(),
         source,
     };
-    // A file that is not UTF-8 is not TOML either; the parser reports it.
-    let text = str::from_utf8(&bytes)
-        .map_err(|error| to_error(ConfigError::Parse(utf8_problem(error))))?;
+    // A file that is not UTF-8 is not TOML either; it is reported like a parse error, at the
+    // place of the first invalid byte.
+    let text = str::from_utf8(&bytes).map_err(|error| {
+        to_error(ConfigError::Parse {
+            position: utf8_position(&bytes, error),
+            message: utf8_problem(error),
+        })
+    })?;
     Config::parse(text).map_err(to_error)
 }
 
@@ -216,6 +221,12 @@ fn utf8_problem(error: str::Utf8Error) -> String {
         "the file is not valid UTF-8 (invalid byte at offset {})",
         error.valid_up_to()
     )
+}
+
+/// Where the first invalid byte of `bytes` is, as a place in the text before it.
+fn utf8_position(bytes: &[u8], error: str::Utf8Error) -> Option<TextPosition> {
+    let valid = str::from_utf8(bytes.get(..error.valid_up_to())?).ok()?;
+    TextPosition::of(valid, valid.len())
 }
 
 /// Moves a corrupt state file to `<name>.bad` so the next save does not destroy it, and says so.
@@ -339,6 +350,29 @@ mod tests {
 
         assert!(error.to_string().contains("config.toml"), "{error}");
         assert_eq!(names(dir.path()), ["config.toml"]);
+    }
+
+    #[test]
+    fn config_that_is_not_utf8_is_a_parse_error_at_the_bad_byte() {
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, b"# ok\n[connection]\nurl = \"\xff\"\n").expect("written");
+
+        let error = read_config(&path).expect_err("not UTF-8");
+
+        assert!(
+            matches!(
+                &error,
+                FilesError::Config {
+                    source: ConfigError::Parse {
+                        position: Some(TextPosition { line: 3, column: 8 }),
+                        ..
+                    },
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -675,7 +709,10 @@ mod tests {
     fn display_leaves_the_cause_to_the_source() {
         let error = FilesError::Config {
             path: "/x/config.toml".into(),
-            source: ConfigError::Parse("line 1, column 2: boom".to_owned()),
+            source: ConfigError::Parse {
+                position: Some(TextPosition { line: 1, column: 2 }),
+                message: "boom".to_owned(),
+            },
         };
 
         assert_eq!(error.to_string(), "invalid config file /x/config.toml");

@@ -17,13 +17,16 @@
 //!
 //! What the main window shows is decided here as well: [`table_model`] turns a [`Snapshot`] and
 //! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts, [`status_model`]
-//! builds the status bar, and [`visibility`] tells whether the user can see the window.
+//! builds the status bar, whose [`Indicator`] says which of the [`ServiceStatus`] and the
+//! [`ConnectionState`] the connection dot shows, and [`visibility`] tells whether the user can see
+//! the window.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
 //! [`UiState::parse`] (see also [`UiState::normalized`]), and [`Config`] is the owner's
 //! `config.toml`, which the app only reads. Both turn text into values and back; reading and
-//! writing the files is left to the app.
+//! writing the files is left to the app. A [`ConfigError`] names the [`TextPosition`] of a
+//! parse error as numbers, so the app can word it.
 //!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
@@ -82,13 +85,14 @@ pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
+pub use toml_error::TextPosition;
 pub use ui_state::{
     ColumnState, ParsedUiState, SortState, ThemeChoice, UI_STATE_VERSION, UiState, UiStateError,
     WindowState, default_columns,
 };
 pub use view::{
-    ColumnId, CompactDuration, EtaView, Row, StatusModel, Subtitle, TableModel, TimeUnit,
-    ViewState, status_model, table_model, visibility,
+    ColumnId, CompactDuration, EtaView, Indicator, Row, ServiceStatus, StatusModel, Subtitle,
+    TableModel, TimeUnit, ViewState, status_model, table_model, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

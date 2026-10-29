@@ -10,6 +10,8 @@
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
 
+use std::sync::Arc;
+
 use crossbeam_channel::Sender;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
@@ -21,18 +23,17 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    Command, Event, Snapshot, StatusModel, TableModel, ThemeChoice, UiState, ViewState, Visibility,
-    status_model, table_model, visibility,
+    Command, Event, ServiceStatus, Snapshot, SortState, StatusModel, TableModel, ThemeChoice,
+    UiState, ViewState, Visibility, status_model, table_model, visibility,
 };
 
-use crate::i18n::{t, torrent_count_text};
-use crate::status_bar::{ServiceState, StatusBarParts, connection_label, status_bar};
-use crate::theme::{apply_theme, follow_appearance, next_theme};
+use crate::app::ConfigProblem;
+use crate::i18n::{connection_text, t, torrent_count_text};
+use crate::status_bar::status_bar;
+use crate::theme::{STALE_OPACITY, apply_theme, follow_appearance, next_theme};
 
 /// The width of the sidebar.
 const SIDEBAR_WIDTH: f32 = 200.;
-/// How visible the table stays while its data is old: dimmed, but readable.
-const STALE_OPACITY: f32 = 0.5;
 
 /// The main window's content.
 pub struct MainView {
@@ -42,12 +43,13 @@ pub struct MainView {
     view: ViewState,
     /// The rows of the table and the counts of the sidebar.
     model: TableModel,
+    /// The newest snapshot, so that a change of `view` shows at once, without waiting for the
+    /// next one.
+    last_snapshot: Option<Arc<Snapshot>>,
     /// The state to remember between runs, as the user has changed it.
     ui: UiState,
-    /// Whether the service still runs.
-    service: ServiceState,
     /// Why `config.toml` is not used, until the user dismisses it.
-    config_problem: Option<SharedString>,
+    config_problem: Option<ConfigProblem>,
     /// Where commands for the service go.
     commands: Sender<Command>,
     /// The visibility last sent to the service; `None` before the first.
@@ -91,8 +93,8 @@ impl MainView {
             status: StatusModel::default(),
             view: ui.view_state(),
             model: TableModel::default(),
+            last_snapshot: None,
             ui,
-            service: ServiceState::Running,
             config_problem: None,
             commands,
             last_visibility: None,
@@ -122,7 +124,7 @@ impl MainView {
     /// only the dot.
     #[must_use]
     pub fn connection_text(&self) -> SharedString {
-        connection_label(&self.status, self.service)
+        connection_text(&self.status.indicator())
     }
 
     /// The state to remember between runs, with the user's changes, such as the theme.
@@ -131,17 +133,33 @@ impl MainView {
         &self.ui
     }
 
+    /// Shows the torrents `view` asks for (the filter, the search and the sort order), from the
+    /// last snapshot and without waiting for the next one, and remembers its filter and sort
+    /// order in the [`UiState`].
+    pub fn set_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
+        if view == self.view {
+            return;
+        }
+        self.ui.filter = view.filter;
+        self.ui.sort = SortState {
+            key: view.sort_key,
+            direction: view.sort_direction,
+        };
+        self.view = view;
+        self.update_table();
+        cx.notify();
+    }
+
     /// Shows that the service could not be started, so no data will come.
     pub(crate) fn service_failed(&mut self, cx: &mut Context<'_, Self>) {
-        self.service = ServiceState::Failed;
-        self.status.stale = true;
+        self.status.service_failed();
         cx.notify();
     }
 
     /// Shows that `config.toml` is not used and why, until the user dismisses it.
     pub(crate) fn show_config_problem(
         &mut self,
-        problem: SharedString,
+        problem: ConfigProblem,
         cx: &mut Context<'_, Self>,
     ) {
         self.config_problem = Some(problem);
@@ -153,7 +171,7 @@ impl MainView {
         let mut changed = false;
         for event in events {
             match event {
-                Event::Snapshot(snapshot) => changed |= self.show(&snapshot),
+                Event::Snapshot(snapshot) => changed |= self.show(snapshot),
                 Event::Details(_) => {
                     tracing::debug!("ignored torrent details: this window shows none yet");
                 }
@@ -168,15 +186,12 @@ impl MainView {
         }
     }
 
-    /// Recomputes the table and the status bar for `snapshot`; returns whether either changed.
-    fn show(&mut self, snapshot: &Snapshot) -> bool {
-        let model = table_model(snapshot, &self.view);
-        let status = status_model(snapshot);
-        let mut changed = false;
-        if model != self.model {
-            self.model = model;
-            changed = true;
-        }
+    /// Recomputes the table and the status bar for `snapshot` and keeps it; returns whether
+    /// either changed.
+    fn show(&mut self, snapshot: Arc<Snapshot>) -> bool {
+        let status = status_model(&snapshot);
+        self.last_snapshot = Some(snapshot);
+        let mut changed = self.update_table();
         if status != self.status {
             self.status = status;
             changed = true;
@@ -184,15 +199,28 @@ impl MainView {
         changed
     }
 
+    /// Recomputes the table from the last snapshot for the current view; returns whether it
+    /// changed.
+    fn update_table(&mut self) -> bool {
+        let Some(snapshot) = &self.last_snapshot else {
+            return false;
+        };
+        let model = table_model(snapshot, &self.view);
+        if model == self.model {
+            return false;
+        }
+        self.model = model;
+        true
+    }
+
     /// The events channel closed: the service thread stopped or panicked, so the data on screen
     /// will not change again. It stays visible but is marked stale.
     fn service_stopped(&mut self, cx: &mut Context<'_, Self>) {
         // A service that never started has said so already.
-        if self.service == ServiceState::Running {
+        if self.status.service == ServiceStatus::Running {
             tracing::error!("the service stopped; the window shows the last data it sent");
-            self.service = ServiceState::Stopped;
         }
-        self.status.stale = true;
+        self.status.service_stopped();
         cx.notify();
     }
 
@@ -289,13 +317,8 @@ impl Render for MainView {
             .border_r_1()
             .border_color(theme.sidebar_border)
             .bg(theme.sidebar);
-        let parts = StatusBarParts {
-            status: &self.status,
-            service: self.service,
-            config_problem: self.config_problem.as_ref(),
-        };
         let on_dismiss = cx.listener(|view, _, _, cx| view.dismiss_config_problem(cx));
-        let status_bar = status_bar(&parts, theme, on_dismiss);
+        let status_bar = status_bar(&self.status, self.config_problem, theme, on_dismiss);
         v_flex()
             .size_full()
             .bg(theme.background)
@@ -355,11 +378,40 @@ fn newest_snapshot_only(mut events: Vec<Event>) -> Vec<Event> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
+    use gpui_kit::{Entity, TestAppContext};
     use x4_core::{ActionError, ActionId, ConnectionState};
 
     use super::*;
+    use crate::app;
+
+    #[gpui_kit::test]
+    fn dismissing_the_config_problem_redraws(cx: &mut TestAppContext) {
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (_, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.show_config_problem(ConfigProblem::Unreadable, cx);
+            });
+        });
+        let redraws = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&redraws);
+        let _subscription =
+            cx.update(|cx| cx.observe(&view, move |_, _| counter.set(counter.get() + 1)));
+
+        cx.update(|cx| view.update(cx, MainView::dismiss_config_problem));
+
+        assert_eq!(cx.update(|cx| view.read(cx).config_problem), None);
+        assert_eq!(redraws.get(), 1);
+    }
 
     fn snapshot(rate_down: u64) -> Event {
         Event::Snapshot(Arc::new(Snapshot {

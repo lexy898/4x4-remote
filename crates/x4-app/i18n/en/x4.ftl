@@ -127,10 +127,17 @@ status-free-space = { $size } free
 # Shown while the alternative speed limits apply; the detail is its tooltip.
 status-alt-speed = Alt speed
 status-alt-speed-detail = Alternative speed limits are on
-# Shown when config.toml cannot be used. $problem: what is wrong with it, from the app, in English.
+# Shown when config.toml cannot be used; one of the config-problem-* messages is its tooltip.
 status-config-problem = Config file not used
-status-config-problem-detail = The defaults are used instead: { $problem }
 status-dismiss = Dismiss
+
+## Why config.toml is not used (the defaults are used instead)
+
+config-problem-unreadable = config.toml cannot be read, so the defaults are used
+# $line and $column: where the error is (numbers, from 1).
+config-problem-invalid = config.toml has an error at line { $line }, column { $column }, so the defaults are used
+config-problem-malformed = config.toml is not valid, so the defaults are used
+config-problem-unsupported-url = The address in config.toml must start with http://, so the defaults are used
 
 ## The toolbar
 

@@ -13,13 +13,15 @@ use std::sync::Arc;
 
 use gpui_kit::component::{ActiveTheme as _, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext, WindowVisibility};
+use gpui_kit::{
+    AnyWindowHandle, AppContext as _, Entity, Subscription, TestAppContext, WindowVisibility,
+};
 use x4_app::app::{self, Quit};
 use x4_app::main_view::MainView;
 use x4_core::test_support::torrent;
 use x4_core::{
-    Command, ConnectionError, ConnectionState, Event, Snapshot, StatusModel, ThemeChoice, UiState,
-    Visibility, human_size, human_speed,
+    Command, ConnectionError, ConnectionState, DisplayState, Event, Filter, Snapshot, StatusModel,
+    ThemeChoice, Torrent, UiState, ViewState, Visibility, human_size, human_speed,
 };
 
 /// An open main window and the far ends of its channels, standing in for the service.
@@ -81,9 +83,18 @@ impl Window {
         cx.update(|cx| self.view.read(cx).connection_text().to_string())
     }
 
-    /// The commands the window has sent so far.
+    /// The commands the window has sent since the last call.
     fn sent(&self) -> Vec<Command> {
         self.commands.try_iter().collect()
+    }
+
+    /// Counts the redraws the view asks for from now on; keep the subscription alive.
+    fn count_redraws(&self, cx: &mut TestAppContext) -> (Rc<Cell<u32>>, Subscription) {
+        let redraws = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&redraws);
+        let subscription =
+            cx.update(|cx| cx.observe(&self.view, move |_, _| counter.set(counter.get() + 1)));
+        (redraws, subscription)
     }
 }
 
@@ -195,11 +206,7 @@ fn unsupported_server_is_named_in_the_status_bar(cx: &mut TestAppContext) {
 fn queued_snapshots_are_coalesced_into_one_redraw(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     cx.run_until_parked();
-    let redraws = Rc::new(Cell::new(0));
-    let _observer = cx.update(|cx| {
-        let redraws = Rc::clone(&redraws);
-        cx.observe(&window.view, move |_, _| redraws.set(redraws.get() + 1))
-    });
+    let (redraws, _subscription) = window.count_redraws(cx);
 
     for torrents in [&["a"][..], &["a", "b"], &["a", "b", "c"]] {
         window
@@ -217,11 +224,7 @@ fn queued_snapshots_are_coalesced_into_one_redraw(cx: &mut TestAppContext) {
 fn an_unchanged_snapshot_does_not_redraw(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(Event::Snapshot(Arc::new(snapshot(&["a", "b"]))), cx);
-    let redraws = Rc::new(Cell::new(0));
-    let _observer = cx.update(|cx| {
-        let redraws = Rc::clone(&redraws);
-        cx.observe(&window.view, move |_, _| redraws.set(redraws.get() + 1))
-    });
+    let (redraws, _subscription) = window.count_redraws(cx);
 
     window.send(Event::Snapshot(Arc::new(snapshot(&["a", "b"]))), cx);
     assert_eq!(redraws.get(), 0);
@@ -251,15 +254,26 @@ fn visibility_changes_send_one_command(cx: &mut TestAppContext) {
 
     cx.simulate_window_visibility_change(window.handle, WindowVisibility::Hidden);
     cx.run_until_parked();
+    assert_eq!(
+        window.sent(),
+        [Command::SetVisibility(Visibility::Hidden)],
+        "hiding the window is reported at once"
+    );
+
     cx.simulate_window_visibility_change(window.handle, WindowVisibility::Hidden);
     cx.run_until_parked();
+    assert_eq!(window.sent(), [], "hidden again is no change");
+
     // Losing the focus while hidden changes nothing the service cares about.
     let other = cx.add_window(|_, _| gpui_kit::Empty);
     cx.update_window(other.into(), |_, other, _| other.activate_window())
         .expect("the other window is open");
     cx.run_until_parked();
-
-    assert_eq!(window.sent(), [Command::SetVisibility(Visibility::Hidden)]);
+    assert_eq!(
+        window.sent(),
+        [],
+        "losing the focus while hidden is no change"
+    );
 }
 
 #[gpui_kit::test]
@@ -340,10 +354,13 @@ fn closed_events_channel_marks_stale(cx: &mut TestAppContext) {
     window.send(Event::Snapshot(Arc::new(snapshot(&["a", "b"]))), cx);
     assert!(!window.status(cx).stale);
 
+    let (redraws, _subscription) = window.count_redraws(cx);
+
     // The service thread stopped or panicked: its sender is gone.
     window.events.close();
     cx.run_until_parked();
 
+    assert_eq!(redraws.get(), 1, "the window shows it at once");
     assert!(window.status(cx).stale);
     assert_eq!(window.connection_text(cx), "Service stopped");
     assert_eq!(window.rows(cx), 2, "the last data stays visible, dimmed");
@@ -352,6 +369,68 @@ fn closed_events_channel_marks_stale(cx: &mut TestAppContext) {
         assert_eq!(window.find("connection").label(), Some("Service stopped"));
     })
     .expect("the window is open");
+}
+
+#[gpui_kit::test]
+fn changing_the_view_recomputes_the_rows_without_a_new_snapshot(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(
+        Event::Snapshot(Arc::new(Snapshot {
+            torrents: vec![
+                torrent("seeding"),
+                Torrent {
+                    state: DisplayState::Paused,
+                    ..torrent("paused")
+                },
+            ],
+            ..snapshot(&[])
+        })),
+        cx,
+    );
+    assert_eq!(window.rows(cx), 2);
+    let (redraws, _subscription) = window.count_redraws(cx);
+
+    cx.update(|cx| {
+        window.view.update(cx, |view, cx| {
+            view.set_view(
+                ViewState {
+                    filter: Filter::Seeding,
+                    ..ViewState::default()
+                },
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    let names: Vec<String> = cx.update(|cx| {
+        window
+            .view
+            .read(cx)
+            .model()
+            .rows
+            .iter()
+            .map(|row| row.name.clone())
+            .collect()
+    });
+    assert_eq!(names, ["seeding"]);
+    assert_eq!(redraws.get(), 1);
+    let ui = cx.update(|cx| window.view.read(cx).ui_state().clone());
+    assert_eq!(ui.filter, Filter::Seeding, "the filter is remembered");
+
+    cx.update(|cx| {
+        window.view.update(cx, |view, cx| {
+            view.set_view(
+                ViewState {
+                    filter: Filter::Seeding,
+                    ..ViewState::default()
+                },
+                cx,
+            );
+        });
+    });
+    assert_eq!(redraws.get(), 1, "the same view again changes nothing");
+    assert_eq!(window.sent().len(), 1, "only the visibility at the start");
 }
 
 #[gpui_kit::test]

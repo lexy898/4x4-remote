@@ -5,7 +5,7 @@
 
 use serde::Deserialize;
 
-use crate::toml_error::describe;
+use crate::toml_error::{TextPosition, locate, with_position};
 
 /// Where the owner's daemon listens when `config.toml` does not say.
 pub const DEFAULT_RPC_URL: &str = "http://192.168.1.5:9091/transmission/rpc";
@@ -40,10 +40,14 @@ impl Default for ConnectionConfig {
 /// Neither the display nor the debug output of an error shows the URL, as it may hold a password.
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
-    /// The file is not valid TOML, or a key has the wrong type. Holds the position and the
-    /// message of the parser.
-    #[error("cannot parse config.toml: {0}")]
-    Parse(String),
+    /// The file is not valid TOML, or a key has the wrong type.
+    #[error("cannot parse config.toml: {}", with_position(*.position, .message))]
+    Parse {
+        /// Where the problem is; `None` when the parser does not say.
+        position: Option<TextPosition>,
+        /// What the parser said, without the value it found.
+        message: String,
+    },
     /// `connection.url` does not start with `http://`. Holds the URL as written, for callers
     /// that need to look at it; it must not be logged.
     #[error("connection.url {}", url_problem(.0))]
@@ -53,7 +57,11 @@ pub enum ConfigError {
 impl std::fmt::Debug for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Parse(message) => f.debug_tuple("Parse").field(message).finish(),
+            Self::Parse { position, message } => f
+                .debug_struct("Parse")
+                .field("position", position)
+                .field("message", message)
+                .finish(),
             // The URL may hold a password, and `{error:?}` is what gets logged by habit.
             Self::InvalidUrl(_) => f.write_str("InvalidUrl(..)"),
         }
@@ -100,8 +108,10 @@ impl Config {
     /// [`ConfigError::InvalidUrl`] if `connection.url` does not start with `http://` (in any
     /// case).
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let config: Config =
-            toml::from_str(text).map_err(|error| ConfigError::Parse(describe(&error, text)))?;
+        let config: Config = toml::from_str(text).map_err(|error| {
+            let (position, message) = locate(&error, text);
+            ConfigError::Parse { position, message }
+        })?;
         // TLS is not built in yet, so `https://` would only fail later with a worse message.
         if !is_http(&config.connection.url) {
             return Err(ConfigError::InvalidUrl(config.connection.url));
@@ -172,20 +182,34 @@ mod tests {
 
     #[test]
     fn config_wrong_type_is_a_parse_error_with_a_position() {
-        let Err(ConfigError::Parse(message)) = Config::parse("[connection]\nurl = 5\n") else {
-            panic!("a number is not a URL");
+        let error = Config::parse("[connection]\nurl = 5\n").expect_err("a number is not a URL");
+        let ConfigError::Parse { position, message } = &error else {
+            panic!("a wrong type is a parse error: {error:?}");
         };
 
-        assert!(message.starts_with("line 2, column 7: "), "{message}");
-        assert!(!message.contains('\n'), "{message}");
+        assert_eq!(*position, Some(TextPosition { line: 2, column: 7 }));
+        assert_eq!(message, "invalid type: integer, expected a string");
+        assert_eq!(
+            error.to_string(),
+            "cannot parse config.toml: line 2, column 7: invalid type: integer, expected a string"
+        );
+        assert!(!error.to_string().contains('\n'), "{error}");
     }
 
     #[test]
-    fn config_broken_toml_is_a_parse_error() {
-        assert!(matches!(
-            Config::parse("[connection\nurl = 1"),
-            Err(ConfigError::Parse(_))
-        ));
+    fn config_broken_toml_is_a_parse_error_with_a_position() {
+        let error = Config::parse("[connection\nurl = 1").expect_err("not TOML");
+
+        assert!(
+            matches!(
+                error,
+                ConfigError::Parse {
+                    position: Some(TextPosition { line: 1, .. }),
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -249,11 +273,15 @@ mod tests {
                 "{url:?}"
             );
         }
-        assert!(
-            ConfigError::Parse("line 1, column 2: boom".to_owned())
-                .to_string()
-                .contains("line 1, column 2: boom")
+        let parse = |position| ConfigError::Parse {
+            position,
+            message: "boom".to_owned(),
+        };
+        assert_eq!(
+            parse(Some(TextPosition { line: 1, column: 2 })).to_string(),
+            "cannot parse config.toml: line 1, column 2: boom"
         );
+        assert_eq!(parse(None).to_string(), "cannot parse config.toml: boom");
     }
 
     #[test]
@@ -294,12 +322,16 @@ mod tests {
             format!("[connection]\nurl = 5\nother = \"{secret}\"\n"),
             format!("connection = {{ url = [\"{secret}\"] }}\n"),
         ] {
-            let Err(ConfigError::Parse(message)) = Config::parse(&text) else {
-                panic!("{text}: a wrong type is a parse error");
-            };
+            let error = Config::parse(&text).expect_err("a wrong type");
+            assert!(
+                matches!(error, ConfigError::Parse { .. }),
+                "{text}: a wrong type is a parse error"
+            );
 
-            assert!(!message.contains(secret), "{message}");
-            assert!(!message.contains("user"), "{message}");
+            for shown in [error.to_string(), format!("{error:?}")] {
+                assert!(!shown.contains(secret), "{shown}");
+                assert!(!shown.contains("user"), "{shown}");
+            }
         }
     }
 }

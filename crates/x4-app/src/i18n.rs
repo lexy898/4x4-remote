@@ -20,9 +20,11 @@ use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
-    ConnectionError, ConnectionState, DisplayState, EtaView, HumanSize, HumanSpeed, QueueKind,
-    Ratio, SizeUnit, SpeedUnit, Subtitle, TimeUnit, UnsupportedReason,
+    ConnectionError, DisplayState, EtaView, HumanSize, HumanSpeed, Indicator, QueueKind, Ratio,
+    SizeUnit, SpeedUnit, Subtitle, TimeUnit, UnsupportedReason,
 };
+
+use crate::app::ConfigProblem;
 
 #[cfg(test)]
 mod parity;
@@ -139,9 +141,17 @@ pub(crate) fn free_space_text(size: HumanSize) -> SharedString {
     t!("status-free-space", size = size_string(size)).into()
 }
 
-/// The tooltip of the notice that `config.toml` is not used; `problem` is what is wrong with it.
-pub(crate) fn config_problem_detail_text(problem: &str) -> SharedString {
-    t!("status-config-problem-detail", problem = problem).into()
+/// Why `config.toml` is not used, as the tooltip of the notice in the status bar says it.
+pub(crate) fn config_problem_text(problem: ConfigProblem) -> SharedString {
+    match problem {
+        ConfigProblem::Unreadable => t!("config-problem-unreadable"),
+        ConfigProblem::Invalid { line, column } => {
+            t!("config-problem-invalid", line = line, column = column)
+        }
+        ConfigProblem::Malformed => t!("config-problem-malformed"),
+        ConfigProblem::UnsupportedUrl => t!("config-problem-unsupported-url"),
+    }
+    .into()
 }
 
 /// How many torrents the list shows, such as "3 torrents".
@@ -284,17 +294,24 @@ pub(crate) fn state_text(state: DisplayState) -> SharedString {
     .into()
 }
 
-/// What the status bar says about the connection; empty when connected, as the bar then shows
-/// only a dot.
+/// What the status bar says next to the connection dot; empty when connected, as the bar then
+/// shows only the dot.
 ///
 /// The status bar has little room, so a failed reconnect is named in a few words (see
 /// [`connection_reason_text`]). The details the server gave for a protocol or server error are
 /// not part of the text; they are for a tooltip, together with [`connection_reason_detail_text`].
-pub(crate) fn connection_text(state: &ConnectionState) -> SharedString {
-    match state {
-        ConnectionState::Connecting => t!("connection-connecting"),
-        ConnectionState::Connected => String::new(),
-        ConnectionState::Reconnecting {
+pub(crate) fn connection_text(indicator: &Indicator) -> SharedString {
+    match indicator {
+        Indicator::ServiceFailed => t!("connection-service-failed"),
+        Indicator::ServiceStopped => t!("connection-service-stopped"),
+        Indicator::Unsupported(reason) => match reason {
+            UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
+            UnsupportedReason::NoVersion => t!("connection-unsupported-no-version"),
+            UnsupportedReason::Version(version) => {
+                t!("connection-unsupported-version", version = version.as_str())
+            }
+        },
+        Indicator::Reconnecting {
             attempt,
             last_error,
         } => t!(
@@ -302,13 +319,8 @@ pub(crate) fn connection_text(state: &ConnectionState) -> SharedString {
             attempt = attempt,
             reason = connection_reason_text(last_error).to_string()
         ),
-        ConnectionState::Unsupported { reason } => match reason {
-            UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
-            UnsupportedReason::NoVersion => t!("connection-unsupported-no-version"),
-            UnsupportedReason::Version(version) => {
-                t!("connection-unsupported-version", version = version.as_str())
-            }
-        },
+        Indicator::Connecting => t!("connection-connecting"),
+        Indicator::Connected => String::new(),
     }
     .into()
 }

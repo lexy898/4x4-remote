@@ -15,15 +15,15 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, KeyBinding, QuitMode, SharedString,
-    TitlebarOptions, WindowBounds, WindowOptions, actions, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, KeyBinding, QuitMode, TitlebarOptions,
+    WindowBounds, WindowOptions, actions, px, size,
 };
 use x4_core::service::{self, ServiceHandle};
-use x4_core::{Command, Config, EngineConfig, Event, UiState};
+use x4_core::{Command, Config, ConfigError, EngineConfig, Event, UiState};
 use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
-use crate::files::{read_config, read_ui_state};
+use crate::files::{FilesError, read_config, read_ui_state};
 use crate::main_view::MainView;
 use crate::paths::AppPaths;
 use crate::theme::apply_theme;
@@ -58,9 +58,52 @@ pub struct Startup {
     pub state_writable: bool,
     /// Where the UI state is saved; `None` means it is never saved.
     pub state_path: Option<PathBuf>,
-    /// Why `config.toml` is not used, if it is not, in words that show nothing from the file.
-    /// The window shows it until the user dismisses it.
-    pub config_problem: Option<String>,
+    /// Why `config.toml` is not used, if it is not. The window shows it until the user
+    /// dismisses it.
+    pub config_problem: Option<ConfigProblem>,
+}
+
+/// Why `config.toml` is not used, as the window tells the user (in their language). The log
+/// gets the full report, with the path and the parser's message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigProblem {
+    /// The file is there but cannot be read.
+    Unreadable,
+    /// The file is not valid TOML, or a value has the wrong type.
+    Invalid {
+        /// The line of the error, from 1.
+        line: u32,
+        /// The column of the error, from 1, in characters.
+        column: u32,
+    },
+    /// The file is not valid, and the parser cannot say where.
+    Malformed,
+    /// `connection.url` is not a plain `http://` address.
+    UnsupportedUrl,
+}
+
+impl ConfigProblem {
+    /// The problem behind an error of [`read_config`].
+    fn of(error: &FilesError) -> Self {
+        match error {
+            FilesError::Config {
+                source: ConfigError::Parse { position, .. },
+                ..
+            } => position.map_or(Self::Malformed, |position| Self::Invalid {
+                line: position.line,
+                column: position.column,
+            }),
+            FilesError::Config {
+                source: ConfigError::InvalidUrl(_),
+                ..
+            } => Self::UnsupportedUrl,
+            // Reading gives only `Read`; the others come from writing the state.
+            FilesError::Read { .. }
+            | FilesError::CreateDir { .. }
+            | FilesError::Serialize { .. }
+            | FilesError::Write { .. } => Self::Unreadable,
+        }
+    }
 }
 
 /// Runs the application until it quits: reads the config and the saved state from `paths`
@@ -118,19 +161,18 @@ pub fn run_with(started: Instant, startup: Startup) -> anyhow::Result<()> {
     launch_error.take().map_or(Ok(()), Err)
 }
 
-/// Reads `config.toml`. A file that cannot be used gives the defaults and a display-safe
-/// description of the problem, which is logged too; the URL is never logged, as it may hold a
+/// Reads `config.toml`. A file that cannot be used gives the defaults and the problem for the
+/// window; the full report goes to the log, which never shows the URL, as it may hold a
 /// password.
-fn load_config(path: &Path) -> (Config, Option<String>) {
+fn load_config(path: &Path) -> (Config, Option<ConfigProblem>) {
     match read_config(path) {
         Ok(config) => {
             tracing::info!(path = %path.display(), "config loaded");
             (config, None)
         }
         Err(error) => {
-            let problem = error.report();
-            tracing::warn!(error = %problem, "config not loaded; using the defaults");
-            (Config::default(), Some(problem))
+            tracing::warn!(error = %error.report(), "config not loaded; using the defaults");
+            (Config::default(), Some(ConfigProblem::of(&error)))
         }
     }
 }
@@ -179,7 +221,7 @@ fn launch(startup: Startup, cx: &mut App) -> anyhow::Result<(AnyWindowHandle, En
             view.service_failed(cx);
         }
         if let Some(problem) = config_problem {
-            view.show_config_problem(SharedString::from(problem), cx);
+            view.show_config_problem(problem, cx);
         }
     });
     Ok((window, view))
@@ -259,19 +301,26 @@ fn log_first_frame(window: AnyWindowHandle, started: Instant, cx: &mut App) -> a
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::sync::Arc;
+
     use gpui_kit::TestAppContext;
     use gpui_kit::test::TestWindowExt as _;
+    use x4_core::test_support::torrent;
+    use x4_core::{
+        ConnectionState, DisplayState, Filter, Snapshot, TextPosition, ThemeChoice, Torrent,
+    };
 
     use super::*;
 
     /// A start whose service could not be started, with `config_problem`.
-    fn failed_start(config_problem: Option<&str>) -> Startup {
+    fn failed_start(config_problem: Option<ConfigProblem>) -> Startup {
         Startup {
             service: Err(io::Error::other("no more threads")),
             ui: UiState::default(),
             state_writable: false,
             state_path: None,
-            config_problem: config_problem.map(str::to_owned),
+            config_problem,
         }
     }
 
@@ -286,16 +335,93 @@ mod tests {
         opened
     }
 
+    /// The problem `load_config` reports for a `config.toml` holding `text`.
+    fn problem_with(text: &str) -> Option<ConfigProblem> {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, text).expect("written");
+        let (config, problem) = load_config(&path);
+        if problem.is_some() {
+            assert_eq!(
+                config,
+                Config::default(),
+                "a broken file gives the defaults"
+            );
+        }
+        problem
+    }
+
+    #[test]
+    fn a_usable_config_has_no_problem() {
+        assert_eq!(
+            problem_with("[connection]\nurl = \"http://pi/rpc\"\n"),
+            None
+        );
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        assert_eq!(load_config(&dir.path().join("missing.toml")).1, None);
+    }
+
+    #[test]
+    fn config_problems_name_the_kind_and_the_place() {
+        assert_eq!(
+            problem_with("[connection]\nurl = 5\n"),
+            Some(ConfigProblem::Invalid { line: 2, column: 7 })
+        );
+        assert_eq!(
+            problem_with("[connection]\nurl = \"https://user:secret@pi/rpc\"\n"),
+            Some(ConfigProblem::UnsupportedUrl)
+        );
+
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("config.toml");
+        fs::create_dir(&path).expect("a directory");
+        assert_eq!(load_config(&path).1, Some(ConfigProblem::Unreadable));
+    }
+
+    #[test]
+    fn a_parse_error_without_a_place_is_malformed() {
+        let error = |position| FilesError::Config {
+            path: "/x/config.toml".into(),
+            source: ConfigError::Parse {
+                position,
+                message: "boom".to_owned(),
+            },
+        };
+
+        assert_eq!(ConfigProblem::of(&error(None)), ConfigProblem::Malformed);
+        assert_eq!(
+            ConfigProblem::of(&error(Some(TextPosition { line: 3, column: 1 }))),
+            ConfigProblem::Invalid { line: 3, column: 1 }
+        );
+    }
+
     #[gpui_kit::test]
     fn a_service_that_cannot_start_still_opens_the_window(cx: &mut TestAppContext) {
-        let (window, view) = launched(failed_start(None), cx);
+        let ui = UiState {
+            theme: ThemeChoice::Dark,
+            filter: Filter::Paused,
+            ..UiState::default()
+        };
 
-        let (text, stale) = cx.update(|cx| {
+        let (window, view) = launched(
+            Startup {
+                ui: ui.clone(),
+                ..failed_start(None)
+            },
+            cx,
+        );
+
+        let (text, stale, shown_ui) = cx.update(|cx| {
             let view = view.read(cx);
-            (view.connection_text(), view.status().stale)
+            (
+                view.connection_text(),
+                view.status().stale,
+                view.ui_state().clone(),
+            )
         });
         assert_eq!(text, "Service could not start");
         assert!(stale);
+        assert_eq!(shown_ui, ui, "the saved state reaches the window");
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             assert_eq!(
@@ -309,15 +435,24 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_config_problem_is_shown_until_dismissed(cx: &mut TestAppContext) {
-        let (window, _) = launched(failed_start(Some("invalid config file /x/config.toml")), cx);
-
+        let (window, _) = launched(
+            failed_start(Some(ConfigProblem::Invalid { line: 2, column: 7 })),
+            cx,
+        );
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
+            let notice = window.find("config-problem");
+            assert_eq!(notice.label(), Some("Config file not used"));
             assert_eq!(
-                window.find("config-problem").label(),
-                Some("Config file not used")
+                notice.description(),
+                Some("config.toml has an error at line 2, column 7, so the defaults are used")
             );
+        })
+        .expect("the window is open");
 
+        // The redraw itself is checked in `main_view`: the click redraws the view anyway, for
+        // the button's hover and press styles.
+        cx.update_window(window, |_, window, cx| {
             window.click("config-problem-dismiss", cx);
             window.render_frame(cx);
             assert!(window.try_find("config-problem").is_none());
@@ -328,20 +463,49 @@ mod tests {
     #[gpui_kit::test]
     fn the_saved_state_reaches_the_window(cx: &mut TestAppContext) {
         let ui = UiState {
-            theme: x4_core::ThemeChoice::Dark,
-            filter: x4_core::Filter::Seeding,
+            filter: Filter::Seeding,
             ..UiState::default()
         };
+        let (events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (_, view) = cx
+            .update(|cx| {
+                init(cx);
+                open_main_window(events_rx, commands, None, &ui, cx)
+            })
+            .expect("the window opens");
 
-        let (_, view) = launched(
-            Startup {
-                ui: ui.clone(),
-                ..failed_start(None)
-            },
-            cx,
-        );
+        events
+            .send_blocking(Event::Snapshot(Arc::new(Snapshot {
+                torrents: vec![
+                    torrent("seeding"),
+                    Torrent {
+                        state: DisplayState::Paused,
+                        ..torrent("paused")
+                    },
+                ],
+                session: None,
+                free_space_bytes: None,
+                rate_down: 0,
+                rate_up: 0,
+                connection: ConnectionState::Connected,
+                stale: false,
+            })))
+            .expect("the window listens");
+        cx.run_until_parked();
 
-        assert_eq!(cx.update(|cx| view.read(cx).ui_state().clone()), ui);
+        let (names, shown_ui) = cx.update(|cx| {
+            let view = view.read(cx);
+            let names: Vec<String> = view
+                .model()
+                .rows
+                .iter()
+                .map(|row| row.name.clone())
+                .collect();
+            (names, view.ui_state().clone())
+        });
+        assert_eq!(names, ["seeding"], "the saved filter applies");
+        assert_eq!(shown_ui, ui);
     }
 
     #[test]

@@ -1,8 +1,49 @@
 //! The status bar and the window's visibility.
 
+use x4_rpc::UnsupportedReason;
+
 use crate::engine::Visibility;
 use crate::format::{HumanSize, HumanSpeed, human_size, human_speed};
-use crate::snapshot::{ConnectionState, Snapshot};
+use crate::snapshot::{ConnectionError, ConnectionState, Snapshot};
+
+/// Whether the service thread is there to send snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ServiceStatus {
+    /// It runs; the snapshots tell how the connection is doing.
+    #[default]
+    Running,
+    /// It stopped or panicked: its events channel closed, so nothing will change any more.
+    Stopped,
+    /// It could not be started, so no data will come.
+    Failed,
+}
+
+/// What the connection indicator of the status bar shows, one state at a time.
+///
+/// A service that is not running outranks what its last snapshot said: [`Indicator::ServiceFailed`],
+/// then [`Indicator::ServiceStopped`], then the state of the link to the daemon, of which only one
+/// holds at a time ([`Indicator::Unsupported`], [`Indicator::Reconnecting`],
+/// [`Indicator::Connecting`], [`Indicator::Connected`]). The UI words it and picks its color.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Indicator {
+    /// The service could not be started.
+    ServiceFailed,
+    /// The service stopped; the data shown is the last it sent.
+    ServiceStopped,
+    /// The daemon speaks an RPC version 4x4 cannot use, for this reason.
+    Unsupported(UnsupportedReason),
+    /// The daemon stopped answering and the service tries again.
+    Reconnecting {
+        /// How many tries have failed in a row.
+        attempt: u32,
+        /// Why the latest one failed.
+        last_error: ConnectionError,
+    },
+    /// The first connection is being made.
+    Connecting,
+    /// The daemon answers.
+    Connected,
+}
 
 /// What the status bar shows.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,10 +60,51 @@ pub struct StatusModel {
     pub stale: bool,
     /// Whether the alternative speed limits apply; `false` while the session is not known.
     pub alt_speed: bool,
+    /// Whether the service still runs.
+    pub service: ServiceStatus,
+}
+
+impl StatusModel {
+    /// The service stopped: the numbers will not change again, so they are stale. A service
+    /// that never started stays [`ServiceStatus::Failed`].
+    pub fn service_stopped(&mut self) {
+        if self.service == ServiceStatus::Running {
+            self.service = ServiceStatus::Stopped;
+        }
+        self.stale = true;
+    }
+
+    /// The service could not be started: nothing will come, and what is shown is stale.
+    pub fn service_failed(&mut self) {
+        self.service = ServiceStatus::Failed;
+        self.stale = true;
+    }
+
+    /// What the connection indicator shows (see [`Indicator`] for which state wins).
+    #[must_use]
+    pub fn indicator(&self) -> Indicator {
+        match self.service {
+            ServiceStatus::Failed => Indicator::ServiceFailed,
+            ServiceStatus::Stopped => Indicator::ServiceStopped,
+            ServiceStatus::Running => match &self.connection {
+                ConnectionState::Unsupported { reason } => Indicator::Unsupported(reason.clone()),
+                ConnectionState::Reconnecting {
+                    attempt,
+                    last_error,
+                } => Indicator::Reconnecting {
+                    attempt: *attempt,
+                    last_error: last_error.clone(),
+                },
+                ConnectionState::Connecting => Indicator::Connecting,
+                ConnectionState::Connected => Indicator::Connected,
+            },
+        }
+    }
 }
 
 impl Default for StatusModel {
-    /// The status bar before the first answer: connecting, no traffic, nothing known.
+    /// The status bar before the first answer: the service runs and connects, no traffic,
+    /// nothing known.
     fn default() -> Self {
         Self {
             rate_down: human_speed(0),
@@ -31,11 +113,12 @@ impl Default for StatusModel {
             connection: ConnectionState::Connecting,
             stale: false,
             alt_speed: false,
+            service: ServiceStatus::Running,
         }
     }
 }
 
-/// The status bar for `snapshot`.
+/// The status bar for `snapshot`, which only a running service sends.
 #[must_use]
 pub fn status_model(snapshot: &Snapshot) -> StatusModel {
     StatusModel {
@@ -48,6 +131,7 @@ pub fn status_model(snapshot: &Snapshot) -> StatusModel {
             .session
             .as_ref()
             .is_some_and(|session| session.alt_speed_enabled),
+        service: ServiceStatus::Running,
     }
 }
 
@@ -134,13 +218,119 @@ mod tests {
         assert_eq!(status.free_space, None);
         assert!(!status.stale);
         assert!(!status.alt_speed);
+        assert_eq!(status.service, ServiceStatus::Running);
+        assert_eq!(status.indicator(), Indicator::Connecting);
+    }
+
+    fn reconnecting() -> ConnectionState {
+        ConnectionState::Reconnecting {
+            attempt: 2,
+            last_error: ConnectionError::Timeout,
+        }
+    }
+
+    fn unsupported() -> ConnectionState {
+        ConnectionState::Unsupported {
+            reason: UnsupportedReason::Version("5.0.1".to_owned()),
+        }
+    }
+
+    fn running(connection: ConnectionState) -> StatusModel {
+        StatusModel {
+            connection,
+            ..StatusModel::default()
+        }
+    }
+
+    #[test]
+    fn a_running_service_shows_the_state_of_the_link() {
+        assert_eq!(
+            running(ConnectionState::Connected).indicator(),
+            Indicator::Connected
+        );
+        assert_eq!(
+            running(ConnectionState::Connecting).indicator(),
+            Indicator::Connecting
+        );
+        assert_eq!(
+            running(reconnecting()).indicator(),
+            Indicator::Reconnecting {
+                attempt: 2,
+                last_error: ConnectionError::Timeout
+            }
+        );
+        assert_eq!(
+            running(unsupported()).indicator(),
+            Indicator::Unsupported(UnsupportedReason::Version("5.0.1".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_service_that_is_gone_outranks_every_connection_state() {
+        for connection in [
+            ConnectionState::Connected,
+            ConnectionState::Connecting,
+            reconnecting(),
+            unsupported(),
+        ] {
+            let mut stopped = running(connection.clone());
+            stopped.service_stopped();
+            assert_eq!(
+                stopped.indicator(),
+                Indicator::ServiceStopped,
+                "{connection:?}"
+            );
+
+            let mut failed = running(connection.clone());
+            failed.service_failed();
+            assert_eq!(
+                failed.indicator(),
+                Indicator::ServiceFailed,
+                "{connection:?}"
+            );
+
+            // A failure to start outranks a stop, in either order.
+            failed.service_stopped();
+            assert_eq!(
+                failed.indicator(),
+                Indicator::ServiceFailed,
+                "{connection:?}"
+            );
+            stopped.service_failed();
+            assert_eq!(
+                stopped.indicator(),
+                Indicator::ServiceFailed,
+                "{connection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_service_that_is_gone_leaves_the_numbers_stale() {
+        let fresh = status_model(&Snapshot {
+            rate_down: 2_516_582,
+            ..snapshot()
+        });
+        assert!(!fresh.stale);
+        assert_eq!(fresh.service, ServiceStatus::Running);
+
+        let mut stopped = fresh.clone();
+        stopped.service_stopped();
+        assert_eq!(stopped.service, ServiceStatus::Stopped);
+        assert!(stopped.stale);
+        assert_eq!(stopped.rate_down, fresh.rate_down, "the last numbers stay");
+
+        let mut failed = StatusModel::default();
+        failed.service_failed();
+        assert_eq!(failed.service, ServiceStatus::Failed);
+        assert!(failed.stale);
     }
 
     #[test]
     fn status_model_passes_the_connection_and_staleness_on() {
         let connection = ConnectionState::Reconnecting {
             attempt: 3,
-            last_error: crate::ConnectionError::Timeout,
+            last_error: ConnectionError::Timeout,
         };
 
         let status = status_model(&Snapshot {

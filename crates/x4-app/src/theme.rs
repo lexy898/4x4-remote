@@ -9,9 +9,11 @@ use std::sync::Arc;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFeatures, Hsla, Window, WindowAppearance};
-use x4_core::{ConnectionState, DisplayState, ThemeChoice};
+use x4_core::{DisplayState, Indicator, ThemeChoice};
 
-use crate::status_bar::ServiceState;
+/// How visible old data stays: the table and the status bar's numbers are dimmed while the
+/// daemon does not answer, but stay readable.
+pub(crate) const STALE_OPACITY: f32 = 0.5;
 
 /// The color of a torrent state: blue while downloading, green while seeding, the warning color
 /// while queued or checking, the danger color for an error, and muted while paused.
@@ -32,17 +34,14 @@ pub(crate) fn state_color(state: DisplayState, theme: &Theme) -> Hsla {
 /// The color of the connection dot in the status bar: the success color while connected, muted
 /// while connecting, the warning color while reconnecting, and the danger color when the daemon
 /// is too old or the service is not running.
-pub(crate) fn connection_color(
-    service: ServiceState,
-    connection: &ConnectionState,
-    theme: &Theme,
-) -> Hsla {
-    match (service, connection) {
-        (ServiceState::Stopped | ServiceState::Failed, _)
-        | (ServiceState::Running, ConnectionState::Unsupported { .. }) => theme.danger,
-        (ServiceState::Running, ConnectionState::Connected) => theme.success,
-        (ServiceState::Running, ConnectionState::Connecting) => theme.muted_foreground,
-        (ServiceState::Running, ConnectionState::Reconnecting { .. }) => theme.warning,
+pub(crate) fn connection_color(indicator: &Indicator, theme: &Theme) -> Hsla {
+    match indicator {
+        Indicator::ServiceFailed | Indicator::ServiceStopped | Indicator::Unsupported(_) => {
+            theme.danger
+        }
+        Indicator::Reconnecting { .. } => theme.warning,
+        Indicator::Connecting => theme.muted_foreground,
+        Indicator::Connected => theme.success,
     }
 }
 
@@ -157,34 +156,26 @@ mod tests {
     fn connection_colors_tell_the_states_apart(cx: &mut TestAppContext) {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let theme = theme(mode, cx);
-            let running = |connection: &ConnectionState| {
-                connection_color(ServiceState::Running, connection, &theme)
-            };
-            let reconnecting = ConnectionState::Reconnecting {
+            let color = |indicator: Indicator| connection_color(&indicator, &theme);
+            let reconnecting = Indicator::Reconnecting {
                 attempt: 1,
                 last_error: ConnectionError::Unreachable,
             };
-            let unsupported = ConnectionState::Unsupported {
-                reason: UnsupportedReason::Legacy,
-            };
 
             let distinct = [
-                running(&ConnectionState::Connected),
-                running(&ConnectionState::Connecting),
-                running(&reconnecting),
-                running(&unsupported),
+                color(Indicator::Connected),
+                color(Indicator::Connecting),
+                color(reconnecting),
+                color(Indicator::Unsupported(UnsupportedReason::Legacy)),
             ];
             for (index, first) in distinct.iter().enumerate() {
                 for second in &distinct[index + 1..] {
                     assert_ne!(first, second, "{mode:?}");
                 }
             }
-            for service in [ServiceState::Stopped, ServiceState::Failed] {
-                assert_eq!(
-                    connection_color(service, &ConnectionState::Connected, &theme),
-                    theme.danger,
-                    "a stopped service is never shown as connected"
-                );
+            assert_eq!(color(Indicator::Connected), theme.success);
+            for gone in [Indicator::ServiceStopped, Indicator::ServiceFailed] {
+                assert_eq!(color(gone), theme.danger, "{mode:?}");
             }
         }
     }
