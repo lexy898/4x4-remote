@@ -16,17 +16,33 @@ const README: &str = include_str!("../../../../README.md");
 /// toolkit's own binding does the same, so the README gives them for anywhere.
 const ALSO_ELSEWHERE: &[&str] = &["tab", "shift-tab"];
 
+/// The places of the README's table of keys where [`BINDINGS`] binds keys, as `place` names them.
+const ANYWHERE: &str = "anywhere";
+const IN_THE_WINDOW: &str = "anywhere in the window";
+const OUTSIDE_TEXT: &str = "anywhere but a text field";
+const IN_THE_SEARCH_BOX: &str = "in the search box";
+const IN_THE_TABLE: &str = "in the table";
+const BOUND_PLACES: &[&str] = &[
+    ANYWHERE,
+    IN_THE_WINDOW,
+    OUTSIDE_TEXT,
+    IN_THE_SEARCH_BOX,
+    IN_THE_TABLE,
+];
+/// The places of the README's table of keys where the keys are the toolkit's own.
+const TOOLKIT_PLACES: &[&str] = &["in a menu", "in a removal dialog", "in the speed limits"];
+
 /// Where the README says that `keys`, bound in `context`, work.
 fn place(keys: &str, context: Option<&str>) -> &'static str {
     if ALSO_ELSEWHERE.contains(&keys) {
-        return "anywhere";
+        return ANYWHERE;
     }
     match context {
-        None => "anywhere",
-        Some(MAIN_CONTEXT) => "anywhere in the window",
-        Some(MAIN_OUTSIDE_TEXT_CONTEXT) => "anywhere but a text field",
-        Some(SEARCH_CONTEXT) => "in the search box",
-        Some(TABLE_CONTEXT | TABLE_NO_MENU | TORRENTS) => "in the table",
+        None => ANYWHERE,
+        Some(MAIN_CONTEXT) => IN_THE_WINDOW,
+        Some(MAIN_OUTSIDE_TEXT_CONTEXT) => OUTSIDE_TEXT,
+        Some(SEARCH_CONTEXT) => IN_THE_SEARCH_BOX,
+        Some(TABLE_CONTEXT | TABLE_NO_MENU | TORRENTS) => IN_THE_TABLE,
         Some(other) => panic!("the README has no place for keys bound in {other:?}"),
     }
 }
@@ -56,21 +72,40 @@ fn readme_keys() -> BTreeSet<(String, String)> {
         .split("\n### Keys\n")
         .nth(1)
         .expect("the README has a section of keys");
-    section
+    key_table(section).unwrap_or_else(|problem| panic!("the README's table of keys: {problem}"))
+}
+
+/// Each key of the first table in `section` with the place of its row. A row must have three
+/// cells: the keys, each in backticks, a known place, and what they do.
+fn key_table(section: &str) -> Result<BTreeSet<(String, String)>, String> {
+    let mut keys = BTreeSet::new();
+    let rows = section
         .lines()
         .skip_while(|line| !line.starts_with('|'))
         .take_while(|line| line.starts_with('|'))
         // The header and the line under it.
-        .skip(2)
-        .flat_map(|line| {
-            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
-            let (keys, place) = (cells[1], cells[2]);
-            keys.split('`')
-                .skip(1)
-                .step_by(2)
-                .map(move |key| (key.to_owned(), place.to_owned()))
-        })
-        .collect()
+        .skip(2);
+    for row in rows {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let ["", row_keys, place, _what, ""] = cells.as_slice() else {
+            return Err(format!(
+                "a row without its three cells (keys, where, what): {row:?}"
+            ));
+        };
+        if !BOUND_PLACES.contains(place) && !TOOLKIT_PLACES.contains(place) {
+            return Err(format!("a row with an unknown place {place:?}: {row:?}"));
+        }
+        let row_keys: Vec<&str> = row_keys.split('`').skip(1).step_by(2).collect();
+        if row_keys.is_empty() {
+            return Err(format!("a row that names no key in backticks: {row:?}"));
+        }
+        keys.extend(
+            row_keys
+                .into_iter()
+                .map(|key| (key.to_owned(), (*place).to_owned())),
+        );
+    }
+    Ok(keys)
 }
 
 #[test]
@@ -99,6 +134,48 @@ fn the_readme_lists_every_key_binding_where_it_works() {
     assert!(
         unbound.is_empty(),
         "in the README's table of keys, but not bound there: {unbound:?}"
+    );
+}
+
+#[test]
+fn a_malformed_row_of_the_key_table_is_reported_clearly() {
+    const HEADER: &str = "| Key | Where | What it does |\n| --- | --- | --- |\n";
+    let table = |rows: &str| key_table(&format!("{HEADER}{rows}"));
+
+    assert_eq!(
+        table("| `Ctrl+S` | in the table | starts them |\n| `Ctrl+P` | in the table | pauses |\n"),
+        Ok([
+            ("Ctrl+P".to_owned(), IN_THE_TABLE.to_owned()),
+            ("Ctrl+S".to_owned(), IN_THE_TABLE.to_owned()),
+        ]
+        .into())
+    );
+    let short = table("| `Ctrl+S` | in the table |\n");
+    assert!(
+        short
+            .as_ref()
+            .is_err_and(|problem| problem.contains("three cells")),
+        "{short:?}"
+    );
+    let no_key = table("| Ctrl+S | in the table | starts them |\n");
+    assert!(
+        no_key
+            .as_ref()
+            .is_err_and(|problem| problem.contains("names no key")),
+        "{no_key:?}"
+    );
+}
+
+#[test]
+fn a_row_of_the_key_table_with_an_unknown_place_is_flagged() {
+    let table = key_table(
+        "| Key | Where | What it does |\n| --- | --- | --- |\n| `Up` | in a menuu | moves |\n",
+    );
+    assert!(
+        table
+            .as_ref()
+            .is_err_and(|problem| problem.contains("unknown place \"in a menuu\"")),
+        "{table:?}"
     );
 }
 
