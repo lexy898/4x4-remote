@@ -25,7 +25,11 @@ just lint-policy      # lint exceptions, workspace lints, dependency direction, 
                       # gpui-pre-wgpu patch (scripts/lint-policy.sh)
 just run              # run the app (debug build)
 just release          # optimized build
-just measure          # startup time and memory of the release build
+just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp
+                      # state dir; --synthetic measures the demo; run it inside `just virtual`
+just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
+just demo-synthetic   # the main window over 2000 made-up torrents, no network
+                      # (--static, --scroll, --select N)
 just update           # update dependencies, then run the full gate
 just setup            # enable git hooks and verify required tools
 ```
@@ -104,9 +108,26 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 
 ### UI text and localization
 - The UI is English and localization-ready: every user-visible string goes through the i18n layer
-  by key (introduced in stage 2; until then the only allowed literal is the product name "4x4").
-- Never build sentences by concatenation; use message arguments and plural rules.
-- Sizes use binary IEC units (KiB, MiB, GiB) and are formatted in `x4-core`.
+  by key. The only allowed literal is the product name "4x4".
+- To add a string: add the message to `crates/x4-app/i18n/en/x4.ftl` and fetch it with `t!` from
+  `crates/x4-app/src/i18n.rs` (`t!("id")` or `t!("id", name = value)`). `t!` wraps `fl!`, which
+  checks the message id against `en` at compile time. It checks the argument names only when the
+  call passes at least one argument; a call with none is not checked, so a message that has
+  variables is fetched only inside a helper of `i18n.rs`, and that helper has a test. Text for a
+  `x4-core` value (size, speed, ETA, subtitle, state, connection) is such a helper, so views never
+  pick words themselves.
+- Never build sentences by concatenation; use message arguments and plural rules. Pass counts as
+  numbers, so that plural selection works (every `{ $n -> }` needs a `*[other]` variant).
+- Pass decimals (sizes, speeds, ratios) as preformatted strings made by `i18n::decimal`: Fluent does
+  not format numbers by the rules of a language, and the decimal separator is the message
+  `number-decimal-separator`.
+- Another language is one more `crates/x4-app/i18n/<code>/x4.ftl`, and the language must also be
+  selected in code (the loader loads only `en` until then; once it selects languages,
+  `set_use_isolating(false)` must be applied again after each selection). The parity test in
+  `src/i18n/parity.rs` covers every language directory: the file parses, defines the same messages
+  as `en` and uses the same `$variables` in each. `fl!` checks only `en`, so keep that test green.
+- Sizes use binary IEC units (KiB, MiB, GiB). `x4-core` scales them (`human_size`, `human_speed`);
+  `x4-app/src/i18n.rs` turns them into text.
 
 ## Dependencies
 
@@ -141,6 +162,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
   settings (`session_set`) from tests or while debugging. Reading is fine.
 - The owner's daemon: `http://192.168.1.5:9091/transmission/rpc`, on a Raspberry Pi 3 with little
   RAM — keep the request rate modest. Server notes: `/home/alexey/garage/raspberrypi/CLAUDE.md`.
+- Agents open app windows only through `just virtual …` (headless KWin, own D-Bus, own XDG and
+  runtime dirs); never run KWin, spectacle or test windows against the owner's session bus, XDG
+  dirs or screens. Debug builds use the `.Devel` app id.
 - Everything in the repository is English.
 
 ## Git

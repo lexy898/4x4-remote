@@ -19,13 +19,28 @@ async-channel = "2.5.0"
 base64 = "0.23.1"
 # The UI sends commands to the worker thread, which waits on them until its next wakeup.
 crossbeam-channel = "0.5.17"
+# Where the config, the UI state and the logs live (XDG directories on Linux).
+directories = "6.0.0"
+# Parses the .ftl files in the localization parity test (dev-dependency only).
+fluent-syntax = "0.12.0"
 gpui-kit = "=0.8.1"
+# Fluent messages for every user-visible string; `fl!` checks ids and arguments at compile time.
+i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
+i18n-embed-fl = "0.10.1"
+# Embeds the .ftl files into the binary (read from disk in debug builds).
+rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # SHA-1 for the metainfo the live tests create (dev-dependency only).
 sha1 = "0.11.0"
+# The UI state is written to a temporary file first and renamed over the old one.
+tempfile = "3.27.0"
 thiserror = "2.0.21"
+# The persisted UI state and the owner's config file; both are TOML.
+toml = "1.1.8"
 tracing = "0.1.44"
+# The daily log file, written on a thread of its own so that logging never waits on the disk.
+tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # Plain HTTP only: the daemon is reached over http:// on the local network, so no TLS stack.
 ureq = { version = "3.5.0", default-features = false }

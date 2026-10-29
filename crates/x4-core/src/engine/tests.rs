@@ -1147,6 +1147,64 @@ fn snapshot_only_when_changed() {
 }
 
 #[test]
+fn the_list_counts_as_read_only_once_a_whole_list_has_come() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    assert!(
+        !engine.take_snapshot().unwrap().listed,
+        "nothing has come yet"
+    );
+
+    let mut engine = connected(base);
+    respond(
+        &mut engine,
+        base,
+        &Request::SessionGet,
+        Ok(Response::Session(session_info())),
+    );
+    let snapshot = engine.take_snapshot().unwrap();
+    assert_eq!(snapshot.connection, ConnectionState::Connected);
+    assert!(!snapshot.listed, "connected, but the list has not come");
+
+    respond(
+        &mut engine,
+        base,
+        &Request::FullList,
+        Ok(Response::Torrents(list())),
+    );
+    assert!(engine.take_snapshot().unwrap().listed);
+
+    // It stays read while the daemon is away: the last list is still the daemon's.
+    let mut engine = dropped(base, base + ms(1500));
+    let snapshot = engine.take_snapshot().unwrap();
+    assert!(snapshot.stale);
+    assert!(snapshot.listed);
+}
+
+#[test]
+fn an_empty_whole_list_counts_as_read() {
+    let base = Instant::now();
+    let mut engine = connected(base);
+    engine.take_snapshot();
+
+    respond(
+        &mut engine,
+        base,
+        &Request::FullList,
+        Ok(Response::Torrents(TorrentGetResponse {
+            torrents: Vec::new(),
+            removed: Vec::new(),
+        })),
+    );
+
+    let snapshot = engine
+        .take_snapshot()
+        .expect("reading the list is a change");
+    assert!(snapshot.listed);
+    assert_eq!(snapshot.torrents, []);
+}
+
+#[test]
 fn an_identical_recent_answer_changes_nothing() {
     let base = Instant::now();
     let mut engine = loaded(base);

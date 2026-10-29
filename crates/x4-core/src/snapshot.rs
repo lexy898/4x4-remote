@@ -123,6 +123,9 @@ impl From<&SessionInfo> for SessionSummary {
 pub struct Snapshot {
     /// Every torrent, in no particular order; sort them with [`sort`](crate::sort()).
     pub torrents: Vec<Torrent>,
+    /// Whether the daemon's whole list of torrents has been read since the start. Until it has,
+    /// an empty `torrents` means that nothing has arrived yet, not that there are no torrents.
+    pub listed: bool,
     /// The daemon's settings; `None` until they have been read.
     pub session: Option<SessionSummary>,
     /// Free space where new torrents are saved; `None` when unknown.

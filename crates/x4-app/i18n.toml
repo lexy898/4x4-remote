@@ -1,0 +1,8 @@
+# Settings of i18n-embed and the `fl!` macro (the `t!` macro in src/i18n.rs wraps it).
+fallback_language = "en"
+
+[fluent]
+# i18n/{language}/{domain}.ftl
+assets_dir = "i18n"
+# Set explicitly: the default is the package name, "x4-app".
+domain = "x4"

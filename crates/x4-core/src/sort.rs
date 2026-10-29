@@ -2,13 +2,18 @@
 
 use std::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{Eta, Ratio, Torrent};
 use crate::state::{DisplayState, QueueKind};
+use crate::view::EtaView;
 
-/// The column the list is sorted by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The column the list is sorted by. It is written to the state file by its `snake_case` name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortKey {
     /// The name, ignoring case.
+    #[default]
     Name,
     /// The size of the wanted files.
     Size,
@@ -20,7 +25,8 @@ pub enum SortKey {
     DownloadSpeed,
     /// The upload rate.
     UploadSpeed,
-    /// The time to finish: known estimates, then unknown, then none.
+    /// The time to finish as the ETA column shows it: known estimates, then unknown, then none
+    /// (every torrent that is not downloading).
     Eta,
     /// The share ratio: none, then values, then infinite.
     Ratio,
@@ -30,10 +36,13 @@ pub enum SortKey {
     Added,
 }
 
-/// Which way a [`SortKey`] orders the list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Which way a [`SortKey`] orders the list. It is written to the state file by its `snake_case`
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortDirection {
     /// Smallest first.
+    #[default]
     Ascending,
     /// Largest first.
     Descending,
@@ -86,7 +95,7 @@ fn compare_by_key(key: SortKey, a: &Entry<'_>, b: &Entry<'_>) -> Ordering {
         SortKey::State => state_rank(x.state).cmp(&state_rank(y.state)),
         SortKey::DownloadSpeed => x.rate_down.cmp(&y.rate_down),
         SortKey::UploadSpeed => x.rate_up.cmp(&y.rate_up),
-        SortKey::Eta => compare_eta(x.eta, y.eta),
+        SortKey::Eta => compare_eta(shown_eta(x), shown_eta(y)),
         SortKey::Ratio => compare_ratio(x.ratio, y.ratio),
         SortKey::Peers => x.peers_connected.cmp(&y.peers_connected),
         // `None` sorts before any date.
@@ -107,6 +116,17 @@ fn state_rank(state: DisplayState) -> u8 {
     }
 }
 
+/// The ETA as the column shows it ([`EtaView`]): only a downloading torrent has one, ordered by
+/// its exact duration rather than by the rounded text.
+fn shown_eta(torrent: &Torrent) -> Eta {
+    match EtaView::of(torrent) {
+        EtaView::In(_) => torrent.eta,
+        EtaView::Unknown => Eta::Unknown,
+        EtaView::None => Eta::NotAvailable,
+    }
+}
+
+/// Known ETAs, soonest first, then the unknown ones, then those with none.
 fn compare_eta(a: Eta, b: Eta) -> Ordering {
     fn rank(eta: Eta) -> u8 {
         match eta {
@@ -210,25 +230,22 @@ mod tests {
         );
     }
 
+    /// A downloading torrent whose ETA is `eta`.
+    fn downloading(name: &str, eta: Eta) -> Torrent {
+        Torrent {
+            state: DisplayState::Downloading,
+            eta,
+            ..torrent(name)
+        }
+    }
+
     #[test]
     fn sort_eta_puts_unknown_after_known() {
         let torrents = [
-            Torrent {
-                eta: Eta::NotAvailable,
-                ..torrent("none")
-            },
-            Torrent {
-                eta: Eta::In(Duration::from_secs(90)),
-                ..torrent("slow")
-            },
-            Torrent {
-                eta: Eta::Unknown,
-                ..torrent("unknown")
-            },
-            Torrent {
-                eta: Eta::In(Duration::from_secs(10)),
-                ..torrent("fast")
-            },
+            downloading("none", Eta::NotAvailable),
+            downloading("slow", Eta::In(Duration::from_secs(90))),
+            downloading("unknown", Eta::Unknown),
+            downloading("fast", Eta::In(Duration::from_secs(10))),
         ];
 
         assert_eq!(
@@ -238,6 +255,40 @@ mod tests {
         assert_eq!(
             order(&torrents, SortKey::Eta, Descending),
             ["none", "unknown", "slow", "fast"]
+        );
+    }
+
+    #[test]
+    fn sort_eta_follows_what_the_column_shows() {
+        // A seeder, a paused and a queued torrent show no ETA ("—"), whatever the server reports,
+        // so they sort with the torrents that have none, after the unknown one.
+        let torrents = [
+            Torrent {
+                eta: Eta::In(Duration::from_secs(5)),
+                ..torrent("seeding")
+            },
+            Torrent {
+                state: DisplayState::Paused,
+                eta: Eta::Unknown,
+                ..torrent("paused")
+            },
+            Torrent {
+                state: DisplayState::Queued(QueueKind::Download),
+                eta: Eta::In(Duration::from_secs(1)),
+                ..torrent("queued")
+            },
+            downloading("unknown", Eta::Unknown),
+            downloading("hour", Eta::In(Duration::from_secs(3600))),
+            downloading("minute", Eta::In(Duration::from_secs(60))),
+        ];
+
+        assert_eq!(
+            order(&torrents, SortKey::Eta, Ascending),
+            ["minute", "hour", "unknown", "paused", "queued", "seeding"]
+        );
+        assert_eq!(
+            order(&torrents, SortKey::Eta, Descending),
+            ["paused", "queued", "seeding", "unknown", "hour", "minute"]
         );
     }
 

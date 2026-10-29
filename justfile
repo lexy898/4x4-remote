@@ -30,17 +30,19 @@ spell:
 lint-policy:
     scripts/lint-policy.sh
 
+# The gates build x4-app with its `synthetic` feature too, so that the demo is linted, tested and
+# documented with the rest.
 lint:
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --workspace --all-targets --features x4-app/synthetic --locked -- -D warnings
 
 test:
-    cargo nextest run --workspace --locked --no-tests=warn
+    cargo nextest run --workspace --features x4-app/synthetic --locked --no-tests=warn
 
 doc-test:
     cargo test --workspace --doc --locked
 
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features x4-app/synthetic --locked
 
 deny:
     cargo deny check --hide-inclusion-graph
@@ -78,9 +80,20 @@ run *args:
 release:
     cargo build -p x4-app --release --locked
 
-# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build.
-measure:
-    scripts/measure.sh
+# The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N).
+demo-synthetic *args:
+    RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
+        cargo run -p x4-app --features synthetic --bin x4-synthetic --locked -- {{args}}
+
+# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `-- <args>`.
+[positional-arguments]
+measure *args:
+    scripts/measure.sh "$@"
+
+# Run a command in a headless KWin, off the real screens (KDE only): `just virtual just run`; X4_VIRTUAL_KEEP=1 keeps its temp dir.
+[positional-arguments]
+virtual +cmd:
+    scripts/virtual-session.sh "$@"
 
 update:
     cargo update

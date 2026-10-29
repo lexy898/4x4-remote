@@ -12,6 +12,8 @@ guard_hook=$root/scripts/hooks/guard-bash.sh
 check_tools=$root/scripts/check-tools.sh
 lint_policy=$root/scripts/lint-policy.sh
 measure_lib=$root/scripts/measure-lib.sh
+measure=$root/scripts/measure.sh
+virtual_session=$root/scripts/virtual-session.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
@@ -695,6 +697,339 @@ test_measure_warnings_fail_only_when_a_metric_is_unreadable() {
     expect_contains "RssAnon:" "$stderr" stderr
 }
 
+# write_stat <file> <utime> <stime>: a copy of /proc/<pid>/stat whose command name holds spaces
+# and parentheses, as a thread name may; utime and stime are fields 14 and 15.
+write_stat() {
+    printf '4242 (4x4 (x) y) S 1 4242 4242 0 -1 4194304 9000 0 12 0 %d %d 0 0 20 0 26 0 100\n' \
+        "$2" "$3" >"$1"
+}
+
+test_measure_cpu_line_counts_user_and_system_time_over_the_window() {
+    local dir
+    dir=$(mktemp -d "$tmp_root/stat.XXXXXX")
+    write_stat "$dir/before" 100 50
+    write_stat "$dir/after" 130 56
+    # 36 ticks at 100 per second are 0.36 s of CPU in 30 s: 1.2 % of one core.
+    run_measure cpu_line "$dir/before" "$dir/after" 30 100
+    expect_status 0
+    [[ $stdout == 'cpu_percent=1.20 window_s=30.0' ]] || fail "unexpected CPU line: $stdout"
+    run_measure cpu_line "$dir/before" "$dir/before" 30.04 100
+    [[ $stdout == 'cpu_percent=0.00 window_s=30.0' ]] || fail "unexpected idle CPU line: $stdout"
+}
+
+test_measure_elapsed_seconds_reads_either_decimal_separator() {
+    run_measure elapsed_seconds 1793246118,250000 1793246148,750000
+    [[ $stdout == 30.5 ]] || fail "unexpected seconds with commas: $stdout"
+    run_measure elapsed_seconds 1793246118.250000 1793246119.000000
+    [[ $stdout == 0.75 ]] || fail "unexpected seconds with dots: $stdout"
+}
+
+test_measure_cpu_line_rejects_an_unreadable_stat() {
+    local dir
+    dir=$(mktemp -d "$tmp_root/stat.XXXXXX")
+    write_stat "$dir/before" 100 50
+    run_measure cpu_line "$dir/before" "$dir/missing" 30 100
+    expect_status 1
+    printf '4242 (4x4) S 1 4242\n' >"$dir/short"
+    run_measure cpu_line "$dir/before" "$dir/short" 30 100
+    expect_status 1
+    expect_contains "no utime and stime" "$stderr" stderr
+    [[ -z $stdout ]] || fail "expected no CPU line, got: $stdout"
+}
+
+# A fake build for scripts/measure.sh: `just` and `cargo` that record their arguments, and in
+# <dir>/target the binaries of the app and of the synthetic demo, which record theirs and
+# their XDG_STATE_HOME, write a state file and a log there as the app does, log their first frame
+# like the app and then sleep until the script stops them.
+new_measure_env() {
+    local dir name
+    dir=$(mktemp -d "$tmp_root/measure.XXXXXX")
+    mkdir -p "$dir/bin" "$dir/target/release" "$dir/home" "$dir/tmp"
+    for name in just cargo; do
+        printf '#!/usr/bin/env bash\necho "$*" >>%q\n' "$dir/$name.txt" >"$dir/bin/$name"
+        chmod +x "$dir/bin/$name"
+    done
+    for name in 4x4 x4-synthetic; do
+        printf '#!/usr/bin/env bash\necho "$*" >%q\necho "${XDG_STATE_HOME-unset}" >%q\nmkdir -p "$XDG_STATE_HOME/4x4" && touch "$XDG_STATE_HOME/4x4/state.toml" "$XDG_STATE_HOME/4x4/4x4.log"\necho "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2\nexec sleep 30\n' \
+            "$dir/args-$name.txt" "$dir/state-$name.txt" >"$dir/target/release/$name"
+        chmod +x "$dir/target/release/$name"
+    done
+    echo "$dir"
+}
+
+run_measure_script() { # <dir> <arg...>
+    local dir=$1
+    shift
+    run_with_input '' env -u XDG_STATE_HOME PATH="$dir/bin:$PATH" CARGO_TARGET_DIR="$dir/target" \
+        HOME="$dir/home" TMPDIR="$dir/tmp" X4_MEASURE_SETTLE_SECONDS=1 "$BASH" "$measure" "$@"
+}
+
+test_measure_measures_the_synthetic_demo_with_its_arguments_and_cpu() {
+    local dir
+    dir=$(new_measure_env)
+    run_measure_script "$dir" --synthetic --cpu 1 -- --static 'two words'
+    expect_status 0
+    [[ $(wc -l <<<"$stdout") -eq 2 ]] || fail "expected the report and the CPU line, got: $stdout"
+    [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ .*binary_mib= ]] || fail "unexpected report: $stdout"
+    [[ $stdout =~ $'\n'cpu_percent=[0-9]+\.[0-9]{2}\ window_s=1\.[0-9]$ ]] || fail "unexpected CPU line: $stdout"
+    [[ $(<"$dir/cargo.txt") == "build -p x4-app --release --locked --features synthetic --bin x4-synthetic" ]] ||
+        fail "unexpected build: $(<"$dir/cargo.txt")"
+    [[ ! -e $dir/just.txt ]] || fail "the app was built too: $(<"$dir/just.txt")"
+    [[ $(<"$dir/args-x4-synthetic.txt") == "--static two words" ]] ||
+        fail "unexpected arguments: $(<"$dir/args-x4-synthetic.txt")"
+    [[ $(<"$dir/state-x4-synthetic.txt") == "$dir/tmp/"* ]] ||
+        fail "the demo did not get a temp state dir: $(<"$dir/state-x4-synthetic.txt")"
+}
+
+test_measure_measures_the_app_by_default() {
+    local dir
+    dir=$(new_measure_env)
+    run_measure_script "$dir"
+    expect_status 0
+    [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ [^$'\n']*$ ]] || fail "expected one report line, got: $stdout"
+    [[ $(<"$dir/just.txt") == release ]] || fail "unexpected build: $(<"$dir/just.txt")"
+    [[ -e $dir/args-4x4.txt ]] || fail "the app did not run"
+}
+
+# The measured app saves its state and writes its log under XDG_STATE_HOME: a temp dir, so that a
+# measurement never saves over the owner's state.toml, removed at the end.
+test_measure_gives_the_app_a_temp_state_dir() {
+    local dir state
+    dir=$(new_measure_env)
+    run_measure_script "$dir"
+    expect_status 0
+    state=$(<"$dir/state-4x4.txt")
+    [[ $state == "$dir/tmp/"* ]] || fail "the state dir is not a temp dir: '$state'"
+    [[ ! -e $state ]] || fail "the state dir was left behind: $state"
+    [[ -z $(ls -A "$dir/home") ]] || fail "something was written to HOME: $(ls -A "$dir/home")"
+}
+
+test_measure_rejects_unknown_options() {
+    local dir option
+    dir=$(new_measure_env)
+    for option in --bogus "--cpu x" "--cpu" "--example synthetic"; do
+        # Unquoted on purpose: "--cpu x" is an option and its value.
+        run_measure_script "$dir" $option
+        expect_status 2
+        expect_contains "usage: scripts/measure.sh" "$stderr" "stderr for $option"
+    done
+    [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "a bad command line built something"
+}
+
+# A directory with a fake `dbus-run-session`, which runs its command, and a fake `kwin_wayland`,
+# which runs its --exit-with-session script as KWin does once the virtual screen is up and prints
+# some noise of its own. Each writes its arguments, the XDG dirs and the display variables it
+# sees to <dir>/<tool>.txt. Also an owner's home with a kdeglobals, and an empty TMPDIR for the
+# session's directory.
+virtual_dir=
+virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY)='
+new_virtual_env() {
+    virtual_dir=$(mktemp -d "$tmp_root/virtual.XXXXXX")
+    mkdir -p "$virtual_dir/bin" "$virtual_dir/home/.config/fontconfig" "$virtual_dir/tmp"
+    printf '[General]\nColorScheme=Owner\n' >"$virtual_dir/home/.config/kdeglobals"
+    printf '<fontconfig/>\n' >"$virtual_dir/home/.config/fontconfig/fonts.conf"
+    cat >"$virtual_dir/bin/dbus-run-session" <<EOF
+#!/usr/bin/env bash
+seen='$virtual_seen'
+{ echo "args: \$*"; env | grep -E "\$seen" || true; } >"$virtual_dir/dbus-run-session.txt"
+[[ \$1 == -- ]] && shift
+exec "\$@"
+EOF
+    cat >"$virtual_dir/bin/kwin_wayland" <<EOF
+#!/usr/bin/env bash
+seen='$virtual_seen'
+{ echo "args: \$*"; env | grep -E "\$seen" || true; } >"$virtual_dir/kwin_wayland.txt"
+echo "kwin noise"
+while ((\$#)); do
+    if [[ \$1 == --exit-with-session ]]; then "\$2"; exit 0; fi
+    shift
+done
+exit 1
+EOF
+    chmod +x "$virtual_dir/bin/dbus-run-session" "$virtual_dir/bin/kwin_wayland"
+}
+
+# run_virtual <command...>: the helper with the fakes first on PATH, in the fake home, with the
+# owner's XDG dirs left to their defaults and the owner's displays, X authority and runtime dir set
+# as on a desktop.
+run_virtual() {
+    mkdir -p "$virtual_dir/owner-runtime"
+    run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+        -u X4_VIRTUAL_KEEP PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
+        TMPDIR="$virtual_dir/tmp" DISPLAY=:0 XAUTHORITY="$virtual_dir/home/.Xauthority" \
+        WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$virtual_dir/owner-runtime" \
+        "$BASH" "$virtual_session" "$@"
+}
+
+test_virtual_session_propagates_the_exit_code() {
+    new_virtual_env
+    run_virtual bash -c 'exit 7'
+    expect_status 7
+    run_virtual true
+    expect_status 0
+    expect_contains "args: -- kwin_wayland --virtual" "$(<"$virtual_dir/dbus-run-session.txt")" \
+        "the dbus-run-session call"
+    expect_contains "--exit-with-session" "$(<"$virtual_dir/kwin_wayland.txt")" "the kwin call"
+}
+
+test_virtual_session_gives_kwin_and_the_command_temp_xdg_dirs() {
+    local name dir seen
+    new_virtual_env
+    # The command also overwrites its kdeglobals, which must not reach the owner's.
+    run_virtual bash -c 'for name in CONFIG DATA STATE CACHE; do
+            dir=XDG_${name}_HOME; echo "$name=${!dir}"; [[ -d ${!dir} ]] || echo "$name missing"
+        done
+        cat "$XDG_CONFIG_HOME/kdeglobals" "$XDG_CONFIG_HOME/fontconfig/fonts.conf"
+        echo "display=${DISPLAY-unset}"
+        echo changed >"$XDG_CONFIG_HOME/kdeglobals"'
+    expect_status 0
+    for name in CONFIG DATA STATE CACHE; do
+        dir=$(sed -n "s/^$name=//p" <<<"$stdout")
+        [[ $dir == "$virtual_dir/tmp/"* ]] || fail "XDG_${name}_HOME is not in TMPDIR: '$dir'"
+        [[ $dir != "$virtual_dir/home"* ]] || fail "XDG_${name}_HOME is in HOME: '$dir'"
+        for seen in kwin_wayland dbus-run-session; do
+            expect_contains "XDG_${name}_HOME=$dir" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+        done
+    done
+    [[ $stdout != *missing* ]] || fail "a session dir does not exist: $stdout"
+    expect_contains "ColorScheme=Owner" "$stdout" "the session's kdeglobals"
+    expect_contains "<fontconfig/>" "$stdout" "the session's fontconfig"
+    expect_contains "display=unset" "$stdout" "the command's DISPLAY"
+    [[ $(<"$virtual_dir/home/.config/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
+        fail "the owner's kdeglobals changed"
+    [[ -z $(ls -A "$virtual_dir/tmp") ]] || fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
+    [[ $stdout != *"kwin noise"* && $stderr != *"kwin noise"* ]] ||
+        fail "KWin's own output belongs in its log, got: $stdout $stderr"
+}
+
+# Services on the session's bus (the portal, ksecretd) must not reach the owner's X server or
+# runtime dir: KWin, the bus and the command see the session's Wayland socket, no DISPLAY and no
+# XAUTHORITY, and a runtime dir of the session's own.
+test_virtual_session_keeps_the_owner_display_and_runtime_dir_away() {
+    local seen socket runtime
+    new_virtual_env
+    run_virtual bash -c 'echo "runtime=$XDG_RUNTIME_DIR mode=$(stat -c %a "$XDG_RUNTIME_DIR")"
+        echo "wayland=$WAYLAND_DISPLAY display=${DISPLAY-unset} xauthority=${XAUTHORITY-unset}"'
+    expect_status 0
+    socket=$(sed -n 's/.*--socket \([^ ]*\).*/\1/p' "$virtual_dir/kwin_wayland.txt")
+    [[ $socket == x4-virtual-* ]] || fail "unexpected KWin socket: '$socket'"
+    runtime=$(sed -n 's/^runtime=\([^ ]*\) .*/\1/p' <<<"$stdout")
+    [[ $runtime == "$virtual_dir/tmp/x4-virtual."*/runtime ]] || fail "unexpected runtime dir: '$runtime'"
+    expect_contains "mode=700" "$stdout" "the runtime dir's mode"
+    expect_contains "wayland=$socket display=unset xauthority=unset" "$stdout" "the command's display"
+    for seen in dbus-run-session kwin_wayland; do
+        expect_contains "WAYLAND_DISPLAY=$socket" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+        expect_contains "XDG_RUNTIME_DIR=$runtime" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+        if grep -Eq '^(DISPLAY|XAUTHORITY)=' "$virtual_dir/$seen.txt"; then
+            fail "$seen sees the owner's X server: $(<"$virtual_dir/$seen.txt")"
+        fi
+    done
+}
+
+# A fontconfig dir and a kdeglobals that are symlinks (into a dotfiles repository, say) are copied
+# as a real dir and file, so the session's writes never follow the links into the owner's files.
+test_virtual_session_copies_linked_settings_as_files() {
+    local config
+    new_virtual_env
+    config=$virtual_dir/home/.config
+    mkdir -p "$virtual_dir/dotfiles"
+    mv "$config/fontconfig" "$config/kdeglobals" "$virtual_dir/dotfiles/"
+    ln -s "$virtual_dir/dotfiles/fontconfig" "$config/fontconfig"
+    ln -s "$virtual_dir/dotfiles/kdeglobals" "$config/kdeglobals"
+    run_virtual bash -c 'cd "$XDG_CONFIG_HOME"
+        [[ -L fontconfig || -L kdeglobals ]] && echo "linked"
+        [[ -d fontconfig && -f fontconfig/fonts.conf && -f kdeglobals ]] && echo "copied"
+        echo changed >kdeglobals; echo changed >fontconfig/fonts.conf'
+    expect_status 0
+    [[ $stdout == copied ]] || fail "expected real copies, got: $stdout"
+    [[ $(<"$virtual_dir/dotfiles/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
+        fail "the owner's kdeglobals changed"
+    [[ $(<"$virtual_dir/dotfiles/fontconfig/fonts.conf") == '<fontconfig/>' ]] ||
+        fail "the owner's fonts.conf changed"
+}
+
+test_virtual_session_keeps_arguments_with_spaces() {
+    new_virtual_env
+    # The literal $HOME and * must reach the command unexpanded.
+    run_virtual printf '<%s>' 'a b' '' "it's" '$HOME' '*'
+    expect_status 0
+    [[ $stdout == "<a b><><it's><\$HOME><*>" ]] || fail "unexpected arguments: $stdout"
+}
+
+test_virtual_session_names_a_missing_tool() {
+    new_virtual_env
+    rm "$virtual_dir/bin/kwin_wayland"
+    run_with_input '' env PATH="$virtual_dir/bin" "$BASH" "$virtual_session" true
+    expect_status 127
+    expect_contains "kwin_wayland not found" "$stderr" stderr
+    expect_contains "KDE" "$stderr" stderr
+    new_virtual_env
+    rm "$virtual_dir/bin/dbus-run-session"
+    run_with_input '' env PATH="$virtual_dir/bin" "$BASH" "$virtual_session" true
+    expect_status 127
+    expect_contains "dbus-run-session not found" "$stderr" stderr
+}
+
+test_virtual_session_keeps_its_dir_on_request() {
+    local kept
+    new_virtual_env
+    run_with_input '' env PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
+        TMPDIR="$virtual_dir/tmp" X4_VIRTUAL_KEEP=1 "$BASH" "$virtual_session" true
+    expect_status 0
+    kept=$(sed -n 's/^virtual-session: kept //p' <<<"$stderr")
+    [[ -n $kept && $kept == "$virtual_dir/tmp/"* ]] || fail "expected the kept dir on stderr, got: $stderr"
+    expect_contains "kwin noise" "$(<"$kept/kwin.log")" "kwin.log"
+}
+
+# Services the session's D-Bus starts (the desktop portal, ksecretd) outlive KWin and write to the
+# session's dirs; the fake KWin leaves such a process behind, with the session's environment.
+# The fake KWin leaves behind a process with the session's environment, one that ignores SIGTERM,
+# and two decoys that must survive: one whose XDG_DATA_HOME only starts like the session's, and
+# one without it, like the owner's own processes.
+test_virtual_session_stops_what_the_session_left_running() {
+    local name pid
+    new_virtual_env
+    cat >"$virtual_dir/bin/kwin_wayland" <<EOF
+#!/usr/bin/env bash
+sleep 300 </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/leftover.pid"
+bash -c 'trap "" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/stubborn.pid"
+env XDG_DATA_HOME="\${XDG_DATA_HOME}2" sleep 300 </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/near-miss.pid"
+env -u XDG_DATA_HOME sleep 300 </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/unrelated.pid"
+while ((\$#)); do
+    if [[ \$1 == --exit-with-session ]]; then "\$2"; exit 0; fi
+    shift
+done
+EOF
+    run_virtual true
+    expect_status 0
+    for name in near-miss unrelated; do
+        pid=$(<"$virtual_dir/$name.pid")
+        kill -0 "$pid" 2>/dev/null || fail "the $name decoy was stopped"
+        kill "$pid"
+    done
+    for name in leftover stubborn; do
+        pid=$(<"$virtual_dir/$name.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid"
+            fail "the $name process the session left running is still there"
+        fi
+    done
+    [[ -z $(ls -A "$virtual_dir/tmp") ]] || fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
+}
+
+test_virtual_session_reports_a_session_that_never_ran() {
+    new_virtual_env
+    printf '#!/usr/bin/env bash\necho "cannot open the virtual output"\nexit 1\n' >"$virtual_dir/bin/kwin_wayland"
+    run_virtual true
+    expect_status 125
+    expect_contains "the command did not run" "$stderr" stderr
+    expect_contains "cannot open the virtual output" "$stderr" "stderr with KWin's log"
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -747,6 +1082,22 @@ cases=(
     measure_warnings_name_every_breach_on_stderr_and_keep_exit_zero
     measure_warnings_report_one_breach_alone
     measure_warnings_fail_only_when_a_metric_is_unreadable
+    measure_cpu_line_counts_user_and_system_time_over_the_window
+    measure_cpu_line_rejects_an_unreadable_stat
+    measure_elapsed_seconds_reads_either_decimal_separator
+    measure_measures_the_synthetic_demo_with_its_arguments_and_cpu
+    measure_measures_the_app_by_default
+    measure_gives_the_app_a_temp_state_dir
+    measure_rejects_unknown_options
+    virtual_session_propagates_the_exit_code
+    virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
+    virtual_session_keeps_the_owner_display_and_runtime_dir_away
+    virtual_session_copies_linked_settings_as_files
+    virtual_session_keeps_arguments_with_spaces
+    virtual_session_names_a_missing_tool
+    virtual_session_keeps_its_dir_on_request
+    virtual_session_stops_what_the_session_left_running
+    virtual_session_reports_a_session_that_never_ran
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
