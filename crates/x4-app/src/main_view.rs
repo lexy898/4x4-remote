@@ -1,5 +1,5 @@
-//! The content of the main window: a toolbar, the filter sidebar, the torrent table and the
-//! status bar, fed by the events of the service.
+//! The content of the main window: a toolbar with the search box, the filter sidebar, the
+//! torrent table and the status bar, fed by the events of the service.
 //!
 //! The view pumps the events channel on the UI thread's executor and never waits on the network:
 //! awaiting the channel yields until the service sends something, and sending a command never
@@ -7,11 +7,13 @@
 //! into the [`TableModel`] and the [`StatusModel`]; the view redraws only when one of them changed,
 //! so an idle daemon costs no frames.
 //!
-//! The torrent table ([`TorrentTable`]) shows the rows; the view owns what they are: a click on a
-//! header sorts through [`ViewState::toggle_sort`], and the view recomputes the rows from the last
-//! snapshot and hands them to the table. It also keeps what the user does to the columns (shown,
-//! moved, resized) in the [`UiState`], and the toolbar's column menu shows and hides them. The
-//! selection stays in the table: this stage reads nothing more for a selected torrent.
+//! The torrent table ([`TorrentTable`]) shows the rows; the view owns what they are, as its
+//! [`ViewState`]: a click on a filter in the sidebar, an edit in the search box and a click on a
+//! header (through [`ViewState::toggle_sort`]) change it, and the view recomputes the rows from the
+//! last snapshot and hands them to the table, without asking the daemon. It also keeps what the
+//! user does to the columns (shown, moved, resized) in the [`UiState`], and the toolbar's column
+//! menu shows and hides them. The selection stays in the table: this stage reads nothing more for
+//! a selected torrent.
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
@@ -20,6 +22,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
@@ -32,19 +35,19 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    ColumnId, Command, Event, ServiceStatus, Snapshot, SortState, StatusModel, TableModel,
+    ColumnId, Command, Event, Filter, ServiceStatus, Snapshot, SortState, StatusModel, TableModel,
     ThemeChoice, UiState, ViewState, Visibility, shown_columns, status_model, table_model,
     visibility,
 };
 
-use crate::app::{ConfigProblem, FocusNext, FocusPrevious};
+use crate::app::{ClearSearch, ConfigProblem, FocusNext, FocusPrevious, FocusSearch, MAIN_CONTEXT};
 use crate::i18n::{column_name_text, connection_text, t, torrent_count_text};
+use crate::search::{clear_search, focus_search, new_search_state, search_box};
+use crate::sidebar::filter_sidebar;
 use crate::status_bar::status_bar;
 use crate::theme::{STALE_OPACITY, apply_theme, follow_appearance, next_theme};
 use crate::torrent_table::{TorrentTable, new_table_state, show_column, show_rows};
 
-/// The width of the sidebar.
-const SIDEBAR_WIDTH: f32 = 200.;
 /// The height of a row of the table, for the two lines of the name cell.
 const ROW_HEIGHT: f32 = 44.;
 /// The height of the table's header.
@@ -61,6 +64,8 @@ pub struct MainView {
     /// The torrent table, whose delegate holds the rows of `model`, the columns and the
     /// selection.
     table: Entity<TableState<TorrentTable>>,
+    /// The text of the search box, which `view.search` follows.
+    search: Entity<InputState>,
     /// The newest snapshot, so that a change of `view` shows at once, without waiting for the
     /// next one.
     last_snapshot: Option<Arc<Snapshot>>,
@@ -76,7 +81,8 @@ pub struct MainView {
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
-    /// The table's events and the window's activation, visibility and appearance observers.
+    /// The table's and the search box's events and the window's activation, visibility and
+    /// appearance observers.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -100,8 +106,10 @@ impl MainView {
         let table = Self::new_table(&ui, &view_state, window, cx);
         // The window's own bindings work only while something in it has the focus.
         window.focus(&table.focus_handle(cx), cx);
+        let search = cx.new(|cx| new_search_state(window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&table, window, Self::on_table_event),
+            cx.subscribe_in(&search, window, Self::on_search_event),
             cx.observe_window_activation(window, |view, window, _| {
                 view.report_visibility(window);
             }),
@@ -118,6 +126,7 @@ impl MainView {
             view: view_state,
             model: TableModel::default(),
             table,
+            search,
             last_snapshot: None,
             ui,
             config_problem: None,
@@ -152,6 +161,12 @@ impl MainView {
         &self.model
     }
 
+    /// The filter, the search and the sort order the table follows.
+    #[must_use]
+    pub fn view_state(&self) -> &ViewState {
+        &self.view
+    }
+
     /// What the status bar says about the connection; empty while connected, when the bar shows
     /// only the dot.
     #[must_use]
@@ -167,7 +182,7 @@ impl MainView {
 
     /// Shows the torrents `view` asks for (the filter, the search and the sort order), from the
     /// last snapshot and without waiting for the next one, and remembers its filter and sort
-    /// order in the [`UiState`].
+    /// order in the [`UiState`]. The search is not remembered.
     pub fn set_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
         if view == self.view {
             return;
@@ -186,6 +201,53 @@ impl MainView {
         });
         self.update_table(cx);
         cx.notify();
+    }
+
+    /// Shows the torrents `filter` matches; a click on it in the sidebar calls this.
+    fn select_filter(&mut self, filter: Filter, cx: &mut Context<'_, Self>) {
+        tracing::debug!(?filter, "filter selected");
+        self.set_view(
+            ViewState {
+                filter,
+                ..self.view.clone()
+            },
+            cx,
+        );
+    }
+
+    /// Follows the text of the search box into the view, at every edit.
+    fn on_search_event(
+        &mut self,
+        search: &Entity<InputState>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let query = search.read(cx).value().to_string();
+                self.set_view(
+                    ViewState {
+                        search: query,
+                        ..self.view.clone()
+                    },
+                    cx,
+                );
+            }
+            InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
+    /// Handles [`ClearSearch`]: empties the search box, which shows every torrent the filter
+    /// matches again, and hands the focus back to the table.
+    fn on_clear_search(
+        &mut self,
+        _: &ClearSearch,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        clear_search(&self.search, window, cx);
+        window.focus(&self.table.focus_handle(cx), cx);
     }
 
     /// Shows or hides `column` in the table, and remembers it. The name column stays.
@@ -395,8 +457,8 @@ impl MainView {
             .py_1()
             .border_b_1()
             .border_color(border)
-            // The search box goes here.
-            .child(div().id("search-slot").flex_1())
+            .child(search_box(&self.search, cx.theme()))
+            .child(div().flex_1())
             .child(
                 Button::new("theme-toggle")
                     .ghost()
@@ -462,23 +524,32 @@ impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let toolbar = self.toolbar(cx);
         let table = self.torrent_list();
+        let this = cx.weak_entity();
         let theme = cx.theme();
-        let sidebar = v_flex()
-            .id("sidebar")
-            .flex_none()
-            .w(px(SIDEBAR_WIDTH))
-            .h_full()
-            .border_r_1()
-            .border_color(theme.sidebar_border)
-            .bg(theme.sidebar);
+        let counts = self.model.shown_counts();
+        let sidebar = filter_sidebar(
+            counts.as_ref(),
+            self.view.filter,
+            theme,
+            move |filter, _, cx| {
+                if let Err(error) = this.update(cx, |view, cx| view.select_filter(filter, cx)) {
+                    tracing::debug!(%error, "a filter was clicked after the window closed");
+                }
+            },
+        );
         let on_dismiss = cx.listener(|view, _, _, cx| view.dismiss_config_problem(cx));
         let status_bar = status_bar(&self.status, self.config_problem, theme, on_dismiss);
         v_flex()
+            .key_context(MAIN_CONTEXT)
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
+            .on_action(cx.listener(|view, _: &FocusSearch, window, cx| {
+                focus_search(&view.search, window, cx);
+            }))
+            .on_action(cx.listener(Self::on_clear_search))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(table))
             .child(status_bar)

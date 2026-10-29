@@ -147,6 +147,23 @@ theme-light = Light theme
 theme-dark = Dark theme
 theme-switch-tooltip = Switch between the system, light and dark themes
 
+## The sidebar
+
+# The filters of the torrent list. The sidebar shows each with the number of torrents it matches.
+filter-all = All
+filter-downloading = Downloading
+filter-seeding = Seeding
+filter-paused = Paused
+filter-active = Active
+filter-error = Error
+# The number next to a filter. $count: the torrents it matches (a number).
+filter-count = { $count }
+
+## The search box
+
+# What the empty search box says: what it is for, and the key that moves the focus to it.
+search-placeholder = Search (Ctrl+F)
+
 ## The torrent list
 
 # $count: the torrents shown (a number); the accessible name of the list.

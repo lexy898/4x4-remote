@@ -26,6 +26,17 @@ pub enum Filter {
 }
 
 impl Filter {
+    /// Every filter, in the order the sidebar lists them: everything first, then by what the
+    /// torrents do, and the errors last.
+    pub const ALL: [Filter; 6] = [
+        Self::All,
+        Self::Downloading,
+        Self::Seeding,
+        Self::Paused,
+        Self::Active,
+        Self::Error,
+    ];
+
     /// Whether `torrent` is shown under this filter.
     ///
     /// A torrent can match several filters (an active download is in `Downloading` and `Active`),
@@ -70,6 +81,28 @@ pub struct FilterCounts {
     pub error: usize,
 }
 
+impl FilterCounts {
+    /// How many torrents `filter` matches.
+    #[must_use]
+    pub fn get(&self, filter: Filter) -> usize {
+        match filter {
+            Filter::All => self.all,
+            Filter::Downloading => self.downloading,
+            Filter::Seeding => self.seeding,
+            Filter::Paused => self.paused,
+            Filter::Active => self.active,
+            Filter::Error => self.error,
+        }
+    }
+
+    /// Whether the count of `filter` should catch the eye: only the errors do, and only when
+    /// there are any, so that a torrent in trouble is noticed under any filter.
+    #[must_use]
+    pub fn needs_attention(&self, filter: Filter) -> bool {
+        filter == Filter::Error && self.error > 0
+    }
+}
+
 /// Counts the torrents under each filter in one pass.
 #[must_use]
 pub fn counts<'a>(torrents: impl IntoIterator<Item = &'a Torrent>) -> FilterCounts {
@@ -105,15 +138,6 @@ pub fn matches_search(name: &str, query: &str) -> bool {
 mod tests {
     use super::*;
     use crate::test_support::torrent;
-
-    const FILTERS: [Filter; 6] = [
-        Filter::All,
-        Filter::Downloading,
-        Filter::Seeding,
-        Filter::Paused,
-        Filter::Active,
-        Filter::Error,
-    ];
 
     fn in_state(name: &str, state: DisplayState) -> Torrent {
         Torrent {
@@ -230,6 +254,65 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_lists_every_filter_once_in_order() {
+        assert_eq!(
+            Filter::ALL,
+            [
+                Filter::All,
+                Filter::Downloading,
+                Filter::Seeding,
+                Filter::Paused,
+                Filter::Active,
+                Filter::Error,
+            ]
+        );
+    }
+
+    #[test]
+    fn get_reads_the_count_of_each_filter() {
+        let distinct = FilterCounts {
+            all: 10,
+            downloading: 3,
+            seeding: 4,
+            paused: 1,
+            active: 2,
+            error: 5,
+        };
+
+        assert_eq!(
+            Filter::ALL.map(|filter| distinct.get(filter)),
+            [10, 3, 4, 1, 2, 5]
+        );
+        assert_eq!(counts(&zoo()).get(Filter::Seeding), 4);
+    }
+
+    #[test]
+    fn only_errors_need_attention_and_only_when_there_are_some() {
+        let busy = FilterCounts {
+            all: 9,
+            downloading: 9,
+            seeding: 9,
+            paused: 9,
+            active: 9,
+            error: 1,
+        };
+
+        for filter in Filter::ALL {
+            assert_eq!(
+                busy.needs_attention(filter),
+                filter == Filter::Error,
+                "{filter:?}"
+            );
+        }
+        let calm = FilterCounts { error: 0, ..busy };
+        assert!(
+            Filter::ALL
+                .iter()
+                .all(|filter| !calm.needs_attention(*filter))
+        );
+    }
+
+    #[test]
     fn counts_of_nothing_are_zero() {
         assert_eq!(counts(std::iter::empty()), FilterCounts::default());
     }
@@ -245,7 +328,7 @@ mod tests {
                 ..FilterCounts::default()
             }
         );
-        for filter in FILTERS {
+        for filter in Filter::ALL {
             assert_eq!(
                 filter.matches(&checking[0]),
                 filter == Filter::All,

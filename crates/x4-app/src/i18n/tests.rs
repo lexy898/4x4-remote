@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
-    ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView, HumanSize,
-    QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit, UnsupportedReason, human_size,
-    human_speed,
+    ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView, Filter,
+    HumanSize, QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit, UnsupportedReason,
+    human_size, human_speed,
 };
 
 use super::*;
@@ -303,6 +303,27 @@ fn peer_counts_are_plain_numbers() {
     assert_eq!(peer_count_text(0), "0");
     assert_eq!(peer_count_text(12), "12");
     assert_eq!(peer_count_text(4000), "4000");
+}
+
+#[test]
+fn filter_names_follow_the_sidebar() {
+    let names = Filter::ALL.map(filter_text);
+    assert_eq!(
+        names.each_ref().map(SharedString::as_ref),
+        ["All", "Downloading", "Seeding", "Paused", "Active", "Error"]
+    );
+}
+
+#[test]
+fn filter_counts_are_plain_numbers() {
+    assert_eq!(filter_count_text(0), "0");
+    assert_eq!(filter_count_text(7), "7");
+    assert_eq!(filter_count_text(12_345), "12345");
+}
+
+#[test]
+fn the_search_placeholder_names_the_shortcut() {
+    assert_eq!(search_placeholder_text(), "Search (Ctrl+F)");
 }
 
 #[test]

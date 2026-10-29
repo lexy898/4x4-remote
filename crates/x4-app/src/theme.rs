@@ -1,5 +1,5 @@
-//! The look of the window: the light or dark theme, the colors that tell torrent states and the
-//! connection apart, and tabular digits for numbers.
+//! The look of the window: the light or dark theme, the colors that tell torrent states, the
+//! filters and the connection apart, and tabular digits for numbers.
 //!
 //! Every color is a field of the gpui-component [`Theme`], so it changes with the light and dark
 //! mode and with a theme file; the views use no color literals. Each state maps to its color here,
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFeatures, Hsla, Window, WindowAppearance};
-use x4_core::{DisplayState, Indicator, Subtitle, ThemeChoice};
+use x4_core::{DisplayState, Filter, Indicator, Subtitle, ThemeChoice};
 
 /// How visible old data stays: the table and the status bar's numbers are dimmed while the
 /// daemon does not answer, but stay readable.
@@ -32,6 +32,30 @@ pub(crate) fn state_color(state: DisplayState, theme: &Theme) -> Hsla {
         DisplayState::Checking | DisplayState::Queued(_) => theme.warning,
         DisplayState::Error => theme.danger,
         DisplayState::Paused => theme.muted_foreground,
+    }
+}
+
+/// The color of a filter's icon in the sidebar: the color of the state it shows for downloading,
+/// seeding, paused and errors, the primary color for the active torrents, and the sidebar's text
+/// color for all of them.
+pub(crate) fn filter_color(filter: Filter, theme: &Theme) -> Hsla {
+    match filter {
+        Filter::All => theme.sidebar_foreground,
+        Filter::Downloading => state_color(DisplayState::Downloading, theme),
+        Filter::Seeding => state_color(DisplayState::Seeding, theme),
+        Filter::Paused => state_color(DisplayState::Paused, theme),
+        Filter::Active => theme.primary,
+        Filter::Error => state_color(DisplayState::Error, theme),
+    }
+}
+
+/// The color of a count in the sidebar: the danger color for one that needs attention (see
+/// `FilterCounts::needs_attention`), and muted otherwise.
+pub(crate) fn count_color(needs_attention: bool, theme: &Theme) -> Hsla {
+    if needs_attention {
+        theme.danger
+    } else {
+        theme.muted_foreground
     }
 }
 
@@ -247,6 +271,37 @@ mod tests {
                 assert_eq!(color(gone), theme.danger, "{mode:?}");
             }
         }
+    }
+
+    #[gpui_kit::test]
+    fn filters_take_the_colors_of_their_states(cx: &mut TestAppContext) {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let theme = theme(mode, cx);
+            let color = |filter| filter_color(filter, &theme);
+
+            assert_eq!(color(Filter::All), theme.sidebar_foreground, "{mode:?}");
+            assert_eq!(
+                color(Filter::Downloading),
+                state_color(DisplayState::Downloading, &theme)
+            );
+            assert_eq!(color(Filter::Downloading), theme.blue);
+            assert_eq!(
+                color(Filter::Seeding),
+                state_color(DisplayState::Seeding, &theme)
+            );
+            assert_eq!(color(Filter::Seeding), theme.green);
+            assert_eq!(color(Filter::Paused), theme.muted_foreground);
+            assert_eq!(color(Filter::Active), theme.primary);
+            assert_eq!(color(Filter::Error), theme.danger);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn only_a_count_that_needs_attention_is_in_the_danger_color(cx: &mut TestAppContext) {
+        let theme = theme(ThemeMode::Dark, cx);
+
+        assert_eq!(count_color(true, &theme), theme.danger);
+        assert_eq!(count_color(false, &theme), theme.muted_foreground);
     }
 
     #[test]

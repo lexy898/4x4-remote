@@ -53,6 +53,14 @@ pub enum EmptyTable {
 }
 
 impl TableModel {
+    /// The counts the sidebar shows, or `None` before the daemon's list of torrents has arrived
+    /// while no torrent is known: zeros would say that there are none, so nothing is said, as in
+    /// the table ([`EmptyTable::Waiting`]).
+    #[must_use]
+    pub fn shown_counts(&self) -> Option<FilterCounts> {
+        (self.listed || self.counts.all > 0).then_some(self.counts)
+    }
+
     /// Why the table is empty, or `None` when it has rows. It never says that there are no
     /// torrents before the daemon's list has arrived.
     #[must_use]
@@ -250,6 +258,35 @@ mod tests {
                 "{connection:?}"
             );
         }
+    }
+
+    #[test]
+    fn counts_are_shown_once_the_list_has_come_or_torrents_are_there() {
+        assert_eq!(
+            TableModel::default().shown_counts(),
+            None,
+            "before the first snapshot"
+        );
+        let waiting = Snapshot {
+            listed: false,
+            ..snapshot(Vec::new())
+        };
+        assert_eq!(
+            table_model(&waiting, &ViewState::default()).shown_counts(),
+            None,
+            "zeros would say there are no torrents"
+        );
+
+        let partial = Snapshot {
+            listed: false,
+            ..snapshot(vec![named("Alpha", DisplayState::Seeding)])
+        };
+        let partial = table_model(&partial, &ViewState::default());
+        assert_eq!(partial.shown_counts(), Some(partial.counts));
+        assert_eq!(partial.counts.all, 1);
+
+        let none = table_model(&snapshot(Vec::new()), &ViewState::default());
+        assert_eq!(none.shown_counts(), Some(FilterCounts::default()));
     }
 
     #[test]

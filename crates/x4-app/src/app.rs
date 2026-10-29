@@ -37,9 +37,19 @@ actions!(
         FocusNext,
         /// Moves the focus to the previous control, out of the torrent table.
         FocusPrevious,
+        /// Moves the focus to the search box and selects its text.
+        FocusSearch,
+        /// Empties the search box and hands the focus back to the torrent table.
+        ClearSearch,
     ]
 );
 
+/// The key context of the main window's content.
+pub(crate) const MAIN_CONTEXT: &str = "MainWindow";
+/// The main window while no text field has the focus: a key bound here can still be typed in one.
+const MAIN_OUTSIDE_TEXT_CONTEXT: &str = "MainWindow && !Input";
+/// The key context of the search box, around gpui-component's `Input` context.
+pub(crate) const SEARCH_CONTEXT: &str = "SearchBox";
 /// The key context of gpui-component's table.
 const TABLE_CONTEXT: &str = "DataTable";
 
@@ -154,17 +164,20 @@ pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
 pub fn run_with(started: Instant, startup: Startup) -> anyhow::Result<()> {
     let launch_error = Rc::new(RefCell::new(None));
     let launch_error_slot = Rc::clone(&launch_error);
-    gpui_kit::application().run(move |cx| {
-        init(cx);
-        let opened =
-            launch(startup, cx).and_then(|(window, _)| log_first_frame(window, started, cx));
-        if let Err(error) = opened {
-            launch_error_slot.replace(Some(error));
-            // A quit requested during launch is lost: the event loop clears its stop signal
-            // when it starts, so quit from inside the loop instead.
-            cx.spawn(async |cx| cx.update(|cx| cx.quit())).detach();
-        }
-    });
+    // The component icons (the sidebar's, the search box's, the menus' checks); no others.
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+            init(cx);
+            let opened =
+                launch(startup, cx).and_then(|(window, _)| log_first_frame(window, started, cx));
+            if let Err(error) = opened {
+                launch_error_slot.replace(Some(error));
+                // A quit requested during launch is lost: the event loop clears its stop signal
+                // when it starts, so quit from inside the loop instead.
+                cx.spawn(async |cx| cx.update(|cx| cx.quit())).detach();
+            }
+        });
     launch_error.take().map_or(Ok(()), Err)
 }
 
@@ -244,6 +257,11 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([
         KeyBinding::new("ctrl-q", Quit, None),
+        KeyBinding::new("ctrl-f", FocusSearch, Some(MAIN_CONTEXT)),
+        KeyBinding::new("/", FocusSearch, Some(MAIN_OUTSIDE_TEXT_CONTEXT)),
+        // Shallower than the text field's own Escape, which goes first: it closes the field's menu
+        // or drops extra cursors, and passes the key on when there is nothing of that kind.
+        KeyBinding::new("escape", ClearSearch, Some(SEARCH_CONTEXT)),
         // The table binds Tab and the side arrows to moving between its columns. A list of
         // torrents has rows only: Tab leaves it, and the side arrows do nothing.
         KeyBinding::new("tab", FocusNext, Some(TABLE_CONTEXT)),

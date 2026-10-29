@@ -6,9 +6,9 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 
 Early development — stage 2 (the main window, read-only), in progress. The window connects to the
 daemon set in `config.toml` and shows every torrent in a table, with its state, progress and
-speeds, and the total download and upload speeds, the free space and the state of the connection in
-its status bar. The filters and the search come next. 4x4 only reads from the daemon so far; it
-changes nothing there.
+speeds; a sidebar filters them by state, with live counts, and a search box finds them by name. The
+status bar shows the total download and upload speeds, the free space and the state of the
+connection. 4x4 only reads from the daemon so far; it changes nothing there.
 
 ## What it will do
 
@@ -78,7 +78,7 @@ The table lists the torrents, sorted by name at first. Each row shows:
 Rows where nothing happens (an idle seeder, a paused or queued torrent) are dimmed, so the active
 ones stand out; an error is never dimmed. Until the daemon's list of torrents has come, the table
 stays blank; after that, when there is nothing to show, it says "No torrents", or "No torrents
-match" when the filter hides every torrent.
+match" when the filter or the search hides every torrent.
 
 Click a column header to sort by it; click it again to reverse the order. ▲ or ▼ after the header
 shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;
@@ -88,8 +88,27 @@ torrents last. Drag a header to move the column, and drag the edge of a header t
 
 Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent;
 Escape clears the selection. The selection stays on the same torrent when the list is re-sorted or
-updated, and an update never scrolls the list. Tab moves on from the table to the buttons. The
-table has the keyboard focus when the window opens.
+updated, and an update never scrolls the list. Tab moves on from the table to the search box and
+the buttons. The table has the keyboard focus when the window opens.
+
+The sidebar on the left filters the list by state:
+
+- All;
+- Downloading, also the torrents queued to download;
+- Seeding, also the torrents queued to seed;
+- Paused;
+- Active, the torrents where data moves right now;
+- Error, a torrent stopped by an error or one whose tracker reports an error.
+
+Each filter has an icon in the color of its state and the number of torrents it matches. The
+numbers count every torrent, whatever the filter and the search show, and appear once the daemon's
+list of torrents has come; the Error count turns red when any torrent has an error. Click a filter to show its torrents; the chosen one is highlighted.
+The filter is not remembered between runs yet.
+
+The search box in the toolbar narrows the list, as you type, to the torrents whose names contain
+every word typed, in any order and ignoring case. It works together with the filter. `Ctrl+F` moves
+to the search box from anywhere in the window, and `/` from anywhere but a text field; `Escape` in
+the box empties it and goes back to the table. The search is not remembered between runs.
 
 The status bar at the bottom shows:
 

@@ -20,8 +20,9 @@ use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
-    ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, HumanSize, HumanSpeed, Indicator,
-    QueueKind, Ratio, SizeUnit, SortDirection, SpeedUnit, Subtitle, TimeUnit, UnsupportedReason,
+    ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, Filter, HumanSize, HumanSpeed,
+    Indicator, QueueKind, Ratio, SizeUnit, SortDirection, SpeedUnit, Subtitle, TimeUnit,
+    UnsupportedReason,
 };
 
 use crate::app::ConfigProblem;
@@ -144,6 +145,29 @@ pub(crate) fn config_problem_text(problem: ConfigProblem) -> SharedString {
         ConfigProblem::UnsupportedUrl => t!("config-problem-unsupported-url"),
     }
     .into()
+}
+
+/// The name of a filter in the sidebar, such as "Seeding".
+pub(crate) fn filter_text(filter: Filter) -> SharedString {
+    match filter {
+        Filter::All => t!("filter-all"),
+        Filter::Downloading => t!("filter-downloading"),
+        Filter::Seeding => t!("filter-seeding"),
+        Filter::Paused => t!("filter-paused"),
+        Filter::Active => t!("filter-active"),
+        Filter::Error => t!("filter-error"),
+    }
+    .into()
+}
+
+/// The number of torrents a filter matches, as the sidebar shows it next to the filter's name.
+pub(crate) fn filter_count_text(count: usize) -> SharedString {
+    t!("filter-count", count = count).into()
+}
+
+/// What the empty search box says: "Search (Ctrl+F)".
+pub(crate) fn search_placeholder_text() -> SharedString {
+    t!("search-placeholder").into()
 }
 
 /// How many torrents the list shows, such as "3 torrents".
