@@ -27,7 +27,7 @@ pub use eta::{CompactDuration, EtaView, TimeUnit};
 pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
 pub use selection::Selection;
-pub use status::{Indicator, ServiceStatus, StatusModel, status_model, visibility};
+pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
 
 use std::sync::Arc;

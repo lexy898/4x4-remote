@@ -2,6 +2,7 @@
 
 use x4_rpc::{RpcError, SessionInfo, TransportError, UnsupportedReason};
 
+use crate::limits::KbPerSecond;
 use crate::model::Torrent;
 
 /// How the link to the daemon is doing.
@@ -88,9 +89,8 @@ impl From<&RpcError> for ConnectionError {
 /// One of the daemon's normal speed limits, as it stores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SpeedLimit {
-    /// The limit in kB/s (1000 B/s). The daemon keeps it while the limit is off, so the UI can
-    /// offer it again.
-    pub kbps: u32,
+    /// The limit. The daemon keeps it while the limit is off, so the UI can offer it again.
+    pub kbps: KbPerSecond,
     /// Whether the limit applies.
     pub enabled: bool,
 }
@@ -108,10 +108,10 @@ pub struct SessionSummary {
     pub speed_limit_down: SpeedLimit,
     /// The normal upload limit, whether it is on or off.
     pub speed_limit_up: SpeedLimit,
-    /// The alternative download limit in kB/s, which applies while `alt_speed_enabled` is on.
-    pub alt_speed_down_kbps: u32,
-    /// The alternative upload limit in kB/s, which applies while `alt_speed_enabled` is on.
-    pub alt_speed_up_kbps: u32,
+    /// The alternative download limit, which applies while `alt_speed_enabled` is on.
+    pub alt_speed_down_kbps: KbPerSecond,
+    /// The alternative upload limit, which applies while `alt_speed_enabled` is on.
+    pub alt_speed_up_kbps: KbPerSecond,
 }
 
 impl From<&SessionInfo> for SessionSummary {
@@ -123,15 +123,15 @@ impl From<&SessionInfo> for SessionSummary {
             download_dir: info.download_dir.clone(),
             alt_speed_enabled: info.alt_speed_enabled,
             speed_limit_down: SpeedLimit {
-                kbps: info.speed_limit_down_kbps,
+                kbps: KbPerSecond(info.speed_limit_down_kbps),
                 enabled: info.speed_limit_down_enabled,
             },
             speed_limit_up: SpeedLimit {
-                kbps: info.speed_limit_up_kbps,
+                kbps: KbPerSecond(info.speed_limit_up_kbps),
                 enabled: info.speed_limit_up_enabled,
             },
-            alt_speed_down_kbps: info.alt_speed_down_kbps,
-            alt_speed_up_kbps: info.alt_speed_up_kbps,
+            alt_speed_down_kbps: KbPerSecond(info.alt_speed_down_kbps),
+            alt_speed_up_kbps: KbPerSecond(info.alt_speed_up_kbps),
         }
     }
 }
@@ -269,15 +269,15 @@ mod tests {
                 download_dir: info.download_dir.clone(),
                 alt_speed_enabled: true,
                 speed_limit_down: SpeedLimit {
-                    kbps: 300,
+                    kbps: KbPerSecond(300),
                     enabled: true,
                 },
                 speed_limit_up: SpeedLimit {
-                    kbps: 50,
+                    kbps: KbPerSecond(50),
                     enabled: true,
                 },
-                alt_speed_down_kbps: 20,
-                alt_speed_up_kbps: 10,
+                alt_speed_down_kbps: KbPerSecond(20),
+                alt_speed_up_kbps: KbPerSecond(10),
             }
         );
     }
@@ -292,20 +292,26 @@ mod tests {
         assert_eq!(
             summary.speed_limit_down,
             SpeedLimit {
-                kbps: 300,
+                kbps: KbPerSecond(300),
                 enabled: false,
             }
         );
         assert_eq!(
             summary.speed_limit_up,
             SpeedLimit {
-                kbps: 50,
+                kbps: KbPerSecond(50),
                 enabled: false,
             }
         );
         // The alternative limits are kept while the turtle is off, too.
-        assert_eq!(summary.alt_speed_down_kbps, info.alt_speed_down_kbps);
-        assert_eq!(summary.alt_speed_up_kbps, info.alt_speed_up_kbps);
+        assert_eq!(
+            summary.alt_speed_down_kbps,
+            KbPerSecond(info.alt_speed_down_kbps)
+        );
+        assert_eq!(
+            summary.alt_speed_up_kbps,
+            KbPerSecond(info.alt_speed_up_kbps)
+        );
     }
 
     #[test]
@@ -319,7 +325,7 @@ mod tests {
         assert!(summary.speed_limit_up.enabled);
         assert_eq!(
             (summary.speed_limit_down.kbps, summary.speed_limit_up.kbps),
-            (300, 50)
+            (KbPerSecond(300), KbPerSecond(50))
         );
     }
 
@@ -328,7 +334,7 @@ mod tests {
         let summary = SessionSummary::from(&session_info((0, true), (0, true), false));
 
         let zero = SpeedLimit {
-            kbps: 0,
+            kbps: KbPerSecond(0),
             enabled: true,
         };
         assert_eq!(summary.speed_limit_down, zero);

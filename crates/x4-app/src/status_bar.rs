@@ -57,7 +57,7 @@ pub(crate) fn status_bar(
     if state_not_saved {
         bar = bar.left(state_notice());
     }
-    if status.alt_speed {
+    if status.alt_speed() {
         bar = bar.right(
             div()
                 .id("alt-speed")

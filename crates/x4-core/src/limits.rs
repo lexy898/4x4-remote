@@ -1,14 +1,32 @@
 //! The global speed limits as the user types them, and the two units they come in.
 //!
-//! The user reads and types limits in KiB/s (1024 B/s), like every other speed of the UI, while
-//! the daemon stores them in kB/s (1000 B/s). [`parse_limit`] reads what the user typed, and
-//! [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two units. A limit that goes out
-//! through one comes back unchanged through the other.
+//! The user reads and types limits in KiB/s ([`KibPerSecond`], 1024 B/s), like every other speed
+//! of the UI, while the daemon stores them in kB/s ([`KbPerSecond`], 1000 B/s). [`parse_limit`]
+//! reads what the user typed, and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two
+//! units.
+//!
+//! The round trip KiB/s → kB/s → KiB/s is exact for every limit [`parse_limit`] accepts, so a
+//! value the user typed comes back as typed. The other way, kB/s → KiB/s → kB/s, can move a
+//! value by one: 21 kB/s show as 21 KiB/s, which go out as 22 kB/s. That is why
+//! [`limit_edit`] decides what an edit sends from the text the input started with
+//! ([`limit_prefill`]): an untouched value is never converted back.
+
+mod edit;
+
+pub use edit::{LimitEdit, limit_edit, limit_prefill};
 
 use std::num::IntErrorKind;
 
-/// The highest limit [`parse_limit`] accepts, in KiB/s: almost 1 GiB/s.
-pub const MAX_LIMIT_KIB: u32 = 1_000_000;
+/// A speed in the daemon's decimal kB/s, 1000 bytes per second, as it reads and stores limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KbPerSecond(pub u32);
+
+/// A speed in KiB/s, 1024 bytes per second, the unit the UI shows and takes limits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KibPerSecond(pub u32);
+
+/// The highest limit [`parse_limit`] accepts: almost 1 GiB/s.
+pub const MAX_LIMIT_KIB: KibPerSecond = KibPerSecond(1_000_000);
 
 /// Bytes per second in one of the daemon's kB/s.
 const BYTES_PER_KB: u64 = 1000;
@@ -30,7 +48,7 @@ pub enum LimitError {
     OutOfRange,
 }
 
-/// Reads a speed limit the user typed, in KiB/s; `Ok(None)` means no limit.
+/// Reads a speed limit the user typed; `Ok(None)` means no limit.
 ///
 /// Spaces around the text are ignored, and empty text means no limit. Anything else must be
 /// ASCII digits only, making a number from 1 to [`MAX_LIMIT_KIB`].
@@ -40,7 +58,7 @@ pub enum LimitError {
 /// [`LimitError::NotANumber`] when the text holds anything but ASCII digits;
 /// [`LimitError::OutOfRange`] when the number is 0 or above [`MAX_LIMIT_KIB`], however many
 /// digits it has.
-pub fn parse_limit(text: &str) -> Result<Option<u32>, LimitError> {
+pub fn parse_limit(text: &str) -> Result<Option<KibPerSecond>, LimitError> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
@@ -56,29 +74,24 @@ pub fn parse_limit(text: &str) -> Result<Option<u32>, LimitError> {
             LimitError::NotANumber
         }
     })?;
-    if (1..=MAX_LIMIT_KIB).contains(&kib) {
-        Ok(Some(kib))
+    if (1..=MAX_LIMIT_KIB.0).contains(&kib) {
+        Ok(Some(KibPerSecond(kib)))
     } else {
         Err(LimitError::OutOfRange)
     }
 }
 
-/// A limit in KiB/s as the daemon's kB/s: `kib × 1.024`, rounded half away from zero, and
-/// `u32::MAX` when it does not fit.
+/// A speed in KiB/s as the daemon's kB/s: `kib × 1.024`, rounded half away from zero, and
+/// `u32::MAX` kB/s when it does not fit.
 #[must_use]
-pub fn kib_to_kbps(kib: u32) -> u32 {
-    rounded_ratio(kib, BYTES_PER_KIB, BYTES_PER_KB)
+pub fn kib_to_kbps(kib: KibPerSecond) -> KbPerSecond {
+    KbPerSecond(rounded_ratio(kib.0, BYTES_PER_KIB, BYTES_PER_KB))
 }
 
-/// A limit in the daemon's kB/s as KiB/s: `kbps ÷ 1.024`, rounded half away from zero.
+/// A speed in the daemon's kB/s as KiB/s: `kbps ÷ 1.024`, rounded half away from zero.
 #[must_use]
-pub fn kbps_to_kib(kbps: u32) -> u32 {
-    rounded_ratio(kbps, BYTES_PER_KB, BYTES_PER_KIB)
-}
-
-/// A rate in the daemon's kB/s as bytes per second.
-pub(crate) fn kbps_to_bytes_per_sec(kbps: u32) -> u64 {
-    u64::from(kbps) * BYTES_PER_KB
+pub fn kbps_to_kib(kbps: KbPerSecond) -> KibPerSecond {
+    KibPerSecond(rounded_ratio(kbps.0, BYTES_PER_KB, BYTES_PER_KIB))
 }
 
 /// `value × numerator ÷ denominator`, rounded half away from zero and saturated at `u32::MAX`.
@@ -96,13 +109,14 @@ mod tests {
 
     #[test]
     fn parse_limit_table() {
-        let cases: &[(&str, Result<Option<u32>, LimitError>)] = &[
+        let kib = |value| Ok(Some(KibPerSecond(value)));
+        let cases: &[(&str, Result<Option<KibPerSecond>, LimitError>)] = &[
             ("", Ok(None)),
             ("   ", Ok(None)),
-            (" 512 ", Ok(Some(512))),
-            ("1", Ok(Some(1))),
-            ("0512", Ok(Some(512))),
-            ("1000000", Ok(Some(1_000_000))),
+            (" 512 ", kib(512)),
+            ("1", kib(1)),
+            ("0512", kib(512)),
+            ("1000000", kib(1_000_000)),
             ("0", Err(LimitError::OutOfRange)),
             ("1000001", Err(LimitError::OutOfRange)),
             ("4294967296", Err(LimitError::OutOfRange)),
@@ -125,45 +139,41 @@ mod tests {
 
     #[test]
     fn kib_kbps_round_trip_is_stable_for_every_valid_limit() {
-        for kib in 1..=MAX_LIMIT_KIB {
+        for value in 1..=MAX_LIMIT_KIB.0 {
+            let kib = KibPerSecond(value);
             let kbps = kib_to_kbps(kib);
-            assert_eq!(
-                kbps_to_kib(kbps),
-                kib,
-                "{kib} KiB/s went out as {kbps} kB/s"
-            );
+            assert_eq!(kbps_to_kib(kbps), kib, "{kib:?} went out as {kbps:?}");
         }
     }
 
     #[test]
     fn the_conversions_round_half_away_from_zero() {
-        assert_eq!(kib_to_kbps(0), 0);
-        // 1.024 kB/s.
-        assert_eq!(kib_to_kbps(1), 1);
-        // 21.504 kB/s.
-        assert_eq!(kib_to_kbps(21), 22);
-        assert_eq!(kib_to_kbps(1000), 1024);
-        assert_eq!(kib_to_kbps(MAX_LIMIT_KIB), 1_024_000);
+        let up = |kib| kib_to_kbps(KibPerSecond(kib)).0;
+        let down = |kbps| kbps_to_kib(KbPerSecond(kbps)).0;
 
-        assert_eq!(kbps_to_kib(0), 0);
+        assert_eq!(up(0), 0);
+        // 1.024 kB/s.
+        assert_eq!(up(1), 1);
+        // 21.504 kB/s.
+        assert_eq!(up(21), 22);
+        assert_eq!(up(1000), 1024);
+        assert_eq!(kib_to_kbps(MAX_LIMIT_KIB), KbPerSecond(1_024_000));
+
+        assert_eq!(down(0), 0);
         // 97.66 KiB/s.
-        assert_eq!(kbps_to_kib(100), 98);
+        assert_eq!(down(100), 98);
         // 62.5 and 187.5 KiB/s: the halves go up.
-        assert_eq!(kbps_to_kib(64), 63);
-        assert_eq!(kbps_to_kib(192), 188);
-        assert_eq!(kbps_to_kib(1024), 1000);
+        assert_eq!(down(64), 63);
+        assert_eq!(down(192), 188);
+        assert_eq!(down(1024), 1000);
     }
 
     #[test]
     fn the_conversions_saturate_instead_of_overflowing() {
-        assert_eq!(kib_to_kbps(u32::MAX), u32::MAX);
-        assert_eq!(kbps_to_kib(u32::MAX), 4_194_303_999);
-    }
-
-    #[test]
-    fn a_kb_per_second_is_a_thousand_bytes() {
-        assert_eq!(kbps_to_bytes_per_sec(0), 0);
-        assert_eq!(kbps_to_bytes_per_sec(50), 50_000);
-        assert_eq!(kbps_to_bytes_per_sec(u32::MAX), 4_294_967_295_000);
+        assert_eq!(kib_to_kbps(KibPerSecond(u32::MAX)), KbPerSecond(u32::MAX));
+        assert_eq!(
+            kbps_to_kib(KbPerSecond(u32::MAX)),
+            KibPerSecond(4_194_303_999)
+        );
     }
 }

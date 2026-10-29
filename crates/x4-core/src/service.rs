@@ -24,6 +24,7 @@ use x4_rpc::{
 
 use crate::action::{Action, Direction};
 use crate::engine::{Command, Engine, EngineConfig, Event, Request, Response};
+use crate::limits::KbPerSecond;
 
 /// The name of the service thread, as debuggers and system monitors show it.
 const THREAD_NAME: &str = "x4-service";
@@ -214,8 +215,8 @@ fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), 
             alt_speed_enabled: Some(*enabled),
             ..SessionSet::default()
         }),
-        Action::SetSpeedLimit { direction, kbps } => {
-            client.session_set(&speed_limit(*direction, *kbps))
+        Action::SetSpeedLimit { direction, limit } => {
+            client.session_set(&speed_limit(*direction, *limit))
         }
         Action::Add(add) => client.torrent_add(add).map(|outcome| {
             if let AddOutcome::Duplicate(_) = outcome {
@@ -277,10 +278,11 @@ fn wanted_set(files: &[usize], wanted: bool) -> TorrentSet {
     }
 }
 
-/// The normal speed limit of `direction` in kB/s, switched on; `None` only switches it off,
-/// which keeps its stored value. The other direction is left out.
-fn speed_limit(direction: Direction, kbps: Option<u32>) -> SessionSet {
-    let enabled = Some(kbps.is_some());
+/// The normal speed limit of `direction`, switched on; `None` only switches it off, which keeps
+/// its stored value. The other direction is left out.
+fn speed_limit(direction: Direction, limit: Option<KbPerSecond>) -> SessionSet {
+    let enabled = Some(limit.is_some());
+    let kbps = limit.map(|KbPerSecond(kbps)| kbps);
     match direction {
         Direction::Down => SessionSet {
             speed_limit_down_kbps: kbps,
@@ -697,7 +699,12 @@ mod tests {
 
     #[test]
     fn set_speed_limit_sends_only_its_direction() {
-        let set = |direction, kbps| sent_for(Action::SetSpeedLimit { direction, kbps });
+        let set = |direction, kbps: Option<u32>| {
+            sent_for(Action::SetSpeedLimit {
+                direction,
+                limit: kbps.map(KbPerSecond),
+            })
+        };
         let session_set = |params: Value| ("session_set".to_owned(), params);
 
         assert_eq!(

@@ -2,6 +2,7 @@
 
 use x4_rpc::{FilePriority, HashString, RemoveData, TorrentAdd};
 
+use crate::limits::KbPerSecond;
 use crate::snapshot::ConnectionError;
 
 /// Which way data flows; each of the normal speed limits applies to one.
@@ -69,7 +70,7 @@ pub enum Action {
     },
     /// Switch the alternative speed limits on or off.
     SetAltSpeed(bool),
-    /// Set the normal speed limit of one direction in kB/s, or turn it off.
+    /// Set the normal speed limit of one direction, or turn it off.
     ///
     /// Only that direction's settings go out, so a value the UI read a while ago never
     /// overwrites the other direction. Turning a limit off keeps its stored value, which
@@ -77,8 +78,8 @@ pub enum Action {
     SetSpeedLimit {
         /// The limit to change.
         direction: Direction,
-        /// The limit in kB/s, switched on; `None` switches it off.
-        kbps: Option<u32>,
+        /// The limit, switched on; `None` switches it off.
+        limit: Option<KbPerSecond>,
     },
     /// Add a torrent.
     Add(TorrentAdd),
@@ -230,11 +231,11 @@ mod tests {
             Action::SetAltSpeed(false),
             Action::SetSpeedLimit {
                 direction: Direction::Down,
-                kbps: None,
+                limit: None,
             },
             Action::SetSpeedLimit {
                 direction: Direction::Up,
-                kbps: Some(100),
+                limit: Some(KbPerSecond(100)),
             },
             Action::Add(add()),
         ] {
@@ -246,8 +247,8 @@ mod tests {
     fn only_speed_actions_change_the_session() {
         assert!(Action::SetAltSpeed(true).changes_session());
         for direction in [Direction::Down, Direction::Up] {
-            for kbps in [Some(100), None] {
-                let action = Action::SetSpeedLimit { direction, kbps };
+            for limit in [Some(KbPerSecond(100)), None] {
+                let action = Action::SetSpeedLimit { direction, limit };
                 assert!(action.changes_session(), "{action:?}");
             }
         }

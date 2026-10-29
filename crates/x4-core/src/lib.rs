@@ -25,10 +25,12 @@
 //! [`availability()`] and [`toggle_kind`] tell which actions those rows allow.
 //! [`removal_summary`] gives the [`RemovalSummary`] the removal dialog shows.
 //!
-//! The global speed limits are shown and typed in KiB/s, while the daemon keeps them in kB/s:
-//! [`parse_limit`] reads what the user typed (or the [`LimitError`] why not), and
-//! [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
-//! each [`SpeedLimit`] with its switch, so a limit that is off keeps its value.
+//! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
+//! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
+//! and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
+//! each [`SpeedLimit`] with its switch, so a limit that is off keeps its value, and the status
+//! bar's [`SpeedControls`] carry them while the session is known. [`limit_prefill`] gives the
+//! text a limit's input starts with, and [`limit_edit`] the [`LimitEdit`] that leaving it sends.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
@@ -93,7 +95,10 @@ pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,
     human_speed,
 };
-pub use limits::{LimitError, MAX_LIMIT_KIB, kbps_to_kib, kib_to_kbps, parse_limit};
+pub use limits::{
+    KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, kbps_to_kib, kib_to_kbps,
+    limit_edit, limit_prefill, parse_limit,
+};
 pub use model::{Eta, ModelError, Ratio, Torrent};
 pub use playable::{file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
@@ -108,8 +113,9 @@ pub use ui_state::{
 };
 pub use view::{
     Availability, ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, RemovalSummary, Row,
-    Selection, ServiceStatus, StatusModel, Subtitle, TableModel, TimeUnit, ToggleKind, ViewState,
-    availability, removal_summary, status_model, table_model, toggle_kind, visibility,
+    Selection, ServiceStatus, SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit,
+    ToggleKind, ViewState, availability, removal_summary, status_model, table_model, toggle_kind,
+    visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

@@ -16,6 +16,7 @@ use x4_rpc::{
 use super::*;
 
 use crate::action::Direction;
+use crate::limits::KbPerSecond;
 use crate::model::Torrent;
 use crate::snapshot::ConnectionError;
 use crate::store::{SkipReason, SkippedRecord};
@@ -925,10 +926,10 @@ fn add_and_remove_success_pull_tick_forward_too() {
 #[test]
 fn a_speed_action_reads_the_session_again() {
     let base = Instant::now();
-    let limit = |direction, kbps| Action::SetSpeedLimit { direction, kbps };
+    let limit = |direction, limit| Action::SetSpeedLimit { direction, limit };
     for action in [
         Action::SetAltSpeed(true),
-        limit(Direction::Down, Some(100)),
+        limit(Direction::Down, Some(KbPerSecond(100))),
         limit(Direction::Up, None),
     ] {
         let mut engine = loaded(base);
@@ -1046,6 +1047,40 @@ fn magnet_links_are_read_once_and_ordered_by_request() {
         [Request::RecentlyActive, Request::SessionStats]
     );
     assert_eq!(engine.connection, ConnectionState::Connected);
+}
+
+#[test]
+fn a_magnet_answer_drops_torrents_that_were_not_asked_for() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    command(
+        &mut engine,
+        base,
+        Command::ReadMagnetLinks(ActionId(29), vec![first()]),
+    );
+    let due = hand_out(&mut engine, base);
+    let answer = TorrentGetResponse {
+        torrents: vec![
+            link_record(SECOND, Some("magnet:?xt=urn:btih:2")),
+            link_record(FIRST, Some("magnet:?xt=urn:btih:1")),
+        ],
+        removed: Vec::new(),
+    };
+
+    let events = respond(
+        &mut engine,
+        base,
+        &due[0],
+        Ok(Response::MagnetLinks(answer)),
+    );
+
+    assert_eq!(
+        events,
+        [magnets(
+            29,
+            Ok(vec![(first(), "magnet:?xt=urn:btih:1".to_owned())])
+        )]
+    );
 }
 
 #[test]

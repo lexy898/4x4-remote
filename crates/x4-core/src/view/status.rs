@@ -4,8 +4,8 @@ use x4_rpc::UnsupportedReason;
 
 use crate::engine::Visibility;
 use crate::format::{HumanSize, HumanSpeed, human_size, human_speed};
-use crate::limits::{kbps_to_bytes_per_sec, kbps_to_kib};
-use crate::snapshot::{ConnectionError, ConnectionState, Snapshot, SpeedLimit};
+use crate::limits::{KibPerSecond, kbps_to_kib};
+use crate::snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 
 /// Whether the service thread is there to send snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,6 +46,34 @@ pub enum Indicator {
     Connected,
 }
 
+/// The turtle and the normal speed limits, as the daemon's session has them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeedControls {
+    /// Whether the alternative speed limits apply: the turtle is on.
+    pub alt_speed: bool,
+    /// The alternative download limit, in whole KiB/s.
+    pub alt_down: KibPerSecond,
+    /// The alternative upload limit, in whole KiB/s.
+    pub alt_up: KibPerSecond,
+    /// The normal download limit as the daemon stores it, also while it is off.
+    pub limit_down: SpeedLimit,
+    /// The normal upload limit as the daemon stores it, also while it is off.
+    pub limit_up: SpeedLimit,
+}
+
+impl From<&SessionSummary> for SpeedControls {
+    /// Takes the switches and the stored limits; the alternative speeds turn into KiB/s.
+    fn from(session: &SessionSummary) -> Self {
+        Self {
+            alt_speed: session.alt_speed_enabled,
+            alt_down: kbps_to_kib(session.alt_speed_down_kbps),
+            alt_up: kbps_to_kib(session.alt_speed_up_kbps),
+            limit_down: session.speed_limit_down,
+            limit_up: session.speed_limit_up,
+        }
+    }
+}
+
 /// What the status bar shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusModel {
@@ -59,22 +87,9 @@ pub struct StatusModel {
     pub connection: ConnectionState,
     /// Whether the numbers are old, because the daemon has not answered lately.
     pub stale: bool,
-    /// Whether the alternative speed limits apply; `false` while the session is not known.
-    pub alt_speed: bool,
-    /// The alternative download limit; zero while the session is not known.
-    pub alt_speed_down: HumanSpeed,
-    /// The alternative upload limit; zero while the session is not known.
-    pub alt_speed_up: HumanSpeed,
-    /// The normal download limit in KiB/s; `None` while it is off or the session is not known.
-    pub limit_down: Option<u32>,
-    /// The normal upload limit in KiB/s; `None` while it is off or the session is not known.
-    pub limit_up: Option<u32>,
-    /// The download limit the daemon stores in KiB/s, also while it is off, to prefill its
-    /// input; 0 while the session is not known.
-    pub stored_limit_down: u32,
-    /// The upload limit the daemon stores in KiB/s, also while it is off, to prefill its input;
-    /// 0 while the session is not known.
-    pub stored_limit_up: u32,
+    /// The turtle and the speed limits; `None` while the session is not known, when neither
+    /// can be shown or changed.
+    pub speed: Option<SpeedControls>,
     /// Whether the service still runs.
     pub service: ServiceStatus,
 }
@@ -93,6 +108,12 @@ impl StatusModel {
     pub fn service_failed(&mut self) {
         self.service = ServiceStatus::Failed;
         self.stale = true;
+    }
+
+    /// Whether the alternative speed limits apply; `false` while the session is not known.
+    #[must_use]
+    pub fn alt_speed(&self) -> bool {
+        self.speed.is_some_and(|speed| speed.alt_speed)
     }
 
     /// What the connection indicator shows (see [`Indicator`] for which state wins).
@@ -127,48 +148,24 @@ impl Default for StatusModel {
             free_space: None,
             connection: ConnectionState::Connecting,
             stale: false,
-            alt_speed: false,
-            alt_speed_down: human_speed(0),
-            alt_speed_up: human_speed(0),
-            limit_down: None,
-            limit_up: None,
-            stored_limit_down: 0,
-            stored_limit_up: 0,
+            speed: None,
             service: ServiceStatus::Running,
         }
     }
 }
 
 /// The status bar for `snapshot`, which only a running service sends.
-///
-/// The daemon's limits are in kB/s; the status bar shows them in KiB/s, like every other speed.
 #[must_use]
 pub fn status_model(snapshot: &Snapshot) -> StatusModel {
-    let session = snapshot.session.as_ref();
-    let down = session.map(|session| session.speed_limit_down);
-    let up = session.map(|session| session.speed_limit_up);
-    let alt_down = session.map_or(0, |session| session.alt_speed_down_kbps);
-    let alt_up = session.map_or(0, |session| session.alt_speed_up_kbps);
     StatusModel {
         rate_down: human_speed(snapshot.rate_down),
         rate_up: human_speed(snapshot.rate_up),
         free_space: snapshot.free_space_bytes.map(human_size),
         connection: snapshot.connection.clone(),
         stale: snapshot.stale,
-        alt_speed: session.is_some_and(|session| session.alt_speed_enabled),
-        alt_speed_down: human_speed(kbps_to_bytes_per_sec(alt_down)),
-        alt_speed_up: human_speed(kbps_to_bytes_per_sec(alt_up)),
-        limit_down: down.and_then(applied_kib),
-        limit_up: up.and_then(applied_kib),
-        stored_limit_down: down.map_or(0, |limit| kbps_to_kib(limit.kbps)),
-        stored_limit_up: up.map_or(0, |limit| kbps_to_kib(limit.kbps)),
+        speed: snapshot.session.as_ref().map(SpeedControls::from),
         service: ServiceStatus::Running,
     }
-}
-
-/// The limit in KiB/s while it applies.
-fn applied_kib(limit: SpeedLimit) -> Option<u32> {
-    limit.enabled.then(|| kbps_to_kib(limit.kbps))
 }
 
 /// Whether the user can see the window: it must be active and not hidden or minimised.
@@ -185,7 +182,7 @@ pub fn visibility(window_active: bool, window_visible: bool) -> Visibility {
 mod tests {
     use super::*;
     use crate::format::{SizeUnit, SpeedUnit};
-    use crate::snapshot::{SessionSummary, SpeedLimit};
+    use crate::limits::KbPerSecond;
 
     fn snapshot() -> Snapshot {
         Snapshot {
@@ -202,7 +199,7 @@ mod tests {
 
     fn session(alt_speed_enabled: bool) -> SessionSummary {
         let off = SpeedLimit {
-            kbps: 0,
+            kbps: KbPerSecond(0),
             enabled: false,
         };
         SessionSummary {
@@ -211,48 +208,54 @@ mod tests {
             alt_speed_enabled,
             speed_limit_down: off,
             speed_limit_up: off,
-            alt_speed_down_kbps: 0,
-            alt_speed_up_kbps: 0,
+            alt_speed_down_kbps: KbPerSecond(0),
+            alt_speed_up_kbps: KbPerSecond(0),
         }
     }
 
     #[test]
     fn status_model_carries_the_e2_values() {
+        let limit_down = SpeedLimit {
+            kbps: KbPerSecond(1024),
+            enabled: true,
+        };
+        // Off, but the daemon keeps the value.
+        let limit_up = SpeedLimit {
+            kbps: KbPerSecond(100),
+            enabled: false,
+        };
         let status = status_model(&Snapshot {
             session: Some(SessionSummary {
-                alt_speed_down_kbps: 50,
-                alt_speed_up_kbps: 1024,
-                // 1024 kB/s are exactly 1000 KiB/s.
-                speed_limit_down: SpeedLimit {
-                    kbps: 1024,
-                    enabled: true,
-                },
-                // 100 kB/s are 97.66 KiB/s; the limit is off but keeps its value.
-                speed_limit_up: SpeedLimit {
-                    kbps: 100,
-                    enabled: false,
-                },
+                // 48.83 and exactly 1000 KiB/s.
+                alt_speed_down_kbps: KbPerSecond(50),
+                alt_speed_up_kbps: KbPerSecond(1024),
+                speed_limit_down: limit_down,
+                speed_limit_up: limit_up,
                 ..session(true)
             }),
             ..snapshot()
         });
 
-        assert!(status.alt_speed);
-        // The daemon's kB/s are 1000 bytes per second.
-        assert_eq!(status.alt_speed_down, human_speed(50_000));
-        assert_eq!(status.alt_speed_up, human_speed(1_024_000));
-        assert_eq!(status.alt_speed_up.unit, SpeedUnit::KiBPerSec);
-        assert_eq!(status.limit_down, Some(1000));
-        assert_eq!(status.limit_up, None);
-        assert_eq!(status.stored_limit_down, 1000);
-        assert_eq!(status.stored_limit_up, 98);
+        assert_eq!(
+            status.speed,
+            Some(SpeedControls {
+                alt_speed: true,
+                alt_down: KibPerSecond(49),
+                alt_up: KibPerSecond(1000),
+                limit_down,
+                limit_up,
+            })
+        );
+        assert!(status.alt_speed());
 
-        let unknown = status_model(&snapshot());
-        assert!(!unknown.alt_speed);
-        assert_eq!(unknown.alt_speed_down, human_speed(0));
-        assert_eq!(unknown.alt_speed_up, human_speed(0));
-        assert_eq!((unknown.limit_down, unknown.limit_up), (None, None));
-        assert_eq!((unknown.stored_limit_down, unknown.stored_limit_up), (0, 0));
+        // A session with every value zero and off still has controls; no session has none.
+        let zeros = status_model(&Snapshot {
+            session: Some(session(false)),
+            ..snapshot()
+        });
+        assert!(zeros.speed.is_some());
+        assert!(!zeros.alt_speed());
+        assert_eq!(status_model(&snapshot()).speed, None);
     }
 
     #[test]
@@ -275,19 +278,22 @@ mod tests {
                 unit: SizeUnit::B
             })
         );
-        assert!(status.alt_speed);
+        assert!(status.alt_speed());
         assert_eq!(status.connection, ConnectionState::Connected);
         assert!(!status.stale);
 
         let unknown = status_model(&snapshot());
         assert_eq!(unknown.free_space, None);
-        assert!(!unknown.alt_speed, "no session means no alternative limits");
+        assert!(
+            !unknown.alt_speed(),
+            "no session means no alternative limits"
+        );
 
         let normal = status_model(&Snapshot {
             session: Some(session(false)),
             ..snapshot()
         });
-        assert!(!normal.alt_speed);
+        assert!(!normal.alt_speed());
     }
 
     #[test]
@@ -299,11 +305,8 @@ mod tests {
         assert_eq!(status.rate_up, human_speed(0));
         assert_eq!(status.free_space, None);
         assert!(!status.stale);
-        assert!(!status.alt_speed);
-        assert_eq!(status.alt_speed_down, human_speed(0));
-        assert_eq!(status.alt_speed_up, human_speed(0));
-        assert_eq!((status.limit_down, status.limit_up), (None, None));
-        assert_eq!((status.stored_limit_down, status.stored_limit_up), (0, 0));
+        assert!(!status.alt_speed());
+        assert_eq!(status.speed, None);
         assert_eq!(status.service, ServiceStatus::Running);
         assert_eq!(status.indicator(), Indicator::Connecting);
     }
