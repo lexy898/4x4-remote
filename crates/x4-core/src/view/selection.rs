@@ -68,21 +68,25 @@ impl Selection {
     /// Moves the lead by `step` rows (negative is up), stopping at the first and last row.
     ///
     /// With `extend` (Shift+arrow) the range from the anchor follows the lead; without it the new
-    /// lead is selected alone, like a click. With no lead (or one that is not among `rows`) a
-    /// positive step lands on the first row and a negative one on the last, as in a file manager.
-    /// A step of zero and an empty `rows` change nothing.
+    /// lead is selected alone, like a click. With no lead (or one that is not among `rows`) any
+    /// step, up or down, Shift or not, selects only the first row, as Qt, GTK and Transmission-Qt
+    /// do. A step of zero and an empty `rows` change nothing.
     pub fn move_lead(&mut self, step: isize, rows: &[Row], extend: bool) {
         if step == 0 {
             return;
         }
-        let current = self.lead.as_ref().and_then(|lead| position(rows, lead));
-        let target = match current {
-            Some(index) if step > 0 => index.saturating_add(step.unsigned_abs()),
-            Some(index) => index.saturating_sub(step.unsigned_abs()),
-            None if step > 0 => 0,
-            None => usize::MAX,
+        let Some(current) = self.lead.as_ref().and_then(|lead| position(rows, lead)) else {
+            if let Some(first) = rows.first() {
+                self.click(&first.hash);
+            }
+            return;
         };
-        // A target past the end lands on the last row; there is none when `rows` is empty.
+        let target = if step > 0 {
+            current.saturating_add(step.unsigned_abs())
+        } else {
+            current.saturating_sub(step.unsigned_abs())
+        };
+        // A target past the end lands on the last row, which exists: the lead is among `rows`.
         let Some(row) = rows.get(target).or(rows.last()) else {
             return;
         };
@@ -352,18 +356,9 @@ mod tests {
     fn move_lead_clamps_and_extends() {
         let rows = rows(4);
 
-        // With no lead, a step down starts at the first row and a step up at the last.
-        let mut selection = Selection::default();
-        selection.move_lead(1, &rows, false);
-        assert_eq!(selected_names(&selection, &rows), ["row 0"]);
-        assert_eq!(selection.lead(), Some(hash_of(&rows, 0)));
-
-        let mut selection = Selection::default();
-        selection.move_lead(-1, &rows, false);
-        assert_eq!(selected_names(&selection, &rows), ["row 3"]);
-        assert_eq!(selection.lead(), Some(hash_of(&rows, 3)));
-
         // A plain move selects only the new lead and clamps at both ends.
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 3));
         selection.move_lead(-1, &rows, false);
         assert_eq!(selected_names(&selection, &rows), ["row 2"]);
         selection.move_lead(-10, &rows, false);
@@ -395,10 +390,47 @@ mod tests {
         // A plain move after extending drops the range.
         selection.move_lead(1, &rows, false);
         assert_eq!(selected_names(&selection, &rows), ["row 1"]);
+    }
 
-        // Extending with no lead starts a selection at the end the step points to.
+    #[test]
+    fn any_step_without_a_lead_selects_only_the_first_row() {
+        let rows = rows(4);
+        for (step, extend) in [
+            (1, false),
+            (-1, false),
+            (1, true),
+            (-1, true),
+            (isize::MAX, false),
+            (-isize::MAX, true),
+        ] {
+            let mut selection = Selection::default();
+
+            selection.move_lead(step, &rows, extend);
+
+            assert_eq!(
+                selected_names(&selection, &rows),
+                ["row 0"],
+                "step {step}, extend {extend}"
+            );
+            assert_eq!(selection.lead(), Some(hash_of(&rows, 0)));
+            // It is the anchor too: a Shift+Down after it extends from there.
+            selection.move_lead(1, &rows, true);
+            assert_eq!(selected_names(&selection, &rows), ["row 0", "row 1"]);
+        }
+    }
+
+    #[test]
+    fn extending_without_a_lead_ignores_a_remaining_anchor() {
+        let rows = rows(4);
         let mut selection = Selection::default();
-        selection.move_lead(1, &rows, true);
+        selection.click(hash_of(&rows, 1));
+        selection.extend_to(hash_of(&rows, 3), &rows);
+        // Row 3, the lead, is filtered away; the anchor, row 1, stays.
+        selection.retain_visible(&rows[..3]);
+        assert_eq!(selection.lead(), None);
+
+        selection.move_lead(-1, &rows[..3], true);
+
         assert_eq!(selected_names(&selection, &rows), ["row 0"]);
     }
 
@@ -419,15 +451,19 @@ mod tests {
     }
 
     #[test]
-    fn move_lead_from_a_lead_that_left_the_rows_starts_at_an_end() {
+    fn move_lead_from_a_lead_that_left_the_rows_starts_at_the_first_row() {
         let all = rows(4);
         let mut selection = Selection::default();
         selection.click(hash_of(&all, 0));
 
         let shown = &all[1..];
         selection.move_lead(1, shown, false);
-
         assert_eq!(selected_names(&selection, shown), ["row 1"]);
+
+        // Up too: it does not wrap to the last row.
+        let shown = &all[2..];
+        selection.move_lead(-1, shown, false);
+        assert_eq!(selected_names(&selection, shown), ["row 2"]);
     }
 
     #[test]

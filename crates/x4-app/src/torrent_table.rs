@@ -10,9 +10,10 @@
 //! mirrors the selection's lead while the lead is selected, and has none otherwise, so that it
 //! never paints a row that is not selected. The other selected rows get a mark of the same color
 //! from the delegate. Plain, Ctrl and Shift clicks on a row are handled here before the table sees
-//! them (`render_tr`), and so are the selection keys (`change_selection`). What the table does to
-//! its row by itself (Home, End, Page Up, Page Down, Escape) is taken over by `follow_table`, which
-//! tells such a change from the table echoing ours by comparing its row with the lead.
+//! them (`render_tr`), and so are the selection keys, the moving keys of the table included
+//! (`change_selection`); a key brings the lead into view. What the table still does to its row by
+//! itself, its Escape, is taken over by `follow_table`, which tells it from the table echoing ours
+//! by comparing its row with the lead.
 //!
 //! The table's own sorting and column selection are off. A click on a header goes to the handler
 //! set with [`TorrentTable::on_sort`], through which the main view, the owner of the sort order,
@@ -33,7 +34,7 @@ use gpui_kit::component::{ActiveTheme as _, Theme, ThemeToken};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    Pixels, ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
     TestSupportExt as _, Window, div, px,
 };
 use x4_core::{
@@ -51,15 +52,15 @@ type SortHandler = Rc<dyn Fn(ColumnId, &mut Window, &mut App)>;
 /// What the user does to the selection, with the mouse or a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionChange {
-    /// A plain click on the row at this index, or a key of the table's that lands on it: only that
-    /// row.
+    /// A plain click on the row at this index: only that row.
     Click(usize),
     /// A Ctrl+click on the row: it goes in or out of the selection.
     Toggle(usize),
     /// A Shift+click on the row: the range from the anchor to it.
     ExtendTo(usize),
-    /// Up or Down, `step` rows from the lead (negative is up): only that row, or with `extend`
-    /// (Shift) the range from the anchor to it.
+    /// A moving key, `step` rows from the lead (negative is up): only the row it lands on, or with
+    /// `extend` (Shift) the range from the anchor to it. Up and Down are one row, Page Up and Page
+    /// Down a page, Home and End `isize::MAX` rows.
     Step {
         /// How many rows, and which way.
         step: isize,
@@ -119,7 +120,7 @@ impl TorrentTable {
     /// torrents that are still among them, wherever they are now, and drops the others, so that an
     /// action never reaches a torrent the user cannot see. Returns whether the rows or the
     /// selection changed, that is whether the table must be drawn again.
-    pub fn set_rows(&mut self, rows: Arc<[Row]>) -> bool {
+    pub(crate) fn set_rows(&mut self, rows: Arc<[Row]>) -> bool {
         let rows_changed = !Arc::ptr_eq(&self.rows, &rows) && *self.rows != *rows;
         self.rows = rows;
         let selection_changed = self.selection.retain_visible(&self.rows);
@@ -168,8 +169,10 @@ impl TorrentTable {
         self.sort = sort;
     }
 
-    /// Applies `change` to the selection. A click on an index past the rows changes nothing.
-    pub(crate) fn change_selection(&mut self, change: SelectionChange) {
+    /// Applies `change` to the selection; returns whether the selection changed. A click on an
+    /// index past the rows changes nothing.
+    pub(crate) fn change_selection(&mut self, change: SelectionChange) -> bool {
+        let before = self.selection.clone();
         let Self {
             rows, selection, ..
         } = self;
@@ -194,6 +197,7 @@ impl TorrentTable {
             SelectionChange::All => selection.select_all(rows),
             SelectionChange::Nothing => selection.clear(),
         }
+        *selection != before
     }
 
     /// Whether the rows are drawn as stale data.
@@ -305,23 +309,39 @@ pub(crate) fn show_rows(
 }
 
 /// Applies what the user did to the selection of `table`, and moves the table's selected row to
-/// the lead. A click and a key bring the lead into view; Ctrl+A leaves the view where it is.
+/// the lead. A click and a key bring the lead into view; Ctrl+A leaves the view where it is. A
+/// moving key also brings back a lead the user has scrolled away from when it cannot move it, such
+/// as Down on the last row. The table is drawn again only when the selection or the view changed.
 pub(crate) fn change_selection(
     table: &mut TableState<TorrentTable>,
     change: SelectionChange,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
-    table.delegate_mut().change_selection(change);
+    let changed = table.delegate_mut().change_selection(change);
     mirror_lead(table, change != SelectionChange::All, cx);
-    cx.notify();
+    if matches!(change, SelectionChange::Step { .. }) {
+        reveal_lead(table, cx);
+    }
+    if changed {
+        cx.notify();
+    }
 }
 
-/// Takes over what the table did to its own selected row, when that is not the lead: its keys
-/// (Home, End, Page Up, Page Down) select only the row they land on, and its Escape, which
-/// cleared its row, clears the selection. Called for each of the table's `SelectRow` and
-/// `ClearSelection` events. Most of them echo what [`mirror_lead`] did, and then the table's row
-/// is the lead already and nothing changes. The table's row is read when the event arrives, not
-/// taken from the event, so an event that a later change has overtaken changes nothing either.
+/// How many rows Page Up and Page Down move the lead by: the rows on screen, less the one that is
+/// usually cut off at an edge, and at least one.
+pub(crate) fn page_step(table: &TableState<TorrentTable>) -> isize {
+    let rows = table.visible_range().rows().len().saturating_sub(1).max(1);
+    isize::try_from(rows).unwrap_or(isize::MAX)
+}
+
+/// Takes over what the table did to its own selected row, when that is not the lead. Every key
+/// that moves the table's row is ours now, so what is left is the table's Escape, which cleared
+/// its row and so clears the selection, and the echoes: of [`mirror_lead`], and of the table
+/// selecting the row of a plain click after `render_tr` has. A `SelectRow` that is no echo (a
+/// caller that sets the table's row itself, such as the demo's `--select`) is taken as a click.
+/// Called for each of the table's `SelectRow` and `ClearSelection` events. The table's row is read
+/// when the event arrives, not taken from the event, so an event that a later change has
+/// overtaken changes nothing.
 pub(crate) fn follow_table(
     table: &mut TableState<TorrentTable>,
     cx: &mut Context<'_, TableState<TorrentTable>>,
@@ -332,6 +352,24 @@ pub(crate) fn follow_table(
     }
     let change = row.map_or(SelectionChange::Nothing, SelectionChange::Click);
     change_selection(table, change, cx);
+}
+
+/// Scrolls the lead into view when it is off screen. A lead on screen, even if partly, leaves the
+/// view as it is and draws nothing, so that a key held on the last row costs no frames.
+fn reveal_lead(
+    table: &mut TableState<TorrentTable>,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    let Some(row_ix) = table.delegate().lead_index() else {
+        return;
+    };
+    if table.visible_range().rows().contains(&row_ix) {
+        return;
+    }
+    table
+        .vertical_scroll_handle
+        .scroll_to_item(row_ix, ScrollStrategy::Nearest);
+    cx.notify();
 }
 
 /// Makes the table's own selected row the lead while the lead is selected, and clears it

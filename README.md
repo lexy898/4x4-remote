@@ -96,9 +96,10 @@ the columns are remembered between runs.
 
 Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent.
 Several torrents can be selected: Ctrl+click adds a torrent to the selection or takes it out,
-Shift+click selects the range from the last plain click or Ctrl+click to the row clicked, and
-Shift+Up and Shift+Down grow or shrink that range by a row. Ctrl+A selects every torrent the list
-shows, and only those; Escape or Ctrl+Shift+A selects none. Every selected row has the same
+Shift+click selects the range from the last plain click or Ctrl+click to the row clicked,
+Shift+Up and Shift+Down grow or shrink that range by a row, and Shift+Home and Shift+End stretch it
+to the first or the last torrent. Ctrl+A selects every torrent the list shows, and only those;
+Escape or Ctrl+Shift+A selects none. Every selected row has the same
 highlight. The selection stays on the same torrents when the list is re-sorted or updated, and an
 update never scrolls the list. A selected torrent that the filter or the search hides, or that is
 gone from the daemon, leaves the selection, and it is not selected again when it shows again. Tab
@@ -156,6 +157,7 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Escape`, `Ctrl+Shift+A`                            | in the table              | clear the selection                          |
 | `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the table              | select a torrent                             |
 | `Shift+Up`, `Shift+Down`                            | in the table              | grow or shrink the selected range by a row   |
+| `Shift+Home`, `Shift+End`                           | in the table              | stretch the selected range to either end     |
 | `Ctrl+A`                                            | in the table              | selects every torrent the list shows         |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |

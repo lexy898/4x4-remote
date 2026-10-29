@@ -16,8 +16,8 @@
 //! passes it on, the next binding of the key is tried. gpui-component's table (context
 //! `DataTable`, inside the torrent list) binds Escape to clearing its own selected row and passes
 //! the key on when it has none; Escape in the list then clears the selection here. The table also
-//! binds Up, Down, Tab and the side arrows, and those are bound again here in its context, later,
-//! so that ours win (see [`BINDINGS`]).
+//! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
+//! again here in its context, later, so that ours win (see [`BINDINGS`]).
 
 use std::rc::Rc;
 
@@ -44,10 +44,22 @@ actions!(
         MoveSelectionUp,
         /// Selects only the torrent below the lead.
         MoveSelectionDown,
+        /// Selects only the first torrent of the list.
+        MoveSelectionToFirst,
+        /// Selects only the last torrent of the list.
+        MoveSelectionToLast,
+        /// Selects only the torrent a page above the lead.
+        MoveSelectionPageUp,
+        /// Selects only the torrent a page below the lead.
+        MoveSelectionPageDown,
         /// Moves the lead up and selects the range from the anchor to it.
         ExtendSelectionUp,
         /// Moves the lead down and selects the range from the anchor to it.
         ExtendSelectionDown,
+        /// Moves the lead to the first torrent and selects the range from the anchor to it.
+        ExtendSelectionToFirst,
+        /// Moves the lead to the last torrent and selects the range from the anchor to it.
+        ExtendSelectionToLast,
     ]
 );
 
@@ -125,8 +137,9 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(TABLE_CONTEXT),
     },
     // The table moves its own selected row from that row, and starts from the top when it has
-    // none. Its row is the lead only while the lead is selected, so Up and Down move the lead
-    // here instead, from wherever it is.
+    // none. Its row is the lead only while the lead is selected, so its moving keys move the lead
+    // here instead, from wherever it is. A key that lands on the lead also selects only the lead,
+    // which the table, seeing its row unchanged, would not.
     Binding {
         keys: "up",
         action: || Box::new(MoveSelectionUp),
@@ -135,6 +148,26 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "down",
         action: || Box::new(MoveSelectionDown),
+        context: Some(TABLE_CONTEXT),
+    },
+    Binding {
+        keys: "home",
+        action: || Box::new(MoveSelectionToFirst),
+        context: Some(TABLE_CONTEXT),
+    },
+    Binding {
+        keys: "end",
+        action: || Box::new(MoveSelectionToLast),
+        context: Some(TABLE_CONTEXT),
+    },
+    Binding {
+        keys: "pageup",
+        action: || Box::new(MoveSelectionPageUp),
+        context: Some(TABLE_CONTEXT),
+    },
+    Binding {
+        keys: "pagedown",
+        action: || Box::new(MoveSelectionPageDown),
         context: Some(TABLE_CONTEXT),
     },
     Binding {
@@ -162,6 +195,16 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "shift-down",
         action: || Box::new(ExtendSelectionDown),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "shift-home",
+        action: || Box::new(ExtendSelectionToFirst),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "shift-end",
+        action: || Box::new(ExtendSelectionToLast),
         context: Some(TORRENTS),
     },
 ];
