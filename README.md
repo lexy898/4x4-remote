@@ -118,9 +118,10 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Ctrl+Shift+R` verifies their downloaded data, which reads all of it on the server;
 - `Ctrl+R` asks their trackers for more peers.
 
-Holding a key down sends its action once, not again with every repeat of the key. An action that is
-still waiting for the daemon's answer is not sent again for the same torrents, so a second press
-or a double click does nothing more.
+Holding a key down sends its action once, not again with every repeat of the key. While the action
+sent last waits for the daemon's answer, it is not sent again for the same torrents, so a second
+press or a double click does nothing more; after a different action, though, the same one goes
+again (Pause, Start and Pause again send all three, and the torrents end up paused).
 
 An action is available only when it can do something to at least one of the torrents (Start needs
 a paused or failed one, Pause one that is not stopped, Start now a stopped or queued one, and asking

@@ -633,6 +633,37 @@ fn an_identical_pending_request_is_not_sent_again(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_repeated_choice_after_a_different_action_is_sent(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![downloading("a"), paused("b")], cx);
+    window.press("ctrl-a", cx);
+
+    // Pause, then Start, then Pause again, before the daemon has answered any of them: the last
+    // press is what the user wants, and the daemon runs the commands in order.
+    window.press("ctrl-p", cx);
+    window.press("ctrl-s", cx);
+    window.press("ctrl-p", cx);
+
+    let sent: Vec<Action> = window
+        .sent()
+        .into_iter()
+        .filter_map(|command| match command {
+            Command::Run(_, action) => Some(action),
+            _ => None,
+        })
+        .collect();
+    let both = hashes(&["a", "b"]);
+    assert_eq!(
+        sent,
+        [
+            Action::Stop(both.clone()),
+            Action::Start(both.clone()),
+            Action::Stop(both)
+        ]
+    );
+}
+
+#[gpui_kit::test]
 fn a_selected_row_the_search_hides_is_not_acted_on(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("alpha"), paused("beta")], cx);

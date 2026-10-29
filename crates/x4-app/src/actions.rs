@@ -8,10 +8,11 @@
 //! does nothing from any of them.
 //!
 //! Each action sent is kept (`PendingActions`) under its [`ActionId`], with its kind and the
-//! torrents it named, until the service says how it went. While it waits, the same action on the
-//! same torrents is not sent again: a second press of its key or a double click would only repeat
-//! it. A success shows nothing (the next snapshot shows the change); a failure is worded from the
-//! kind, the count and the error.
+//! torrents it named, until the service says how it went. While the action sent last waits, the
+//! same action on the same torrents is not sent again: a second press of its key or a double click
+//! would only repeat it. An older one does not count: after Pause and then Start, Pause again is
+//! the user's newest choice and goes. A success shows nothing (the next snapshot shows the
+//! change); a failure is worded from the kind, the count and the error.
 
 use std::collections::HashMap;
 
@@ -166,15 +167,17 @@ pub(crate) struct PendingActions {
 
 impl PendingActions {
     /// Keeps the action `kind` on the torrents `hashes` until it is answered, under a new id,
-    /// which it returns. Returns `None`, and keeps nothing, when the same action on the same
-    /// torrents, in any order, is still waiting for its answer.
+    /// which it returns. Returns `None`, and keeps nothing, when the action sent last is the same
+    /// action on the same torrents, in any order, and is still waiting for its answer. An older
+    /// pending action does not count: the daemon runs the actions in order, so the newest choice
+    /// must go last.
     pub(crate) fn start(&mut self, kind: ActionKind, hashes: &[HashString]) -> Option<ActionId> {
         let mut targets = hashes.to_vec();
         targets.sort_unstable();
         if self
             .pending
-            .values()
-            .any(|sent| sent.action.kind == kind && sent.targets == targets)
+            .get(&ActionId(self.last_id))
+            .is_some_and(|last| last.action.kind == kind && last.targets == targets)
         {
             return None;
         }
@@ -355,20 +358,14 @@ mod tests {
     }
 
     #[test]
-    fn the_same_action_on_the_same_torrents_waits_for_its_answer() {
+    fn the_action_sent_last_is_not_sent_again_while_it_waits() {
         let mut pending = PendingActions::default();
-        let Some(first) = pending.start(ActionKind::Pause, &[hash("a"), hash("b")]) else {
-            panic!("the first pause is new");
-        };
+        let both = [hash("a"), hash("b")];
+        assert!(pending.start(ActionKind::Pause, &both).is_some());
         assert_eq!(
             pending.start(ActionKind::Pause, &[hash("b"), hash("a")]),
             None,
             "the same torrents in another order"
-        );
-        assert!(
-            pending
-                .start(ActionKind::Verify, &[hash("a"), hash("b")])
-                .is_some()
         );
         assert!(pending.start(ActionKind::Pause, &[hash("a")]).is_some());
         assert!(
@@ -376,13 +373,18 @@ mod tests {
                 .start(ActionKind::Pause, &[hash("a"), hash("b"), hash("c")])
                 .is_some()
         );
-        assert_eq!(pending.len(), 4);
 
-        pending.finish(first, &Ok(()));
+        // Pause, then Start, then Pause again: the older pause does not hold back the newest.
+        assert!(pending.start(ActionKind::Start, &both).is_some());
+        let Some(last) = pending.start(ActionKind::Pause, &both) else {
+            panic!("the pause after a start goes");
+        };
+        assert_eq!(pending.start(ActionKind::Pause, &both), None);
+        assert_eq!(pending.len(), 5);
+
+        pending.finish(last, &Ok(()));
         assert!(
-            pending
-                .start(ActionKind::Pause, &[hash("a"), hash("b")])
-                .is_some(),
+            pending.start(ActionKind::Pause, &both).is_some(),
             "answered, it can go again"
         );
     }

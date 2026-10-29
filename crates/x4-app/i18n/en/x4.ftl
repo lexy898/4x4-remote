@@ -159,7 +159,7 @@ action-pause = Pause
 
 # One message per action. $count: the torrents it named (a number). $outcome is what is known:
 #   not-sent: the server is not connected, so the action was not sent;
-#   no-answer: the server did not answer in time, so the action may have been carried out anyway;
+#   no-answer: the server did not answer, so the action may have happened;
 #   failed: the server refused it or answered unexpectedly, and $reason says why: one of the
 #     connection-reason-* messages, action-reason-nothing-selected or the server's own text.
 action-failed-start =
