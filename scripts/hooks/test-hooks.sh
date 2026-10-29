@@ -212,6 +212,21 @@ test_stop_hook_skips_markdown_change() {
     expect_check_skipped
 }
 
+# The key-table test reads the README at the top of the repository, so a change of it must run the
+# check; other Markdown, such as a README further down, still does not.
+test_stop_hook_reruns_on_top_readme_change() {
+    echo 'keys' >"$stop_dir/README.md"
+    run_stop_green
+    expect_check_ran
+    echo 'other keys' >"$stop_dir/README.md"
+    run_stop_green
+    expect_check_ran
+    mkdir -p "$stop_dir/docs"
+    echo 'notes' >"$stop_dir/docs/README.md"
+    run_stop_green
+    expect_check_skipped
+}
+
 test_stop_hook_reruns_on_fixture_change() {
     mkdir -p "$stop_dir/tests/fixtures"
     echo '{"result": "success"}' >"$stop_dir/tests/fixtures/x.json"
@@ -1090,6 +1105,7 @@ cases=(
     stop_hook_gives_up_after_three
     stop_hook_green_clears_blocks
     stop_hook_skips_markdown_change
+    stop_hook_reruns_on_top_readme_change
     stop_hook_reruns_on_fixture_change
     stop_hook_reruns_on_new_untracked_rs
     stop_hook_reruns_on_deleted_file
