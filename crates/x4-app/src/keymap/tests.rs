@@ -1,12 +1,13 @@
-//! The README's table of keys says what [`BINDINGS`] binds, and where.
+//! The README's table of keys says what [`BINDINGS`] binds, and where; and an open menu keeps
+//! the keys that work outside it.
 
 use std::collections::BTreeSet;
 
-use gpui_kit::{Action as _, NoAction};
+use gpui_kit::{Action as _, KeyBindingContextPredicate, KeyContext, NoAction};
 
 use super::{
-    BINDINGS, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT, TABLE_CONTEXT,
-    TABLE_NO_MENU, TORRENTS,
+    ANY_MENU, BINDINGS, Binding, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT,
+    TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS,
 };
 
 const README: &str = include_str!("../../../../README.md");
@@ -107,4 +108,85 @@ fn keys_are_spelled_as_the_readme_writes_them() {
     assert_eq!(spelled("pagedown"), "Page Down");
     assert_eq!(spelled("shift-delete"), "Shift+Delete");
     assert_eq!(spelled("/"), "/");
+}
+
+/// The key contexts around an open menu, from the window down to the menu: the context menu,
+/// which is drawn inside the table, and a menu of the toolbar (Remove, Columns).
+const OPEN_MENUS: &[&[&str]] = &[
+    &[
+        MAIN_CONTEXT,
+        TORRENT_LIST_CONTEXT,
+        TABLE_CONTEXT,
+        "PopupMenu",
+    ],
+    &[MAIN_CONTEXT, "PopupMenu"],
+];
+
+/// The keys that may act while a menu is open: Ctrl+Q quits from anywhere, and the menu's own
+/// keys, which gpui-component's menu binds deeper than ours, choose an item or close the menu.
+const ACT_IN_A_MENU: &[&str] = &["ctrl-q", "enter", "escape", "up", "down", "left", "right"];
+
+fn is_no_action(binding: &Binding) -> bool {
+    (binding.action)().name() == NoAction.name()
+}
+
+fn predicate(context: &str) -> KeyBindingContextPredicate {
+    KeyBindingContextPredicate::parse(context).expect("a context of the key table parses")
+}
+
+/// A menu is modal: every key bound outside it, whose context does not leave an open menu out
+/// (`!PopupMenu`), is bound to nothing in the menu too, deeper than where it works, so that it
+/// does nothing there. Otherwise the key would act behind the menu, or take the focus out of it
+/// and leave it open.
+#[test]
+fn every_key_bound_outside_a_menu_does_nothing_while_one_is_open() {
+    let mut acting = Vec::new();
+    for stack in OPEN_MENUS {
+        let contexts: Vec<KeyContext> = stack
+            .iter()
+            .map(|context| KeyContext::parse(context).expect("a key context parses"))
+            .collect();
+        for binding in BINDINGS {
+            if is_no_action(binding) || ACT_IN_A_MENU.contains(&binding.keys) {
+                continue;
+            }
+            let Some(context) = binding.context else {
+                acting.push((binding.keys, "no context", stack));
+                continue;
+            };
+            let Some(depth) = predicate(context).depth_of(&contexts) else {
+                // It does not work here: it leaves an open menu out, or it is bound elsewhere.
+                continue;
+            };
+            let kept = BINDINGS.iter().any(|other| {
+                other.keys == binding.keys
+                    && is_no_action(other)
+                    && other
+                        .context
+                        .filter(|context| [ANY_MENU, TABLE_MENU].contains(context))
+                        .and_then(|context| predicate(context).depth_of(&contexts))
+                        .is_some_and(|menu_depth| menu_depth > depth)
+            });
+            if !kept {
+                acting.push((binding.keys, context, stack));
+            }
+        }
+    }
+    assert!(
+        acting.is_empty(),
+        "keys that act while a menu is open, (keys, where bound, around the menu): {acting:?}; \
+         bind them to `NoAction` in `ANY_MENU` or `TABLE_MENU`"
+    );
+}
+
+#[test]
+fn the_menu_rule_knows_which_contexts_leave_an_open_menu_out() {
+    let context_menu: Vec<KeyContext> = OPEN_MENUS[0]
+        .iter()
+        .map(|context| KeyContext::parse(context).expect("a key context parses"))
+        .collect();
+    assert_eq!(predicate(TORRENTS).depth_of(&context_menu), None);
+    assert_eq!(predicate(TABLE_NO_MENU).depth_of(&context_menu), None);
+    assert_eq!(predicate(TABLE_CONTEXT).depth_of(&context_menu), Some(3));
+    assert_eq!(predicate(ANY_MENU).depth_of(&context_menu), Some(4));
 }

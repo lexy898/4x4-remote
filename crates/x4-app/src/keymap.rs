@@ -194,7 +194,8 @@ pub const BINDINGS: &[Binding] = &[
     // A menu is modal. Up and Down in it move its highlight (the menu's own bindings are deeper).
     // Neither Tab, Shift+Tab, Ctrl+F, `/` nor Ctrl+L (which opens the speed limits) may take the
     // focus out of an open menu, which does not close when it loses the focus: the keys of the
-    // list or the search box would then act behind it. Ctrl+T does nothing behind it either.
+    // list or the search box would then act behind it. Ctrl+T does nothing behind it either. A
+    // test holds every key bound outside a menu to this, unless its context leaves menus out.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
