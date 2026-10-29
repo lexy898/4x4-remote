@@ -41,8 +41,11 @@ const APPLY: &str = "limits-apply";
 const SEARCH: &str = "search";
 /// The free space in the status bar, a place to click beside the popover.
 const FREE_SPACE: &str = "free-space";
-/// The id of the context menu.
+/// The id of an open menu: the context menu, or a menu of the toolbar.
 const MENU: &str = "popup-menu";
+/// The toolbar's Remove button and Columns button, each of which opens a menu.
+const REMOVE: &str = "remove-torrents";
+const COLUMNS: &str = "column-menu";
 /// The id of a notification.
 const NOTIFICATION: &str = "notification";
 /// What a field says under it when its text is not a whole number.
@@ -838,6 +841,41 @@ fn the_speed_keys_do_nothing_behind_the_context_menu(cx: &mut TestAppContext) {
     window.press("escape", cx);
     assert!(!window.menu_open(cx));
     assert!(window.table_focused(cx));
+}
+
+/// The toolbar's menus keep the keys as the context menu does: Ctrl+T and Ctrl+L, which work in
+/// the whole window, neither switch the turtle nor open the speed limits behind them.
+#[gpui_kit::test]
+fn the_speed_keys_do_nothing_behind_a_toolbar_menu(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_snapshot(
+        vec![torrent("a"), torrent("b")],
+        Some(session(limit(1024, true), off(), false)),
+        ConnectionState::Connected,
+        cx,
+    );
+    // The Remove menu needs a selection.
+    window.act(cx, |window, cx| window.click(("row", 0usize), cx));
+
+    for button in [REMOVE, COLUMNS] {
+        window.click(button, cx);
+        assert!(window.menu_open(cx), "{button}");
+        for key in ["ctrl-t", "ctrl-l"] {
+            window.press(key, cx);
+            assert_eq!(window.sent(), [], "{button}, {key}");
+            assert!(!window.limits_open(cx), "{button}, {key}");
+            assert!(
+                window.menu_open(cx),
+                "{button}, {key}: the menu keeps the keys"
+            );
+        }
+        window.press("escape", cx);
+        assert!(!window.menu_open(cx), "{button}");
+    }
+
+    // Closed, the menus let the keys work again.
+    window.press("ctrl-t", cx);
+    assert_eq!(window.sent_actions(), [Action::SetAltSpeed(true)]);
 }
 
 #[gpui_kit::test]
