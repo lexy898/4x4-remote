@@ -541,16 +541,18 @@ mod tests {
             cx,
         );
 
-        let (text, stale, shown_ui) = cx.update(|cx| {
+        let (text, stale, table_stale, shown_ui) = cx.update(|cx| {
             let view = view.read(cx);
             (
                 view.connection_text(),
                 view.status().stale,
+                view.table().read(cx).delegate().stale(),
                 view.ui_state().clone(),
             )
         });
         assert_eq!(text, "Service could not start");
         assert!(stale);
+        assert!(table_stale, "the table draws its rows stale");
         assert_eq!(shown_ui, ui, "the saved state reaches the window");
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);

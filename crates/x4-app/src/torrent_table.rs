@@ -20,8 +20,8 @@ mod cells;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
+use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
@@ -35,7 +35,7 @@ use x4_core::{
 use x4_rpc::HashString;
 
 use crate::i18n::{column_name_text, empty_table_text};
-use crate::theme::DIMMED_OPACITY;
+use crate::theme::row_opacity;
 
 /// What a click on a column header does, given the column.
 type SortHandler = Rc<dyn Fn(ColumnId, &mut Window, &mut App)>;
@@ -53,6 +53,8 @@ pub struct TorrentTable {
     sort: (SortKey, SortDirection),
     /// What the table says when it has no rows.
     empty: EmptyTable,
+    /// Whether the rows are old data, which the daemon has not confirmed lately.
+    stale: bool,
     /// Called with the column whose header is clicked.
     on_sort: Option<SortHandler>,
 }
@@ -68,6 +70,7 @@ impl TorrentTable {
             selected: None,
             sort,
             empty: EmptyTable::Waiting,
+            stale: false,
             on_sort: None,
         }
     }
@@ -135,6 +138,32 @@ impl TorrentTable {
     /// Selects nothing.
     pub(crate) fn clear_selected(&mut self) {
         self.selected = None;
+    }
+
+    /// Whether the rows are drawn as stale data.
+    #[must_use]
+    pub fn stale(&self) -> bool {
+        self.stale
+    }
+
+    /// Draws the rows as stale data, or as fresh again; returns whether that changed.
+    pub(crate) fn set_stale(&mut self, stale: bool) -> bool {
+        let changed = self.stale != stale;
+        self.stale = stale;
+        changed
+    }
+
+    /// The content of the cell at `row_ix` and `col_ix`, at the row's opacity. The opacity is on
+    /// the content, not on the row, so that the background of a selected row keeps its full
+    /// color.
+    fn cell_element(&self, row_ix: usize, col_ix: usize, theme: &Theme) -> Div {
+        let content = div().size_full();
+        match (self.rows.get(row_ix), self.shown_id(col_ix)) {
+            (Some(row), Some(column)) => content
+                .when_some(row_opacity(self.stale, row.dimmed), Div::opacity)
+                .child(cells::cell(row, column, theme)),
+            _ => content,
+        }
     }
 
     /// Takes the widths of the shown columns, in order, as the table reports them; returns
@@ -272,10 +301,8 @@ impl TableDelegate for TorrentTable {
         _: &mut Window,
         _: &mut Context<'_, TableState<Self>>,
     ) -> Stateful<Div> {
-        let dimmed = self.rows.get(row_ix).is_some_and(|row| row.dimmed);
-        div()
-            .id(("row", row_ix))
-            .when(dimmed, |row| row.opacity(DIMMED_OPACITY))
+        // No opacity here: it would also fade the selected row's background (`cell_element`).
+        div().id(("row", row_ix))
     }
 
     fn render_td(
@@ -285,10 +312,7 @@ impl TableDelegate for TorrentTable {
         _: &mut Window,
         cx: &mut Context<'_, TableState<Self>>,
     ) -> impl IntoElement {
-        match (self.rows.get(row_ix), self.shown_id(col_ix)) {
-            (Some(row), Some(column)) => cells::cell(row, column, cx.theme()),
-            _ => div().into_any_element(),
-        }
+        self.cell_element(row_ix, col_ix, cx.theme())
     }
 
     fn cell_label(&self, row_ix: usize, col_ix: usize, _: &App) -> Option<SharedString> {

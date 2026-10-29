@@ -33,7 +33,6 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, App, AppContext as _, AsyncApp, Context, Entity, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
@@ -52,7 +51,7 @@ use crate::i18n::{column_name_text, connection_text, t, torrent_count_text};
 use crate::search::{clear_search, focus_search, new_search_state, search_box};
 use crate::sidebar::filter_sidebar;
 use crate::status_bar::status_bar;
-use crate::theme::{STALE_OPACITY, apply_theme, follow_appearance, next_theme};
+use crate::theme::{apply_theme, follow_appearance, next_theme};
 use crate::torrent_table::{TorrentTable, new_table_state, show_column, show_rows};
 use persistence::Saver;
 
@@ -378,6 +377,7 @@ impl MainView {
     /// Shows that the service could not be started, so no data will come.
     pub(crate) fn service_failed(&mut self, cx: &mut Context<'_, Self>) {
         self.status.service_failed();
+        self.show_stale(cx);
         cx.notify();
     }
 
@@ -419,9 +419,20 @@ impl MainView {
         let mut changed = self.update_table(cx);
         if status != self.status {
             self.status = status;
+            self.show_stale(cx);
             changed = true;
         }
         changed
+    }
+
+    /// Tells the table whether its rows are stale data, which it draws at the stale opacity.
+    fn show_stale(&self, cx: &mut Context<'_, Self>) {
+        let stale = self.status.stale;
+        self.table.update(cx, |table, cx| {
+            if table.delegate_mut().set_stale(stale) {
+                cx.notify();
+            }
+        });
     }
 
     /// Recomputes the table from the last snapshot for the current view and hands the rows to
@@ -449,6 +460,7 @@ impl MainView {
             tracing::error!("the service stopped; the window shows the last data it sent");
         }
         self.status.service_stopped();
+        self.show_stale(cx);
         cx.notify();
     }
 
@@ -540,8 +552,8 @@ impl MainView {
             })
     }
 
-    /// The torrent table, dimmed while the data is stale. Its accessible name says how many
-    /// torrents it shows.
+    /// The torrent table, whose rows are dimmed while the data is stale (the table does that, so
+    /// that a row is never dimmed twice). Its accessible name says how many torrents it shows.
     fn torrent_list(&self) -> impl IntoElement + use<> {
         div()
             .id("torrent-list")
@@ -549,7 +561,6 @@ impl MainView {
             .min_w_0()
             .h_full()
             .text_sm()
-            .when(self.status.stale, |list| list.opacity(STALE_OPACITY))
             .child(
                 DataTable::new(&self.table)
                     .with_size(Size::Size(px(ROW_HEIGHT)))

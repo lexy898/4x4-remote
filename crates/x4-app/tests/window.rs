@@ -75,6 +75,11 @@ impl Window {
         cx.update(|cx| self.view.read(cx).status().clone())
     }
 
+    /// Whether the table draws its rows as stale.
+    fn table_stale(&self, cx: &mut TestAppContext) -> bool {
+        cx.update(|cx| self.view.read(cx).table().read(cx).delegate().stale())
+    }
+
     fn rows(&self, cx: &mut TestAppContext) -> usize {
         cx.update(|cx| self.view.read(cx).model().rows.len())
     }
@@ -177,10 +182,14 @@ fn status_bar_shows_reconnecting_and_stale(cx: &mut TestAppContext) {
     );
 
     assert!(window.status(cx).stale);
+    assert!(window.table_stale(cx), "the rows are drawn stale");
     let text = window.connection_text(cx);
     assert!(text.contains('2'), "{text}");
     assert_eq!(text, "Reconnecting (attempt 2)… timed out");
     assert_eq!(window.rows(cx), 2, "the last data stays visible");
+
+    window.send(Event::Snapshot(Arc::new(snapshot(&["alpha", "beta"]))), cx);
+    assert!(!window.table_stale(cx), "fresh data is drawn as such again");
 }
 
 #[gpui_kit::test]
@@ -363,6 +372,7 @@ fn closed_events_channel_marks_stale(cx: &mut TestAppContext) {
 
     assert_eq!(redraws.get(), 1, "the window shows it at once");
     assert!(window.status(cx).stale);
+    assert!(window.table_stale(cx), "the rows are drawn stale");
     assert_eq!(window.connection_text(cx), "Service stopped");
     assert_eq!(window.rows(cx), 2, "the last data stays visible, dimmed");
     cx.update_window(window.handle, |_, window, cx| {

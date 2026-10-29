@@ -4,6 +4,7 @@ use x4_core::test_support::torrent;
 use x4_core::{DisplayState, Torrent, default_columns};
 
 use super::*;
+use crate::theme::{DIMMED_OPACITY, STALE_OPACITY};
 
 fn rows(names: &[&str]) -> Arc<[Row]> {
     names.iter().map(|name| Row::from(&torrent(name))).collect()
@@ -141,6 +142,38 @@ fn cell_labels_name_the_row_and_column(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn idle_rows_are_dimmed_and_active_rows_are_not(cx: &mut TestAppContext) {
+    let (row_opacities, cell_opacities) = opacities(false, cx);
+
+    // The row itself is never dimmed, so its selected background keeps its full color.
+    assert_eq!(row_opacities, [None, None]);
+    assert_eq!(cell_opacities, [Some(DIMMED_OPACITY), None]);
+}
+
+#[gpui_kit::test]
+fn stale_rows_take_the_stale_opacity_alone(cx: &mut TestAppContext) {
+    let (row_opacities, cell_opacities) = opacities(true, cx);
+
+    assert_eq!(row_opacities, [None, None]);
+    assert_eq!(
+        cell_opacities,
+        [Some(STALE_OPACITY), Some(STALE_OPACITY)],
+        "an idle row is not dimmed twice"
+    );
+}
+
+#[test]
+fn the_stale_flag_reports_a_change() {
+    let mut table = table();
+    assert!(!table.stale());
+
+    assert!(table.set_stale(true));
+    assert!(!table.set_stale(true), "nothing changed");
+    assert!(table.stale());
+}
+
+/// The opacity of the rows and of the first cell of an idle row and an active one, with the data
+/// `stale` or not.
+fn opacities(stale: bool, cx: &mut TestAppContext) -> ([Option<f32>; 2], [Option<f32>; 2]) {
     let mut table = table();
     let downloading = Torrent {
         state: DisplayState::Downloading,
@@ -148,20 +181,27 @@ fn idle_rows_are_dimmed_and_active_rows_are_not(cx: &mut TestAppContext) {
     };
     // A seeder with nobody downloading from it is idle.
     table.set_rows([Row::from(&torrent("idle")), Row::from(&downloading)].into());
+    table.set_stale(stale);
     cx.update(gpui_kit::init);
     let window = cx.add_window(|window, cx| new_table_state(table, window, cx));
 
-    let opacities = window
+    window
         .update(cx, |state, window, cx| {
-            [0, 1].map(|ix| {
+            let rows = [0, 1].map(|ix| {
                 state
                     .delegate_mut()
                     .render_tr(ix, window, cx)
                     .style()
                     .opacity
-            })
+            });
+            let cells = [0, 1].map(|ix| {
+                state
+                    .delegate()
+                    .cell_element(ix, 0, cx.theme())
+                    .style()
+                    .opacity
+            });
+            (rows, cells)
         })
-        .expect("the window is open");
-
-    assert_eq!(opacities, [Some(DIMMED_OPACITY), None]);
+        .expect("the window is open")
 }

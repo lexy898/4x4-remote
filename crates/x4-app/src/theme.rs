@@ -16,8 +16,21 @@ use x4_core::{DisplayState, Filter, Indicator, Subtitle, ThemeChoice};
 pub(crate) const STALE_OPACITY: f32 = 0.5;
 
 /// How visible an idle row of the table is: it recedes behind the rows where something happens,
-/// and stays readable. The stale dimming applies on top.
+/// and stays readable.
 pub(crate) const DIMMED_OPACITY: f32 = 0.55;
+
+/// The opacity of a row of the table: the stale opacity while the data is `stale`, the dimmed
+/// one for an idle (`dimmed`) row, and none otherwise. Never both: a stale idle row would fade to
+/// a quarter and become hard to read.
+pub(crate) fn row_opacity(stale: bool, dimmed: bool) -> Option<f32> {
+    if stale {
+        Some(STALE_OPACITY)
+    } else if dimmed {
+        Some(DIMMED_OPACITY)
+    } else {
+        None
+    }
+}
 
 /// How strong the track of a progress bar is, as a fraction of the bar's color, so that the
 /// track is a pale shade of the state.
@@ -146,6 +159,18 @@ mod tests {
     use x4_core::{ConnectionError, QueueKind, UnsupportedReason};
 
     use super::*;
+
+    #[test]
+    fn a_row_has_one_opacity_and_stale_wins() {
+        assert_eq!(row_opacity(false, false), None);
+        assert_eq!(row_opacity(false, true), Some(DIMMED_OPACITY));
+        assert_eq!(row_opacity(true, false), Some(STALE_OPACITY));
+        assert_eq!(
+            row_opacity(true, true),
+            Some(STALE_OPACITY),
+            "never the product of the two"
+        );
+    }
 
     /// The theme of `mode`, as gpui-component loads it.
     fn theme(mode: ThemeMode, cx: &mut TestAppContext) -> Theme {
