@@ -283,6 +283,14 @@ its thread, and closing it does not wait for the worker to finish its last reque
 never waits on the network. When several snapshots queue up while the window is busy, it shows only
 the newest, and it redraws only when what it shows has changed, so an idle daemon costs no frames.
 
+### Windows off screen
+
+`just virtual <command>` runs a command inside a headless KWin with a D-Bus session and XDG
+directories of its own, so the windows it opens show on no monitor, take no focus and leave the
+desktop's settings alone; `spectacle -b -n -f -o shot.png` inside it captures the virtual screen.
+For example, `just virtual just measure` measures the app without a window on your screens. It
+needs KDE Plasma (`kwin_wayland` and `dbus-run-session`) and works nowhere else.
+
 ### Live tests
 
 `just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` against a real Transmission 4.1+

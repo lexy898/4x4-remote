@@ -12,6 +12,7 @@ guard_hook=$root/scripts/hooks/guard-bash.sh
 check_tools=$root/scripts/check-tools.sh
 lint_policy=$root/scripts/lint-policy.sh
 measure_lib=$root/scripts/measure-lib.sh
+virtual_session=$root/scripts/virtual-session.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
@@ -695,6 +696,126 @@ test_measure_warnings_fail_only_when_a_metric_is_unreadable() {
     expect_contains "RssAnon:" "$stderr" stderr
 }
 
+# A directory with a fake `dbus-run-session`, which runs its command, and a fake `kwin_wayland`,
+# which runs its --exit-with-session script as KWin does once the virtual screen is up and prints
+# some noise of its own. Each writes its arguments and the XDG dirs it sees to <dir>/<tool>.txt.
+# Also an owner's home with a kdeglobals, and an empty TMPDIR for the session's directory.
+virtual_dir=
+new_virtual_env() {
+    virtual_dir=$(mktemp -d "$tmp_root/virtual.XXXXXX")
+    mkdir -p "$virtual_dir/bin" "$virtual_dir/home/.config/fontconfig" "$virtual_dir/tmp"
+    printf '[General]\nColorScheme=Owner\n' >"$virtual_dir/home/.config/kdeglobals"
+    printf '<fontconfig/>\n' >"$virtual_dir/home/.config/fontconfig/fonts.conf"
+    cat >"$virtual_dir/bin/dbus-run-session" <<EOF
+#!/usr/bin/env bash
+{ echo "args: \$*"; env | grep '^XDG_' || true; } >"$virtual_dir/dbus-run-session.txt"
+[[ \$1 == -- ]] && shift
+exec "\$@"
+EOF
+    cat >"$virtual_dir/bin/kwin_wayland" <<EOF
+#!/usr/bin/env bash
+{ echo "args: \$*"; env | grep '^XDG_' || true; } >"$virtual_dir/kwin_wayland.txt"
+echo "kwin noise"
+while ((\$#)); do
+    if [[ \$1 == --exit-with-session ]]; then "\$2"; exit 0; fi
+    shift
+done
+exit 1
+EOF
+    chmod +x "$virtual_dir/bin/dbus-run-session" "$virtual_dir/bin/kwin_wayland"
+}
+
+# run_virtual <command...>: the helper with the fakes first on PATH, in the fake home, with the
+# owner's XDG dirs left to their defaults and DISPLAY set as on a desktop.
+run_virtual() {
+    run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+        -u X4_VIRTUAL_KEEP PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
+        TMPDIR="$virtual_dir/tmp" DISPLAY=:0 "$BASH" "$virtual_session" "$@"
+}
+
+test_virtual_session_propagates_the_exit_code() {
+    new_virtual_env
+    run_virtual bash -c 'exit 7'
+    expect_status 7
+    run_virtual true
+    expect_status 0
+    expect_contains "args: -- kwin_wayland --virtual" "$(<"$virtual_dir/dbus-run-session.txt")" \
+        "the dbus-run-session call"
+    expect_contains "--exit-with-session" "$(<"$virtual_dir/kwin_wayland.txt")" "the kwin call"
+}
+
+test_virtual_session_gives_kwin_and_the_command_temp_xdg_dirs() {
+    local name dir seen
+    new_virtual_env
+    # The command also overwrites its kdeglobals, which must not reach the owner's.
+    run_virtual bash -c 'for name in CONFIG DATA STATE CACHE; do
+            dir=XDG_${name}_HOME; echo "$name=${!dir}"; [[ -d ${!dir} ]] || echo "$name missing"
+        done
+        cat "$XDG_CONFIG_HOME/kdeglobals" "$XDG_CONFIG_HOME/fontconfig/fonts.conf"
+        echo "display=${DISPLAY-unset}"
+        echo changed >"$XDG_CONFIG_HOME/kdeglobals"'
+    expect_status 0
+    for name in CONFIG DATA STATE CACHE; do
+        dir=$(sed -n "s/^$name=//p" <<<"$stdout")
+        [[ $dir == "$virtual_dir/tmp/"* ]] || fail "XDG_${name}_HOME is not in TMPDIR: '$dir'"
+        [[ $dir != "$virtual_dir/home"* ]] || fail "XDG_${name}_HOME is in HOME: '$dir'"
+        for seen in kwin_wayland dbus-run-session; do
+            expect_contains "XDG_${name}_HOME=$dir" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+        done
+    done
+    [[ $stdout != *missing* ]] || fail "a session dir does not exist: $stdout"
+    expect_contains "ColorScheme=Owner" "$stdout" "the session's kdeglobals"
+    expect_contains "<fontconfig/>" "$stdout" "the session's fontconfig"
+    expect_contains "display=unset" "$stdout" "the command's DISPLAY"
+    [[ $(<"$virtual_dir/home/.config/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
+        fail "the owner's kdeglobals changed"
+    [[ -z $(ls -A "$virtual_dir/tmp") ]] || fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
+    [[ $stdout != *"kwin noise"* && $stderr != *"kwin noise"* ]] ||
+        fail "KWin's own output belongs in its log, got: $stdout $stderr"
+}
+
+test_virtual_session_keeps_arguments_with_spaces() {
+    new_virtual_env
+    # The literal $HOME and * must reach the command unexpanded.
+    run_virtual printf '<%s>' 'a b' '' "it's" '$HOME' '*'
+    expect_status 0
+    [[ $stdout == "<a b><><it's><\$HOME><*>" ]] || fail "unexpected arguments: $stdout"
+}
+
+test_virtual_session_names_a_missing_tool() {
+    new_virtual_env
+    rm "$virtual_dir/bin/kwin_wayland"
+    run_with_input '' env PATH="$virtual_dir/bin" "$BASH" "$virtual_session" true
+    expect_status 127
+    expect_contains "kwin_wayland not found" "$stderr" stderr
+    expect_contains "KDE" "$stderr" stderr
+    new_virtual_env
+    rm "$virtual_dir/bin/dbus-run-session"
+    run_with_input '' env PATH="$virtual_dir/bin" "$BASH" "$virtual_session" true
+    expect_status 127
+    expect_contains "dbus-run-session not found" "$stderr" stderr
+}
+
+test_virtual_session_keeps_its_dir_on_request() {
+    local kept
+    new_virtual_env
+    run_with_input '' env PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
+        TMPDIR="$virtual_dir/tmp" X4_VIRTUAL_KEEP=1 "$BASH" "$virtual_session" true
+    expect_status 0
+    kept=$(sed -n 's/^virtual-session: kept //p' <<<"$stderr")
+    [[ -n $kept && $kept == "$virtual_dir/tmp/"* ]] || fail "expected the kept dir on stderr, got: $stderr"
+    expect_contains "kwin noise" "$(<"$kept/kwin.log")" "kwin.log"
+}
+
+test_virtual_session_reports_a_session_that_never_ran() {
+    new_virtual_env
+    printf '#!/usr/bin/env bash\necho "cannot open the virtual output"\nexit 1\n' >"$virtual_dir/bin/kwin_wayland"
+    run_virtual true
+    expect_status 125
+    expect_contains "the command did not run" "$stderr" stderr
+    expect_contains "cannot open the virtual output" "$stderr" "stderr with KWin's log"
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -747,6 +868,12 @@ cases=(
     measure_warnings_name_every_breach_on_stderr_and_keep_exit_zero
     measure_warnings_report_one_breach_alone
     measure_warnings_fail_only_when_a_metric_is_unreadable
+    virtual_session_propagates_the_exit_code
+    virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
+    virtual_session_keeps_arguments_with_spaces
+    virtual_session_names_a_missing_tool
+    virtual_session_keeps_its_dir_on_request
+    virtual_session_reports_a_session_that_never_ran
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )

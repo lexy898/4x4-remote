@@ -82,6 +82,12 @@ release:
 measure:
     scripts/measure.sh
 
+# Run a command in a headless KWin, off the real screens (KDE only): `just virtual just run`.
+# X4_VIRTUAL_KEEP=1 keeps the session's temp dir.
+[positional-arguments]
+virtual +cmd:
+    scripts/virtual-session.sh "$@"
+
 update:
     cargo update
     just check
