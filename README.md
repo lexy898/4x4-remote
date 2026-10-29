@@ -166,7 +166,10 @@ button that has the focus, so they cancel, and only a click on "Delete files", o
 Enter, deletes anything. Escape, Cancel or a click beside the dialog close it and remove nothing.
 While the dialog is open, Delete and Shift+Delete open no second one, and holding the key opens it
 once; a key already held when the dialog opens presses no button in it, so an Enter held on a menu
-item opens the dialog without confirming it. While the daemon is not connected, Remove and its keys
+item opens the dialog without confirming it. The mouse cannot confirm by accident either: for half a
+second after the dialog opens its confirm button takes no click, and it never takes a double-click,
+so a double-click on a menu item that lands its second click on the dialog's button presses nothing.
+While the daemon is not connected, Remove and its keys
 do nothing, and the confirm button of an open dialog is disabled until the connection is back;
 Cancel still works. Closing the dialog gives the keys back to the table.
 

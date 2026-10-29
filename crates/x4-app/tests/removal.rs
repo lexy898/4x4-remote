@@ -1,18 +1,22 @@
 //! Headless tests for removing the selected torrents: the light dialog of Delete ("Remove from
 //! list"), the danger dialog of Shift+Delete ("Remove and delete files"), where the focus is, what
 //! Enter, Space, Escape and a held key do in them, what they remove when the list changes under
-//! them, the toolbar's Remove menu, and what they do while the daemon is not connected.
+//! them, the toolbar's Remove menu, what they do while the daemon is not connected, and that a
+//! click that comes too soon after a dialog opened (the second click of a double-click on the menu
+//! item that opened it) presses nothing.
 //!
 //! Each test builds the two channels of a service itself and opens the window with no service
 //! behind them, so nothing touches the network: the test reads the commands the window sends and
 //! answers them with the events a service would send.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::test::{ClickOptions, TestWindowExt as _};
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, KeyContext,
-    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, OperatingSystem, TestAppContext,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, Focusable as _, InputEvent as _,
+    KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point, TestAppContext,
 };
 use x4_app::actions::{RemoveTorrents, RemoveTorrentsWithData};
 use x4_app::app;
@@ -52,6 +56,8 @@ const MENU: &str = "popup-menu";
 const SEARCH: &str = "search";
 /// The id of the toolbar's Columns button, whose menu shows and hides columns.
 const COLUMNS: &str = "column-menu";
+/// How long after a dialog opens its confirm button starts taking clicks of the pointer.
+const ARMING: Duration = Duration::from_millis(500);
 
 /// An open main window and the far ends of its channels, standing in for the service.
 struct Window {
@@ -146,6 +152,122 @@ impl Window {
 
     fn click_row(&self, row: usize, cx: &mut TestAppContext) {
         self.click(("row", row), cx);
+    }
+
+    /// Lets the time pass after which a dialog's confirm button takes clicks of the pointer.
+    fn let_the_buttons_arm(cx: &mut TestAppContext) {
+        cx.executor().advance_clock(ARMING);
+        cx.run_until_parked();
+    }
+
+    /// Clicks the left button at `position`, as the `count`th click of a series (2 is the second
+    /// click of a double-click), whatever is there.
+    fn click_at(&self, position: Point<Pixels>, count: usize, cx: &mut TestAppContext) {
+        let modifiers = Modifiers::none();
+        self.act(cx, |window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: count,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: count,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Where the element `id` was drawn last.
+    fn bounds(
+        &self,
+        id: impl Into<gpui_kit::ElementId>,
+        cx: &mut TestAppContext,
+    ) -> Bounds<Pixels> {
+        let id = id.into();
+        self.act(cx, |window, _| window.find(id).bounds())
+    }
+
+    /// Where the item `label` of the open menu was drawn last.
+    fn item_bounds(&self, label: &str, cx: &mut TestAppContext) -> Bounds<Pixels> {
+        self.act(cx, |window, _| {
+            window.within(MENU).find_by_label(label).bounds()
+        })
+    }
+
+    /// Opens the context menu so that its item `label` lies over the button `button` of the
+    /// dialog the item opens, as a double-click on the item would find them, and returns the
+    /// middle of the button, which is on both. The button is found first in the dialog that the
+    /// key `key` opens for the same torrents; the menu's place, from a first right-click.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a layout where the item cannot lie over the button fails the test"
+    )]
+    fn item_over_button(
+        &self,
+        key: &str,
+        button: &'static str,
+        label: &str,
+        cx: &mut TestAppContext,
+    ) -> Point<Pixels> {
+        self.press(key, cx);
+        let target = self.bounds(button, cx).center();
+        self.press("escape", cx);
+        assert_eq!(self.dialogs(cx), 0);
+
+        let pressed_at = self.bounds(("row", 0_usize), cx).center();
+        self.act(cx, |window, cx| window.right_click(("row", 0_usize), cx));
+        let item_offset = self.item_bounds(label, cx).center() - pressed_at;
+        self.press("escape", cx);
+
+        let press_at = target - item_offset;
+        let rows: Vec<Bounds<Pixels>> = self.act(cx, |window, _| {
+            (0_usize..)
+                .map_while(|row| window.try_find(("row", row)).map(|row| row.bounds()))
+                .collect()
+        });
+        let (row, row_bounds) = rows
+            .into_iter()
+            .enumerate()
+            .find(|(_, bounds)| bounds.contains(&press_at))
+            .expect("a row where a right-click opens the menu with the item over the button");
+        let row_origin = row_bounds.origin;
+        self.act(cx, |window, cx| {
+            window.click_with_options(
+                ("row", row),
+                ClickOptions::new()
+                    .with_button(MouseButton::Right)
+                    .with_offset(press_at - row_origin),
+                cx,
+            );
+        });
+        assert!(
+            self.item_bounds(label, cx).contains(&target),
+            "the item lies over the button"
+        );
+        target
     }
 
     fn ctrl_click_row(&self, row: usize, cx: &mut TestAppContext) {
@@ -566,6 +688,7 @@ fn clicking_delete_files_sends_remove_with_data_for_the_captured_hashes(cx: &mut
         Some("7.0 GiB of downloaded data will be deleted from the server. This cannot be undone.")
     );
 
+    Window::let_the_buttons_arm(cx);
     window.click(DANGER_CONFIRM, cx);
 
     assert_eq!(window.sent_action(), remove(&names, RemoveData::Delete));
@@ -667,6 +790,7 @@ fn remove_is_disabled_while_disconnected(cx: &mut TestAppContext) {
     window.send_with(vec![torrent("a"), torrent("b")], reconnecting(), cx);
     assert!(window.disabled(DANGER_CONFIRM, cx));
     assert!(!window.disabled(DANGER_CANCEL, cx));
+    Window::let_the_buttons_arm(cx);
     window.click(DANGER_CONFIRM, cx);
     assert_eq!(window.sent(), []);
     assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
@@ -713,6 +837,7 @@ fn the_remove_button_asks_either_way_from_its_menu(cx: &mut TestAppContext) {
     assert_eq!(window.sent(), []);
 
     window.choose(REMOVE_FROM_LIST, cx);
+    Window::let_the_buttons_arm(cx);
     window.click(LIGHT_CONFIRM, cx);
     assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
     assert!(window.table_focused(cx));
@@ -806,6 +931,7 @@ fn a_dialog_closed_with_the_mouse_lets_the_key_ask_again(cx: &mut TestAppContext
     window.click(DANGER_CANCEL, cx);
 
     window.press("delete", cx);
+    Window::let_the_buttons_arm(cx);
     window.click(LIGHT_CONFIRM, cx);
     assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
     window.click_row(1, cx);
@@ -880,6 +1006,7 @@ fn a_failed_removal_is_shown(cx: &mut TestAppContext) {
     window.send(vec![torrent("a"), torrent("b")], cx);
     window.press("ctrl-a", cx);
     window.press("shift-delete", cx);
+    Window::let_the_buttons_arm(cx);
     window.click(DANGER_CONFIRM, cx);
     let (id, action) = window.sent_run();
     assert_eq!(action, remove(&["a", "b"], RemoveData::Delete));
@@ -895,4 +1022,113 @@ fn a_failed_removal_is_shown(cx: &mut TestAppContext) {
         Some("Could not remove 2 torrents and delete their files: busy")
     );
     assert_eq!(window.notifications(cx), 1);
+}
+
+/// The second click of a double-click on "Remove and delete files…" lands on whatever the dialog
+/// it opened has put under the pointer, which can be "Delete files": it must press nothing, and nor
+/// may any click so soon after the dialog opened.
+#[gpui_kit::test]
+fn a_double_click_on_the_menu_item_does_not_delete_files(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    window.send(names.into_iter().map(torrent).collect(), cx);
+    window.press("ctrl-a", cx);
+    let point = window.item_over_button("shift-delete", DANGER_CONFIRM, REMOVE_WITH_DATA, cx);
+
+    window.click_at(point, 1, cx);
+    assert!(
+        window.shown(DANGER_CONFIRM, cx),
+        "the item opened the dialog"
+    );
+    assert!(
+        window.bounds(DANGER_CONFIRM, cx).contains(&point),
+        "the second click lands on Delete files"
+    );
+    window.click_at(point, 2, cx);
+
+    assert_eq!(window.sent(), [], "the double-click deleted nothing");
+    assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
+
+    // Later on too, a click that is the second of a double-click is not a press.
+    Window::let_the_buttons_arm(cx);
+    window.click_at(point, 2, cx);
+    assert_eq!(window.sent(), []);
+    window.click_at(point, 1, cx);
+    assert_eq!(window.sent_action(), remove(&names, RemoveData::Delete));
+}
+
+#[gpui_kit::test]
+fn delete_files_ignores_clicks_right_after_the_dialog_opens(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+    window.press("shift-delete", cx);
+
+    window.click(DANGER_CONFIRM, cx);
+    assert_eq!(window.sent(), [], "too soon after the dialog opened");
+    cx.executor().advance_clock(ARMING / 2);
+    window.click(DANGER_CONFIRM, cx);
+    assert_eq!(window.sent(), [], "still too soon");
+    assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
+
+    Window::let_the_buttons_arm(cx);
+    window.click(DANGER_CONFIRM, cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Delete));
+    assert!(!window.shown(DANGER_CONFIRM, cx), "the dialog closed");
+}
+
+/// The light dialog's Remove takes no double-click either.
+#[gpui_kit::test]
+fn a_double_click_on_the_menu_item_does_not_remove_from_list(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    window.send(names.into_iter().map(torrent).collect(), cx);
+    window.press("ctrl-a", cx);
+    let point = window.item_over_button("delete", LIGHT_CONFIRM, REMOVE_FROM_LIST, cx);
+
+    window.click_at(point, 1, cx);
+    assert!(
+        window.shown(LIGHT_CONFIRM, cx),
+        "the item opened the dialog"
+    );
+    assert!(
+        window.bounds(LIGHT_CONFIRM, cx).contains(&point),
+        "the second click lands on Remove"
+    );
+    window.click_at(point, 2, cx);
+
+    assert_eq!(window.sent(), [], "the double-click removed nothing");
+    assert!(window.shown(LIGHT_CONFIRM, cx), "the dialog stays open");
+
+    Window::let_the_buttons_arm(cx);
+    window.click_at(point, 2, cx);
+    assert_eq!(window.sent(), []);
+    window.click_at(point, 1, cx);
+    assert_eq!(window.sent_action(), remove(&names, RemoveData::Keep));
+}
+
+#[gpui_kit::test]
+fn remove_from_list_ignores_clicks_right_after_the_dialog_opens(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+    window.press("delete", cx);
+
+    window.click(LIGHT_CONFIRM, cx);
+    assert_eq!(window.sent(), [], "too soon after the dialog opened");
+    cx.executor().advance_clock(ARMING / 2);
+    window.click(LIGHT_CONFIRM, cx);
+    assert_eq!(window.sent(), [], "still too soon");
+    assert!(window.shown(LIGHT_CONFIRM, cx), "the dialog stays open");
+
+    Window::let_the_buttons_arm(cx);
+    window.click(LIGHT_CONFIRM, cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
+    assert!(!window.shown(LIGHT_CONFIRM, cx), "the dialog closed");
+
+    // A key needs no wait: Enter presses the focused Remove at once.
+    window.click_row(1, cx);
+    window.press("delete", cx);
+    window.press("enter", cx);
+    assert_eq!(window.sent_action(), remove(&["b"], RemoveData::Keep));
 }
