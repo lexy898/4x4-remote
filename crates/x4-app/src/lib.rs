@@ -10,13 +10,15 @@
 //! daily file there, and the `files` module reads `config.toml` and reads and writes
 //! `state.toml`; the `saving` module decides when the window's state is written, and the
 //! `window_state` module turns the window's bounds into the size to remember and back. The `4x4`
-//! binary finds the paths, starts the logging and calls [`app::run`].
+//! binary finds the paths, starts the logging and calls [`app::run`]. [`keymap`] is the one table
+//! of key bindings, with the actions the keys run.
 //! Every text the windows show comes from the Fluent messages in `i18n/`, through the `i18n`
 //! module.
 
 pub mod app;
 mod files;
 mod i18n;
+pub mod keymap;
 pub mod logging;
 pub mod main_view;
 pub mod paths;

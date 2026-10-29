@@ -14,6 +14,8 @@
 //!   `x4_synthetic`, which `just demo-synthetic` shows.
 //! - `--select N` selects the row at index `N` (from 0, in the shown order) once the list is
 //!   there, as a click would, for screenshots of a selected row.
+//! - `--extend K`, after `--select N`, then extends the selection `K` rows down, as Shift+Down
+//!   pressed `K` times would, for screenshots of several selected rows.
 //!
 //! It reads and writes none of the app's files: there is no `config.toml`, the UI state starts
 //! from the defaults and is never saved, and the log goes to stderr only.
@@ -24,8 +26,9 @@ mod frames;
 use std::env;
 use std::time::{Duration, Instant};
 
-use gpui_kit::{App, Entity};
+use gpui_kit::{AnyWindowHandle, App, AsyncApp, Entity};
 use x4_app::app::{self, Startup};
+use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
 use x4_core::service;
@@ -55,6 +58,7 @@ fn main() -> anyhow::Result<()> {
         activity = ?options.activity,
         scroll = options.scroll,
         select = ?options.select,
+        extend = options.extend,
         "synthetic daemon"
     );
     let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
@@ -67,7 +71,7 @@ fn main() -> anyhow::Result<()> {
     };
     app::run_driven(started, startup, move |window, view, cx| {
         if let Some(row) = options.select {
-            select_when_listed(view.clone(), row, cx);
+            select_when_listed(window, view.clone(), row, options.extend, cx);
         }
         if options.scroll {
             frames::scroll_then_quit(window, view, SCROLL_AFTER, SCROLL_FOR, cx);
@@ -75,9 +79,15 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
-/// Selects the row at index `row` of the table of `view` once the table has it, as a click on
-/// the row would.
-fn select_when_listed(view: Entity<MainView>, row: usize, cx: &mut App) {
+/// Selects the row at index `row` of the table of `view` in `window` once the table has it, as a
+/// click on the row would, then extends the selection `extend` rows down, as Shift+Down would.
+fn select_when_listed(
+    window: AnyWindowHandle,
+    view: Entity<MainView>,
+    row: usize,
+    extend: usize,
+    cx: &mut App,
+) {
     cx.spawn(async move |cx| {
         let deadline = Instant::now() + SELECT_WAIT;
         while Instant::now() < deadline {
@@ -91,6 +101,7 @@ fn select_when_listed(view: Entity<MainView>, row: usize, cx: &mut App) {
             });
             if selected {
                 tracing::info!(row, "row selected");
+                extend_down(window, extend, cx);
                 return;
             }
             cx.background_executor().timer(SELECT_POLL).await;
@@ -100,6 +111,25 @@ fn select_when_listed(view: Entity<MainView>, row: usize, cx: &mut App) {
     .detach();
 }
 
+/// Presses Shift+Down `times` times in `window`: the action of the key goes to the focused
+/// table, as a key press would send it.
+fn extend_down(window: AnyWindowHandle, times: usize, cx: &mut AsyncApp) {
+    if times == 0 {
+        return;
+    }
+    let extended = cx.update(|cx| {
+        window.update(cx, |_, window, cx| {
+            for _ in 0..times {
+                window.dispatch_action(Box::new(ExtendSelectionDown), cx);
+            }
+        })
+    });
+    match extended {
+        Ok(()) => tracing::info!(rows = times, "selection extended"),
+        Err(error) => tracing::error!(%error, "the selection could not be extended"),
+    }
+}
+
 /// The command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Options {
@@ -107,6 +137,8 @@ struct Options {
     scroll: bool,
     /// The index of the row to select.
     select: Option<usize>,
+    /// How many rows to extend the selection down by, after selecting `select`.
+    extend: usize,
 }
 
 impl Options {
@@ -127,10 +159,22 @@ impl Options {
                     })?;
                     options.select = Some(row);
                 }
+                "--extend" => {
+                    let rows = args
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--extend needs a number of rows"))?;
+                    options.extend = rows.parse().map_err(|error| {
+                        anyhow::anyhow!("--extend needs a number of rows, not {rows:?}: {error}")
+                    })?;
+                }
                 other => anyhow::bail!(
-                    "unknown argument {other:?}; the options are --static, --scroll and --select N"
+                    "unknown argument {other:?}; the options are --static, --scroll, --select N \
+                     and --extend K"
                 ),
             }
+        }
+        if options.extend > 0 && options.select.is_none() {
+            anyhow::bail!("--extend extends the selection of --select N; give --select too");
         }
         Ok(options)
     }
@@ -152,6 +196,7 @@ mod tests {
                 activity: Activity::Ticking,
                 scroll: false,
                 select: None,
+                extend: 0,
             }
         );
     }
@@ -164,6 +209,7 @@ mod tests {
                 activity: Activity::Static,
                 scroll: true,
                 select: None,
+                extend: 0,
             }
         );
     }
@@ -182,6 +228,16 @@ mod tests {
         assert!(missing.to_string().contains("row index"), "{missing}");
         let invalid = parse(&["--select", "first"]).expect_err("not a number");
         assert!(invalid.to_string().contains("\"first\""), "{invalid}");
+    }
+
+    #[test]
+    fn extend_takes_a_number_of_rows_after_select() {
+        let options = parse(&["--select", "4", "--extend", "2"]).expect("a range");
+        assert_eq!((options.select, options.extend), (Some(4), 2));
+        let invalid = parse(&["--select", "4", "--extend", "-1"]).expect_err("not a count");
+        assert!(invalid.to_string().contains("\"-1\""), "{invalid}");
+        let alone = parse(&["--extend", "2"]).expect_err("nothing to extend");
+        assert!(alone.to_string().contains("--select"), "{alone}");
     }
 
     #[test]

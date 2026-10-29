@@ -94,10 +94,16 @@ with errors first and paused torrents last. Drag a header to move the column, an
 "Columns" in the toolbar shows and hides columns; the name column always stays. The sort order and
 the columns are remembered between runs.
 
-Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent;
-Escape clears the selection. The selection stays on the same torrent when the list is re-sorted or
-updated, and an update never scrolls the list. Tab moves on from the table to the search box and
-the buttons. The table has the keyboard focus when the window opens.
+Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent.
+Several torrents can be selected: Ctrl+click adds a torrent to the selection or takes it out,
+Shift+click selects the range from the last plain click or Ctrl+click to the row clicked, and
+Shift+Up and Shift+Down grow or shrink that range by a row. Ctrl+A selects every torrent the list
+shows, and only those; Escape or Ctrl+Shift+A selects none. Every selected row has the same
+highlight. The selection stays on the same torrents when the list is re-sorted or updated, and an
+update never scrolls the list. A selected torrent that the filter or the search hides, or that is
+gone from the daemon, leaves the selection, and it is not selected again when it shows again. Tab
+moves on from the table to the search box and the buttons. The table has the keyboard focus when
+the window opens.
 
 The sidebar on the left filters the list by state:
 
@@ -147,14 +153,16 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+F`                                            | anywhere in the window    | moves to the search box and selects its text |
 | `/`                                                 | anywhere but a text field | the same as `Ctrl+F`                         |
 | `Escape`                                            | in the search box         | empties it and goes back to the table        |
-| `Escape`                                            | in the table              | clears the selection                         |
+| `Escape`, `Ctrl+Shift+A`                            | in the table              | clear the selection                          |
 | `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the table              | select a torrent                             |
+| `Shift+Up`, `Shift+Down`                            | in the table              | grow or shrink the selected range by a row   |
+| `Ctrl+A`                                            | in the table              | selects every torrent the list shows         |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
-`Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
-place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
-`/`, which types a period.
+In the search box, `Ctrl+A` selects the text, not the torrents. `Ctrl+F` works on any keyboard
+layout. `/` is matched by the character the key types, not by its place on the keyboard: on the
+Russian layout it is the key that types `/` there, not the key marked `/`, which types a period.
 
 ## What 4x4 remembers
 
@@ -392,7 +400,8 @@ state, made up in memory: nothing goes over the network, and none of 4x4's files
 (the log goes to stderr only). The rates of the active torrents change on every poll. `--static`
 keeps every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10
 seconds, logs the intervals between the frames and quits; `--select N` selects the row at index `N`
-(from 0) once the list is there. For example, `just virtual just demo-synthetic --scroll` runs it
+(from 0) once the list is there, and `--extend K` then extends the selection `K` rows down, as
+Shift+Down would. For example, `just virtual just demo-synthetic --scroll` runs it
 off screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
 does not contain it.
 

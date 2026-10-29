@@ -6,7 +6,7 @@
 //! decides what matches ([`matches_search`](x4_core::matches_search)). Ctrl+F focuses the box
 //! from anywhere in the window and `/` from anywhere but a text field, so that a slash can still
 //! be typed in one. Escape in the box empties it and hands the focus back to the table, once the
-//! box has nothing of its own to dismiss. The key bindings are in [`app`](crate::app).
+//! box has nothing of its own to dismiss. The key bindings are in [`keymap`](crate::keymap).
 //!
 //! The box has no clear button: gpui-component names that button in English, outside our
 //! messages. Escape clears it instead.
@@ -18,8 +18,8 @@ use gpui_kit::{
     Window, div, px,
 };
 
-use crate::app::SEARCH_CONTEXT;
 use crate::i18n::search_placeholder_text;
+use crate::keymap::SEARCH_CONTEXT;
 
 /// The width of the search box.
 const SEARCH_WIDTH: f32 = 280.;

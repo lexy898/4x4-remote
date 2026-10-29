@@ -12,8 +12,10 @@
 //! header (through [`ViewState::toggle_sort`]) change it, and the view recomputes the rows from the
 //! last snapshot and hands them to the table, without asking the daemon. It also keeps what the
 //! user does to the columns (shown, moved, resized) in the [`UiState`], and the toolbar's column
-//! menu shows and hides them. The selection stays in the table: this stage reads nothing more for
-//! a selected torrent.
+//! menu shows and hides them. The selection of several torrents stays in the table, by hash; the
+//! view handles the selection keys of [`keymap`](crate::keymap) (Ctrl+A, Ctrl+Shift+A, Escape,
+//! Up, Down, Shift+Up, Shift+Down) and hands them to it, and passes on what the table does to its
+//! own selected row. This stage reads nothing more for a selected torrent.
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
@@ -46,13 +48,21 @@ use x4_core::{
     visibility,
 };
 
-use crate::app::{ClearSearch, ConfigProblem, FocusNext, FocusPrevious, FocusSearch, MAIN_CONTEXT};
+use crate::app::ConfigProblem;
 use crate::i18n::{column_name_text, connection_text, t, torrent_count_text};
+use crate::keymap::{
+    ClearSearch, DeselectTorrents, ExtendSelectionDown, ExtendSelectionUp, FocusNext,
+    FocusPrevious, FocusSearch, MAIN_CONTEXT, MoveSelectionDown, MoveSelectionUp,
+    SelectAllTorrents, TORRENT_LIST_CONTEXT,
+};
 use crate::search::{clear_search, focus_search, new_search_state, search_box};
 use crate::sidebar::filter_sidebar;
 use crate::status_bar::status_bar;
 use crate::theme::{apply_theme, follow_appearance, next_theme};
-use crate::torrent_table::{TorrentTable, new_table_state, show_column, show_rows};
+use crate::torrent_table::{
+    SelectionChange, TorrentTable, change_selection, follow_table, new_table_state, show_column,
+    show_rows,
+};
 use persistence::Saver;
 
 /// The height of a row of the table, for the two lines of the name cell.
@@ -328,8 +338,9 @@ impl MainView {
         self.set_view(view, cx);
     }
 
-    /// Follows what the user does in the table: the selected torrent, and the columns moved or
-    /// resized, which are remembered.
+    /// Follows what the user does in the table: what it does to its own selected row (taken over
+    /// by the selection, unless it only echoes the selection), and the columns moved or resized,
+    /// which are remembered.
     fn on_table_event(
         &mut self,
         table: &Entity<TableState<TorrentTable>>,
@@ -338,12 +349,8 @@ impl MainView {
         cx: &mut Context<'_, Self>,
     ) {
         match event {
-            TableEvent::SelectRow(row_ix) => {
-                let row_ix = *row_ix;
-                table.update(cx, |table, _| table.delegate_mut().select_row(row_ix));
-            }
-            TableEvent::ClearSelection => {
-                table.update(cx, |table, _| table.delegate_mut().clear_selected());
+            TableEvent::SelectRow(_) | TableEvent::ClearSelection => {
+                table.update(cx, follow_table);
             }
             TableEvent::ColumnWidthsChanged(widths) => {
                 if table.update(cx, |table, _| table.delegate_mut().set_widths(widths)) {
@@ -359,6 +366,12 @@ impl MainView {
             | TableEvent::RightClickedRow(_)
             | TableEvent::RightClickedCell(..) => {}
         }
+    }
+
+    /// Handles a selection key of the torrent list.
+    fn change_selection(&self, change: SelectionChange, cx: &mut Context<'_, Self>) {
+        self.table
+            .update(cx, |table, cx| change_selection(table, change, cx));
     }
 
     /// Copies the table's columns into the state to remember between runs.
@@ -565,6 +578,7 @@ impl MainView {
     fn torrent_list(&self) -> impl IntoElement + use<> {
         div()
             .id("torrent-list")
+            .key_context(TORRENT_LIST_CONTEXT)
             .flex_1()
             .min_w_0()
             .h_full()
@@ -617,10 +631,33 @@ impl Render for MainView {
                 focus_search(&view.search, window, cx);
             }))
             .on_action(cx.listener(Self::on_clear_search))
+            .on_action(cx.listener(|view, _: &SelectAllTorrents, _, cx| {
+                view.change_selection(SelectionChange::All, cx);
+            }))
+            .on_action(cx.listener(|view, _: &DeselectTorrents, _, cx| {
+                view.change_selection(SelectionChange::Nothing, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveSelectionUp, _, cx| {
+                view.change_selection(step(-1, false), cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveSelectionDown, _, cx| {
+                view.change_selection(step(1, false), cx);
+            }))
+            .on_action(cx.listener(|view, _: &ExtendSelectionUp, _, cx| {
+                view.change_selection(step(-1, true), cx);
+            }))
+            .on_action(cx.listener(|view, _: &ExtendSelectionDown, _, cx| {
+                view.change_selection(step(1, true), cx);
+            }))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(table))
             .child(status_bar)
     }
+}
+
+/// A move of the lead by one row, `step` −1 (up) or 1 (down), extending the range or not.
+const fn step(step: isize, extend: bool) -> SelectionChange {
+    SelectionChange::Step { step, extend }
 }
 
 /// Feeds the view the events of the service until the view is gone or the channel closes.

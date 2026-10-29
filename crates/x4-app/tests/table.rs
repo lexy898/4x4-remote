@@ -117,14 +117,13 @@ impl Window {
         })
     }
 
+    /// The name of the selected torrent; `None` when there is none, or more than one.
     fn selected_name(&self, cx: &mut TestAppContext) -> Option<String> {
         self.read(cx, |table, _| {
-            let selected = table.selected()?;
-            table
-                .rows()
-                .iter()
-                .find(|row| &row.hash == selected)
-                .map(|row| row.name.clone())
+            match table.selection().targets(table.rows())[..] {
+                [row] => Some(row.name.clone()),
+                _ => None,
+            }
         })
     }
 
@@ -486,7 +485,7 @@ fn selection_follows_the_hash_after_resort(cx: &mut TestAppContext) {
         cx,
     );
     let table = window.table(cx);
-    assert_eq!(window.read(cx, |table, _| table.selected_index()), Some(1));
+    assert_eq!(window.read(cx, |table, _| table.lead_index()), Some(1));
     assert_eq!(cx.update(|cx| table.read(cx).selected_row()), Some(1));
     assert_eq!(window.selected_name(cx).as_deref(), Some("a"));
     window.act(cx, |window, _| {
@@ -498,7 +497,7 @@ fn selection_follows_the_hash_after_resort(cx: &mut TestAppContext) {
     window.act(cx, |window, cx| window.click(("col-header", SIZE), cx));
     cx.run_until_parked();
     assert_eq!(window.names(cx), ["0 new", "c", "b", "a"]);
-    assert_eq!(window.read(cx, |table, _| table.selected_index()), Some(3));
+    assert_eq!(window.read(cx, |table, _| table.lead_index()), Some(3));
     assert_eq!(cx.update(|cx| table.read(cx).selected_row()), Some(3));
 
     // The keyboard moves the selection on from there.
@@ -528,7 +527,7 @@ fn selection_follows_the_hash_after_resort(cx: &mut TestAppContext) {
 
     // One that filters it out clears the selection.
     window.filter(Filter::Downloading, cx);
-    assert_eq!(window.read(cx, |table, _| table.selected().cloned()), None);
+    assert_eq!(window.read(cx, |table, _| table.selection().len()), 0);
     assert_eq!(cx.update(|cx| table.read(cx).selected_row()), None);
 }
 
@@ -542,8 +541,8 @@ fn selected_torrent_removed_clears(cx: &mut TestAppContext) {
     window.send(named(&["a", "c"]), cx);
 
     let table = window.table(cx);
-    assert_eq!(window.read(cx, |table, _| table.selected().cloned()), None);
-    assert_eq!(window.read(cx, |table, _| table.selected_index()), None);
+    assert_eq!(window.read(cx, |table, _| table.selection().len()), 0);
+    assert_eq!(window.read(cx, |table, _| table.lead_index()), None);
     assert_eq!(cx.update(|cx| table.read(cx).selected_row()), None);
     window.act(cx, |window, _| {
         assert_eq!(window.find(("row", 1usize)).selected(), Some(false));
@@ -557,7 +556,7 @@ fn selected_torrent_removed_clears(cx: &mut TestAppContext) {
 
     // It does not come back when the torrent does.
     window.send(named(&["a", "b", "c"]), cx);
-    assert_eq!(window.read(cx, |table, _| table.selected().cloned()), None);
+    assert_eq!(window.read(cx, |table, _| table.selection().len()), 0);
 }
 
 #[gpui_kit::test]
@@ -579,7 +578,7 @@ fn new_snapshot_keeps_scroll_offset(cx: &mut TestAppContext) {
     window.act(cx, TestWindowExt::render_frame);
 
     assert_eq!(cx.update(|cx| scroll_offset(&table, cx)), scrolled);
-    assert_eq!(window.read(cx, |table, _| table.selected_index()), Some(1));
+    assert_eq!(window.read(cx, |table, _| table.lead_index()), Some(1));
     assert_eq!(cx.update(|cx| table.read(cx).selected_row()), Some(1));
 
     // A snapshot that only drops rows below the view does not move it either.

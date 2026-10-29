@@ -1,5 +1,4 @@
-use gpui_kit::TestAppContext;
-use gpui_kit::px;
+use gpui_kit::{Fill, TestAppContext, px};
 use x4_core::test_support::torrent;
 use x4_core::{DisplayState, Torrent, default_columns};
 
@@ -14,49 +13,132 @@ fn table() -> TorrentTable {
     TorrentTable::new(default_columns(), (SortKey::Name, SortDirection::Ascending))
 }
 
+/// The names of the selected rows, in the order shown.
+fn selected(table: &TorrentTable) -> Vec<&str> {
+    table
+        .selection()
+        .targets(table.rows())
+        .iter()
+        .map(|row| row.name.as_str())
+        .collect()
+}
+
 #[test]
-fn set_rows_keeps_the_selected_torrent_by_hash() {
+fn set_rows_keeps_the_selected_torrents_by_hash() {
     let mut table = table();
     table.set_rows(rows(&["a", "b", "c"]));
-    table.select_row(1);
-    let selected = table.selected().cloned();
+    table.change_selection(SelectionChange::Click(1));
+    table.change_selection(SelectionChange::Toggle(2));
 
-    table.set_rows(rows(&["0", "c", "b", "a"]));
+    assert!(table.set_rows(rows(&["0", "c", "b", "a"])));
 
-    assert_eq!(table.selected().cloned(), selected);
-    assert_eq!(table.selected_index(), Some(2));
+    assert_eq!(selected(&table), ["c", "b"]);
+    assert_eq!(table.lead_index(), Some(1), "the lead, c, moved");
 }
 
 #[test]
 fn set_rows_drops_a_torrent_that_is_gone() {
     let mut table = table();
     table.set_rows(rows(&["a", "b"]));
-    table.select_row(0);
+    table.change_selection(SelectionChange::Click(0));
 
-    table.set_rows(rows(&["b"]));
-    assert_eq!(table.selected(), None);
-    assert_eq!(table.selected_index(), None);
+    assert!(table.set_rows(rows(&["b"])));
+    assert!(table.selection().is_empty());
+    assert_eq!(table.lead_index(), None);
 
     table.set_rows(rows(&["a", "b"]));
-    assert_eq!(
-        table.selected(),
-        None,
+    assert!(
+        table.selection().is_empty(),
         "a torrent that comes back is not selected again"
     );
 }
 
 #[test]
-fn selecting_past_the_rows_selects_nothing() {
+fn set_rows_says_whether_anything_changed() {
     let mut table = table();
-    table.set_rows(rows(&["a"]));
-    table.select_row(0);
+    let shown = rows(&["a", "b"]);
+    assert!(table.set_rows(Arc::clone(&shown)));
+    table.change_selection(SelectionChange::Click(0));
 
-    table.select_row(5);
-    assert_eq!(table.selected(), None);
+    assert!(!table.set_rows(Arc::clone(&shown)), "the same rows");
+    assert!(!table.set_rows(rows(&["a", "b"])), "equal rows");
+    assert!(table.set_rows(rows(&["b", "a"])), "the order changed");
+    assert!(table.set_rows(rows(&["b"])), "the selected torrent is gone");
+    assert!(table.selection().is_empty());
+}
 
-    table.select_row(0);
-    table.clear_selected();
-    assert_eq!(table.selected_index(), None);
+#[test]
+fn clicking_past_the_rows_changes_nothing() {
+    let mut table = table();
+    table.set_rows(rows(&["a", "b"]));
+    table.change_selection(SelectionChange::Click(0));
+
+    table.change_selection(SelectionChange::Click(5));
+    table.change_selection(SelectionChange::Toggle(5));
+    table.change_selection(SelectionChange::ExtendTo(5));
+    assert_eq!(selected(&table), ["a"]);
+
+    table.change_selection(SelectionChange::Nothing);
+    assert!(table.selection().is_empty());
+    assert_eq!(table.lead_index(), None);
+}
+
+#[test]
+fn the_lead_index_is_the_lead_only_while_it_is_selected() {
+    let mut table = table();
+    table.set_rows(rows(&["a", "b", "c"]));
+    table.change_selection(SelectionChange::Click(0));
+    table.change_selection(SelectionChange::Toggle(2));
+    assert_eq!(table.lead_index(), Some(2));
+
+    table.change_selection(SelectionChange::Toggle(2));
+
+    assert_eq!(selected(&table), ["a"]);
+    assert_eq!(table.lead_index(), None);
+    // Shift+Down goes on from the lead all the same.
+    table.change_selection(SelectionChange::Step {
+        step: -1,
+        extend: true,
+    });
+    assert_eq!(selected(&table), ["b", "c"]);
+    assert_eq!(table.lead_index(), Some(1));
+}
+
+#[gpui_kit::test]
+fn a_selected_idle_row_keeps_the_full_selection_color(cx: &mut TestAppContext) {
+    let mut table = table();
+    let downloading = Torrent {
+        state: DisplayState::Downloading,
+        ..torrent("active")
+    };
+    // A seeder with nobody downloading from it is idle, and dimmed.
+    table.set_rows(
+        [
+            Row::from(&torrent("idle")),
+            Row::from(&downloading),
+            Row::from(&torrent("not selected")),
+        ]
+        .into(),
+    );
+    table.change_selection(SelectionChange::Click(0));
+    table.change_selection(SelectionChange::Toggle(1));
+    cx.update(gpui_kit::init);
+
+    let (marks, background) = cx.update(|cx| {
+        let theme = cx.theme();
+        let marks = [0, 1, 2].map(|ix| {
+            table
+                .selection_mark(ix, theme)
+                .map(|mut mark| (mark.style().background.clone(), mark.style().opacity))
+        });
+        (marks, Fill::from(selected_background(theme)))
+    });
+
+    assert_eq!(
+        marks,
+        [Some((Some(background), None)), None, None],
+        "the idle row is marked at full color; the lead is the table's to paint"
+    );
 }
 
 #[gpui_kit::test]

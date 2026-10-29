@@ -2,9 +2,17 @@
 //! the last snapshot, the columns as the user arranged them, the sort order and the selection.
 //!
 //! The rows come decided from `x4-core` ([`Row`]); the cells word them only when they are drawn,
-//! so a snapshot formats no text for the rows off screen. The selection is kept by hash, so it
-//! stays on the same torrent when a new snapshot re-sorts or filters the list, and a snapshot
-//! never scrolls the view (`show_rows`).
+//! so a snapshot formats no text for the rows off screen.
+//!
+//! The selection is the delegate's [`Selection`], kept by hash, so it stays on the same torrents
+//! when a new snapshot re-sorts or filters the list; the rows that leave the list leave it, and a
+//! snapshot never scrolls the view (`show_rows`). The table itself has one selected row only: it
+//! mirrors the selection's lead while the lead is selected, and has none otherwise, so that it
+//! never paints a row that is not selected. The other selected rows get a mark of the same color
+//! from the delegate. Plain, Ctrl and Shift clicks on a row are handled here before the table sees
+//! them (`render_tr`), and so are the selection keys (`change_selection`). What the table does to
+//! its row by itself (Home, End, Page Up, Page Down, Escape) is taken over by `follow_table`, which
+//! tells such a change from the table echoing ours by comparing its row with the lead.
 //!
 //! The table's own sorting and column selection are off. A click on a header goes to the handler
 //! set with [`TorrentTable::on_sort`], through which the main view, the owner of the sort order,
@@ -21,18 +29,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
-use gpui_kit::component::{ActiveTheme as _, Theme};
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeToken};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
-    Window, div, px,
+    App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    TestSupportExt as _, Window, div, px,
 };
 use x4_core::{
-    ColumnId, ColumnState, EmptyTable, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, Row, SortDirection,
-    SortKey, TableModel, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
+    ColumnId, ColumnState, EmptyTable, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, Row, Selection,
+    SortDirection, SortKey, TableModel, move_shown_column, set_column_shown, set_shown_widths,
+    shown_columns,
 };
-use x4_rpc::HashString;
 
 use crate::i18n::{column_name_text, empty_table_text};
 use crate::theme::row_opacity;
@@ -40,15 +48,39 @@ use crate::theme::row_opacity;
 /// What a click on a column header does, given the column.
 type SortHandler = Rc<dyn Fn(ColumnId, &mut Window, &mut App)>;
 
+/// What the user does to the selection, with the mouse or a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionChange {
+    /// A plain click on the row at this index, or a key of the table's that lands on it: only that
+    /// row.
+    Click(usize),
+    /// A Ctrl+click on the row: it goes in or out of the selection.
+    Toggle(usize),
+    /// A Shift+click on the row: the range from the anchor to it.
+    ExtendTo(usize),
+    /// Up or Down, `step` rows from the lead (negative is up): only that row, or with `extend`
+    /// (Shift) the range from the anchor to it.
+    Step {
+        /// How many rows, and which way.
+        step: isize,
+        /// Whether the range from the anchor follows the lead.
+        extend: bool,
+    },
+    /// Ctrl+A: every row shown.
+    All,
+    /// Escape or Ctrl+Shift+A: no row.
+    Nothing,
+}
+
 /// The delegate of the torrent table: the rows to show, the columns, the sort order the header
-/// marks and the selected torrent.
+/// marks and the selection.
 pub struct TorrentTable {
     /// The rows in the order shown, shared with the main view's model.
     rows: Arc<[Row]>,
     /// Every column, shown or hidden, in the order the user arranged them.
     columns: Vec<ColumnState>,
-    /// The selected torrent, which stays selected wherever a new snapshot puts it.
-    selected: Option<HashString>,
+    /// The selected torrents, which stay selected wherever a new snapshot puts them.
+    selection: Selection,
     /// The sort order of the rows, which the header of its column marks.
     sort: (SortKey, SortDirection),
     /// What the table says when it has no rows.
@@ -67,7 +99,7 @@ impl TorrentTable {
         Self {
             rows: Arc::new([]),
             columns,
-            selected: None,
+            selection: Selection::default(),
             sort,
             empty: EmptyTable::Waiting,
             stale: false,
@@ -83,15 +115,15 @@ impl TorrentTable {
         self
     }
 
-    /// Takes the rows of a new snapshot. The selection stays on the same torrent if it is still
-    /// among them, wherever it is now, and is dropped otherwise.
-    pub fn set_rows(&mut self, rows: Arc<[Row]>) {
-        if let Some(selected) = &self.selected
-            && !rows.iter().any(|row| &row.hash == selected)
-        {
-            self.selected = None;
-        }
+    /// Takes the rows of a new snapshot, or of a new filter or search. The selection keeps the
+    /// torrents that are still among them, wherever they are now, and drops the others, so that an
+    /// action never reaches a torrent the user cannot see. Returns whether the rows or the
+    /// selection changed, that is whether the table must be drawn again.
+    pub fn set_rows(&mut self, rows: Arc<[Row]>) -> bool {
+        let rows_changed = !Arc::ptr_eq(&self.rows, &rows) && *self.rows != *rows;
         self.rows = rows;
+        let selection_changed = self.selection.retain_visible(&self.rows);
+        rows_changed || selection_changed
     }
 
     /// The rows in the order shown.
@@ -106,17 +138,23 @@ impl TorrentTable {
         &self.columns
     }
 
-    /// The selected torrent, if any.
+    /// The selected torrents. What an action reaches is `selection().targets(rows())`: the
+    /// selected rows that are shown, in the order shown.
     #[must_use]
-    pub fn selected(&self) -> Option<&HashString> {
-        self.selected.as_ref()
+    pub fn selection(&self) -> &Selection {
+        &self.selection
     }
 
-    /// The row the selected torrent is in now, if any.
+    /// The row of the selection's lead (the row the keys move from), while the lead is selected:
+    /// the row the table marks as its own selected row. `None` when nothing is selected, and when
+    /// a Ctrl+click took the lead out of the selection.
     #[must_use]
-    pub fn selected_index(&self) -> Option<usize> {
-        let selected = self.selected.as_ref()?;
-        self.rows.iter().position(|row| &row.hash == selected)
+    pub fn lead_index(&self) -> Option<usize> {
+        let lead = self
+            .selection
+            .lead()
+            .filter(|lead| self.selection.contains(lead))?;
+        self.rows.iter().position(|row| &row.hash == lead)
     }
 
     /// The sort order the header marks.
@@ -130,14 +168,32 @@ impl TorrentTable {
         self.sort = sort;
     }
 
-    /// Selects the torrent in the row at `row_ix`; an index past the rows selects nothing.
-    pub(crate) fn select_row(&mut self, row_ix: usize) {
-        self.selected = self.rows.get(row_ix).map(|row| row.hash.clone());
-    }
-
-    /// Selects nothing.
-    pub(crate) fn clear_selected(&mut self) {
-        self.selected = None;
+    /// Applies `change` to the selection. A click on an index past the rows changes nothing.
+    pub(crate) fn change_selection(&mut self, change: SelectionChange) {
+        let Self {
+            rows, selection, ..
+        } = self;
+        let hash_at = |row_ix: usize| rows.get(row_ix).map(|row| &row.hash);
+        match change {
+            SelectionChange::Click(row_ix) => {
+                if let Some(hash) = hash_at(row_ix) {
+                    selection.click(hash);
+                }
+            }
+            SelectionChange::Toggle(row_ix) => {
+                if let Some(hash) = hash_at(row_ix) {
+                    selection.toggle(hash);
+                }
+            }
+            SelectionChange::ExtendTo(row_ix) => {
+                if let Some(hash) = hash_at(row_ix) {
+                    selection.extend_to(hash, rows);
+                }
+            }
+            SelectionChange::Step { step, extend } => selection.move_lead(step, rows, extend),
+            SelectionChange::All => selection.select_all(rows),
+            SelectionChange::Nothing => selection.clear(),
+        }
     }
 
     /// Whether the rows are drawn as stale data.
@@ -166,6 +222,25 @@ impl TorrentTable {
         }
     }
 
+    /// The mark of a selected row that the table does not paint itself: every selected row but
+    /// the lead, which is the table's own selected row. It lies under the cells, over the whole
+    /// row, in the color the table paints its own row with, so that every selected row looks the
+    /// same. It is a child rather than the row's background, because the table's hover color
+    /// replaces that background under the pointer, and the row would look unselected; the mark
+    /// stays over the hover color. An idle row's dimmed cells leave it at full color.
+    fn selection_mark(&self, row_ix: usize, theme: &Theme) -> Option<Stateful<Div>> {
+        let hash = &self.rows.get(row_ix)?.hash;
+        // A selected lead is the table's row (`lead_index`).
+        let marked = self.selection.contains(hash) && self.selection.lead() != Some(hash);
+        marked.then(|| {
+            div()
+                .id(("row-selection", row_ix))
+                .absolute()
+                .inset_0()
+                .bg(selected_background(theme))
+        })
+    }
+
     /// Takes the widths of the shown columns, in order, as the table reports them; returns
     /// whether any changed.
     pub(crate) fn set_widths(&mut self, widths: &[Pixels]) -> bool {
@@ -183,8 +258,9 @@ impl TorrentTable {
     }
 }
 
-/// The table's state around `delegate`: one selected row at a time, which does not wrap around
-/// at either end, and none of the table's own sorting or column selection.
+/// The table's state around `delegate`: its selected row does not wrap around at either end, a
+/// Ctrl or Shift click leaves it alone (the delegate handles those), and none of the table's own
+/// sorting or column selection.
 pub(crate) fn new_table_state(
     delegate: TorrentTable,
     window: &mut Window,
@@ -194,43 +270,100 @@ pub(crate) fn new_table_state(
         .col_selectable(false)
         .sortable(false)
         .loop_selection(false)
+        .select_on_modifier_click(false)
 }
 
-/// Shows the rows of `model` in `table`. The table's selected row follows the selected torrent
-/// to its new place, or is cleared when the torrent is gone, and the view stays where it is,
-/// even when the torrent moved out of it.
+/// The background of a selected row: the color gpui-component's table paints its own selected
+/// row with (`TableState`'s row rendering), so that our marks match it.
+fn selected_background(theme: &Theme) -> ThemeToken {
+    if theme.list.active_highlight {
+        theme.tokens.table_active
+    } else {
+        theme.tokens.accent
+    }
+}
+
+/// Shows the rows of `model` in `table`. The selection keeps the torrents still shown, the table's
+/// selected row follows the lead to its new place, or is cleared when the lead is gone, and the
+/// view stays where it is, even when the lead moved out of it. The table is drawn again only when
+/// the rows, the selection or the empty text changed.
 pub(crate) fn show_rows(
     table: &mut TableState<TorrentTable>,
     model: &TableModel,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
     let delegate = table.delegate_mut();
-    delegate.set_rows(Arc::clone(&model.rows));
+    let mut changed = delegate.set_rows(Arc::clone(&model.rows));
     if let Some(empty) = model.empty() {
+        changed |= delegate.empty != empty;
         delegate.empty = empty;
     }
-    let selected = table.delegate().selected_index();
-    if selected != table.selected_row() {
-        match selected {
-            Some(row_ix) => {
-                // Selecting a row scrolls to it. A snapshot must not move the view, so that
-                // scroll is taken back; one the user asked for earlier in this frame stays.
-                let pending = table
-                    .vertical_scroll_handle
-                    .0
-                    .borrow()
-                    .deferred_scroll_to_item;
-                table.set_selected_row(row_ix, cx);
-                table
-                    .vertical_scroll_handle
-                    .0
-                    .borrow_mut()
-                    .deferred_scroll_to_item = pending;
-            }
-            None => table.clear_selection(cx),
-        }
+    mirror_lead(table, false, cx);
+    if changed {
+        cx.notify();
     }
+}
+
+/// Applies what the user did to the selection of `table`, and moves the table's selected row to
+/// the lead. A click and a key bring the lead into view; Ctrl+A leaves the view where it is.
+pub(crate) fn change_selection(
+    table: &mut TableState<TorrentTable>,
+    change: SelectionChange,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    table.delegate_mut().change_selection(change);
+    mirror_lead(table, change != SelectionChange::All, cx);
     cx.notify();
+}
+
+/// Takes over what the table did to its own selected row, when that is not the lead: its keys
+/// (Home, End, Page Up, Page Down) select only the row they land on, and its Escape, which
+/// cleared its row, clears the selection. Called for each of the table's `SelectRow` and
+/// `ClearSelection` events. Most of them echo what [`mirror_lead`] did, and then the table's row
+/// is the lead already and nothing changes. The table's row is read when the event arrives, not
+/// taken from the event, so an event that a later change has overtaken changes nothing either.
+pub(crate) fn follow_table(
+    table: &mut TableState<TorrentTable>,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    let row = table.selected_row();
+    if row == table.delegate().lead_index() {
+        return;
+    }
+    let change = row.map_or(SelectionChange::Nothing, SelectionChange::Click);
+    change_selection(table, change, cx);
+}
+
+/// Makes the table's own selected row the lead while the lead is selected, and clears it
+/// otherwise, so that the table never paints a row the selection does not hold. With `scroll`,
+/// the table scrolls the lead into view as it selects it; without, a scroll it would start is
+/// taken back, and one the user asked for earlier in this frame stays.
+fn mirror_lead(
+    table: &mut TableState<TorrentTable>,
+    scroll: bool,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    let lead = table.delegate().lead_index();
+    if lead == table.selected_row() {
+        return;
+    }
+    match lead {
+        Some(row_ix) if scroll => table.set_selected_row(row_ix, cx),
+        Some(row_ix) => {
+            let pending = table
+                .vertical_scroll_handle
+                .0
+                .borrow()
+                .deferred_scroll_to_item;
+            table.set_selected_row(row_ix, cx);
+            table
+                .vertical_scroll_handle
+                .0
+                .borrow_mut()
+                .deferred_scroll_to_item = pending;
+        }
+        None => table.clear_selection(cx),
+    }
 }
 
 /// Shows or hides the column `id` and rebuilds the table's columns, keeping the widths the user
@@ -299,10 +432,27 @@ impl TableDelegate for TorrentTable {
         &mut self,
         row_ix: usize,
         _: &mut Window,
-        _: &mut Context<'_, TableState<Self>>,
+        cx: &mut Context<'_, TableState<Self>>,
     ) -> Stateful<Div> {
         // No opacity here: it would also fade the selected row's background (`cell_element`).
-        div().id(("row", row_ix))
+        div()
+            .id(("row", row_ix))
+            .when_some(self.selection_mark(row_ix, cx.theme()), |row, mark| {
+                row.child(mark.test_support())
+            })
+            // Added before the table's own click listener, so it runs first. The table selects
+            // its row on a plain click too, which then echoes this.
+            .on_click(cx.listener(move |table, event: &ClickEvent, _, cx| {
+                let modifiers = event.modifiers();
+                let change = if modifiers.shift {
+                    SelectionChange::ExtendTo(row_ix)
+                } else if modifiers.secondary(cx) {
+                    SelectionChange::Toggle(row_ix)
+                } else {
+                    SelectionChange::Click(row_ix)
+                };
+                change_selection(table, change, cx);
+            }))
     }
 
     fn render_td(
