@@ -10,6 +10,11 @@
 //! the `key_repeats` module), and neither does a request for an action that is already on its way
 //! to the same torrents.
 //!
+//! Delete and Shift+Delete, and the items of the toolbar's Remove menu, only open a dialog that asks
+//! first (the `removal` module), for the targets and the summary of that moment; no second dialog
+//! opens over it. The dialog's button sends the removal through the same path as the other actions,
+//! for the hashes it took when it opened.
+//!
 //! The view keeps the availability the toolbar shows up to date: it observes the table, which
 //! holds the selection and the rows, and draws the toolbar again only when the availability has
 //! changed.
@@ -23,14 +28,16 @@ use gpui_kit::{
     Action, App, Context, Div, Focusable as _, InteractiveElement as _, KeyUpEvent, Subscription,
     Window,
 };
-use x4_core::{ActionError, ActionId, Availability, Command, availability};
+use x4_core::{ActionError, ActionId, Availability, Command, availability, removal_summary};
+use x4_rpc::{HashString, RemoveData};
 
 use super::MainView;
 use crate::actions::{
-    ActionKind, PauseTorrents, ReannounceTorrents, StartTorrents, StartTorrentsNow, ToggleTorrents,
-    TorrentRequest, VerifyTorrents, decide,
+    ActionKind, PauseTorrents, ReannounceTorrents, RemoveTorrents, RemoveTorrentsWithData,
+    StartTorrents, StartTorrentsNow, ToggleTorrents, TorrentRequest, VerifyTorrents, decide,
 };
 use crate::key_repeats::KeyRepeats;
+use crate::removal::{self, Removal};
 
 /// Marks the notification of a failed action, together with the kind of action: the next failure
 /// of the same kind replaces it, so that a burst of failures leaves one notification per kind, the
@@ -91,6 +98,18 @@ impl MainView {
             return;
         };
         let hashes: Vec<_> = targets.iter().map(|row| row.hash.clone()).collect();
+        self.send(kind, hashes, window, cx);
+    }
+
+    /// Sends the action `kind` on the torrents `hashes` and keeps it until it is answered, unless
+    /// the action sent last is the same and still waits.
+    fn send(
+        &mut self,
+        kind: ActionKind,
+        hashes: Vec<HashString>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         let count = hashes.len();
         let Some(id) = self.pending.start(kind, &hashes) else {
             tracing::debug!(
@@ -112,6 +131,69 @@ impl MainView {
             );
             self.action_finished(id, &Err(ActionError::NotConnected), window, cx);
         }
+    }
+
+    /// Opens the dialog that asks whether to remove the selected torrents that the list shows now,
+    /// from the list or with their files (`data`), if they allow removing; otherwise, or while
+    /// another dialog is open, does nothing. The dialog takes the targets and their summary now.
+    ///
+    /// The table gets the focus first, so that closing the dialog gives it back to the table,
+    /// whether the dialog was opened from a key or from the toolbar's menu.
+    pub(crate) fn ask_removal(
+        &mut self,
+        data: RemoveData,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if window.has_active_dialog(cx) {
+            tracing::debug!(?data, "a dialog is open already; no second one opens");
+            return;
+        }
+        let hashes: Vec<HashString> = {
+            let table = self.table.read(cx).delegate();
+            let targets = table.selection().targets(table.rows());
+            if !availability(self.status.connected(), &targets).remove {
+                tracing::debug!(?data, "the selection cannot be removed now; nothing asked");
+                return;
+            }
+            targets.iter().map(|row| row.hash.clone()).collect()
+        };
+        let Some(snapshot) = &self.last_snapshot else {
+            tracing::debug!(?data, "no list has come yet; nothing asked");
+            return;
+        };
+        let summary = removal_summary(snapshot, &hashes);
+        tracing::debug!(?data, count = hashes.len(), "asking before a removal");
+        window.focus(&self.table.focus_handle(cx), cx);
+        removal::open(
+            Removal::new(data, hashes, &summary),
+            cx.weak_entity(),
+            window,
+            cx,
+        );
+    }
+
+    /// Handles the confirm button of a removal dialog: removes the torrents `hashes` the dialog
+    /// took when it opened, keeping or deleting their files as `data` says, whatever the list shows
+    /// now. Returns `false`, and sends nothing, while the daemon is not connected; the dialog then
+    /// stays open.
+    pub(crate) fn confirm_removal(
+        &mut self,
+        data: RemoveData,
+        hashes: Vec<HashString>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        if !self.status.connected() {
+            tracing::debug!(
+                ?data,
+                count = hashes.len(),
+                "the daemon is not connected; the removal is not sent"
+            );
+            return false;
+        }
+        self.send(ActionKind::Remove(data), hashes, window, cx);
+        true
     }
 
     /// Handles a press of a toolbar button: carries out `request`, then hands the keyboard focus
@@ -185,6 +267,13 @@ pub(super) fn on_torrent_actions(root: Div, cx: &Context<'_, MainView>) -> Div {
         TorrentRequest::Reannounce,
         cx,
     ))
+    .on_action(once_per_press::<RemoveTorrents>(cx, |view, window, cx| {
+        view.ask_removal(RemoveData::Keep, window, cx);
+    }))
+    .on_action(once_per_press::<RemoveTorrentsWithData>(
+        cx,
+        |view, window, cx| view.ask_removal(RemoveData::Delete, window, cx),
+    ))
 }
 
 /// The handler of the action `A`, which asks the view of `cx` for `request`, unless the action
@@ -193,11 +282,96 @@ fn handler<A: Action>(
     request: TorrentRequest,
     cx: &Context<'_, MainView>,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
-    cx.listener(move |view, _: &A, window, cx| {
-        if view.key_repeats.borrow().repeating() {
-            tracing::trace!(?request, "a held key repeats; the action is not run again");
-            return;
-        }
+    once_per_press::<A>(cx, move |view, window, cx| {
         view.request(request, window, cx);
     })
+}
+
+/// The handler of the action `A`, which runs `run` on the view of `cx`, unless the action comes
+/// from a repeat of a held key.
+fn once_per_press<A: Action>(
+    cx: &Context<'_, MainView>,
+    run: impl Fn(&mut MainView, &mut Window, &mut Context<'_, MainView>) + 'static,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    cx.listener(move |view, action: &A, window, cx| {
+        if view.key_repeats.borrow().repeating() {
+            tracing::trace!(
+                action = action.name(),
+                "a held key repeats; the action is not run again"
+            );
+            return;
+        }
+        run(view, window, cx);
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gpui_kit::{AppContext as _, Entity, TestAppContext};
+    use x4_core::test_support::torrent;
+    use x4_core::{Action, ConnectionState, Snapshot, UiState, status_model};
+
+    use super::*;
+    use crate::app;
+
+    #[gpui_kit::test]
+    fn a_removal_confirmed_while_disconnected_is_not_sent(cx: &mut TestAppContext) {
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, commands_rx) = crossbeam_channel::unbounded();
+        let (handle, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        let hashes = vec![torrent("a").hash];
+        let confirm = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |view, cx| {
+                    view.confirm_removal(RemoveData::Delete, hashes.clone(), window, cx)
+                })
+            })
+            .expect("the window is open")
+        };
+        let sent = || -> Vec<Action> {
+            commands_rx
+                .try_iter()
+                .filter_map(|command| match command {
+                    Command::Run(_, action) => Some(action),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Not connected: a click that came before its button was drawn disabled sends nothing,
+        // and the dialog stays open.
+        assert!(!confirm(cx));
+        assert_eq!(sent(), []);
+
+        let connected = Snapshot {
+            torrents: vec![torrent("a")],
+            listed: true,
+            session: None,
+            free_space_bytes: None,
+            rate_down: 0,
+            rate_up: 0,
+            connection: ConnectionState::Connected,
+            stale: false,
+        };
+        cx.update(|cx| {
+            view.update(cx, |view, _| {
+                view.status = status_model(&Arc::new(connected));
+            });
+        });
+        assert!(confirm(cx));
+        assert_eq!(
+            sent(),
+            [Action::Remove {
+                hashes: hashes.clone(),
+                data: RemoveData::Delete
+            }]
+        );
+    }
 }

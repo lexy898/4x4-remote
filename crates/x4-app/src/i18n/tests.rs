@@ -5,9 +5,10 @@ use std::time::Duration;
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
     ActionError, ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView,
-    Filter, HumanSize, QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit,
-    UnsupportedReason, human_size, human_speed,
+    Filter, HumanSize, QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, Subtitle,
+    TimeUnit, UnsupportedReason, human_size, human_speed,
 };
+use x4_rpc::RemoveData;
 
 use super::*;
 use crate::actions::{ActionKind, PendingAction};
@@ -628,5 +629,86 @@ fn a_failed_action_of_an_unknown_kind_is_still_worded() {
             "busy".to_owned()
         ))),
         "An action failed: busy"
+    );
+}
+
+fn summary(count: usize, downloaded: u64, names: &[&str]) -> RemovalSummary {
+    RemovalSummary {
+        count,
+        downloaded: human_size(downloaded),
+        names: names.iter().map(|name| (*name).to_owned()).collect(),
+        more: count - names.len(),
+    }
+}
+
+#[test]
+fn the_dialog_states_count_names_and_downloaded_size() {
+    let one = summary(1, 1536, &["a"]);
+    let seven = summary(7, 24_592_841_836, &["a", "b", "c", "d", "e"]);
+
+    assert_eq!(
+        removal_title_text(RemoveData::Keep, &one),
+        "Remove 1 torrent from the list?"
+    );
+    assert_eq!(
+        removal_title_text(RemoveData::Keep, &seven),
+        "Remove 7 torrents from the list?"
+    );
+    assert_eq!(
+        removal_title_text(RemoveData::Delete, &one),
+        "Delete 1 torrent and its files?"
+    );
+    assert_eq!(
+        removal_title_text(RemoveData::Delete, &seven),
+        "Delete 7 torrents and their files?"
+    );
+
+    assert_eq!(removal_more_text(&one), None, "every name is listed");
+    assert_eq!(
+        removal_more_text(&seven).as_deref(),
+        Some("and 2 more"),
+        "after the first five names"
+    );
+
+    assert_eq!(
+        removal_files_text(RemoveData::Keep, &seven),
+        "The downloaded files stay on the server."
+    );
+    assert_eq!(
+        removal_files_text(RemoveData::Delete, &seven),
+        "22.9 GiB of downloaded data will be deleted from the server. This cannot be undone."
+    );
+    assert_eq!(
+        removal_files_text(RemoveData::Delete, &one),
+        "1.5 KiB of downloaded data will be deleted from the server. This cannot be undone."
+    );
+}
+
+#[test]
+fn a_failed_removal_says_whether_the_files_were_to_go() {
+    let keep = ActionKind::Remove(RemoveData::Keep);
+    let delete = ActionKind::Remove(RemoveData::Delete);
+    let busy = ActionError::Rpc(ConnectionError::Server("busy".to_owned()));
+
+    assert_eq!(failed(keep, 1, &busy), "Could not remove the torrent: busy");
+    assert_eq!(
+        failed(delete, 3, &busy),
+        "Could not remove 3 torrents and delete their files: busy"
+    );
+    assert_eq!(
+        failed(delete, 1, &ActionError::NotConnected),
+        "Could not remove the torrent and delete its files: the server is not connected, so \
+         nothing was sent"
+    );
+    let timeout = ActionError::Rpc(ConnectionError::Timeout);
+    assert_eq!(
+        failed(keep, 2, &timeout),
+        "The server did not answer while removing 2 torrents; they may have been removed. The \
+         list will show the result"
+    );
+    assert_eq!(
+        failed(delete, 2, &timeout),
+        "The server did not answer while removing 2 torrents and deleting their files; they may \
+         have been removed and their files deleted. The list will show the result"
     );
 }

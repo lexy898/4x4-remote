@@ -21,7 +21,8 @@
 //! The selected torrents can be started, paused, started now, verified and reannounced, from their
 //! keys and from the toolbar's Start and Pause (the `torrent_actions` module). Each action goes
 //! out as a command and is kept until the service answers it; a failure is shown as a notification.
-//! A held key sends its action once.
+//! A held key sends its action once. Delete, Shift+Delete and the toolbar's Remove menu open a
+//! dialog that asks before the torrents are removed, with or without their files.
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.

@@ -9,6 +9,9 @@
 //!   while no menu of it is open (`!PopupMenu`). The search box lies outside the list, so Ctrl+A,
 //!   Delete or Space there edit its text and never reach the torrents;
 //! - the window's own keys (Ctrl+F, `/`) work in the whole main window (`MainWindow`);
+//! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
+//!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
+//!   whatever has the focus, and Enter on a focused Cancel must never delete files;
 //! - only Ctrl+Q has no context. A binding without one also fires in a text field, before the
 //!   field's own binding of the same key, so it would take the key from the search box.
 //!
@@ -25,8 +28,8 @@ use std::rc::Rc;
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, NoAction, actions};
 
 use crate::actions::{
-    PauseTorrents, ReannounceTorrents, StartTorrents, StartTorrentsNow, ToggleTorrents,
-    VerifyTorrents,
+    PauseTorrents, ReannounceTorrents, RemoveTorrents, RemoveTorrentsWithData, StartTorrents,
+    StartTorrentsNow, ToggleTorrents, VerifyTorrents,
 };
 
 actions!(
@@ -83,6 +86,8 @@ const TABLE_CONTEXT: &str = "DataTable";
 /// context menu is drawn inside the list, so without `!PopupMenu` Delete would act on the
 /// torrents behind it.
 const TORRENTS: &str = "TorrentList && !PopupMenu";
+/// The key context around the buttons of a removal dialog, inside gpui-component's `Dialog`.
+pub(crate) const REMOVAL_FOOTER_CONTEXT: &str = "RemovalDialogFooter";
 
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
@@ -245,6 +250,24 @@ pub const BINDINGS: &[Binding] = &[
         keys: "ctrl-r",
         action: || Box::new(ReannounceTorrents),
         context: Some(TORRENTS),
+    },
+    // Both only open a dialog that asks first; Shift+Delete never deletes by itself.
+    Binding {
+        keys: "delete",
+        action: || Box::new(RemoveTorrents),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "shift-delete",
+        action: || Box::new(RemoveTorrentsWithData),
+        context: Some(TORRENTS),
+    },
+    // Deeper than the dialog's own Enter, which confirms the dialog whatever has the focus: bound
+    // to nothing here, Enter goes on to the focused button and presses it, as Space does.
+    Binding {
+        keys: "enter",
+        action: || Box::new(NoAction),
+        context: Some(REMOVAL_FOOTER_CONTEXT),
     },
 ];
 

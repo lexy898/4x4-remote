@@ -7,6 +7,10 @@
 //! (a key, a toolbar button, later the context menu) goes through `decide`, so a disabled action
 //! does nothing from any of them.
 //!
+//! Removing is not a request: [`RemoveTorrents`] and [`RemoveTorrentsWithData`] only open a dialog
+//! that asks first (the `removal` module), and the dialog's own button sends the removal of the
+//! torrents it named when it opened.
+//!
 //! Each action sent is kept (`PendingActions`) under its [`ActionId`], with its kind and the
 //! torrents it named, until the service says how it went. While the action sent last waits, the
 //! same action on the same torrents is not sent again: a second press of its key or a double click
@@ -18,7 +22,7 @@ use std::collections::HashMap;
 
 use gpui_kit::{SharedString, actions};
 use x4_core::{Action, ActionError, ActionId, Availability, Row, ToggleKind, toggle_kind};
-use x4_rpc::HashString;
+use x4_rpc::{HashString, RemoveData};
 
 use crate::i18n::action_failure_text;
 
@@ -37,6 +41,12 @@ actions!(
         VerifyTorrents,
         /// Asks the trackers of the selected torrents for more peers.
         ReannounceTorrents,
+        /// Asks whether to remove the selected torrents from the list, keeping their files; only
+        /// the dialog's own button removes them.
+        RemoveTorrents,
+        /// Asks whether to remove the selected torrents and delete their files from the server;
+        /// only the dialog's own danger button does that.
+        RemoveTorrentsWithData,
     ]
 );
 
@@ -70,6 +80,8 @@ pub(crate) enum ActionKind {
     Verify,
     /// Ask the trackers for more peers.
     Reannounce,
+    /// Remove from the list, keeping the downloaded files on the server or deleting them.
+    Remove(RemoveData),
 }
 
 impl ActionKind {
@@ -81,6 +93,7 @@ impl ActionKind {
             Self::StartNow => Action::StartNow(hashes),
             Self::Verify => Action::Verify(hashes),
             Self::Reannounce => Action::Reannounce(hashes),
+            Self::Remove(data) => Action::Remove { hashes, data },
         }
     }
 
@@ -92,6 +105,7 @@ impl ActionKind {
             Self::StartNow => availability.start_now,
             Self::Verify => availability.verify,
             Self::Reannounce => availability.reannounce,
+            Self::Remove(_) => availability.remove,
         }
     }
 
@@ -103,6 +117,8 @@ impl ActionKind {
             Self::StartNow => "start now",
             Self::Verify => "verify",
             Self::Reannounce => "reannounce",
+            Self::Remove(RemoveData::Keep) => "remove",
+            Self::Remove(RemoveData::Delete) => "remove with data",
         }
     }
 }
@@ -319,7 +335,21 @@ mod tests {
         );
         assert_eq!(
             ActionKind::Reannounce.action(hashes.clone()),
-            Action::Reannounce(hashes)
+            Action::Reannounce(hashes.clone())
+        );
+        assert_eq!(
+            ActionKind::Remove(RemoveData::Keep).action(hashes.clone()),
+            Action::Remove {
+                hashes: hashes.clone(),
+                data: RemoveData::Keep
+            }
+        );
+        assert_eq!(
+            ActionKind::Remove(RemoveData::Delete).action(hashes.clone()),
+            Action::Remove {
+                hashes,
+                data: RemoveData::Delete
+            }
         );
     }
 

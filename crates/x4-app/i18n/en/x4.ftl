@@ -154,6 +154,36 @@ theme-switch-tooltip = Switch between the system, light and dark themes
 # which their tooltips show too, with the key.
 action-start = Start
 action-pause = Pause
+# The toolbar button whose menu removes the selected torrents: its name for screen readers, which
+# its tooltip shows too, with the key; and the two items of its menu, each of which asks first.
+action-remove = Remove
+remove-from-list-menu = Remove from list…
+remove-with-data-menu = Remove and delete files…
+
+## The dialogs that ask before torrents are removed
+
+# Removing from the list keeps the downloaded files. $count: the torrents removed (a number).
+remove-from-list-title =
+    { $count ->
+        [one] Remove { $count } torrent from the list?
+       *[other] Remove { $count } torrents from the list?
+    }
+remove-from-list-keeps-files = The downloaded files stay on the server.
+remove-from-list-confirm = Remove
+# Removing with the data deletes the downloaded files from the server's disk.
+# $count: the torrents removed (a number).
+remove-with-data-title =
+    { $count ->
+        [one] Delete { $count } torrent and its files?
+       *[other] Delete { $count } torrents and their files?
+    }
+# $size: how much downloaded data goes, such as "22.9 GiB".
+remove-with-data-deletes-files = { $size } of downloaded data will be deleted from the server. This cannot be undone.
+remove-with-data-confirm = Delete files
+# Both dialogs list the names of the first five torrents, then how many more they remove.
+# $more: the torrents not named (a number).
+remove-more = and { $more } more
+remove-cancel = Cancel
 
 ## Why an action on torrents failed, in a notification
 
@@ -253,6 +283,44 @@ action-failed-reannounce =
             { $count ->
                 [one] Could not ask the trackers of the torrent for more peers: { $reason }
                *[other] Could not ask the trackers of { $count } torrents for more peers: { $reason }
+            }
+    }
+# Remove: take the torrents off the server's list and keep their downloaded files.
+action-failed-remove =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not remove the torrent: the server is not connected, so nothing was sent
+               *[other] Could not remove { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while removing the torrent; it may have been removed. The list will show the result
+               *[other] The server did not answer while removing { $count } torrents; they may have been removed. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not remove the torrent: { $reason }
+               *[other] Could not remove { $count } torrents: { $reason }
+            }
+    }
+# Remove with the data: take the torrents off the list and delete their files from the server.
+action-failed-remove-with-data =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not remove the torrent and delete its files: the server is not connected, so nothing was sent
+               *[other] Could not remove { $count } torrents and delete their files: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while removing the torrent and deleting its files; it may have been removed and its files deleted. The list will show the result
+               *[other] The server did not answer while removing { $count } torrents and deleting their files; they may have been removed and their files deleted. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not remove the torrent and delete its files: { $reason }
+               *[other] Could not remove { $count } torrents and delete their files: { $reason }
             }
     }
 # An action whose kind is not known; $outcome and $reason as above.

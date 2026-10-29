@@ -1,0 +1,662 @@
+//! Headless tests for removing the selected torrents: the light dialog of Delete ("Remove from
+//! list"), the danger dialog of Shift+Delete ("Remove and delete files"), where the focus is, what
+//! Enter, Space, Escape and a held key do in them, what they remove when the list changes under
+//! them, the toolbar's Remove menu, and what they do while the daemon is not connected.
+//!
+//! Each test builds the two channels of a service itself and opens the window with no service
+//! behind them, so nothing touches the network: the test reads the commands the window sends and
+//! answers them with the events a service would send.
+
+use std::sync::Arc;
+
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, KeyContext,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, OperatingSystem, TestAppContext,
+};
+use x4_app::actions::{RemoveTorrents, RemoveTorrentsWithData};
+use x4_app::app;
+use x4_app::main_view::MainView;
+use x4_core::test_support::torrent;
+use x4_core::{
+    Action, Command, ConnectionError, ConnectionState, DisplayState, Event, Snapshot, Torrent,
+    UiState,
+};
+use x4_rpc::{HashString, RemoveData};
+
+/// The id of the toolbar's Remove button, whose menu offers both removals.
+const REMOVE: &str = "remove-torrents";
+/// The buttons of the dialog that removes torrents from the list and keeps their files.
+const LIGHT_CANCEL: &str = "remove-from-list-cancel";
+const LIGHT_CONFIRM: &str = "remove-from-list-confirm";
+/// The buttons of the dialog that removes torrents and deletes their files.
+const DANGER_CANCEL: &str = "remove-files-cancel";
+const DANGER_CONFIRM: &str = "remove-files-confirm";
+/// The id of a name a dialog lists, with its index.
+const NAME: &str = "removal-name";
+/// The id of the line that counts the torrents a dialog does not name.
+const MORE: &str = "removal-more";
+/// The id of a dialog.
+const DIALOG: &str = "dialog";
+/// The items of the Remove menu.
+const REMOVE_FROM_LIST: &str = "Remove from list…";
+const REMOVE_WITH_DATA: &str = "Remove and delete files…";
+
+/// An open main window and the far ends of its channels, standing in for the service.
+struct Window {
+    handle: AnyWindowHandle,
+    view: Entity<MainView>,
+    events: async_channel::Sender<Event>,
+    commands: crossbeam_channel::Receiver<Command>,
+}
+
+impl Window {
+    /// Opens the window with animations off, so that a dialog is gone as soon as it closes.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a window that does not open fails the test"
+    )]
+    fn open(cx: &mut TestAppContext) -> Self {
+        let (events, events_rx) = async_channel::unbounded();
+        let (commands_tx, commands) = crossbeam_channel::unbounded();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (handle, view) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands_tx, None, &UiState::default(), cx)
+            })
+            .expect("the main window opens");
+        cx.run_until_parked();
+        Self {
+            handle,
+            view,
+            events,
+            commands,
+        }
+    }
+
+    /// Sends a snapshot of `torrents` with the daemon connected.
+    fn send(&self, torrents: Vec<Torrent>, cx: &mut TestAppContext) {
+        self.send_with(torrents, ConnectionState::Connected, cx);
+    }
+
+    /// Sends a snapshot of `torrents` with the connection in `connection`, and lets the window
+    /// take it.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a window that stopped listening fails the test"
+    )]
+    fn send_with(
+        &self,
+        torrents: Vec<Torrent>,
+        connection: ConnectionState,
+        cx: &mut TestAppContext,
+    ) {
+        let stale = connection != ConnectionState::Connected;
+        self.events
+            .send_blocking(Event::Snapshot(Arc::new(Snapshot {
+                torrents,
+                listed: true,
+                session: None,
+                free_space_bytes: None,
+                rate_down: 0,
+                rate_up: 0,
+                connection,
+                stale,
+            })))
+            .expect("the window listens");
+        cx.run_until_parked();
+    }
+
+    /// Runs `act` on the window after drawing a frame, then lets what it started finish.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a closed window fails the test"
+    )]
+    fn act<R>(
+        &self,
+        cx: &mut TestAppContext,
+        act: impl FnOnce(&mut gpui_kit::Window, &mut App) -> R,
+    ) -> R {
+        let result = cx
+            .update_window(self.handle, |_, window, cx| {
+                window.render_frame(cx);
+                act(window, cx)
+            })
+            .expect("the window is open");
+        cx.run_until_parked();
+        result
+    }
+
+    fn click(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        self.act(cx, |window, cx| window.click(id, cx));
+    }
+
+    fn click_row(&self, row: usize, cx: &mut TestAppContext) {
+        self.click(("row", row), cx);
+    }
+
+    fn ctrl_click_row(&self, row: usize, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
+            window.click_with_modifiers(("row", row), Modifiers::control(), cx);
+        });
+    }
+
+    /// Presses `key`: a key-down and a key-up, so that a focused button is pressed too.
+    fn press(&self, key: &str, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| window.press(key, cx));
+    }
+
+    /// Sends a key-down of `key`; `held` marks a repeat of a held key, as Wayland sends it.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a key that does not parse fails the test"
+    )]
+    fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
+        let down = KeyDownEvent {
+            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            is_held: held,
+            prefer_character_input: false,
+        };
+        self.act(cx, |window, cx| {
+            window.dispatch_event(down.to_platform_input(), cx)
+        });
+    }
+
+    /// Sends the key-up of `key`.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a key that does not parse fails the test"
+    )]
+    fn key_up(&self, key: &str, cx: &mut TestAppContext) {
+        let up = KeyUpEvent {
+            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+        };
+        self.act(cx, |window, cx| {
+            window.dispatch_event(up.to_platform_input(), cx)
+        });
+    }
+
+    /// Holds `key` down until the system has repeated it `repeats` times, then lets it go.
+    fn hold(&self, key: &str, repeats: usize, cx: &mut TestAppContext) {
+        self.key_down(key, false, cx);
+        for _ in 0..repeats {
+            self.key_down(key, true, cx);
+        }
+        self.key_up(key, cx);
+    }
+
+    /// Opens the toolbar's Remove menu and chooses the item `label`.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a missing menu item fails the test"
+    )]
+    fn choose(&self, label: &str, cx: &mut TestAppContext) {
+        self.click(REMOVE, cx);
+        self.act(cx, |window, cx| {
+            let mut menu = window.within("popup-menu");
+            let item = menu
+                .find_by_label(label)
+                .path()
+                .last()
+                .cloned()
+                .expect("the item has an id");
+            menu.click(item, cx);
+        });
+    }
+
+    /// Whether the element `id` is on screen.
+    fn shown(&self, id: &'static str, cx: &mut TestAppContext) -> bool {
+        self.act(cx, |window, _| window.try_find(id).is_some())
+    }
+
+    /// Whether the element `id` has the keyboard focus.
+    fn focused(&self, id: &'static str, cx: &mut TestAppContext) -> bool {
+        self.act(cx, |window, _| window.find(id).focused() == Some(true))
+    }
+
+    /// Whether the button `id` is drawn disabled.
+    fn disabled(&self, id: &'static str, cx: &mut TestAppContext) -> bool {
+        self.act(cx, |window, _| window.find(id).disabled() == Some(true))
+    }
+
+    /// What a screen reader says for the element `id`.
+    fn label(&self, id: &'static str, cx: &mut TestAppContext) -> Option<String> {
+        self.act(cx, |window, _| window.find(id).label().map(str::to_owned))
+    }
+
+    /// How many dialogs are open.
+    fn dialogs(&self, cx: &mut TestAppContext) -> usize {
+        self.act(cx, |window, _| window.find_all(DIALOG).len())
+    }
+
+    /// How many torrents the open dialog names (it names at most five).
+    fn names(&self, cx: &mut TestAppContext) -> usize {
+        self.act(cx, |window, _| {
+            (0_usize..10)
+                .take_while(|index| window.try_find((NAME, *index)).is_some())
+                .count()
+        })
+    }
+
+    /// Whether the table has the keyboard focus, so that the list's keys reach it.
+    fn table_focused(&self, cx: &mut TestAppContext) -> bool {
+        let table = cx.update(|cx| self.view.read(cx).table().clone());
+        self.act(cx, |window, cx| table.focus_handle(cx).is_focused(window))
+    }
+
+    /// The commands the window has sent so far, other than the window's visibility.
+    fn sent(&self) -> Vec<Command> {
+        self.commands
+            .try_iter()
+            .filter(|command| !matches!(command, Command::SetVisibility(_)))
+            .collect()
+    }
+
+    /// The one action the window has sent since the last look.
+    #[track_caller]
+    #[expect(
+        clippy::panic,
+        reason = "a test helper: anything but one action fails the test"
+    )]
+    fn sent_action(&self) -> Action {
+        match self.sent().as_slice() {
+            [Command::Run(_, action)] => action.clone(),
+            other => panic!("expected one action, got {other:?}"),
+        }
+    }
+}
+
+fn downloading(name: &str) -> Torrent {
+    Torrent {
+        state: DisplayState::Downloading,
+        ..torrent(name)
+    }
+}
+
+/// The hashes of the torrents called `names`, in that order.
+fn hashes(names: &[&str]) -> Vec<HashString> {
+    names.iter().map(|name| torrent(name).hash).collect()
+}
+
+fn remove(names: &[&str], data: RemoveData) -> Action {
+    Action::Remove {
+        hashes: hashes(names),
+        data,
+    }
+}
+
+fn reconnecting() -> ConnectionState {
+    ConnectionState::Reconnecting {
+        attempt: 2,
+        last_error: ConnectionError::Timeout,
+    }
+}
+
+#[gpui_kit::test]
+fn delete_opens_the_light_dialog_and_enter_removes_from_list(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b"), torrent("c")], cx);
+    window.click_row(0, cx);
+    window.ctrl_click_row(2, cx);
+
+    window.press("delete", cx);
+
+    assert_eq!(window.sent(), [], "the dialog asks first");
+    assert!(
+        !window.shown(DANGER_CONFIRM, cx),
+        "not the dialog that deletes"
+    );
+    assert!(window.focused(LIGHT_CONFIRM, cx), "Remove has the focus");
+    assert_eq!(window.label(LIGHT_CONFIRM, cx).as_deref(), Some("Remove"));
+    assert_eq!(window.label(LIGHT_CANCEL, cx).as_deref(), Some("Cancel"));
+    assert_eq!(window.names(cx), 2);
+    assert!(!window.shown(MORE, cx));
+
+    window.press("enter", cx);
+
+    assert_eq!(window.sent_action(), remove(&["a", "c"], RemoveData::Keep));
+    assert!(!window.shown(LIGHT_CONFIRM, cx), "the dialog closed");
+    assert!(window.table_focused(cx), "the list has the keys again");
+
+    // Enter presses the button that has the focus: on Cancel, it cancels.
+    window.press("delete", cx);
+    window.press("shift-tab", cx);
+    assert!(window.focused(LIGHT_CANCEL, cx));
+    window.press("enter", cx);
+    assert_eq!(window.sent(), []);
+    assert!(!window.shown(LIGHT_CONFIRM, cx));
+    assert!(window.table_focused(cx));
+}
+
+#[gpui_kit::test]
+fn shift_delete_only_opens_the_danger_dialog(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(1, cx);
+
+    window.press("shift-delete", cx);
+
+    assert_eq!(window.sent(), [], "Shift+Delete only asks");
+    assert!(window.shown(DANGER_CONFIRM, cx));
+    assert!(!window.shown(LIGHT_CONFIRM, cx));
+    assert_eq!(
+        window.label(DANGER_CONFIRM, cx).as_deref(),
+        Some("Delete files")
+    );
+    assert_eq!(window.label(DANGER_CANCEL, cx).as_deref(), Some("Cancel"));
+    assert_eq!(window.names(cx), 1);
+
+    // With nothing selected, there is nothing to ask about.
+    window.press("escape", cx);
+    window.press("escape", cx);
+    window.press("shift-delete", cx);
+    window.press("delete", cx);
+    assert_eq!(window.dialogs(cx), 0);
+    assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn cancel_has_focus_in_the_danger_dialog(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.press("ctrl-a", cx);
+
+    window.press("shift-delete", cx);
+
+    assert!(window.focused(DANGER_CANCEL, cx));
+    assert!(!window.focused(DANGER_CONFIRM, cx));
+
+    // The dialog is drawn again at every update of the list; the focus stays where the user put
+    // it.
+    window.press("tab", cx);
+    assert!(
+        window.focused(DANGER_CONFIRM, cx),
+        "Tab reaches Delete files"
+    );
+    window.send(vec![downloading("a"), torrent("b")], cx);
+    assert!(window.focused(DANGER_CONFIRM, cx));
+    window.press("shift-tab", cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    assert!(window.focused(DANGER_CANCEL, cx));
+
+    window.click(DANGER_CANCEL, cx);
+
+    assert!(!window.shown(DANGER_CONFIRM, cx), "the dialog closed");
+    assert_eq!(window.sent(), []);
+    assert!(window.table_focused(cx), "the list has the keys again");
+}
+
+#[gpui_kit::test]
+fn enter_in_the_danger_dialog_never_deletes(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    // Enter presses Cancel, which has the focus.
+    window.press("shift-delete", cx);
+    window.press("enter", cx);
+    assert_eq!(window.sent(), []);
+    assert!(
+        !window.shown(DANGER_CONFIRM, cx),
+        "Cancel closed the dialog"
+    );
+    assert!(window.table_focused(cx));
+
+    // So does Space, and so does a held Enter, once.
+    window.press("shift-delete", cx);
+    window.press("space", cx);
+    assert_eq!(window.sent(), []);
+    assert!(!window.shown(DANGER_CONFIRM, cx));
+    window.press("shift-delete", cx);
+    window.hold("enter", 5, cx);
+    assert_eq!(window.sent(), []);
+    assert!(!window.shown(DANGER_CONFIRM, cx));
+
+    // Only the danger button deletes: Tab to it, then Enter.
+    window.press("shift-delete", cx);
+    window.press("tab", cx);
+    window.press("enter", cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Delete));
+    assert!(!window.shown(DANGER_CONFIRM, cx));
+    assert!(window.table_focused(cx));
+}
+
+#[gpui_kit::test]
+fn escape_cancels_the_danger_dialog(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    window.press("shift-delete", cx);
+    window.press("escape", cx);
+
+    assert!(!window.shown(DANGER_CONFIRM, cx));
+    assert_eq!(window.sent(), []);
+    assert!(window.table_focused(cx));
+
+    // The light dialog too.
+    window.press("delete", cx);
+    window.press("escape", cx);
+    assert!(!window.shown(LIGHT_CONFIRM, cx));
+    assert_eq!(window.sent(), []);
+
+    // The list has its keys back: Escape there clears the selection, so there is nothing to
+    // remove.
+    window.press("escape", cx);
+    window.press("shift-delete", cx);
+    assert_eq!(window.dialogs(cx), 0);
+}
+
+#[gpui_kit::test]
+fn clicking_delete_files_sends_remove_with_data_for_the_captured_hashes(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    window.send(names.into_iter().map(torrent).collect(), cx);
+    window.press("ctrl-a", cx);
+    window.press("shift-delete", cx);
+    assert_eq!(window.names(cx), 5, "five names, and how many more");
+    assert!(window.shown(MORE, cx));
+
+    // Meanwhile one of them is removed elsewhere, and another one changes.
+    window.send(
+        vec![
+            downloading("a"),
+            torrent("c"),
+            torrent("d"),
+            torrent("e"),
+            torrent("f"),
+            torrent("g"),
+        ],
+        cx,
+    );
+    assert_eq!(window.names(cx), 5, "the dialog says what it said");
+    assert!(window.shown(MORE, cx));
+
+    window.click(DANGER_CONFIRM, cx);
+
+    assert_eq!(window.sent_action(), remove(&names, RemoveData::Delete));
+    assert!(!window.shown(DANGER_CONFIRM, cx), "the dialog closed");
+    assert!(window.table_focused(cx));
+}
+
+#[gpui_kit::test]
+fn a_second_shift_delete_does_not_open_a_second_dialog(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    // Held down, the key repeats; then it is pressed again, and Delete too.
+    window.hold("shift-delete", 3, cx);
+    window.press("shift-delete", cx);
+    window.press("delete", cx);
+
+    assert_eq!(window.dialogs(cx), 1);
+    assert!(window.shown(DANGER_CONFIRM, cx));
+    assert!(!window.shown(LIGHT_CONFIRM, cx));
+    assert!(window.focused(DANGER_CANCEL, cx));
+    assert_eq!(window.sent(), []);
+
+    window.press("escape", cx);
+    assert_eq!(window.dialogs(cx), 0, "one Escape closes it");
+
+    // A held Delete opens one light dialog.
+    window.hold("delete", 3, cx);
+    assert_eq!(window.dialogs(cx), 1);
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+    assert_eq!(window.sent(), []);
+
+    // Should the list get the focus back while the dialog is open, its keys still open no second
+    // dialog over it.
+    let table = cx.update(|cx| window.view.read(cx).table().clone());
+    window.act(cx, |window, cx| window.focus(&table.focus_handle(cx), cx));
+    assert!(window.table_focused(cx));
+    window.press("shift-delete", cx);
+    window.press("delete", cx);
+    assert_eq!(window.dialogs(cx), 1);
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+    assert!(!window.shown(DANGER_CONFIRM, cx));
+    assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn the_repeats_of_a_held_delete_open_nothing(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+
+    // Delete goes down with nothing selected, and a torrent is clicked while it is held: its
+    // repeats do not ask to remove it.
+    window.key_down("shift-delete", false, cx);
+    window.click_row(0, cx);
+    window.key_down("shift-delete", true, cx);
+    window.key_down("shift-delete", true, cx);
+    assert_eq!(window.dialogs(cx), 0);
+    window.key_up("shift-delete", cx);
+
+    window.press("escape", cx);
+    window.key_down("delete", false, cx);
+    window.click_row(1, cx);
+    window.key_down("delete", true, cx);
+    assert_eq!(window.dialogs(cx), 0);
+    window.key_up("delete", cx);
+
+    // Let go and pressed again, the key asks.
+    window.press("delete", cx);
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+    assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn remove_is_disabled_while_disconnected(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+    assert!(!window.disabled(REMOVE, cx));
+
+    window.send_with(vec![torrent("a"), torrent("b")], reconnecting(), cx);
+
+    assert!(window.disabled(REMOVE, cx));
+    window.press("delete", cx);
+    window.press("shift-delete", cx);
+    window.click(REMOVE, cx);
+    assert_eq!(window.dialogs(cx), 0, "nothing asks");
+    assert!(
+        !window.act(cx, |window, _| window.try_find("popup-menu").is_some()),
+        "the menu stays closed"
+    );
+    assert_eq!(window.sent(), []);
+
+    // The connection is lost while the dialog is open: it stays, so that it can be cancelled, but
+    // its button is disabled until the connection is back.
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.press("shift-delete", cx);
+    assert!(!window.disabled(DANGER_CONFIRM, cx));
+    window.send_with(vec![torrent("a"), torrent("b")], reconnecting(), cx);
+    assert!(window.disabled(DANGER_CONFIRM, cx));
+    assert!(!window.disabled(DANGER_CANCEL, cx));
+    window.click(DANGER_CONFIRM, cx);
+    assert_eq!(window.sent(), []);
+    assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    assert!(!window.disabled(DANGER_CONFIRM, cx), "enabled again");
+    window.click(DANGER_CONFIRM, cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Delete));
+
+    // Remove keeps the focus while it is disabled: Enter does nothing, and Escape still cancels.
+    window.click_row(1, cx);
+    window.press("delete", cx);
+    window.send_with(vec![torrent("a"), torrent("b")], reconnecting(), cx);
+    assert!(window.disabled(LIGHT_CONFIRM, cx));
+    assert!(window.focused(LIGHT_CONFIRM, cx));
+    window.press("enter", cx);
+    assert_eq!(window.sent(), []);
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+    window.press("escape", cx);
+    assert_eq!(window.dialogs(cx), 0);
+    assert!(window.table_focused(cx));
+}
+
+#[gpui_kit::test]
+fn the_remove_button_asks_either_way_from_its_menu(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    assert!(window.disabled(REMOVE, cx), "nothing is selected");
+    window.click_row(0, cx);
+    assert!(!window.disabled(REMOVE, cx));
+    assert_eq!(window.label(REMOVE, cx).as_deref(), Some("Remove"));
+
+    window.choose(REMOVE_FROM_LIST, cx);
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+    assert!(window.focused(LIGHT_CONFIRM, cx));
+    window.press("escape", cx);
+    assert!(window.table_focused(cx), "the list has the keys again");
+
+    window.choose(REMOVE_WITH_DATA, cx);
+    assert!(window.shown(DANGER_CONFIRM, cx));
+    assert!(!window.shown(LIGHT_CONFIRM, cx));
+    assert!(window.focused(DANGER_CANCEL, cx));
+    window.click(DANGER_CANCEL, cx);
+    assert!(window.table_focused(cx));
+    assert_eq!(window.sent(), []);
+
+    window.choose(REMOVE_FROM_LIST, cx);
+    window.click(LIGHT_CONFIRM, cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
+    assert!(window.table_focused(cx));
+
+    // The tooltip names the key: it looks the action's key up in the torrent list's context.
+    window.act(cx, |window, _| {
+        let list = KeyContext::parse("TorrentList").expect("a key context");
+        for (action, keys) in [
+            (&RemoveTorrents as &dyn gpui_kit::Action, "delete"),
+            (&RemoveTorrentsWithData, "shift-delete"),
+        ] {
+            let binding = window
+                .highest_precedence_binding_for_action_in_context(action, list.clone())
+                .expect("the action has a key in the list");
+            let shown: Vec<String> = binding
+                .keystrokes()
+                .iter()
+                .map(|keystroke| keystroke.unparse(OperatingSystem::Linux))
+                .collect();
+            assert_eq!(shown, [keys]);
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn delete_in_the_search_box_edits_text_and_opens_no_dialog(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("ab"), torrent("b")], cx);
+    window.press("ctrl-a", cx);
+
+    window.press("ctrl-f", cx);
+    window.act(cx, |window, cx| window.input("ab", cx));
+    window.press("home", cx);
+    window.press("delete", cx);
+    window.press("shift-delete", cx);
+
+    assert_eq!(window.dialogs(cx), 0);
+    assert_eq!(window.sent(), []);
+}

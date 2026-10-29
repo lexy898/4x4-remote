@@ -9,8 +9,9 @@ Early development — stage 3, actions, under way. The window connects to the da
 filters them by state, with live counts, and a search box finds them by name. The status bar shows
 the total download and upload speeds, the free space and the state of the connection. The window
 remembers its columns, sorting, filter, theme and size between runs. Several torrents can be
-selected, and started, paused, started ahead of the queue, verified and reannounced, from the
-keyboard and the toolbar; removing them, the context menu and the speed limits are still to come.
+selected, and started, paused, started ahead of the queue, verified, reannounced and removed, from
+the keyboard and the toolbar; removing asks first, and deleting the files too only after an explicit
+confirmation. The context menu and the speed limits are still to come.
 
 ## What it will do
 
@@ -69,8 +70,8 @@ every column fits at its first width, which leaves room for its usual text: "Dow
 left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
 last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
-The window has four parts: a toolbar along the top, with the search box and the Start and Pause
-buttons on the left and the theme button and the "Columns" menu on the right; the filter sidebar
+The window has four parts: a toolbar along the top, with the search box, the Start and Pause
+buttons and the Remove menu on the left and the theme button and the "Columns" menu on the right; the filter sidebar
 down the left side; the torrent table, which takes the rest; and the status bar along the bottom.
 
 The table lists the torrents, sorted by name at first. Each row shows:
@@ -116,7 +117,22 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Space` pauses them if any of them runs, and starts them if all are stopped;
 - `Ctrl+Shift+S` starts them at once, ahead of the queue;
 - `Ctrl+Shift+R` verifies their downloaded data, which reads all of it on the server;
-- `Ctrl+R` asks their trackers for more peers.
+- `Ctrl+R` asks their trackers for more peers;
+- `Delete` asks whether to remove them from the list; their downloaded files stay on the server.
+  "Remove from list…" in the toolbar's Remove menu (the trash can) does the same;
+- `Shift+Delete` asks whether to remove them and delete their files from the server; "Remove and
+  delete files…" in the Remove menu does the same.
+
+Removing always asks first. The dialog names the first five torrents, says how many more there
+are, and says what becomes of the files: that they stay on the server, or how much downloaded data
+will be deleted for good. It removes the torrents it named when it opened, even if the list changes
+while it is open. "Remove from list" has Remove focused, so Enter removes. "Remove and delete files"
+has Cancel focused: Enter or Space press the button that has the focus, so they cancel, and only a
+click on "Delete files", or Tab to it and Enter, deletes anything. Escape, Cancel or a click beside
+the dialog close it and remove nothing. While the dialog is open, Delete and Shift+Delete open no
+second one, and holding the key opens it once. While the daemon is not connected, Remove and its keys
+do nothing, and the confirm button of an open dialog is disabled until the connection is back;
+Cancel still works. Closing the dialog gives the keys back to the table.
 
 Holding a key down sends its action once, not again with every repeat of the key. While the action
 sent last waits for the daemon's answer, it is not sent again for the same torrents, so a second
@@ -193,10 +209,15 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+Shift+S`                                      | in the table              | starts them now, ahead of the queue          |
 | `Ctrl+Shift+R`                                      | in the table              | verifies their data                          |
 | `Ctrl+R`                                            | in the table              | asks their trackers for more peers           |
+| `Delete`                                            | in the table              | asks whether to remove them from the list    |
+| `Shift+Delete`                                      | in the table              | asks whether to remove them with their files |
+| `Enter`, `Space`                                    | in a removal dialog       | press the button that has the focus          |
+| `Escape`                                            | in a removal dialog       | closes it and removes nothing                |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
-In the search box, `Ctrl+A` selects the text, not the torrents, and `Space` types a space.
+In the search box, `Ctrl+A` selects the text, not the torrents, `Space` types a space, and `Delete`
+deletes a character, never a torrent.
 `Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
 place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
 `/`, which types a period. Verify is `Ctrl+Shift+R` rather than Transmission's `Ctrl+V`, which is
@@ -445,7 +466,8 @@ verifying (the torrent checks for three updates, then goes back to what it was),
 the speed settings. `--press KEY`, which can be given several times, presses each key in turn
 once the list is there and selected, one every three seconds, as on the keyboard: for example
 `just virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the
-sixth torrent and starts it again. `just virtual just demo-synthetic --scroll` runs it off
+sixth torrent and starts it again, and `--press shift-delete` opens the dialog that would delete
+its files. `just virtual just demo-synthetic --scroll` runs it off
 screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
 does not contain it.
 

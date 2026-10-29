@@ -21,9 +21,10 @@ use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
     ActionError, ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, Filter, HumanSize,
-    HumanSpeed, Indicator, QueueKind, Ratio, SizeUnit, SortDirection, SpeedUnit, Subtitle,
-    TimeUnit, UnsupportedReason,
+    HumanSpeed, Indicator, QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedUnit,
+    Subtitle, TimeUnit, UnsupportedReason,
 };
+use x4_rpc::RemoveData;
 
 use crate::actions::{ActionKind, PendingAction};
 use crate::app::ConfigProblem;
@@ -470,6 +471,49 @@ pub(crate) fn action_failure_text(
             outcome = outcome,
             count = count,
             reason = reason
+        ),
+        ActionKind::Remove(RemoveData::Keep) => t!(
+            "action-failed-remove",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
+        ActionKind::Remove(RemoveData::Delete) => t!(
+            "action-failed-remove-with-data",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
+    }
+    .into()
+}
+
+/// The title of a removal dialog, which counts the torrents of `summary`: "Remove 3 torrents from
+/// the list?" when the files stay (`data`), "Delete 3 torrents and their files?" when they go.
+pub(crate) fn removal_title_text(data: RemoveData, summary: &RemovalSummary) -> SharedString {
+    let count = summary.count;
+    match data {
+        RemoveData::Keep => t!("remove-from-list-title", count = count),
+        RemoveData::Delete => t!("remove-with-data-title", count = count),
+    }
+    .into()
+}
+
+/// What a removal dialog says after the names it lists, "and 2 more"; `None` when `summary`
+/// names every torrent.
+pub(crate) fn removal_more_text(summary: &RemovalSummary) -> Option<SharedString> {
+    let more = summary.more;
+    (more > 0).then(|| t!("remove-more", more = more).into())
+}
+
+/// What a removal dialog says becomes of the downloaded files: that they stay on the server when
+/// `data` keeps them, or how much of them (`summary`) is deleted for good.
+pub(crate) fn removal_files_text(data: RemoveData, summary: &RemovalSummary) -> SharedString {
+    match data {
+        RemoveData::Keep => t!("remove-from-list-keeps-files"),
+        RemoveData::Delete => t!(
+            "remove-with-data-deletes-files",
+            size = size_string(summary.downloaded)
         ),
     }
     .into()

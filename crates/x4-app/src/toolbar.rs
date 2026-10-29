@@ -1,10 +1,13 @@
-//! The toolbar along the top of the main window: the search box and the buttons that start and
-//! pause the selected torrents on the left, the theme switch and the column menu on the right.
+//! The toolbar along the top of the main window: the search box, the buttons that start and
+//! pause the selected torrents and the Remove menu on the left, the theme switch and the column
+//! menu on the right.
 //!
-//! Start and Pause are enabled as the selection's [`Availability`] says, and a click on one goes
-//! through the same request as its key, which reads the availability again: a disabled action does
-//! nothing from either. Their tooltips name the action and its key. The main view draws the toolbar
-//! again whenever the availability changes.
+//! Start, Pause and Remove are enabled as the selection's [`Availability`] says, and a click on
+//! Start or Pause goes through the same request as its key, which reads the availability again: a
+//! disabled action does nothing from either. Remove opens a menu of the two ways to remove, "Remove
+//! from list…" and "Remove and delete files…"; each item opens the dialog that asks first, as its
+//! key does. The tooltips name the action and its key. The main view draws the toolbar again
+//! whenever the availability changes.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
@@ -15,8 +18,11 @@ use gpui_kit::{
     SharedString, Styled as _, div,
 };
 use x4_core::{Availability, ColumnId, ThemeChoice};
+use x4_rpc::RemoveData;
 
-use crate::actions::{PauseTorrents, StartTorrents, TorrentRequest};
+use crate::actions::{
+    PauseTorrents, RemoveTorrents, RemoveTorrentsWithData, StartTorrents, TorrentRequest,
+};
 use crate::i18n::{column_name_text, t};
 use crate::keymap::TORRENT_LIST_CONTEXT;
 use crate::main_view::MainView;
@@ -30,7 +36,7 @@ pub(crate) struct ToolbarState {
     /// Whether each column is shown, in the order of [`ColumnId::ALL`], as the column menu
     /// lists them.
     pub(crate) columns: [(ColumnId, bool); ColumnId::ALL.len()],
-    /// Which actions the selection allows, for the Start and Pause buttons.
+    /// Which actions the selection allows, for the Start, Pause and Remove buttons.
     pub(crate) availability: Availability,
 }
 
@@ -79,7 +85,8 @@ pub(crate) fn toolbar(
                         enabled: state.availability.pause,
                     },
                     cx,
-                )),
+                ))
+                .child(remove_menu(state.availability.remove, cx)),
         )
         .child(div().flex_1())
         .child(
@@ -121,6 +128,48 @@ fn action_button(button: ActionButton<'_>, cx: &Context<'_, MainView>) -> Button
         .on_click(cx.listener(move |view, _, window, cx| {
             view.press_button(request, window, cx);
         }))
+}
+
+/// The toolbar button whose menu offers the two ways to remove the selected torrents, enabled when
+/// the selection can be removed. Each item opens the dialog of the view of `cx` that asks first.
+fn remove_menu(enabled: bool, cx: &Context<'_, MainView>) -> impl IntoElement + use<> {
+    let this = cx.weak_entity();
+    let name: SharedString = t!("action-remove").into();
+    Button::new("remove-torrents")
+        .ghost()
+        .small()
+        .icon(gpui_kit::assets::IconName::Trash)
+        .accessibility_label(name.clone())
+        .tooltip_with_action(name, &RemoveTorrents, Some(TORRENT_LIST_CONTEXT))
+        .disabled(!enabled)
+        .dropdown_menu(move |menu, _, _| {
+            [
+                (
+                    RemoveData::Keep,
+                    t!("remove-from-list-menu"),
+                    Box::new(RemoveTorrents) as Box<dyn Action>,
+                ),
+                (
+                    RemoveData::Delete,
+                    t!("remove-with-data-menu"),
+                    Box::new(RemoveTorrentsWithData),
+                ),
+            ]
+            .into_iter()
+            .fold(menu, |menu, (data, label, action)| {
+                let this = this.clone();
+                // The action only shows its key in the menu; a click asks the view directly.
+                menu.item(PopupMenuItem::new(label).action(action).on_click(
+                    move |_, window, cx| {
+                        if let Err(error) =
+                            this.update(cx, |view, cx| view.ask_removal(data, window, cx))
+                        {
+                            tracing::debug!(%error, "a removal was chosen after the window closed");
+                        }
+                    },
+                ))
+            })
+        })
 }
 
 /// The toolbar button whose menu shows and hides the columns, with a check on each shown one
