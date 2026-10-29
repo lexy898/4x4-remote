@@ -21,7 +21,9 @@ use gpui_kit::{
     TitlebarOptions, WindowOptions, actions, px, size,
 };
 use x4_core::service::{self, ServiceHandle};
-use x4_core::{Command, Config, ConfigError, EngineConfig, Event, UiState};
+use x4_core::{
+    Command, Config, ConfigError, EngineConfig, Event, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, UiState,
+};
 use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
@@ -349,16 +351,7 @@ fn open_window(
     state_file: Option<PathBuf>,
     cx: &mut App,
 ) -> anyhow::Result<(AnyWindowHandle, Entity<MainView>)> {
-    let bounds = Bounds::centered(None, size(px(ui.window.width), px(ui.window.height)), cx);
-    let options = WindowOptions {
-        window_bounds: Some(opening_bounds(ui.window, bounds)),
-        titlebar: Some(TitlebarOptions {
-            title: Some(PRODUCT_NAME.into()),
-            ..Default::default()
-        }),
-        app_id: Some(app_id().to_owned()),
-        ..Default::default()
-    };
+    let options = main_window_options(ui, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
         // Before the view exists, so that the first frame is drawn in the right theme.
         apply_theme(ui.theme, window, cx);
@@ -366,6 +359,25 @@ fn open_window(
         cx.new(|cx| MainView::new(events, commands, service, ui, state_file, window, cx))
     })
     .context("failed to open the main window")
+}
+
+/// How the main window opens for the remembered state `ui`: centered on the primary display, at
+/// the remembered size and maximized if it was, never smaller than core's minimum, with the
+/// product name as its title and the app id of this run.
+fn main_window_options(ui: &UiState, cx: &App) -> WindowOptions {
+    let bounds = Bounds::centered(None, size(px(ui.window.width), px(ui.window.height)), cx);
+    WindowOptions {
+        window_bounds: Some(opening_bounds(ui.window, bounds)),
+        // The lower bound of a remembered size. The compositor then never makes a size that
+        // `WindowState::normalized` would reset; that bound only guards a hand-edited file.
+        window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
+        titlebar: Some(TitlebarOptions {
+            title: Some(PRODUCT_NAME.into()),
+            ..Default::default()
+        }),
+        app_id: Some(app_id().to_owned()),
+        ..Default::default()
+    }
 }
 
 /// The Wayland `app_id` of this run: the development id in debug builds and when `X4_DEVEL=1`,
@@ -404,10 +416,12 @@ mod tests {
     use std::sync::Arc;
 
     use gpui_kit::TestAppContext;
+    use gpui_kit::WindowBounds;
     use gpui_kit::test::TestWindowExt as _;
     use x4_core::test_support::torrent;
     use x4_core::{
         ConnectionState, DisplayState, Filter, Snapshot, TextPosition, ThemeChoice, Torrent,
+        WindowState,
     };
 
     use super::*;
@@ -630,6 +644,45 @@ mod tests {
         assert_eq!(kept.state_path, Some(newer));
         assert_eq!(kept.state_file(), None, "a newer file is left alone");
         assert_eq!(kept.config_problem, None);
+    }
+
+    #[gpui_kit::test]
+    fn the_main_window_opens_at_the_remembered_size_and_never_smaller(cx: &mut TestAppContext) {
+        let at = |maximized| UiState {
+            window: WindowState {
+                width: 1000.,
+                height: 650.,
+                maximized,
+            },
+            ..UiState::default()
+        };
+        let remembered = size(px(1000.), px(650.));
+        let minimum = Some(size(px(400.), px(300.)));
+
+        let (maximized, windowed) = cx.update(|cx| {
+            (
+                main_window_options(&at(true), cx),
+                main_window_options(&at(false), cx),
+            )
+        });
+
+        match maximized.window_bounds {
+            Some(WindowBounds::Maximized(bounds)) => assert_eq!(bounds.size, remembered),
+            other => panic!("a maximized window opens maximized, not {other:?}"),
+        }
+        match windowed.window_bounds {
+            Some(WindowBounds::Windowed(bounds)) => assert_eq!(bounds.size, remembered),
+            other => panic!("a normal window opens as one, not {other:?}"),
+        }
+        for options in [&maximized, &windowed] {
+            assert_eq!(options.window_min_size, minimum);
+            assert_eq!(
+                options.window_min_size,
+                Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
+                "the minimum is core's"
+            );
+            assert_eq!(options.app_id.as_deref(), Some(app_id()));
+        }
     }
 
     #[test]

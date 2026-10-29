@@ -89,9 +89,9 @@ pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_acti
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
 pub use toml_error::TextPosition;
 pub use ui_state::{
-    ColumnState, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ParsedUiState, SortState, ThemeChoice,
-    UI_STATE_VERSION, UiState, UiStateError, WindowState, default_columns, move_shown_column,
-    set_column_shown, set_shown_widths, shown_columns,
+    ColumnState, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+    ParsedUiState, SortState, ThemeChoice, UI_STATE_VERSION, UiState, UiStateError, WindowState,
+    default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
     ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, Row, ServiceStatus, StatusModel,

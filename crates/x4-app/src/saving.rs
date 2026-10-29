@@ -7,6 +7,7 @@
 //! are tested without a window or a clock, and the file ([`StateFile`]), which never lets an older
 //! state land over a newer one. The main view runs the timer and the writes.
 
+use std::mem::{self, Discriminant};
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -31,15 +32,32 @@ pub(crate) enum Change {
     Undone,
 }
 
-/// How the status bar's notice that the state cannot be saved changes after a write.
+/// The kind of a failed write: the variant of its [`FilesError`]. A new kind is worth a warning;
+/// the same kind again is not.
+pub(crate) type FailureKind = Discriminant<FilesError>;
+
+/// The kind of `error`.
+pub(crate) fn failure_kind(error: &FilesError) -> FailureKind {
+    mem::discriminant(error)
+}
+
+/// What the result of a write means for the status bar's notice that the state cannot be saved,
+/// and for the log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Notice {
-    /// It stays as it is: shown during a run of failures, hidden otherwise.
-    Unchanged,
-    /// The first failure after a success (or since the start): show it, and log the error once.
-    Show,
-    /// The first success after a failure: hide it.
-    Clear,
+pub(crate) enum Outcome {
+    /// Saved, and the write before was too: the notice stays hidden.
+    Saved,
+    /// The first save after a failure: hide the notice.
+    SavedAgain,
+    /// The first failure since the start or since a save: show the notice and warn.
+    Failed,
+    /// A failure of another kind than the one before: warn again. The notice is shown already.
+    FailedOtherwise,
+    /// A failure of the same kind as the one before: the notice stays, and the log needs no
+    /// warning, so that a disk that stays full does not fill it.
+    StillFailing,
+    /// The result came after that of a newer write, which counts instead: nothing changes.
+    Late,
 }
 
 /// A state to write, numbered in the order the writes are handed out.
@@ -73,9 +91,9 @@ pub(crate) struct SaveSchedule {
     in_flight: Option<u64>,
     /// The number of the newest write whose result came; older results come too late to count.
     newest_finished: u64,
-    /// Whether the newest write that finished failed. Then the state handed out is not on disk,
-    /// and the next change or the close tries again.
-    failing: bool,
+    /// The kind of failure of the newest write that finished, if it failed. Then the state handed
+    /// out is not on disk, and the next change or the close tries again.
+    failing: Option<FailureKind>,
 }
 
 impl SaveSchedule {
@@ -89,7 +107,7 @@ impl SaveSchedule {
             writes: 0,
             in_flight: None,
             newest_finished: 0,
-            failing: false,
+            failing: None,
         }
     }
 
@@ -100,7 +118,7 @@ impl SaveSchedule {
 
     /// Whether the newest write that finished failed, so the status bar says so.
     pub(crate) fn failing(&self) -> bool {
-        self.failing
+        self.failing.is_some()
     }
 
     /// What `state` means after something that may have changed it.
@@ -135,32 +153,30 @@ impl SaveSchedule {
         Some(self.hand_out(state))
     }
 
-    /// Takes the result of write `number`: whether it reached the file. Returns how the notice in
-    /// the status bar changes. A result older than one taken already is ignored.
-    pub(crate) fn finished(&mut self, number: u64, written: bool) -> Notice {
+    /// Takes the result of write `number`: `None` if it reached the file, or the kind of its
+    /// failure. Returns what that means for the notice and the log. A result older than one taken
+    /// already is [`Outcome::Late`].
+    pub(crate) fn finished(&mut self, number: u64, failure: Option<FailureKind>) -> Outcome {
         if number < self.newest_finished {
-            return Notice::Unchanged;
+            return Outcome::Late;
         }
         self.newest_finished = number;
         if self.in_flight.is_some_and(|in_flight| in_flight <= number) {
             self.in_flight = None;
         }
-        match (written, self.failing) {
-            (false, false) => {
-                self.failing = true;
-                Notice::Show
-            }
-            (true, true) => {
-                self.failing = false;
-                Notice::Clear
-            }
-            (false, true) | (true, false) => Notice::Unchanged,
+        let before = mem::replace(&mut self.failing, failure);
+        match (before, failure) {
+            (None, None) => Outcome::Saved,
+            (Some(_), None) => Outcome::SavedAgain,
+            (None, Some(_)) => Outcome::Failed,
+            (Some(before), Some(now)) if before == now => Outcome::StillFailing,
+            (Some(_), Some(_)) => Outcome::FailedOtherwise,
         }
     }
 
     /// Whether `state` is the one handed out last, and that write has not failed.
     fn is_saved(&self, state: &UiState) -> bool {
-        *state == self.handed && !self.failing
+        *state == self.handed && self.failing.is_none()
     }
 
     fn hand_out(&mut self, state: &UiState) -> Write {
@@ -218,12 +234,28 @@ impl StateFile {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, io};
 
     use x4_core::{Filter, SortDirection, SortKey, SortState, ThemeChoice};
 
     use super::*;
     use crate::files::read_ui_state;
+
+    /// The kind of a failure to create the directory.
+    fn no_directory() -> FailureKind {
+        failure_kind(&FilesError::CreateDir {
+            path: "/x".into(),
+            source: io::Error::other("no"),
+        })
+    }
+
+    /// The kind of a failure to write the file.
+    fn no_write() -> FailureKind {
+        failure_kind(&FilesError::Write {
+            path: "/x/state.toml".into(),
+            source: io::Error::other("no"),
+        })
+    }
 
     fn sorted_by_size() -> UiState {
         UiState {
@@ -308,7 +340,7 @@ mod tests {
                 .map(|write| write.number),
             Some(1)
         );
-        schedule.finished(1, true);
+        schedule.finished(1, None);
         assert_eq!(schedule.closing(&sorted_by_size()), None, "saved already");
 
         // Handed out, and the write has not finished: it may never run once the window is gone.
@@ -326,14 +358,14 @@ mod tests {
         schedule.changed(&sorted_by_size());
         schedule.due(&sorted_by_size());
 
-        assert_eq!(schedule.finished(1, false), Notice::Show);
+        assert_eq!(schedule.finished(1, Some(no_write())), Outcome::Failed);
         assert!(schedule.failing());
 
         schedule.changed(&seeding());
         schedule.due(&seeding());
         assert_eq!(
-            schedule.finished(2, false),
-            Notice::Unchanged,
+            schedule.finished(2, Some(no_write())),
+            Outcome::StillFailing,
             "once per run"
         );
         assert!(schedule.failing());
@@ -344,9 +376,35 @@ mod tests {
         };
         schedule.changed(&dark);
         schedule.due(&dark);
-        assert_eq!(schedule.finished(3, true), Notice::Clear);
+        assert_eq!(schedule.finished(3, None), Outcome::SavedAgain);
         assert!(!schedule.failing());
-        assert_eq!(schedule.finished(3, true), Notice::Unchanged);
+        assert_eq!(schedule.finished(3, None), Outcome::Saved);
+    }
+
+    #[test]
+    fn a_new_kind_of_failure_is_a_warning_again() {
+        let mut schedule = SaveSchedule::new(&UiState::default(), true);
+
+        assert_eq!(schedule.finished(1, Some(no_directory())), Outcome::Failed);
+        assert_eq!(
+            schedule.finished(2, Some(no_directory())),
+            Outcome::StillFailing
+        );
+        assert_eq!(
+            schedule.finished(3, Some(no_write())),
+            Outcome::FailedOtherwise
+        );
+        assert_eq!(
+            schedule.finished(4, Some(no_write())),
+            Outcome::StillFailing
+        );
+        assert_eq!(
+            schedule.finished(5, Some(no_directory())),
+            Outcome::FailedOtherwise
+        );
+        assert!(schedule.failing());
+        assert_eq!(schedule.finished(6, None), Outcome::SavedAgain);
+        assert_eq!(schedule.finished(7, Some(no_write())), Outcome::Failed);
     }
 
     #[test]
@@ -354,7 +412,7 @@ mod tests {
         let mut schedule = SaveSchedule::new(&UiState::default(), true);
         schedule.changed(&sorted_by_size());
         schedule.due(&sorted_by_size());
-        schedule.finished(1, false);
+        schedule.finished(1, Some(no_write()));
 
         // Away and back: the state is the one handed out, but it is not on disk.
         assert_eq!(schedule.changed(&seeding()), Change::Due);
@@ -364,7 +422,7 @@ mod tests {
             Some(2)
         );
         // Nothing changed since: no retry without a change, but one last try at the close.
-        schedule.finished(2, false);
+        schedule.finished(2, Some(no_write()));
         assert_eq!(schedule.changed(&sorted_by_size()), Change::None);
         assert_eq!(
             schedule
@@ -382,8 +440,12 @@ mod tests {
         schedule.changed(&seeding());
         schedule.due(&seeding());
 
-        assert_eq!(schedule.finished(2, true), Notice::Unchanged);
-        assert_eq!(schedule.finished(1, false), Notice::Unchanged, "too late");
+        assert_eq!(schedule.finished(2, None), Outcome::Saved);
+        assert_eq!(
+            schedule.finished(1, Some(no_write())),
+            Outcome::Late,
+            "too late"
+        );
         assert!(!schedule.failing());
         assert_eq!(schedule.closing(&seeding()), None, "nothing in flight");
     }

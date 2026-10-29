@@ -30,9 +30,14 @@ pub const UI_STATE_VERSION: u32 = 1;
 /// The window size when there is none to restore, or the one restored is unusable.
 const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
-/// Below this size the window cannot be used.
-const MIN_WINDOW_WIDTH: f32 = 400.0;
-const MIN_WINDOW_HEIGHT: f32 = 300.0;
+/// The narrowest the main window can be, in logical pixels: below it the window cannot be used.
+///
+/// The app gives the window this minimum, so the compositor never makes it smaller and a size
+/// the window reports is never reset by [`WindowState::normalized`]; that lower bound only guards
+/// a hand-edited file.
+pub const MIN_WINDOW_WIDTH: f32 = 400.0;
+/// The lowest the main window can be, in logical pixels; see [`MIN_WINDOW_WIDTH`].
+pub const MIN_WINDOW_HEIGHT: f32 = 300.0;
 /// Above this size in either direction the window is not real: no screen is that large, and the
 /// graphics stack fails on textures beyond it.
 const MAX_WINDOW_SIZE: f32 = 16384.0;

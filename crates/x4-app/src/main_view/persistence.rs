@@ -14,7 +14,7 @@ use x4_core::UiState;
 
 use super::MainView;
 use crate::files::FilesError;
-use crate::saving::{Change, Notice, SAVE_DELAY, SaveSchedule, StateFile};
+use crate::saving::{Change, Outcome, SAVE_DELAY, SaveSchedule, StateFile, failure_kind};
 use crate::window_state::remembered_window;
 
 /// What the main view needs to save its state: the decisions, the file and the tasks running.
@@ -90,8 +90,10 @@ impl MainView {
         let number = write.number;
         tracing::debug!(number, "saving the UI state");
         let writing = cx.background_spawn(async move { file.write(&write) });
-        // A write before this one may still run: the file keeps them in order. Dropping its task
-        // only drops the handling of its result, which this one's replaces.
+        // Replacing the task of the write before drops it and the background task it owns. If that
+        // write has not started yet, it is cancelled, which is fine: this one carries a newer
+        // state. If it runs already, it finishes, and the file keeps the two in order; only the
+        // handling of its result is dropped, and this one's takes its place.
         self.saver.write = Some(cx.spawn(async move |view, cx| {
             let result = writing.await;
             if let Err(error) = view.update(cx, |view, cx| view.save_finished(number, result, cx)) {
@@ -116,31 +118,34 @@ impl MainView {
     }
 
     /// Takes the result of save `number`: logs it, and shows or hides the notice in the status
-    /// bar. Only the first failure of a run is a warning, so a disk that stays full does not fill
-    /// the log.
+    /// bar. A failure is a warning only when it is the first of a run or of another kind than the
+    /// one before, so a disk that stays full does not fill the log.
     fn save_finished(
         &mut self,
         number: u64,
         result: Result<(), FilesError>,
         cx: &mut Context<'_, Self>,
     ) {
-        let notice = self.saver.schedule.finished(number, result.is_ok());
-        match result {
-            Ok(()) => {
-                tracing::debug!(number, "UI state saved");
-                if notice == Notice::Clear {
-                    tracing::info!("the UI state is saved again");
+        let outcome = self
+            .saver
+            .schedule
+            .finished(number, result.as_ref().err().map(failure_kind));
+        match (outcome, result) {
+            (Outcome::SavedAgain, _) => {
+                tracing::info!(number, "the UI state is saved again");
+                cx.notify();
+            }
+            (Outcome::Failed | Outcome::FailedOtherwise, Err(error)) => {
+                tracing::warn!(number, error = %error.report(), "the UI state cannot be saved; the window keeps working and tries again at the next change");
+                // The notice appears with the first failure; another kind leaves it as it is.
+                if outcome == Outcome::Failed {
                     cx.notify();
                 }
             }
-            Err(error) => {
-                if notice == Notice::Show {
-                    tracing::warn!(error = %error.report(), "the UI state cannot be saved; the window keeps working and tries again at the next change");
-                    cx.notify();
-                } else {
-                    tracing::debug!(number, error = %error.report(), "the UI state still cannot be saved");
-                }
+            (_, Err(error)) => {
+                tracing::debug!(number, error = %error.report(), "the UI state still cannot be saved");
             }
+            (_, Ok(())) => tracing::debug!(number, "UI state saved"),
         }
     }
 }

@@ -151,8 +151,8 @@ The search text, the selected torrent and the scroll position are not remembered
 the file once, and at once when the window is closed or 4x4 quits (`Ctrl+Q`). Typing in the search
 box never writes it. When a save fails (a full disk, a directory 4x4 cannot write to), the window
 keeps working: the status bar says "Layout not saved" (its tooltip says what is not saved) until a
-save works again, the log has the reason once, and 4x4 tries again at the next change and when the
-window closes.
+save works again, the log gives the reason (again only when it changes), and 4x4 tries again at the
+next change and when the window closes.
 
 ## Files and logs
 
@@ -179,8 +179,8 @@ the defaults are used; neither ever shows the URL, which may hold a password.
 
 4x4 writes `state.toml` atomically, so a crash cannot leave half a file. If the file cannot be
 parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
-file written by a newer version of 4x4, or one that cannot be read, is left alone: 4x4 starts from
-the defaults and saves nothing in that session.
+file written by a newer version of 4x4, one that cannot be read, or a corrupt one that cannot be
+moved aside is left alone: 4x4 starts from the defaults and saves nothing in that session.
 
 The log lines also go to stderr. `RUST_LOG` sets the level for both (for example
 `RUST_LOG=x4_app=debug`); without it 4x4 logs its own lifecycle events and the problems of its
