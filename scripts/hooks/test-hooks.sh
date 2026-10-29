@@ -738,19 +738,20 @@ test_measure_cpu_line_rejects_an_unreadable_stat() {
 }
 
 # A fake build for scripts/measure.sh: `just` and `cargo` that record their arguments, and in
-# <dir>/target the binaries of the app and of the example `synthetic`, which record theirs, log
-# their first frame like the app and then sleep until the script stops them.
+# <dir>/target the binaries of the app and of the example `synthetic`, which record theirs and
+# their XDG_STATE_HOME, write a state file and a log there as the app does, log their first frame
+# like the app and then sleep until the script stops them.
 new_measure_env() {
     local dir name
     dir=$(mktemp -d "$tmp_root/measure.XXXXXX")
-    mkdir -p "$dir/bin" "$dir/target/release/examples"
+    mkdir -p "$dir/bin" "$dir/target/release/examples" "$dir/home" "$dir/tmp"
     for name in just cargo; do
         printf '#!/usr/bin/env bash\necho "$*" >>%q\n' "$dir/$name.txt" >"$dir/bin/$name"
         chmod +x "$dir/bin/$name"
     done
     for name in 4x4 examples/synthetic; do
-        printf '#!/usr/bin/env bash\necho "$*" >%q\necho "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2\nexec sleep 30\n' \
-            "$dir/args-${name##*/}.txt" >"$dir/target/release/$name"
+        printf '#!/usr/bin/env bash\necho "$*" >%q\necho "${XDG_STATE_HOME-unset}" >%q\nmkdir -p "$XDG_STATE_HOME/4x4" && touch "$XDG_STATE_HOME/4x4/state.toml" "$XDG_STATE_HOME/4x4/4x4.log"\necho "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2\nexec sleep 30\n' \
+            "$dir/args-${name##*/}.txt" "$dir/state-${name##*/}.txt" >"$dir/target/release/$name"
         chmod +x "$dir/target/release/$name"
     done
     echo "$dir"
@@ -759,8 +760,8 @@ new_measure_env() {
 run_measure_script() { # <dir> <arg...>
     local dir=$1
     shift
-    run_with_input '' env PATH="$dir/bin:$PATH" CARGO_TARGET_DIR="$dir/target" \
-        X4_MEASURE_SETTLE_SECONDS=1 "$BASH" "$measure" "$@"
+    run_with_input '' env -u XDG_STATE_HOME PATH="$dir/bin:$PATH" CARGO_TARGET_DIR="$dir/target" \
+        HOME="$dir/home" TMPDIR="$dir/tmp" X4_MEASURE_SETTLE_SECONDS=1 "$BASH" "$measure" "$@"
 }
 
 test_measure_measures_an_example_with_its_arguments_and_cpu() {
@@ -786,6 +787,19 @@ test_measure_measures_the_app_by_default() {
     [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ [^$'\n']*$ ]] || fail "expected one report line, got: $stdout"
     [[ $(<"$dir/just.txt") == release ]] || fail "unexpected build: $(<"$dir/just.txt")"
     [[ -e $dir/args-4x4.txt ]] || fail "the app did not run"
+}
+
+# The measured app saves its state and writes its log under XDG_STATE_HOME: a temp dir, so that a
+# measurement never saves over the owner's state.toml, removed at the end.
+test_measure_gives_the_app_a_temp_state_dir() {
+    local dir state
+    dir=$(new_measure_env)
+    run_measure_script "$dir"
+    expect_status 0
+    state=$(<"$dir/state-4x4.txt")
+    [[ $state == "$dir/tmp/"* ]] || fail "the state dir is not a temp dir: '$state'"
+    [[ ! -e $state ]] || fail "the state dir was left behind: $state"
+    [[ -z $(ls -A "$dir/home") ]] || fail "something was written to HOME: $(ls -A "$dir/home")"
 }
 
 test_measure_rejects_unknown_options() {
@@ -1071,6 +1085,7 @@ cases=(
     measure_elapsed_seconds_reads_either_decimal_separator
     measure_measures_an_example_with_its_arguments_and_cpu
     measure_measures_the_app_by_default
+    measure_gives_the_app_a_temp_state_dir
     measure_rejects_unknown_options
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs

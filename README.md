@@ -236,11 +236,12 @@ the message `number-decimal-separator` (a dot in English).
 
 ## Performance
 
-`just measure` builds the release binary, starts it, waits 5 seconds and prints one line: the time to
-the first rendered frame, then the memory as proportional (`pss_mib`), unique (`uss_mib`),
-anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the thread count, whether Mesa's OpenGL
-stack is loaded (`gl_stack_mapped`) and the binary size. It adds a `WARN:` line on stderr when a figure
-is above one of its own reference limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when
+`just measure` builds the release binary, starts it with a temporary state directory (so its
+`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits
+5 seconds and prints one line: the time to the first rendered frame, then the memory as
+proportional (`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`)
+size, the thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary
+size. It adds a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when
 the OpenGL stack is mapped, which it should not be where a Vulkan driver is installed. The exit
 code stays 0 unless the measurement itself failed. `--cpu <seconds>` adds a second line, the CPU
 time of all its threads over that many seconds after the memory figures, as a percentage of one

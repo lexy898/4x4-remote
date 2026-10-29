@@ -33,8 +33,9 @@
 # line). The first-frame target (<= 500 ms) is reported in README.md, not checked here.
 #
 # Env: X4_MEASURE_SETTLE_SECONDS (default: 5), CARGO_TARGET_DIR (default: target). The app is
-# started with X4_DEVEL=1 (the development app id) and also writes its log file under
-# ~/.local/state/4x4/ ($XDG_STATE_HOME/4x4/ when that is set).
+# started with X4_DEVEL=1 (the development app id) and with XDG_STATE_HOME in a temp dir, so that
+# it can never save over the owner's state.toml; its log file goes there too, and the dir is
+# removed at the end. It reads config.toml as usual, so without one it polls the default daemon.
 set -euo pipefail
 
 settle_seconds=${X4_MEASURE_SETTLE_SECONDS:-5}
@@ -80,13 +81,14 @@ fi
 
 log=$(mktemp)
 snapshot=$(mktemp -d)
+state_home=$(mktemp -d)
 app_pid=""
 cleanup() {
     if [[ -n $app_pid ]] && kill -0 "$app_pid" 2>/dev/null; then
         kill "$app_pid" 2>/dev/null || true
         wait "$app_pid" 2>/dev/null || true
     fi
-    rm -rf "$log" "$snapshot"
+    rm -rf "$log" "$snapshot" "$state_home"
 }
 trap cleanup EXIT
 
@@ -101,7 +103,8 @@ fail() {
 
 # X4_DEVEL=1 gives the window the development app id, as in a debug build, so the measurement
 # window is not mistaken for the owner's own (the window rule for test windows matches that id).
-X4_DEVEL=1 RUST_LOG=x4_app=info "$binary" "${args[@]}" 2>"$log" &
+# The temp XDG_STATE_HOME keeps its state.toml and its log away from the owner's.
+X4_DEVEL=1 RUST_LOG=x4_app=info XDG_STATE_HOME="$state_home" "$binary" "${args[@]}" 2>"$log" &
 app_pid=$!
 sleep "$settle_seconds"
 
