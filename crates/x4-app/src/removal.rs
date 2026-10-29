@@ -26,8 +26,11 @@
 //! The pointer cannot press either confirm button by accident. A menu item opens its dialog on
 //! the first click of a double-click, and the second click lands on whatever the dialog has put
 //! under the pointer, which can be the confirm button. So the button takes no click that is the
-//! second of a series, and no click at all until [`POINTER_ARMING`] after the dialog opened. Keys
-//! need no such wait: Cancel or Remove has the focus, and the repeats of a held key press nothing.
+//! second of a series, and no click whose press came before the button was armed, a while
+//! ([`pointer_arming`]) after the dialog opened. The press counts, not the release: the system
+//! takes the two clicks of a slow double-click for two single clicks, and the second, held a
+//! moment, would otherwise be let go once the button was armed. Keys need no such wait: Cancel or
+//! Remove has the focus, and the repeats of a held key press nothing.
 //!
 //! The dialog lies beside the main view, not inside it, so the main view does not see the keys
 //! pressed in it. Its footer passes the key-ups on, so that the key that opened the dialog is not
@@ -46,7 +49,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, v_flex};
 use gpui_kit::{
-    App, ClickEvent, ElementId, FocusHandle, InteractiveElement as _, IntoElement,
+    App, ClickEvent, ElementId, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
     ParentElement as _, Role, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
     TestSupportExt as _, WeakEntity, Window, div,
 };
@@ -57,9 +60,16 @@ use crate::i18n::{removal_files_text, removal_more_text, removal_title_text, t};
 use crate::keymap::REMOVAL_FOOTER_CONTEXT;
 use crate::main_view::MainView;
 
-/// How long after a dialog opens its confirm button starts taking clicks of the pointer: longer
-/// than the pause between the two clicks of a double-click.
-pub(crate) const POINTER_ARMING: Duration = Duration::from_millis(500);
+/// How long after a dialog opens its confirm button starts taking presses of the pointer: longer
+/// than the pause between the two clicks of a double-click. The dialog that deletes files waits a
+/// second, as Firefox does before it lets the buttons of a dialog work
+/// (`security.dialog_enable_delay`), because a deletion cannot be undone.
+const fn pointer_arming(data: RemoveData) -> Duration {
+    match data {
+        RemoveData::Keep => Duration::from_millis(500),
+        RemoveData::Delete => Duration::from_millis(1000),
+    }
+}
 
 /// What a removal dialog removes and says, taken when it opens.
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +135,16 @@ struct ButtonFocus {
     confirm: FocusHandle,
 }
 
+/// When the pointer may press a dialog's confirm button, and when it last did.
+#[derive(Default)]
+struct Arming {
+    /// When the button starts taking presses of the pointer; set by the dialog's first build.
+    armed_at: Cell<Option<Instant>>,
+    /// When the left button last went down on the confirm button: when the click that its
+    /// release makes was pressed.
+    pressed_at: Cell<Option<Instant>>,
+}
+
 /// Opens the dialog of `removal` in `window`. Its confirm button asks `view` to carry the removal
 /// out.
 pub(crate) fn open(
@@ -144,14 +164,14 @@ pub(crate) fn open(
         RemoveData::Keep => focus.confirm.clone(),
         RemoveData::Delete => focus.cancel.clone(),
     };
-    // When the confirm button starts taking clicks of the pointer; set by the first build.
-    let armed_at = Rc::new(Cell::new(None));
+    let arming = Rc::new(Arming::default());
     window.open_dialog(cx, move |dialog, window, cx| {
         // The dialog is built again at every frame it is drawn in. Only the first build moves the
-        // focus, so that it stays where the user puts it.
-        if armed_at.get().is_none() {
+        // focus, so that it stays where the user puts it, and arms the confirm button.
+        if arming.armed_at.get().is_none() {
             first_focus.focus(window, cx);
-            armed_at.set(Some(cx.background_executor().now() + POINTER_ARMING));
+            let armed_at = cx.background_executor().now() + pointer_arming(removal.data);
+            arming.armed_at.set(Some(armed_at));
         }
         let connected = view
             .upgrade()
@@ -160,15 +180,20 @@ pub(crate) fn open(
             .close_button(false)
             .title(text_line("removal-title", &removal.title).test_support())
             .child(body(&removal, cx))
-            .footer(footer(&removal, &focus, connected, &view, &armed_at))
+            .footer(footer(&removal, &focus, connected, &view, &arming))
     });
 }
 
-/// Whether the confirm button takes `click`, which comes at `now`: a key always; the pointer only
-/// from `armed_at` on, and never as the second click of a double-click (or a later one), which is
-/// the user's double-click on the menu item that opened the dialog.
-fn takes_click(click: &ClickEvent, armed_at: Option<Instant>, now: Instant) -> bool {
-    click.is_keyboard() || (click.click_count() <= 1 && armed_at.is_some_and(|at| now >= at))
+/// Whether the confirm button takes `click`, which was pressed at `pressed_at`: a key always; the
+/// pointer only if it was pressed from `armed_at` on, wherever it was let go, and never as the
+/// second click of a double-click (or a later one), which is the user's double-click on the menu
+/// item that opened the dialog.
+fn takes_click(click: &ClickEvent, armed_at: Option<Instant>, pressed_at: Option<Instant>) -> bool {
+    click.is_keyboard()
+        || (click.click_count() <= 1
+            && armed_at
+                .zip(pressed_at)
+                .is_some_and(|(armed_at, pressed_at)| pressed_at >= armed_at))
 }
 
 /// The names of the torrents, each on its own line, how many more there are, and what becomes of
@@ -213,14 +238,14 @@ fn text_line(id: impl Into<ElementId>, text: &SharedString) -> Stateful<gpui_kit
 }
 
 /// Cancel and the confirm button, in the key context where Enter presses the focused one. The
-/// confirm button is enabled only while the daemon is `connected`, and takes the pointer's clicks
-/// only from `armed_at` on (`takes_click`).
+/// confirm button is enabled only while the daemon is `connected`, and takes only the pointer's
+/// clicks pressed once it is armed (`takes_click`).
 fn footer(
     removal: &Rc<Removal>,
     focus: &ButtonFocus,
     connected: bool,
     view: &WeakEntity<MainView>,
-    armed_at: &Rc<Cell<Option<Instant>>>,
+    arming: &Rc<Arming>,
 ) -> impl IntoElement + use<> {
     let ids = ButtonIds::of(removal.data);
     let cancel = Button::new(ids.cancel)
@@ -230,18 +255,30 @@ fn footer(
     let confirm = Button::new(ids.confirm)
         .track_focus(&focus.confirm)
         .disabled(!connected)
+        // In the capture phase, before any handler can stop the press: the button makes a click
+        // only of a press on it, so this sees the press of every click.
+        .capture_any_mouse_down({
+            let arming = Rc::clone(arming);
+            move |event, _, cx| {
+                if event.button == MouseButton::Left {
+                    arming.pressed_at.set(Some(cx.background_executor().now()));
+                }
+            }
+        })
         .on_click({
             let removal = Rc::clone(removal);
             let view = view.clone();
-            let armed_at = Rc::clone(armed_at);
+            let arming = Rc::clone(arming);
             move |click, window, cx| {
-                if takes_click(click, armed_at.get(), cx.background_executor().now()) {
+                // Each press makes one click at most.
+                let pressed_at = arming.pressed_at.take();
+                if takes_click(click, arming.armed_at.get(), pressed_at) {
                     confirm(&removal, &view, window, cx);
                 } else {
                     tracing::debug!(
                         clicks = click.click_count(),
                         "a click on a removal's confirm button came as part of a double-click or \
-                         right after the dialog opened; ignored"
+                         was pressed before the button was armed; ignored"
                     );
                 }
             }
@@ -345,9 +382,10 @@ mod tests {
     #[test]
     fn the_pointer_presses_a_confirm_button_only_once_armed_and_never_with_a_double_click() {
         let opened = Instant::now();
-        let armed_at = Some(opened + POINTER_ARMING);
-        let soon = opened + POINTER_ARMING / 2;
-        let later = opened + POINTER_ARMING;
+        let arming = pointer_arming(RemoveData::Delete);
+        let armed_at = Some(opened + arming);
+        let soon = Some(opened + arming / 2);
+        let later = Some(opened + arming);
 
         assert!(!takes_click(&mouse_click(1), armed_at, soon));
         assert!(takes_click(&mouse_click(1), armed_at, later));
@@ -357,6 +395,10 @@ mod tests {
             !takes_click(&mouse_click(1), None, later),
             "a dialog not built yet"
         );
+        assert!(
+            !takes_click(&mouse_click(1), armed_at, None),
+            "a click whose press the button did not see"
+        );
         let double_tap = ClickEvent::Touch(gpui_kit::TouchClickEvent {
             tap_count: 2,
             ..Default::default()
@@ -364,7 +406,8 @@ mod tests {
         assert!(!takes_click(&double_tap, armed_at, later));
 
         // Enter or Space on the focused button need no wait.
-        assert!(takes_click(&ClickEvent::default(), armed_at, opened));
+        assert!(takes_click(&ClickEvent::default(), armed_at, None));
+        assert!(takes_click(&ClickEvent::default(), armed_at, soon));
     }
 
     #[test]

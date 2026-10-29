@@ -2,15 +2,15 @@
 //! list"), the danger dialog of Shift+Delete ("Remove and delete files"), where the focus is, what
 //! Enter, Space, Escape and a held key do in them, what they remove when the list changes under
 //! them, the toolbar's Remove menu, what they do while the daemon is not connected, and that a
-//! click that comes too soon after a dialog opened (the second click of a double-click on the menu
-//! item that opened it) presses nothing.
+//! click pressed too soon after a dialog opened (the second click of a double-click on the menu
+//! item that opened it, however slow) presses nothing, wherever it is let go.
 //!
 //! Each test builds the two channels of a service itself and opens the window with no service
 //! behind them, so nothing touches the network: the test reads the commands the window sends and
 //! answers them with the events a service would send.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::test::{ClickOptions, TestWindowExt as _};
 use gpui_kit::{
@@ -56,8 +56,11 @@ const MENU: &str = "popup-menu";
 const SEARCH: &str = "search";
 /// The id of the toolbar's Columns button, whose menu shows and hides columns.
 const COLUMNS: &str = "column-menu";
-/// How long after a dialog opens its confirm button starts taking clicks of the pointer.
-const ARMING: Duration = Duration::from_millis(500);
+/// The names of the seven torrents that the clicks on a menu item remove.
+const SEVEN: [&str; 7] = ["a", "b", "c", "d", "e", "f", "g"];
+/// How long after a dialog opens its confirm button takes presses of the pointer, whichever the
+/// dialog: the light dialog's Remove from 500 ms on, the danger dialog's "Delete files" from 1 s.
+const ARMING: Duration = Duration::from_millis(1000);
 
 /// An open main window and the far ends of its channels, standing in for the service.
 struct Window {
@@ -154,7 +157,8 @@ impl Window {
         self.click(("row", row), cx);
     }
 
-    /// Lets the time pass after which a dialog's confirm button takes clicks of the pointer.
+    /// Lets the time pass after which the confirm buttons of both dialogs take presses of the
+    /// pointer.
     fn let_the_buttons_arm(cx: &mut TestAppContext) {
         cx.executor().advance_clock(ARMING);
         cx.run_until_parked();
@@ -163,6 +167,13 @@ impl Window {
     /// Clicks the left button at `position`, as the `count`th click of a series (2 is the second
     /// click of a double-click), whatever is there.
     fn click_at(&self, position: Point<Pixels>, count: usize, cx: &mut TestAppContext) {
+        self.mouse_down_at(position, count, cx);
+        self.mouse_up_at(position, count, cx);
+    }
+
+    /// Moves the pointer to `position` and presses the left button there, as the `count`th click
+    /// of a series, whatever is there. The button stays down until `mouse_up_at`.
+    fn mouse_down_at(&self, position: Point<Pixels>, count: usize, cx: &mut TestAppContext) {
         let modifiers = Modifiers::none();
         self.act(cx, |window, cx| {
             window.dispatch_event(
@@ -186,12 +197,17 @@ impl Window {
                 .to_platform_input(),
                 cx,
             );
-            window.render_frame(cx);
+        });
+    }
+
+    /// Lets the left button go at `position`, ending the `count`th click of a series.
+    fn mouse_up_at(&self, position: Point<Pixels>, count: usize, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
             window.dispatch_event(
                 MouseUpEvent {
                     button: MouseButton::Left,
                     position,
-                    modifiers,
+                    modifiers: Modifiers::none(),
                     click_count: count,
                 }
                 .to_platform_input(),
@@ -446,6 +462,26 @@ impl Window {
     /// How many notifications are on screen.
     fn notifications(&self, cx: &mut TestAppContext) -> usize {
         self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
+    }
+}
+
+/// The clock of a test that says when each press and release comes, counted from when the clock
+/// started.
+struct Timeline(Instant);
+
+impl Timeline {
+    fn start(cx: &TestAppContext) -> Self {
+        Self(cx.executor().now())
+    }
+
+    /// Lets the time pass until `millis` after the clock started.
+    #[track_caller]
+    fn at(&self, millis: u64, cx: &mut TestAppContext) {
+        let then = self.0 + Duration::from_millis(millis);
+        let now = cx.executor().now();
+        assert!(now <= then, "the test is already past {millis} ms");
+        cx.executor().advance_clock(then - now);
+        cx.run_until_parked();
     }
 }
 
@@ -1057,21 +1093,120 @@ fn a_double_click_on_the_menu_item_does_not_delete_files(cx: &mut TestAppContext
     assert_eq!(window.sent_action(), remove(&names, RemoveData::Delete));
 }
 
+/// Opens the dialog of the menu item `label` for seven selected torrents by clicking the item from
+/// 0 to 100 ms on the test's clock, with the item lying over the dialog's `button` (found in the
+/// dialog that `key` opens). Returns the window, the point on both, and the clock.
+fn open_with_a_click_on_the_item(
+    key: &str,
+    button: &'static str,
+    label: &str,
+    cx: &mut TestAppContext,
+) -> (Window, Point<Pixels>, Timeline) {
+    let window = Window::open(cx);
+    window.send(SEVEN.into_iter().map(torrent).collect(), cx);
+    window.press("ctrl-a", cx);
+    let point = window.item_over_button(key, button, label, cx);
+
+    let clock = Timeline::start(cx);
+    window.mouse_down_at(point, 1, cx);
+    clock.at(100, cx);
+    window.mouse_up_at(point, 1, cx);
+    assert!(window.shown(button, cx), "the item opened the dialog");
+    assert!(
+        window.bounds(button, cx).contains(&point),
+        "the next press lands on the button"
+    );
+    (window, point, clock)
+}
+
+/// A slow double-click on "Remove and delete files…": its second press comes too late after the
+/// first for the system to count it as the second click of a double-click, so it is a click of its
+/// own, pressed on "Delete files" at `pressed` and let go there at `released`. It was pressed
+/// before the button was armed, so it deletes nothing.
+fn a_slow_double_click_on_delete_files(pressed: u64, released: u64, cx: &mut TestAppContext) {
+    let (window, point, clock) =
+        open_with_a_click_on_the_item("shift-delete", DANGER_CONFIRM, REMOVE_WITH_DATA, cx);
+
+    clock.at(pressed, cx);
+    window.mouse_down_at(point, 1, cx);
+    clock.at(released, cx);
+    window.mouse_up_at(point, 1, cx);
+
+    assert_eq!(window.sent(), [], "the slow double-click deleted nothing");
+    assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
+}
+
+#[gpui_kit::test]
+fn a_slow_double_click_on_the_menu_item_does_not_delete_files(cx: &mut TestAppContext) {
+    a_slow_double_click_on_delete_files(450, 650, cx);
+}
+
+#[gpui_kit::test]
+fn half_a_second_between_the_clicks_on_the_menu_item_deletes_no_files(cx: &mut TestAppContext) {
+    a_slow_double_click_on_delete_files(600, 720, cx);
+}
+
+/// "Delete files" takes a click only if it was pressed once the button was armed, a second after
+/// the dialog opened: a press that came before it does nothing, however late it is let go.
+#[gpui_kit::test]
+fn delete_files_takes_only_a_press_that_comes_once_it_is_armed(cx: &mut TestAppContext) {
+    let (window, point, clock) =
+        open_with_a_click_on_the_item("shift-delete", DANGER_CONFIRM, REMOVE_WITH_DATA, cx);
+
+    clock.at(900, cx);
+    window.mouse_down_at(point, 1, cx);
+    clock.at(1100, cx);
+    window.mouse_up_at(point, 1, cx);
+    assert_eq!(window.sent(), [], "pressed before the button was armed");
+    assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
+
+    window.mouse_down_at(point, 1, cx);
+    clock.at(1200, cx);
+    window.mouse_up_at(point, 1, cx);
+    assert_eq!(window.sent_action(), remove(&SEVEN, RemoveData::Delete));
+    assert!(!window.shown(DANGER_CONFIRM, cx), "the dialog closed");
+}
+
+/// Remove in the light dialog waits half a second, measured from the press too.
+#[gpui_kit::test]
+fn a_slow_double_click_on_the_menu_item_does_not_remove_from_list(cx: &mut TestAppContext) {
+    let (window, point, clock) =
+        open_with_a_click_on_the_item("delete", LIGHT_CONFIRM, REMOVE_FROM_LIST, cx);
+
+    clock.at(450, cx);
+    window.mouse_down_at(point, 1, cx);
+    clock.at(650, cx);
+    window.mouse_up_at(point, 1, cx);
+    assert_eq!(window.sent(), [], "pressed before the button was armed");
+    assert!(window.shown(LIGHT_CONFIRM, cx), "the dialog stays open");
+
+    clock.at(700, cx);
+    window.mouse_down_at(point, 1, cx);
+    clock.at(800, cx);
+    window.mouse_up_at(point, 1, cx);
+    assert_eq!(window.sent_action(), remove(&SEVEN, RemoveData::Keep));
+    assert!(!window.shown(LIGHT_CONFIRM, cx), "the dialog closed");
+}
+
 #[gpui_kit::test]
 fn delete_files_ignores_clicks_right_after_the_dialog_opens(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![torrent("a"), torrent("b")], cx);
     window.click_row(0, cx);
+    let clock = Timeline::start(cx);
     window.press("shift-delete", cx);
 
     window.click(DANGER_CONFIRM, cx);
     assert_eq!(window.sent(), [], "too soon after the dialog opened");
-    cx.executor().advance_clock(ARMING / 2);
+    clock.at(500, cx);
+    window.click(DANGER_CONFIRM, cx);
+    assert_eq!(window.sent(), [], "half a second is not enough here");
+    clock.at(999, cx);
     window.click(DANGER_CONFIRM, cx);
     assert_eq!(window.sent(), [], "still too soon");
     assert!(window.shown(DANGER_CONFIRM, cx), "the dialog stays open");
 
-    Window::let_the_buttons_arm(cx);
+    clock.at(1000, cx);
     window.click(DANGER_CONFIRM, cx);
     assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Delete));
     assert!(!window.shown(DANGER_CONFIRM, cx), "the dialog closed");
@@ -1112,16 +1247,20 @@ fn remove_from_list_ignores_clicks_right_after_the_dialog_opens(cx: &mut TestApp
     let window = Window::open(cx);
     window.send(vec![torrent("a"), torrent("b")], cx);
     window.click_row(0, cx);
+    let clock = Timeline::start(cx);
     window.press("delete", cx);
 
     window.click(LIGHT_CONFIRM, cx);
     assert_eq!(window.sent(), [], "too soon after the dialog opened");
-    cx.executor().advance_clock(ARMING / 2);
+    clock.at(250, cx);
+    window.click(LIGHT_CONFIRM, cx);
+    assert_eq!(window.sent(), [], "still too soon");
+    clock.at(499, cx);
     window.click(LIGHT_CONFIRM, cx);
     assert_eq!(window.sent(), [], "still too soon");
     assert!(window.shown(LIGHT_CONFIRM, cx), "the dialog stays open");
 
-    Window::let_the_buttons_arm(cx);
+    clock.at(500, cx);
     window.click(LIGHT_CONFIRM, cx);
     assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
     assert!(!window.shown(LIGHT_CONFIRM, cx), "the dialog closed");
