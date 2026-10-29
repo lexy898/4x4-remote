@@ -1,9 +1,10 @@
 //! What the state of a view keeps when the tree is made again.
 
+use x4_core::test_support::details;
 use x4_core::{FileTree, FileTreeView, WantedState};
 use x4_rpc::FilePriority::{High, Normal};
 
-use super::{Spec, indices, key, open_all, row, shape, tree_of};
+use super::{Spec, indices, key, open_all, other_hash, row, shape, tree_of};
 
 #[test]
 fn expanded_state_survives_a_progress_update() {
@@ -56,7 +57,11 @@ fn retain_drops_what_a_new_set_of_files_no_longer_has() {
     ]);
     view.retain(&after);
 
-    assert_eq!(view.cursor(), None);
+    assert_eq!(
+        view.cursor(),
+        Some(&key("T")),
+        "the nearest folder that is left"
+    );
     assert!(!view.is_expanded(&key("T/gone")));
     assert!(view.is_expanded(&key("T/sub")));
     assert!(view.is_expanded(&key("T")));
@@ -146,4 +151,115 @@ fn keys_do_not_change_with_progress_or_a_new_read() {
             "T/a.mkv"
         ]
     );
+}
+
+#[test]
+fn a_lost_cursor_moves_to_its_nearest_surviving_folder() {
+    let before = tree_of(&[
+        ("T/sub/deep/c.mkv", 1, 0, true, Normal),
+        ("T/sub/b.mkv", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+    ]);
+    let cursor_on = |path: &str| {
+        let mut view = open_all(&before);
+        view.set_cursor(&before, &key(path));
+        assert_eq!(view.cursor(), Some(&key(path)));
+        view
+    };
+
+    // The deepest folder is gone: the cursor goes up to the folder that is left.
+    let mut view = cursor_on("T/sub/deep/c.mkv");
+    let no_deep = tree_of(&[
+        ("T/sub/b.mkv", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+    ]);
+    view.retain(&no_deep);
+    assert_eq!(view.cursor(), Some(&key("T/sub")));
+
+    // Two levels are gone: it goes up two.
+    let mut view = cursor_on("T/sub/deep/c.mkv");
+    let only_top = tree_of(&[("T/a.mkv", 1, 0, true, Normal)]);
+    view.retain(&only_top);
+    assert_eq!(view.cursor(), Some(&key("T")));
+
+    // A file is gone: it goes to the folder around it, not to a neighbour.
+    let mut view = cursor_on("T/sub/b.mkv");
+    let no_b = tree_of(&[
+        ("T/sub/deep/c.mkv", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+    ]);
+    view.retain(&no_b);
+    assert_eq!(view.cursor(), Some(&key("T/sub")));
+
+    // The nearest path above that exists is a file now, so it is not a place for the cursor.
+    let mut view = cursor_on("T/sub/b.mkv");
+    let sub_is_a_file = tree_of(&[
+        ("T/sub", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+    ]);
+    view.retain(&sub_is_a_file);
+    assert_eq!(view.cursor(), Some(&key("T")));
+
+    // Nothing above is left: no cursor.
+    let mut view = cursor_on("T/sub/deep/c.mkv");
+    let other = tree_of(&[("U/x.mkv", 1, 0, true, Normal)]);
+    view.retain(&other);
+    assert_eq!(view.cursor(), None);
+
+    // A cursor whose node is still there stays, whatever else is gone.
+    let mut view = cursor_on("T/a.mkv");
+    view.retain(&no_deep);
+    assert_eq!(view.cursor(), Some(&key("T/a.mkv")));
+}
+
+#[test]
+fn a_view_given_another_torrent_starts_fresh() {
+    let files: [Spec<'_>; 3] = [
+        ("T/sub/b.mkv", 1, 0, true, Normal),
+        ("T/sub/deep/c.mkv", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+    ];
+    let first = tree_of(&files);
+    let second = FileTree::new(&details(&other_hash(), &files));
+    let fresh = [("T", 0), ("T/sub", 1), ("T/a.mkv", 1)];
+
+    let mut view = open_all(&first);
+    view.set_cursor(&first, &key("T/sub/deep/c.mkv"));
+    assert_eq!(view.rows(&first).len(), 6);
+
+    // Without a call that fits the view, the rows are those of a fresh view.
+    assert_eq!(shape(&view.rows(&second)), fresh);
+
+    // The same keys exist in the other torrent, but nothing is carried over to it.
+    view.retain(&second);
+    assert_eq!(view.cursor(), None);
+    assert!(!view.is_expanded(&key("T/sub")));
+    assert!(view.is_expanded(&key("T")), "the first level opens again");
+    assert_eq!(shape(&view.rows(&second)), fresh);
+
+    // A folder closed in one torrent is open again when the view comes back to a torrent, but
+    // a refresh of the same torrent keeps what the user did.
+    view.toggle_expanded(&second, &key("T"));
+    view.retain(&second);
+    assert_eq!(shape(&view.rows(&second)), [("T", 0)]);
+    view.retain(&first);
+    assert_eq!(shape(&view.rows(&first)), fresh);
+}
+
+#[test]
+fn a_key_press_on_another_torrent_acts_on_a_fresh_view_of_it() {
+    let files: [Spec<'_>; 2] = [
+        ("T/sub/b.mkv", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+    ];
+    let first = tree_of(&files);
+    let second = FileTree::new(&details(&other_hash(), &files));
+    let mut view = open_all(&first);
+    view.set_cursor(&first, &key("T/sub/b.mkv"));
+
+    // The cursor of the first torrent does not count: a step down starts at the first row.
+    view.move_cursor(&second, 1);
+
+    assert_eq!(view.cursor(), Some(&key("T")));
+    assert!(!view.is_expanded(&key("T/sub")));
 }

@@ -11,9 +11,11 @@
 //! keyboard cursor is. It lists the visible [`FileRow`]s in order, folders first and then by name
 //! with numbers in their natural order, and it survives a refresh of the tree.
 //!
-//! A click on a row becomes an action through [`FileTree::indices`], the only place that makes the
-//! list of files an action names. Its [`NonEmptyIndices`] cannot be empty, because the daemon
-//! reads an empty list as "all files".
+//! A click on a row becomes an action through [`FileTree::toggle_wanted_action`],
+//! [`FileTree::priority_action`] or [`FileTree::step_priority_action`], so the torrent, the files
+//! and the new value all come from the tree that was drawn. The list of files is a
+//! [`NonEmptyIndices`], which cannot be empty, because the daemon reads an empty list as "all
+//! files".
 
 use std::sync::Arc;
 
@@ -51,8 +53,8 @@ impl NodeKey {
 /// The indices of the files an action reaches; there is always at least one.
 ///
 /// The daemon reads an empty list of files as all of them, so a list that is empty by mistake
-/// would change the whole torrent. The only way to make this type is [`FileTree::indices`], which
-/// gives `None` instead of an empty list.
+/// would change the whole torrent. The only way to make this type is a [`FileTree`], which gives
+/// `None` instead of an empty list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonEmptyIndices(Vec<usize>);
 
@@ -89,6 +91,8 @@ pub enum WantedState {
 impl WantedState {
     /// The value a click on the node's checkbox sets: what is wanted entirely is switched off,
     /// and what is not or only partly wanted is switched on.
+    ///
+    /// The app does not pair this with files by hand; [`FileTree::toggle_wanted_action`] does.
     #[must_use]
     pub fn toggled(self) -> bool {
         self != Self::All
@@ -107,6 +111,8 @@ pub enum PriorityView {
 /// The priority that `+` (`up`) or `-` gives to a node: one step higher or lower, and no further
 /// than [`FilePriority::High`] or [`FilePriority::Low`]. A node of mixed priority goes to
 /// [`FilePriority::Normal`] either way, so a folder becomes the same throughout.
+///
+/// The app does not pair this with files by hand; [`FileTree::step_priority_action`] does.
 #[must_use]
 pub fn next_priority(current: PriorityView, up: bool) -> FilePriority {
     let PriorityView::One(current) = current else {

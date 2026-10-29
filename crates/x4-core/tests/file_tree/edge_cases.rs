@@ -1,10 +1,10 @@
 //! Torrents with odd paths, a lot of files, or data that disagrees with itself: the tree must
 //! still name the right files and never an empty list.
 
-use x4_core::{FileTree, FileTreeView, RowKind, human_size};
-use x4_rpc::FilePriority::Normal;
+use x4_core::{Action, FileTree, FileTreeView, PriorityView, RowKind, WantedState, human_size};
+use x4_rpc::FilePriority::{High, Low, Normal};
 
-use super::{details_of, indices, open_all, row, shape, tree_of};
+use super::{details_of, hash, indices, key, open_all, row, shape, tree_of};
 
 #[test]
 fn paths_that_clash_still_get_distinct_keys_and_their_own_files() {
@@ -139,4 +139,75 @@ fn a_file_that_reports_more_than_its_length_does_not_inflate_its_folder() {
 
     assert_eq!(row(&rows, "T/a.mkv").percent, 100);
     assert_eq!(row(&rows, "T").percent, 50, "100 of 200 bytes, not 150");
+}
+
+#[test]
+fn a_pad_file_listed_first_in_its_folder_is_reached_but_does_not_change_the_folder() {
+    // The padding file comes before every shown file of T, not wanted and at another priority.
+    let tree = tree_of(&[
+        ("T/_____padding_file_0", 28, 0, false, Low),
+        ("T/a.mkv", 100, 100, true, Normal),
+        ("T/b.mkv", 100, 50, true, Normal),
+    ]);
+
+    let rows = FileTreeView::new(&tree).rows(&tree);
+
+    assert_eq!(indices(&tree, "T"), Some(vec![0, 1, 2]));
+    assert_eq!(shape(&rows), [("T", 0), ("T/a.mkv", 1), ("T/b.mkv", 1)]);
+    let top = row(&rows, "T");
+    assert_eq!(top.wanted, WantedState::All, "from the shown files only");
+    assert_eq!(top.priority, PriorityView::One(Normal));
+    assert_eq!(top.size, human_size(200));
+    assert_eq!(top.percent, 75, "150 of 200 bytes");
+    assert_eq!(
+        tree.toggle_wanted_action(&key("T")),
+        Some(Action::SetFilesWanted {
+            hash: hash(),
+            files: vec![0, 1, 2],
+            wanted: false,
+        })
+    );
+}
+
+#[test]
+fn indices_and_actions_carry_the_index_of_the_entry_not_its_position() {
+    let mut details = details_of(&[
+        ("T/a.mkv", 1, 0, true, Normal),
+        ("T/sub/b.mkv", 1, 0, false, Normal),
+        ("T/sub/c.mkv", 1, 0, false, Normal),
+        ("T/sub/_____padding_file_x", 1, 0, false, Normal),
+    ]);
+    for (file, index) in details.files.iter_mut().zip([10, 20, 30, 25]) {
+        file.index = index;
+    }
+    let tree = FileTree::new(&details);
+
+    assert_eq!(indices(&tree, "T"), Some(vec![10, 20, 25, 30]));
+    assert_eq!(indices(&tree, "T/sub"), Some(vec![20, 25, 30]));
+    assert_eq!(indices(&tree, "T/a.mkv"), Some(vec![10]));
+    assert_eq!(indices(&tree, "T/sub/c.mkv"), Some(vec![30]));
+    assert_eq!(
+        tree.toggle_wanted_action(&key("T/sub")),
+        Some(Action::SetFilesWanted {
+            hash: hash(),
+            files: vec![20, 25, 30],
+            wanted: true,
+        })
+    );
+    assert_eq!(
+        tree.priority_action(&key("T/sub/b.mkv"), High),
+        Some(Action::SetFilePriority {
+            hash: hash(),
+            files: vec![20],
+            priority: High,
+        })
+    );
+    assert_eq!(
+        tree.step_priority_action(&key("T/a.mkv"), true),
+        Some(Action::SetFilePriority {
+            hash: hash(),
+            files: vec![10],
+            priority: High,
+        })
+    );
 }

@@ -1,8 +1,9 @@
 //! The file tree of the details panel, through the public API the Files tab uses: what the rows
 //! show and which files an action on a row reaches (`structure`, and `edge_cases` for odd torrents),
-//! how the cursor and the open folders are moved (`navigation`), and what survives a refresh
-//! (`refresh`).
+//! the actions the tree builds itself (`actions`), how the cursor and the open folders are moved
+//! (`navigation`), and what survives a refresh (`refresh`).
 
+mod actions;
 mod edge_cases;
 mod navigation;
 mod refresh;
@@ -18,6 +19,11 @@ type Spec<'a> = (&'a str, u64, u64, bool, FilePriority);
 #[expect(clippy::unwrap_used, reason = "the hash is a literal of 40 hex digits")]
 fn hash() -> HashString {
     HashString::parse(&"ab".repeat(20)).unwrap()
+}
+
+#[expect(clippy::unwrap_used, reason = "the hash is a literal of 40 hex digits")]
+fn other_hash() -> HashString {
+    HashString::parse(&"cd".repeat(20)).unwrap()
 }
 
 fn details_of(files: &[Spec<'_>]) -> TorrentDetails {

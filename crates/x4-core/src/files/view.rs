@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use x4_rpc::HashString;
+
 use super::tree::Node;
 use super::{FileTree, NodeKey, PriorityView, WantedState};
 use crate::format::{HumanSize, human_size};
@@ -49,9 +51,16 @@ pub struct FileRow {
 /// Which folders of a [`FileTree`] are open and where the cursor is.
 ///
 /// Both are kept by [`NodeKey`], so the state stays valid when the tree is made again; call
-/// [`retain`](Self::retain) with the new tree. Make a new view for another torrent.
+/// [`retain`](Self::retain) with the new tree.
+///
+/// A view belongs to one torrent: the one of the first tree it is given. A tree of another
+/// torrent starts it afresh, with every folder closed but the first level and no cursor, so the
+/// state of one torrent cannot reach the files of another that has the same paths.
 #[derive(Debug, Clone, Default)]
 pub struct FileTreeView {
+    /// The torrent the state below belongs to; `None` until the first tree, when the state is
+    /// still empty.
+    hash: Option<HashString>,
     expanded: HashSet<NodeKey>,
     cursor: Option<NodeKey>,
     /// Whether the folders at the first level were opened for the first time. A magnet link has
@@ -72,8 +81,14 @@ impl FileTreeView {
     /// The rows to draw, in order: each folder is followed by its entries while it is open, and
     /// the entries of a folder are the folders first, then the files, each by name with numbers
     /// in their natural order.
+    ///
+    /// For a tree of another torrent than the view's, these are the rows of a view that is new,
+    /// which is what the next call that takes the tree makes of this one.
     #[must_use]
     pub fn rows(&self, tree: &FileTree) -> Vec<FileRow> {
+        if !self.belongs_to(tree) {
+            return Self::new(tree).rows(tree);
+        }
         self.shown(tree)
             .into_iter()
             .filter_map(|(index, depth)| Some(self.row(tree.node(index)?, depth)))
@@ -96,6 +111,7 @@ impl FileTreeView {
     /// is not in `tree` change nothing. Closing a folder that holds the cursor moves the cursor
     /// to the folder.
     pub fn toggle_expanded(&mut self, tree: &FileTree, key: &NodeKey) {
+        self.adopt(tree);
         let Some(folder) = tree.position(key) else {
             return;
         };
@@ -116,6 +132,7 @@ impl FileTreeView {
 
     /// Puts the cursor on `key`, if it is a row that is shown.
     pub fn set_cursor(&mut self, tree: &FileTree, key: &NodeKey) {
+        self.adopt(tree);
         let Some(node) = tree.position(key) else {
             return;
         };
@@ -128,6 +145,7 @@ impl FileTreeView {
     /// shown, and stops at the first or the last. A huge step is Home or End. Without a cursor
     /// a step down goes to the first row and a step up to the last.
     pub fn move_cursor(&mut self, tree: &FileTree, step: isize) {
+        self.adopt(tree);
         let shown = self.shown(tree);
         let Some(last) = shown.len().checked_sub(1) else {
             self.cursor = None;
@@ -149,6 +167,7 @@ impl FileTreeView {
 
     /// Moves the cursor from a file or folder to the folder around it.
     pub fn cursor_to_parent(&mut self, tree: &FileTree) {
+        self.adopt(tree);
         let parent = self
             .cursor_node(tree)
             .and_then(|cursor| tree.node(cursor))
@@ -161,6 +180,7 @@ impl FileTreeView {
 
     /// Moves the cursor from an open folder to its first entry.
     pub fn cursor_to_first_child(&mut self, tree: &FileTree) {
+        self.adopt(tree);
         let Some(node) = self.cursor_node(tree).and_then(|cursor| tree.node(cursor)) else {
             return;
         };
@@ -175,6 +195,7 @@ impl FileTreeView {
     /// The Left key: closes the folder under the cursor if it is open, and otherwise moves the
     /// cursor to the folder around it.
     pub fn collapse_or_parent(&mut self, tree: &FileTree) {
+        self.adopt(tree);
         match self.cursor.clone() {
             Some(key) if self.expanded.contains(&key) => self.toggle_expanded(tree, &key),
             _ => self.cursor_to_parent(tree),
@@ -184,6 +205,7 @@ impl FileTreeView {
     /// The Right key: opens the folder under the cursor if it is closed, and otherwise moves the
     /// cursor into it.
     pub fn expand_or_first_child(&mut self, tree: &FileTree) {
+        self.adopt(tree);
         let Some(key) = self.cursor.clone() else {
             return;
         };
@@ -197,7 +219,36 @@ impl FileTreeView {
     /// Fits the state to a tree that was made again, as after every read of the details: the
     /// folders that are open stay open and the cursor stays, unless their nodes are gone. The
     /// first time the tree has anything to show, its first level opens.
+    ///
+    /// A cursor whose node is gone moves to its nearest folder that is still shown, or nowhere.
+    /// A tree of another torrent than the view's starts the view afresh.
     pub fn retain(&mut self, tree: &FileTree) {
+        if !self.adopt(tree) {
+            self.prune(tree);
+        }
+    }
+
+    /// Whether the state is the state of the torrent `tree` was made for.
+    fn belongs_to(&self, tree: &FileTree) -> bool {
+        self.hash.as_ref() == Some(tree.hash())
+    }
+
+    /// Makes the view belong to the torrent of `tree`. A view that belongs to another torrent, or
+    /// to none yet, starts afresh, with the first level of `tree` open. Returns whether it did.
+    fn adopt(&mut self, tree: &FileTree) -> bool {
+        if self.belongs_to(tree) {
+            return false;
+        }
+        *self = Self {
+            hash: Some(tree.hash().clone()),
+            ..Self::default()
+        };
+        self.prune(tree);
+        true
+    }
+
+    /// Fits the open folders and the cursor to `tree`, which is of the view's torrent.
+    fn prune(&mut self, tree: &FileTree) {
         self.expanded.retain(|key| {
             tree.position(key)
                 .and_then(|index| tree.node(index))
@@ -212,13 +263,13 @@ impl FileTreeView {
                     .map(|node| node.key.clone()),
             );
         }
-        // The cursor stays only on a row that is still shown.
-        let shown = self.shown(tree);
-        let keeps = self
-            .cursor_node(tree)
-            .is_some_and(|cursor| shown.iter().any(|&(index, _)| index == cursor));
-        if !keeps {
-            self.cursor = None;
+        if let Some(cursor) = self.cursor.take() {
+            let shown: HashSet<usize> = self
+                .shown(tree)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect();
+            self.cursor = nearest_shown(tree, &shown, cursor);
         }
     }
 
@@ -266,6 +317,30 @@ impl FileTreeView {
             playable: node.playable,
         }
     }
+}
+
+/// The node `key` if it is shown, and otherwise the nearest folder above its path that is shown;
+/// `None` when there is none. The folders are looked up by path, because the node itself may be
+/// gone from `tree`, with its parents.
+fn nearest_shown(tree: &FileTree, shown: &HashSet<usize>, key: NodeKey) -> Option<NodeKey> {
+    let is_shown = |key: &NodeKey, folder_only: bool| {
+        tree.position(key).is_some_and(|index| {
+            shown.contains(&index)
+                && (!folder_only || tree.node(index).is_some_and(|n| n.is_folder))
+        })
+    };
+    if is_shown(&key, false) {
+        return Some(key);
+    }
+    let mut path = key.as_str();
+    while let Some((above, _)) = path.rsplit_once('/') {
+        path = above;
+        let candidate = NodeKey::new(path);
+        if is_shown(&candidate, true) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Whether the node `node` is somewhere below the folder `folder`.

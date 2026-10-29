@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use x4_rpc::{FilePriority, HashString};
 
 use super::names::{is_padding, name_order};
-use super::{NodeKey, NonEmptyIndices, PriorityView, WantedState};
+use super::{NodeKey, NonEmptyIndices, PriorityView, WantedState, next_priority};
+use crate::action::Action;
 use crate::details::{FileEntry, TorrentDetails};
 use crate::playable::Playable;
 
@@ -21,6 +22,13 @@ use crate::playable::Playable;
 /// A tree is a snapshot: it is made again from the details after every read, and the keys of the
 /// nodes stay the same. It remembers the torrent it was made for, so an action drawn from it
 /// names that torrent however the details have changed since.
+///
+/// **The app builds every file action through [`toggle_wanted_action`](Self::toggle_wanted_action),
+/// [`priority_action`](Self::priority_action) and
+/// [`step_priority_action`](Self::step_priority_action), on the tree the rows were drawn from.**
+/// Each takes the torrent, the files and the current value from this one snapshot. Putting an
+/// action together from parts of different reads would change the wrong files of a torrent, and
+/// an action with an empty list of files changes all of them.
 #[derive(Debug, Clone)]
 pub struct FileTree {
     hash: HashString,
@@ -107,10 +115,67 @@ impl FileTree {
     /// It is `None` for a key that is not in the tree, which includes a padding file and a folder
     /// that holds nothing but padding files: those are not shown, so there is nothing to act on.
     /// It never gives an empty list.
+    ///
+    /// This is for looking at what a node reaches. To change the files, build the action with
+    /// [`toggle_wanted_action`](Self::toggle_wanted_action),
+    /// [`priority_action`](Self::priority_action) or
+    /// [`step_priority_action`](Self::step_priority_action), which keep the files, the torrent
+    /// and the value from one tree.
     #[must_use]
     pub fn indices(&self, key: &NodeKey) -> Option<NonEmptyIndices> {
+        self.target(key).map(|(_, files)| files)
+    }
+
+    /// The action that a click on the checkbox of the node `key` asks for: all its files are
+    /// wanted, or none of them when all are wanted now ([`WantedState::toggled`]).
+    ///
+    /// The torrent, the files and the value all come from this tree, so they cannot belong to
+    /// different reads. It is `None` when `key` is not a node of this tree (a padding file is not).
+    #[must_use]
+    pub fn toggle_wanted_action(&self, key: &NodeKey) -> Option<Action> {
+        let (node, files) = self.target(key)?;
+        Some(Action::SetFilesWanted {
+            hash: self.hash.clone(),
+            files: files.into_vec(),
+            wanted: node.wanted.toggled(),
+        })
+    }
+
+    /// The action that gives the files of the node `key` the priority `priority`, as a choice
+    /// from the dropdown does.
+    ///
+    /// The torrent and the files come from this tree. It is `None` when `key` is not a node of
+    /// this tree.
+    #[must_use]
+    pub fn priority_action(&self, key: &NodeKey, priority: FilePriority) -> Option<Action> {
+        let (_, files) = self.target(key)?;
+        Some(Action::SetFilePriority {
+            hash: self.hash.clone(),
+            files: files.into_vec(),
+            priority,
+        })
+    }
+
+    /// The action that `+` (`up`) or `-` asks for: the files of the node `key` get the priority
+    /// one step higher or lower than the node has now ([`next_priority`]).
+    ///
+    /// The torrent, the files and the current priority all come from this tree. It is `None` when
+    /// `key` is not a node of this tree.
+    #[must_use]
+    pub fn step_priority_action(&self, key: &NodeKey, up: bool) -> Option<Action> {
+        let (node, files) = self.target(key)?;
+        Some(Action::SetFilePriority {
+            hash: self.hash.clone(),
+            files: files.into_vec(),
+            priority: next_priority(node.priority, up),
+        })
+    }
+
+    /// The node `key` names and the files an action on it reaches; `None` for a key that is not
+    /// in this tree or a node without files.
+    fn target(&self, key: &NodeKey) -> Option<(&Node, NonEmptyIndices)> {
         let node = self.nodes.get(*self.by_key.get(key)?)?;
-        NonEmptyIndices::new(node.files.clone())
+        Some((node, NonEmptyIndices::new(node.files.clone())?))
     }
 
     /// The node at `index`.
