@@ -106,8 +106,10 @@ Shift+click selects the range from the last plain click or Ctrl+click to the row
 and Shift+Down grow or shrink that range by a row, and Shift+Home and Shift+End stretch it to the
 first or the last torrent. Ctrl+A selects every torrent the list shows, and only those; Escape or
 Ctrl+Shift+A selects none. Every selected row has the same highlight. The selection stays on the
-same torrents when the list is re-sorted or updated, and an update never scrolls the list. A
-selected torrent that the filter or the search hides, or that is gone from the daemon, leaves the
+same torrents when the list is re-sorted or updated, and an update never scrolls the list. A click
+or a right-click acts on the torrent the button went down on, even if an update moves another one
+under the pointer before the button comes up, and on nothing if that torrent has left the list by
+then. A selected torrent that the filter or the search hides, or that is gone from the daemon, leaves the
 selection, and it is not selected again when it shows again. With nothing selected, Up, Down, Page
 Up, Page Down and Home select the first torrent, and End the last. Tab moves on from the table to
 the turtle and the speed limits in the status bar, then to the search box and the toolbar's buttons;

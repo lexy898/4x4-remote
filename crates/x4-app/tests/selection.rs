@@ -15,8 +15,9 @@ use std::sync::Arc;
 use gpui_kit::component::table::TableState;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Entity, Modifiers, ScrollDelta, TestAppContext, point,
-    px,
+    AnyWindowHandle, App, AppContext as _, Entity, InputEvent as _, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, TestAppContext,
+    point, px,
 };
 use x4_app::app;
 use x4_app::keymap::{BINDINGS, key_bindings};
@@ -24,7 +25,8 @@ use x4_app::main_view::MainView;
 use x4_app::torrent_table::TorrentTable;
 use x4_core::test_support::torrent;
 use x4_core::{
-    Command, ConnectionState, DisplayState, Event, Filter, Snapshot, Torrent, UiState, ViewState,
+    Action, Command, ConnectionState, DisplayState, Event, Filter, Snapshot, Torrent, UiState,
+    ViewState,
 };
 
 /// The id of the search box.
@@ -172,6 +174,61 @@ impl Window {
 
     fn press(&self, key: &str, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| window.press(key, cx));
+    }
+
+    /// Moves the pointer to the middle of the row at `row_ix` and presses the left button there,
+    /// without letting it go; returns where.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a closed window fails the test"
+    )]
+    fn press_on_row(&self, row_ix: usize, cx: &mut TestAppContext) -> Point<Pixels> {
+        let position = self.act(cx, |window, _| {
+            window.find(("row", row_ix)).bounds().center()
+        });
+        let modifiers = Modifiers::none();
+        cx.update_window(self.handle, |_, window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+        .expect("the window is open");
+        cx.run_until_parked();
+        position
+    }
+
+    /// Draws a frame, then lets the left button go at `position`.
+    fn release(&self, position: Point<Pixels>, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
     }
 
     fn table(&self, cx: &mut TestAppContext) -> Entity<TableState<TorrentTable>> {
@@ -688,6 +745,36 @@ fn every_selected_row_is_drawn_selected(cx: &mut TestAppContext) {
             );
         }
     });
+}
+
+/// A click selects the torrent the user pressed the button on, also when an update moves another
+/// one under the pointer before the button comes up.
+#[gpui_kit::test]
+fn a_click_selects_the_torrent_that_was_pressed_even_if_rows_moved(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(named(&["a", "b"]), cx);
+
+    let position = window.press_on_row(0, cx);
+    // "0" sorts first, so "a" moves down a row, and the next frame draws "0" under the pointer.
+    window.send(named(&["0", "a", "b"]), cx);
+    window.release(position, cx);
+
+    assert_eq!(window.selected(cx), ["a"]);
+    assert_eq!(window.table_row(cx), Some(1), "the table's row follows");
+    window.press("ctrl-p", cx);
+    let sent = window.sent();
+    assert!(
+        matches!(sent.as_slice(), [Command::Run(_, Action::Stop(hashes))] if *hashes == [torrent("a").hash]),
+        "{sent:?}"
+    );
+
+    // A torrent pressed on that is gone by the time the button comes up is not clicked, and
+    // neither is the one that took its place.
+    let position = window.press_on_row(2, cx);
+    window.send(named(&["0", "a", "c"]), cx);
+    window.release(position, cx);
+    assert_eq!(window.selected(cx), ["a"], "the selection stays as it was");
+    assert_eq!(window.table_row(cx), Some(1));
 }
 
 #[gpui_kit::test]

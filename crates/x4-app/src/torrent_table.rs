@@ -15,6 +15,12 @@
 //! itself, its Escape, is taken over by `follow_table`, which tells it from the table echoing ours
 //! by comparing its row with the lead.
 //!
+//! A click acts on the torrent the button went down on, as the row was drawn then: the press
+//! notes its hash, and the click selects that hash. A snapshot can re-sort the rows while the
+//! button is down, and the table hands the click over with the index of the row drawn under the
+//! pointer when it comes up, which may be another torrent by then. A torrent that has left the
+//! list by then is not clicked at all. A right-click notes its torrent the same way.
+//!
 //! A right-click selects as a file manager does (`right_click`): a row outside the selection
 //! becomes the only selected row, and one inside leaves the selection as it is. The context menu
 //! then opens for the selected rows (the `context_menu` module): the delegate builds it, enabled as
@@ -52,6 +58,7 @@ use x4_core::{
     SortDirection, SortKey, TableModel, move_shown_column, set_column_shown, set_shown_widths,
     shown_columns,
 };
+use x4_rpc::HashString;
 
 use crate::context_menu::{MenuChoice, MenuHandler, torrent_menu};
 use crate::i18n::{column_name_text, empty_table_text};
@@ -60,15 +67,16 @@ use crate::theme::row_opacity;
 /// What a click on a column header does, given the column.
 type SortHandler = Rc<dyn Fn(ColumnId, &mut Window, &mut App)>;
 
-/// What the user does to the selection, with the mouse or a key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the user does to the selection, with the mouse or a key. A click names its torrent by
+/// hash, and changes nothing if the rows no longer show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SelectionChange {
-    /// A plain click on the row at this index: only that row.
-    Click(usize),
-    /// A Ctrl+click on the row: it goes in or out of the selection.
-    Toggle(usize),
-    /// A Shift+click on the row: the range from the anchor to it.
-    ExtendTo(usize),
+    /// A plain click on the torrent: only that row.
+    Click(HashString),
+    /// A Ctrl+click on the torrent: it goes in or out of the selection.
+    Toggle(HashString),
+    /// A Shift+click on the torrent: the range from the anchor to it.
+    ExtendTo(HashString),
     /// A moving key, `step` rows from the lead (negative is up): only the row it lands on, or with
     /// `extend` (Shift) the range from the anchor to it. Up and Down are one row, Page Up and Page
     /// Down a page.
@@ -129,6 +137,15 @@ pub struct TorrentTable {
     /// How far the right-click now under way has come, which tells a context menu built for a row
     /// from the empty one that no row gets.
     right_click: RightClick,
+    /// The torrent the left button last went down on, as its row was drawn then: what the click
+    /// that follows acts on.
+    pressed: Option<HashString>,
+    /// The torrent the right button last went down on, as its row was drawn then: what the
+    /// right-click acts on.
+    right_pressed: Option<HashString>,
+    /// The row of the plain click just handled, which the table selects by itself after us; the
+    /// next `follow_table` takes that as an echo of the click, not as a click of its own.
+    click_echo: Option<usize>,
     /// Called with the column whose header is clicked.
     on_sort: Option<SortHandler>,
     /// Called with the item chosen in the context menu.
@@ -150,6 +167,9 @@ impl TorrentTable {
             connected: false,
             focus: None,
             right_click: RightClick::Idle,
+            pressed: None,
+            right_pressed: None,
+            click_echo: None,
             on_sort: None,
             on_menu: None,
         }
@@ -227,28 +247,28 @@ impl TorrentTable {
         self.sort = sort;
     }
 
-    /// Applies `change` to the selection; returns whether the selection changed. A click on an
-    /// index past the rows changes nothing.
+    /// Applies `change` to the selection; returns whether the selection changed. A click on a
+    /// torrent the rows do not show changes nothing.
     pub(crate) fn change_selection(&mut self, change: SelectionChange) -> bool {
         let before = self.selection.clone();
         let Self {
             rows, selection, ..
         } = self;
-        let hash_at = |row_ix: usize| rows.get(row_ix).map(|row| &row.hash);
+        let shown = |hash: &HashString| rows.iter().any(|row| &row.hash == hash);
         match change {
-            SelectionChange::Click(row_ix) => {
-                if let Some(hash) = hash_at(row_ix) {
-                    selection.click(hash);
+            SelectionChange::Click(hash) => {
+                if shown(&hash) {
+                    selection.click(&hash);
                 }
             }
-            SelectionChange::Toggle(row_ix) => {
-                if let Some(hash) = hash_at(row_ix) {
-                    selection.toggle(hash);
+            SelectionChange::Toggle(hash) => {
+                if shown(&hash) {
+                    selection.toggle(&hash);
                 }
             }
-            SelectionChange::ExtendTo(row_ix) => {
-                if let Some(hash) = hash_at(row_ix) {
-                    selection.extend_to(hash, rows);
+            SelectionChange::ExtendTo(hash) => {
+                if shown(&hash) {
+                    selection.extend_to(&hash, rows);
                 }
             }
             SelectionChange::Step { step, extend } => selection.move_lead(step, rows, extend),
@@ -277,11 +297,9 @@ impl TorrentTable {
         self.connected = connected;
     }
 
-    /// Whether the row at `row_ix` is selected.
-    fn is_selected(&self, row_ix: usize) -> bool {
-        self.rows
-            .get(row_ix)
-            .is_some_and(|row| self.selection.contains(&row.hash))
+    /// The index of the torrent `hash` among the rows shown.
+    fn index_of(&self, hash: &HashString) -> Option<usize> {
+        self.rows.iter().position(|row| &row.hash == hash)
     }
 
     /// The content of the cell at `row_ix` and `col_ix`, at the row's opacity. The opacity is on
@@ -392,12 +410,14 @@ pub(crate) fn change_selection(
     change: SelectionChange,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
-    let changed = table.delegate_mut().change_selection(change);
-    mirror_lead(table, change != SelectionChange::All, cx);
-    if matches!(
+    let scroll = change != SelectionChange::All;
+    let reveal = matches!(
         change,
         SelectionChange::Step { .. } | SelectionChange::ToEdge { .. }
-    ) {
+    );
+    let changed = table.delegate_mut().change_selection(change);
+    mirror_lead(table, scroll, cx);
+    if reveal {
         reveal_lead(table, cx);
     }
     if changed {
@@ -415,37 +435,92 @@ pub(crate) fn page_step(table: &TableState<TorrentTable>) -> isize {
 /// Takes over what the table did to its own selected row, when that is not the lead. Every key
 /// that moves the table's row is ours now, so what is left is the table's Escape, which cleared
 /// its row and so clears the selection, and the echoes: of [`mirror_lead`], and of the table
-/// selecting the row of a plain click after `render_tr` has. A `SelectRow` that is no echo (a
-/// caller that sets the table's row itself, such as the demo's `--select`) is taken as a click.
-/// Called for each of the table's `SelectRow` and `ClearSelection` events. The table's row is read
-/// when the event arrives, not taken from the event, so an event that a later change has
-/// overtaken changes nothing.
+/// selecting the row of a plain click after `render_tr` has. That row is the one under the
+/// pointer when the button came up, which need not be the torrent clicked (`click_row`), so the
+/// table's row goes back to the lead. A `SelectRow` that is no echo (a caller that sets the
+/// table's row itself, such as the demo's `--select`) is taken as a click. Called for each of the
+/// table's `SelectRow` and `ClearSelection` events. The table's row is read when the event
+/// arrives, not taken from the event, so an event that a later change has overtaken changes
+/// nothing.
 pub(crate) fn follow_table(
     table: &mut TableState<TorrentTable>,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
+    // The first event after a click is the click's own, so the echo it expects goes with it.
+    let echo = table.delegate_mut().click_echo.take();
     let row = table.selected_row();
     if row == table.delegate().lead_index() {
         return;
     }
-    let change = row.map_or(SelectionChange::Nothing, SelectionChange::Click);
+    let change = match row {
+        None => SelectionChange::Nothing,
+        Some(row_ix) if Some(row_ix) == echo => {
+            mirror_lead(table, true, cx);
+            return;
+        }
+        Some(row_ix) => match table.delegate().rows.get(row_ix) {
+            Some(row) => SelectionChange::Click(row.hash.clone()),
+            None => return,
+        },
+    };
     change_selection(table, change, cx);
 }
 
-/// Takes a right-click on the row at `row_ix`, before its context menu is built, as a file manager
-/// does: a row outside the selection becomes the only selected row (and the lead), as a click
-/// would make it; a row inside leaves the selection as it is, so that the menu acts on all of it.
-/// The table keeps marking the row as the right-clicked one, which its context menu opens for:
-/// moving its own row to the lead unmarks it. The menu that the right-click opens next is the
-/// row's.
-pub(crate) fn right_click(
+/// Takes a click on the row drawn at `row_ix`, which acts on the torrent the button went down on
+/// (`TorrentTable::pressed`), wherever a snapshot has put it since, and on nothing if it has left
+/// the list. A plain click selects it alone, Ctrl+click toggles it and Shift+click selects the
+/// range to it. The table then selects its row at `row_ix` by itself, which `follow_table` takes
+/// back.
+fn click_row(
     table: &mut TableState<TorrentTable>,
     row_ix: usize,
+    event: &ClickEvent,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
-    table.delegate_mut().right_click = RightClick::OnRow;
-    if !table.delegate().is_selected(row_ix) {
-        change_selection(table, SelectionChange::Click(row_ix), cx);
+    let modifiers = event.modifiers();
+    let delegate = table.delegate_mut();
+    let pressed = delegate.pressed.take();
+    // What the table's own click listener does with it (`select_on_modifier_click(false)`).
+    let plain = !(modifiers.shift || modifiers.secondary(cx));
+    if plain {
+        delegate.click_echo = Some(row_ix);
+    }
+    let Some(hash) = pressed else {
+        return;
+    };
+    let change = if modifiers.shift {
+        SelectionChange::ExtendTo(hash)
+    } else if modifiers.secondary(cx) {
+        SelectionChange::Toggle(hash)
+    } else {
+        SelectionChange::Click(hash)
+    };
+    change_selection(table, change, cx);
+}
+
+/// Takes a right-click on a row, before its context menu is built, as a file manager does. It acts
+/// on the torrent the button went down on, as its row was drawn then
+/// (`TorrentTable::right_pressed`), wherever a snapshot has put it since. A torrent outside the
+/// selection becomes the only selected one (and the lead), as a click would make it; one inside
+/// leaves the selection as it is, so that the menu acts on all of it. The table marks its row as
+/// the right-clicked one, which its context menu opens for: moving its own row to the lead unmarks
+/// it. The menu that the right-click opens next is the torrent's. A torrent that has left the list
+/// by then is not right-clicked: no row is marked, and no menu opens.
+pub(crate) fn right_click(
+    table: &mut TableState<TorrentTable>,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    let delegate = table.delegate_mut();
+    let Some(hash) = delegate.right_pressed.take() else {
+        return;
+    };
+    let Some(row_ix) = delegate.index_of(&hash) else {
+        table.set_right_clicked_row(None, cx);
+        return;
+    };
+    delegate.right_click = RightClick::OnRow;
+    if !delegate.selection.contains(&hash) {
+        change_selection(table, SelectionChange::Click(hash), cx);
     }
     if table.right_clicked_row() != Some(row_ix) {
         table.set_right_clicked_row(Some(row_ix), cx);
@@ -612,23 +687,34 @@ impl TableDelegate for TorrentTable {
         cx: &mut Context<'_, TableState<Self>>,
     ) -> Stateful<Div> {
         // No opacity here: it would also fade the selected row's background (`cell_element`).
-        div()
+        let row = div()
             .id(("row", row_ix))
             .when_some(self.selection_mark(row_ix, cx.theme()), |row, mark| {
                 row.child(mark.test_support())
-            })
+            });
+        // The rows that fill the space below the last torrent take no clicks.
+        let Some(hash) = self.rows.get(row_ix).map(|row| row.hash.clone()) else {
+            return row;
+        };
+        let right_hash = hash.clone();
+        row
+            // The torrent this frame draws here, which a press on the row is meant for.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |table, _: &MouseDownEvent, _, _| {
+                    table.delegate_mut().pressed = Some(hash.clone());
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |table, _: &MouseDownEvent, _, _| {
+                    table.delegate_mut().right_pressed = Some(right_hash.clone());
+                }),
+            )
             // Added before the table's own click listener, so it runs first. The table selects
-            // its row on a plain click too, which then echoes this.
+            // its row on a plain click too, which `follow_table` takes as an echo of this.
             .on_click(cx.listener(move |table, event: &ClickEvent, _, cx| {
-                let modifiers = event.modifiers();
-                let change = if modifiers.shift {
-                    SelectionChange::ExtendTo(row_ix)
-                } else if modifiers.secondary(cx) {
-                    SelectionChange::Toggle(row_ix)
-                } else {
-                    SelectionChange::Click(row_ix)
-                };
-                change_selection(table, change, cx);
+                click_row(table, row_ix, event, cx);
             }))
     }
 

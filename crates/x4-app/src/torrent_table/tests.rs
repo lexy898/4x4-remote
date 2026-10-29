@@ -9,6 +9,11 @@ fn rows(names: &[&str]) -> Arc<[Row]> {
     names.iter().map(|name| Row::from(&torrent(name))).collect()
 }
 
+/// The hash of the torrent called `name`.
+fn hash(name: &str) -> HashString {
+    torrent(name).hash
+}
+
 fn table() -> TorrentTable {
     TorrentTable::new(default_columns(), (SortKey::Name, SortDirection::Ascending))
 }
@@ -27,8 +32,8 @@ fn selected(table: &TorrentTable) -> Vec<&str> {
 fn set_rows_keeps_the_selected_torrents_by_hash() {
     let mut table = table();
     table.set_rows(rows(&["a", "b", "c"]));
-    table.change_selection(SelectionChange::Click(1));
-    table.change_selection(SelectionChange::Toggle(2));
+    table.change_selection(SelectionChange::Click(hash("b")));
+    table.change_selection(SelectionChange::Toggle(hash("c")));
 
     assert!(table.set_rows(rows(&["0", "c", "b", "a"])));
 
@@ -40,7 +45,7 @@ fn set_rows_keeps_the_selected_torrents_by_hash() {
 fn set_rows_drops_a_torrent_that_is_gone() {
     let mut table = table();
     table.set_rows(rows(&["a", "b"]));
-    table.change_selection(SelectionChange::Click(0));
+    table.change_selection(SelectionChange::Click(hash("a")));
 
     assert!(table.set_rows(rows(&["b"])));
     assert!(table.selection().is_empty());
@@ -58,7 +63,7 @@ fn set_rows_says_whether_anything_changed() {
     let mut table = table();
     let shown = rows(&["a", "b"]);
     assert!(table.set_rows(Arc::clone(&shown)));
-    table.change_selection(SelectionChange::Click(0));
+    table.change_selection(SelectionChange::Click(hash("a")));
 
     assert!(!table.set_rows(Arc::clone(&shown)), "the same rows");
     assert!(!table.set_rows(rows(&["a", "b"])), "equal rows");
@@ -68,15 +73,16 @@ fn set_rows_says_whether_anything_changed() {
 }
 
 #[test]
-fn clicking_past_the_rows_changes_nothing() {
+fn clicking_a_torrent_the_rows_do_not_show_changes_nothing() {
     let mut table = table();
     table.set_rows(rows(&["a", "b"]));
-    table.change_selection(SelectionChange::Click(0));
+    table.change_selection(SelectionChange::Click(hash("a")));
 
-    table.change_selection(SelectionChange::Click(5));
-    table.change_selection(SelectionChange::Toggle(5));
-    table.change_selection(SelectionChange::ExtendTo(5));
+    assert!(!table.change_selection(SelectionChange::Click(hash("gone"))));
+    assert!(!table.change_selection(SelectionChange::Toggle(hash("gone"))));
+    assert!(!table.change_selection(SelectionChange::ExtendTo(hash("gone"))));
     assert_eq!(selected(&table), ["a"]);
+    assert_eq!(table.lead_index(), Some(0));
 
     table.change_selection(SelectionChange::Nothing);
     assert!(table.selection().is_empty());
@@ -87,11 +93,11 @@ fn clicking_past_the_rows_changes_nothing() {
 fn the_lead_index_is_the_lead_only_while_it_is_selected() {
     let mut table = table();
     table.set_rows(rows(&["a", "b", "c"]));
-    table.change_selection(SelectionChange::Click(0));
-    table.change_selection(SelectionChange::Toggle(2));
+    table.change_selection(SelectionChange::Click(hash("a")));
+    table.change_selection(SelectionChange::Toggle(hash("c")));
     assert_eq!(table.lead_index(), Some(2));
 
-    table.change_selection(SelectionChange::Toggle(2));
+    table.change_selection(SelectionChange::Toggle(hash("c")));
 
     assert_eq!(selected(&table), ["a"]);
     assert_eq!(table.lead_index(), None);
@@ -120,8 +126,8 @@ fn a_selected_idle_row_keeps_the_full_selection_color(cx: &mut TestAppContext) {
         ]
         .into(),
     );
-    table.change_selection(SelectionChange::Click(0));
-    table.change_selection(SelectionChange::Toggle(1));
+    table.change_selection(SelectionChange::Click(hash("idle")));
+    table.change_selection(SelectionChange::Toggle(hash("active")));
     cx.update(gpui_kit::init);
 
     let (marks, background) = cx.update(|cx| {

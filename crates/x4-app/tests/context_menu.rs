@@ -18,8 +18,8 @@ use gpui_kit::test::ClickOptions;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, ClipboardItem, Entity, Focusable as _, InputEvent as _,
-    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, OperatingSystem, TestAppContext,
-    VisualTestContext, point, px,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, OperatingSystem, Pixels, Point, TestAppContext, VisualTestContext, point, px,
 };
 use x4_app::app;
 use x4_app::main_view::MainView;
@@ -27,7 +27,7 @@ use x4_app::torrent_table::TorrentTable;
 use x4_core::test_support::torrent;
 use x4_core::{
     Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, DisplayState, Event,
-    QueueKind, Snapshot, Torrent, UiState,
+    QueueKind, Snapshot, SortDirection, Torrent, UiState, ViewState,
 };
 use x4_rpc::HashString;
 
@@ -187,6 +187,66 @@ impl Window {
     /// Right-clicks the row `row`, which opens the context menu on the next frame.
     fn right_click_row(&self, row: usize, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| window.right_click(("row", row), cx));
+    }
+
+    /// Where the middle of the row at `row` was drawn last.
+    fn row_middle(&self, row: usize, cx: &mut TestAppContext) -> Point<Pixels> {
+        self.act(cx, |window, _| window.find(("row", row)).bounds().center())
+    }
+
+    /// Lets `change` change the rows of the view, then right-clicks at `position` before a new
+    /// frame is drawn, as when an update comes between the last frame and the press: what the user
+    /// right-clicks is the row they saw there. (The test platform draws a frame as soon as the
+    /// effects of an update have run, so the change and the press go in one update.)
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a closed window fails the test"
+    )]
+    fn right_click_as_drawn(
+        &self,
+        position: Point<Pixels>,
+        change: impl FnOnce(&mut MainView, &mut gpui_kit::Context<'_, MainView>),
+        cx: &mut TestAppContext,
+    ) {
+        let modifiers = Modifiers::none();
+        let view = self.view.clone();
+        cx.update_window(self.handle, |_, window, cx| {
+            view.update(cx, change);
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Right,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+        .expect("the window is open");
+        cx.run_until_parked();
+        self.act(cx, |window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Right,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
     }
 
     /// Right-clicks the table below its rows, 40 pixels above its bottom edge.
@@ -549,6 +609,55 @@ fn right_click_inside_the_selection_keeps_it(cx: &mut TestAppContext) {
         window.sent_action().1,
         Action::Reannounce(hashes(&["a", "c"]))
     );
+}
+
+/// A right-click selects the torrent the user saw under the pointer, also when the rows have been
+/// re-sorted since the last frame was drawn, and opens the menu for it.
+#[gpui_kit::test]
+fn a_right_click_selects_the_torrent_that_was_pressed_even_if_rows_moved(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a", "b"]), cx);
+
+    let position = window.row_middle(0, cx);
+    // Sorted the other way, "a" moves down a row before the next frame is drawn.
+    window.right_click_as_drawn(
+        position,
+        |view, cx| {
+            let sorted = ViewState {
+                sort_direction: SortDirection::Descending,
+                ..view.view_state().clone()
+            };
+            view.set_view(sorted, cx);
+        },
+        cx,
+    );
+
+    assert_eq!(window.selected(cx), ["a"]);
+    assert_eq!(window.table_row(cx), Some(1), "the table's row follows");
+    assert_eq!(window.drawn_selected(cx), [1]);
+    assert!(window.menu_open(cx));
+    window.choose(PAUSE, cx);
+    assert_eq!(window.sent_action().1, Action::Stop(hashes(&["a"])));
+
+    // A torrent right-clicked that has left the list by then (here, hidden by a search) opens no
+    // menu, and the one that took its place is not right-clicked.
+    let position = window.row_middle(0, cx);
+    window.right_click_as_drawn(
+        position,
+        |view, cx| {
+            let searched = ViewState {
+                search: "a".to_owned(),
+                ..view.view_state().clone()
+            };
+            view.set_view(searched, cx);
+        },
+        cx,
+    );
+    assert!(!window.menu_open(cx));
+    assert_eq!(window.selected(cx), ["a"], "the selection stays as it was");
+    assert!(window.table_focused(cx), "the list keeps the keys");
+    window.press("ctrl-r", cx);
+    assert_eq!(window.sent_action().1, Action::Reannounce(hashes(&["a"])));
 }
 
 #[gpui_kit::test]

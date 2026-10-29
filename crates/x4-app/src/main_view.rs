@@ -444,10 +444,9 @@ impl MainView {
             // The delegate has moved the column already, before the table emits this.
             TableEvent::MoveColumn(..) => self.remember_columns(cx),
             // Emitted before the context menu is built, which then sees the new selection.
-            TableEvent::RightClickedRow(Some(row_ix)) => {
-                let row_ix = *row_ix;
-                table.update(cx, |table, cx| right_click(table, row_ix, cx));
-            }
+            // It names the row of the frame drawn last, as the table knows it; the delegate knows
+            // the torrent drawn there, which is what was right-clicked.
+            TableEvent::RightClickedRow(Some(_)) => table.update(cx, right_click),
             // The table emits this whenever its own row moves, the mirror of the lead included,
             // and not when a menu closes; the open menu holds its targets anyway.
             TableEvent::RightClickedRow(None)
