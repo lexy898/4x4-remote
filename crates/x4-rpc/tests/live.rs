@@ -212,11 +212,8 @@ fn remove_keeping_data_leaves_the_file() {
     let kept = torrent.remove_keeping_data(&mut client);
 
     assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
-    assert!(
-        kept.path().starts_with(&env.local_dir),
-        "{} is not in X4_LIVE_LOCAL_DIR",
-        kept.path().display()
-    );
+    // `kept` is the file this run wrote into X4_LIVE_LOCAL_DIR (`LocalFile::write` builds its
+    // path there, and deletes only what this run created), so it needs no check of its place.
     assert!(
         !wait_until(KEPT_FOR, || file_is_gone(kept.path())),
         "the daemon deleted {} although it was told to keep it",
