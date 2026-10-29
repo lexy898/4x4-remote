@@ -109,11 +109,12 @@ Ctrl+Shift+A selects none. Every selected row has the same highlight. The select
 same torrents when the list is re-sorted or updated, and an update never scrolls the list. A click
 or a right-click acts on the torrent the button went down on, even if an update moves another one
 under the pointer before the button comes up, and on nothing if that torrent has left the list by
-then. A selected torrent that the filter or the search hides, or that is gone from the daemon, leaves the
-selection, and it is not selected again when it shows again. With nothing selected, Up, Down, Page
-Up, Page Down and Home select the first torrent, and End the last. Tab moves on from the table to
-the turtle and the speed limits in the status bar, then to the search box and the toolbar's buttons;
-a disabled button is passed over. The table has the keyboard focus when the window opens.
+then. A selected torrent that the filter or the search hides, or that is gone from the daemon,
+leaves the selection, and it is not selected again when it shows again. With no row to start from
+(nothing clicked yet, or the selection cleared with Escape), Up, Down, Page Up, Page Down and Home
+select the first torrent, and End the last. Tab moves on from the table to the turtle and the speed
+limits in the status bar, then to the search box and the toolbar's buttons; a disabled button is
+passed over. The table has the keyboard focus when the window opens.
 
 The selected torrents that the list shows are what an action works on, in the order shown; a
 torrent the filter or the search hides is never touched. With the table focused:
@@ -153,11 +154,12 @@ and `/` do not leave it.
 Two notes on the clipboard:
 
 - the magnet links reach the clipboard only if 4x4 still has the focus when the daemon's answer
-  comes, a moment after `Ctrl+C`: on Wayland an app that does not have the focus cannot set the
-  clipboard. If you have switched to another app by then, nothing is copied and a notification asks
-  you to copy them again. The hashes are copied at once, so this never happens to them;
-- on Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
-  lost when 4x4 quits, unless a clipboard manager keeps it.
+  comes, a moment after `Ctrl+C`: 4x4 does not set the clipboard while another app has the focus
+  (on Wayland it could not). If you have switched to another app by then, nothing is copied and a
+  notification asks you to copy them again. The hashes are copied at once, so this never happens to
+  them;
+- 4x4 itself holds the copied text and hands it to the app that pastes it: when 4x4 quits, the
+  copied text is lost unless a clipboard manager keeps it.
 
 Removing always asks first. The dialog names the first five torrents in full, a long name wrapped
 over several lines, says how many more there are, and says what becomes of the files: that they stay
@@ -562,7 +564,10 @@ data file <path>`). To recover, remove the torrent with that hash in any Transmi
 choosing to delete its local data. If no such line was printed, the run most likely stopped before
 the torrent was added: delete the single `4x4-live-<hex>.bin` file from the test directory instead.
 The next run refuses to start while any torrent downloads into the test directory, so a leftover
-torrent cannot go unnoticed; remove it the same way.
+torrent cannot go unnoticed; remove it the same way. The test that removes its torrent from the list
+only, keeping the file, may be interrupted after the removal: then the daemon no longer has the
+torrent, and the file stays. Delete by hand the file named on its `live test: added torrent …`
+line.
 
 The test directory is one directory seen from both sides: the daemon reads it under one path and
 this machine writes to it under another (for example over NFS), so both must be able to write
