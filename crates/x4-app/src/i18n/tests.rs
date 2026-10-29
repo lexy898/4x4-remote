@@ -4,12 +4,13 @@ use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
-    ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView, Filter,
-    HumanSize, QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit, UnsupportedReason,
-    human_size, human_speed,
+    ActionError, ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView,
+    Filter, HumanSize, QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit,
+    UnsupportedReason, human_size, human_speed,
 };
 
 use super::*;
+use crate::actions::{ActionKind, PendingAction};
 
 /// Message files held in memory, by path such as `ru/x4.ftl`.
 struct MemoryAssets(HashMap<&'static str, &'static str>);
@@ -508,4 +509,124 @@ fn a_second_language_is_one_more_file() {
     assert_eq!(files(5), "5 файлов");
     assert_eq!(files(21), "21 файл");
     assert_eq!(loader.get("only-english"), "Hello");
+}
+
+fn failed(kind: ActionKind, count: usize, error: &ActionError) -> String {
+    action_failure_text(Some(PendingAction { kind, count }), error).to_string()
+}
+
+#[test]
+fn a_failed_action_names_what_failed_with_plurals() {
+    let server = ActionError::Rpc(ConnectionError::Server("no such torrent".to_owned()));
+    assert_eq!(
+        failed(ActionKind::Start, 1, &server),
+        "Could not start the torrent: no such torrent"
+    );
+    assert_eq!(
+        failed(ActionKind::Start, 3, &server),
+        "Could not start 3 torrents: no such torrent"
+    );
+    let forbidden = ActionError::Rpc(ConnectionError::Forbidden);
+    let expected = [
+        (
+            ActionKind::Pause,
+            "Could not pause 2 torrents: access denied",
+        ),
+        (
+            ActionKind::StartNow,
+            "Could not start 2 torrents right away: access denied",
+        ),
+        (
+            ActionKind::Verify,
+            "Could not verify 2 torrents: access denied",
+        ),
+        (
+            ActionKind::Reannounce,
+            "Could not ask the trackers of 2 torrents for more peers: access denied",
+        ),
+    ];
+    for (kind, text) in expected {
+        assert_eq!(failed(kind, 2, &forbidden), text);
+    }
+}
+
+#[test]
+fn a_refused_action_says_it_was_not_sent() {
+    assert_eq!(
+        failed(ActionKind::Pause, 1, &ActionError::NotConnected),
+        "Could not pause the torrent: the server is not connected, so nothing was sent"
+    );
+    assert_eq!(
+        failed(ActionKind::Reannounce, 4, &ActionError::NotConnected),
+        "Could not ask the trackers of 4 torrents for more peers: the server is not connected, \
+         so nothing was sent"
+    );
+}
+
+#[test]
+fn an_unanswered_action_may_have_happened() {
+    for error in [ConnectionError::Timeout, ConnectionError::Unreachable] {
+        let error = ActionError::Rpc(error);
+        assert_eq!(
+            failed(ActionKind::Start, 1, &error),
+            "The server did not answer in time while starting the torrent. It may have started \
+             anyway; the list will show the result"
+        );
+        assert_eq!(
+            failed(ActionKind::Pause, 2, &error),
+            "The server did not answer in time while pausing 2 torrents. They may have been \
+             paused anyway; the list will show the result"
+        );
+        for kind in [
+            ActionKind::StartNow,
+            ActionKind::Verify,
+            ActionKind::Reannounce,
+        ] {
+            let text = failed(kind, 5, &error);
+            assert!(text.contains("may have"), "{text}");
+            assert!(text.contains("5 torrents"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn the_reason_of_a_failed_action_is_short_or_the_servers_own() {
+    let reasons = [
+        (ConnectionError::Unauthorized, "login required"),
+        (
+            ConnectionError::Protocol("odd".to_owned()),
+            "unexpected answer",
+        ),
+        (ConnectionError::Server(" ".to_owned()), "server error"),
+    ];
+    for (error, reason) in reasons {
+        assert_eq!(
+            failed(ActionKind::Verify, 1, &ActionError::Rpc(error)),
+            format!("Could not verify the torrent: {reason}")
+        );
+    }
+    assert_eq!(
+        failed(ActionKind::Start, 0, &ActionError::EmptySelection),
+        "Could not start 0 torrents: no torrent was selected"
+    );
+}
+
+#[test]
+fn a_failed_action_of_an_unknown_kind_is_still_worded() {
+    let unknown = |error: &ActionError| action_failure_text(None, error).to_string();
+    assert_eq!(
+        unknown(&ActionError::NotConnected),
+        "An action could not be carried out: the server is not connected, so nothing was sent"
+    );
+    assert_eq!(
+        unknown(&ActionError::Rpc(ConnectionError::Timeout)),
+        "The server did not answer an action in time. It may have been carried out anyway; the \
+         list will show the result"
+    );
+    assert_eq!(
+        unknown(&ActionError::Rpc(ConnectionError::Server(
+            "busy".to_owned()
+        ))),
+        "An action failed: busy"
+    );
 }

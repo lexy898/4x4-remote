@@ -1,6 +1,7 @@
 //! The one table of key bindings: the actions the keys run, the key contexts they run in, and
 //! [`BINDINGS`], which says which key runs which action where. [`key_bindings`] turns the table
-//! into gpui's bindings; `app::init` binds them after the libraries' own.
+//! into gpui's bindings; `app::init` binds them after the libraries' own. The actions on torrents
+//! themselves are declared in [`actions`](crate::actions).
 //!
 //! Where a key works is its context:
 //!
@@ -22,6 +23,11 @@
 use std::rc::Rc;
 
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, NoAction, actions};
+
+use crate::actions::{
+    PauseTorrents, ReannounceTorrents, StartTorrents, StartTorrentsNow, ToggleTorrents,
+    VerifyTorrents,
+};
 
 actions!(
     x4,
@@ -205,6 +211,39 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "shift-end",
         action: || Box::new(ExtendSelectionToLast),
+        context: Some(TORRENTS),
+    },
+    // The actions on the selected torrents, with Transmission's keys where it has one. Verify is
+    // Ctrl+Shift+R rather than Transmission's Ctrl+V, which stays free for pasting a magnet link:
+    // a check reads every byte of the data, hours on a small server.
+    Binding {
+        keys: "ctrl-s",
+        action: || Box::new(StartTorrents),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "ctrl-p",
+        action: || Box::new(PauseTorrents),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "ctrl-shift-s",
+        action: || Box::new(StartTorrentsNow),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "space",
+        action: || Box::new(ToggleTorrents),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "ctrl-shift-r",
+        action: || Box::new(VerifyTorrents),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "ctrl-r",
+        action: || Box::new(ReannounceTorrents),
         context: Some(TORRENTS),
     },
 ];

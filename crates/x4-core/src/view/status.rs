@@ -110,6 +110,13 @@ impl StatusModel {
         self.stale = true;
     }
 
+    /// Whether actions can go to the daemon: the service runs and the daemon answers. Only then
+    /// does [`availability`](crate::availability) allow the actions that need the daemon.
+    #[must_use]
+    pub fn connected(&self) -> bool {
+        self.service == ServiceStatus::Running && self.connection == ConnectionState::Connected
+    }
+
     /// Whether the alternative speed limits apply; `false` while the session is not known.
     #[must_use]
     pub fn alt_speed(&self) -> bool {
@@ -211,6 +218,36 @@ mod tests {
             alt_speed_down_kbps: KbPerSecond(0),
             alt_speed_up_kbps: KbPerSecond(0),
         }
+    }
+
+    #[test]
+    fn only_a_running_service_with_an_answering_daemon_is_connected() {
+        let connected = status_model(&snapshot());
+        assert!(connected.connected());
+
+        for connection in [
+            ConnectionState::Connecting,
+            ConnectionState::Reconnecting {
+                attempt: 1,
+                last_error: ConnectionError::Timeout,
+            },
+            ConnectionState::Unsupported {
+                reason: UnsupportedReason::Legacy,
+            },
+        ] {
+            let status = StatusModel {
+                connection: connection.clone(),
+                ..connected.clone()
+            };
+            assert!(!status.connected(), "{connection:?}");
+        }
+        let mut stopped = connected.clone();
+        stopped.service_stopped();
+        assert!(!stopped.connected(), "the last snapshot said connected");
+        let mut failed = connected;
+        failed.service_failed();
+        assert!(!failed.connected());
+        assert!(!StatusModel::default().connected(), "still connecting");
     }
 
     #[test]

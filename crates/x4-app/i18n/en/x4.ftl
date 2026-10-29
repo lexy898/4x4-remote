@@ -150,6 +150,121 @@ theme-light = Light theme
 theme-dark = Dark theme
 theme-switch-tooltip = Switch between the system, light and dark themes
 
+# The toolbar buttons that start and pause the selected torrents: their names for screen readers,
+# which their tooltips show too, with the key.
+action-start = Start
+action-pause = Pause
+
+## Why an action on torrents failed, in a notification
+
+# One message per action. $count: the torrents it named (a number). $outcome is what is known:
+#   not-sent: the server is not connected, so the action was not sent;
+#   no-answer: the server did not answer in time, so the action may have been carried out anyway;
+#   failed: the server refused it or answered unexpectedly, and $reason says why: one of the
+#     connection-reason-* messages, action-reason-nothing-selected or the server's own text.
+action-failed-start =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not start the torrent: the server is not connected, so nothing was sent
+               *[other] Could not start { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer in time while starting the torrent. It may have started anyway; the list will show the result
+               *[other] The server did not answer in time while starting { $count } torrents. They may have started anyway; the list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not start the torrent: { $reason }
+               *[other] Could not start { $count } torrents: { $reason }
+            }
+    }
+action-failed-pause =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not pause the torrent: the server is not connected, so nothing was sent
+               *[other] Could not pause { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer in time while pausing the torrent. It may have been paused anyway; the list will show the result
+               *[other] The server did not answer in time while pausing { $count } torrents. They may have been paused anyway; the list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not pause the torrent: { $reason }
+               *[other] Could not pause { $count } torrents: { $reason }
+            }
+    }
+# Start now: start ahead of the download queue.
+action-failed-start-now =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not start the torrent right away: the server is not connected, so nothing was sent
+               *[other] Could not start { $count } torrents right away: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer in time while starting the torrent right away. It may have started anyway; the list will show the result
+               *[other] The server did not answer in time while starting { $count } torrents right away. They may have started anyway; the list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not start the torrent right away: { $reason }
+               *[other] Could not start { $count } torrents right away: { $reason }
+            }
+    }
+# Verify: check the downloaded data against the torrent.
+action-failed-verify =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not verify the torrent: the server is not connected, so nothing was sent
+               *[other] Could not verify { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer in time while verifying the torrent. The check may have started anyway; the list will show the result
+               *[other] The server did not answer in time while verifying { $count } torrents. The checks may have started anyway; the list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not verify the torrent: { $reason }
+               *[other] Could not verify { $count } torrents: { $reason }
+            }
+    }
+# Reannounce: ask the trackers for more peers now.
+action-failed-reannounce =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not ask the trackers of the torrent for more peers: the server is not connected, so nothing was sent
+               *[other] Could not ask the trackers of { $count } torrents for more peers: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer in time while asking the trackers of the torrent for more peers. They may have been asked anyway; the list will show the result
+               *[other] The server did not answer in time while asking the trackers of { $count } torrents for more peers. They may have been asked anyway; the list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not ask the trackers of the torrent for more peers: { $reason }
+               *[other] Could not ask the trackers of { $count } torrents for more peers: { $reason }
+            }
+    }
+# An action whose kind is not known; $outcome and $reason as above.
+action-failed-other =
+    { $outcome ->
+        [not-sent] An action could not be carried out: the server is not connected, so nothing was sent
+        [no-answer] The server did not answer an action in time. It may have been carried out anyway; the list will show the result
+       *[failed] An action failed: { $reason }
+    }
+# The reason when an action named no torrent, so it was not sent.
+action-reason-nothing-selected = no torrent was selected
+
 ## The sidebar
 
 # The filters of the torrent list. The sidebar shows each with the number of torrents it matches.

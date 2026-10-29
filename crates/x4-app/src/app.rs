@@ -28,6 +28,7 @@ use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
 use crate::files::{FilesError, read_config, read_ui_state};
+use crate::icons::AppAssets;
 use crate::keymap::{Quit, key_bindings};
 use crate::main_view::MainView;
 use crate::paths::AppPaths;
@@ -198,9 +199,10 @@ pub fn run_driven(
 ) -> anyhow::Result<()> {
     let launch_error = Rc::new(RefCell::new(None));
     let launch_error_slot = Rc::clone(&launch_error);
-    // The component icons (the sidebar's, the search box's, the menus' checks); no others.
+    // The component icons (the sidebar's, the search box's, the toolbar's, the menus' checks) and
+    // the few the app adds; not the whole catalog.
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(AppAssets)
         .run(move |cx| {
             init(cx);
             let opened = launch(startup, cx).and_then(|(window, view)| {

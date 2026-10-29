@@ -4,12 +4,13 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 
 ## Status
 
-Early development — stage 2, the main window (read-only). The window connects to the
-daemon set in `config.toml` and shows every torrent in a table, with its state, progress and
-speeds; a sidebar filters them by state, with live counts, and a search box finds them by name. The
-status bar shows the total download and upload speeds, the free space and the state of the
-connection. The window remembers its columns, sorting, filter, theme and size between runs. 4x4
-only reads from the daemon so far; it changes nothing there.
+Early development — stage 3, actions, under way. The window connects to the daemon set in
+`config.toml` and shows every torrent in a table, with its state, progress and speeds; a sidebar
+filters them by state, with live counts, and a search box finds them by name. The status bar shows
+the total download and upload speeds, the free space and the state of the connection. The window
+remembers its columns, sorting, filter, theme and size between runs. Several torrents can be
+selected, and started, paused, started ahead of the queue, verified and reannounced, from the
+keyboard and the toolbar; removing them, the context menu and the speed limits are still to come.
 
 ## What it will do
 
@@ -68,8 +69,9 @@ every column fits at its first width, which leaves room for its usual text: "Dow
 left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
 last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
-The window has four parts: a toolbar along the top, with the search box on the left and the theme
-button and the "Columns" menu on the right; the filter sidebar down the left side; the torrent
+The window has four parts: a toolbar along the top, with the search box and the Start and Pause
+buttons on the left and the theme button and the "Columns" menu on the right; the filter sidebar
+down the left side; the torrent
 table, which takes the rest; and the status bar along the bottom.
 
 The table lists the torrents, sorted by name at first. Each row shows:
@@ -105,6 +107,26 @@ update never scrolls the list. A selected torrent that the filter or the search 
 gone from the daemon, leaves the selection, and it is not selected again when it shows again. Tab
 moves on from the table to the search box and the buttons. The table has the keyboard focus when
 the window opens.
+
+The selected torrents that the list shows are what an action works on, in the order shown; a
+torrent the filter or the search hides is never touched. With the table focused:
+
+- `Ctrl+S` starts them, or queues them if the daemon's download queue is full; ▷ in the toolbar
+  does the same;
+- `Ctrl+P` pauses them; ⏸ in the toolbar does the same;
+- `Space` pauses them if any of them runs, and starts them if all are stopped;
+- `Ctrl+Shift+S` starts them at once, ahead of the queue;
+- `Ctrl+Shift+R` verifies their downloaded data, which reads all of it on the server;
+- `Ctrl+R` asks their trackers for more peers.
+
+An action is available only when it can do something to at least one of the torrents (Start needs
+a paused or failed one, Pause one that is not stopped, Start now a stopped or queued one, and asking
+for peers one that is downloading or seeding), and only while the daemon is connected. Otherwise
+its button is disabled and its key does nothing. The toolbar buttons' tooltips name their keys. An
+action shows nothing when it works: the list shows the change at the next update, in a second or
+two. When it fails, a notification at the top right says what failed, for how many torrents, and
+why; it stays until clicked. If the daemon did not answer in time, the action may have been carried
+out anyway, and the notification says so: the list shows what happened.
 
 The sidebar on the left filters the list by state:
 
@@ -159,12 +181,20 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Shift+Up`, `Shift+Down`                            | in the table              | grow or shrink the selected range by a row   |
 | `Shift+Home`, `Shift+End`                           | in the table              | stretch the selected range to either end     |
 | `Ctrl+A`                                            | in the table              | selects every torrent the list shows         |
+| `Ctrl+S`                                            | in the table              | starts the selected torrents                 |
+| `Ctrl+P`                                            | in the table              | pauses the selected torrents                 |
+| `Space`                                             | in the table              | pauses them if any runs, else starts them    |
+| `Ctrl+Shift+S`                                      | in the table              | starts them now, ahead of the queue          |
+| `Ctrl+Shift+R`                                      | in the table              | verifies their data                          |
+| `Ctrl+R`                                            | in the table              | asks their trackers for more peers           |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
-In the search box, `Ctrl+A` selects the text, not the torrents. `Ctrl+F` works on any keyboard
-layout. `/` is matched by the character the key types, not by its place on the keyboard: on the
-Russian layout it is the key that types `/` there, not the key marked `/`, which types a period.
+In the search box, `Ctrl+A` selects the text, not the torrents, and `Space` types a space.
+`Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
+place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
+`/`, which types a period. Verify is `Ctrl+Shift+R` rather than Transmission's `Ctrl+V`, which is
+kept for pasting a magnet link.
 
 ## What 4x4 remembers
 
@@ -403,8 +433,14 @@ state, made up in memory: nothing goes over the network, and none of 4x4's files
 keeps every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10
 seconds, logs the intervals between the frames and quits; `--select N` selects the row at index `N`
 (from 0) once the list is there, and `--extend K` then extends the selection `K` rows down, as
-Shift+Down would. For example, `just virtual just demo-synthetic --scroll` runs it
-off screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
+Shift+Down would. The made-up daemon carries out the actions on its own torrents: pausing,
+starting (a torrent that lacks data downloads, a complete one seeds), starting ahead of the queue,
+verifying (the torrent checks for three updates, then goes back to what it was), removing and
+the speed settings. `--press KEY`, which can be given several times, presses each key in turn
+once the list is there and selected, one every three seconds, as on the keyboard: for example
+`just virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the
+sixth torrent and starts it again. `just virtual just demo-synthetic --scroll` runs it off
+screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
 does not contain it.
 
 ### Live tests

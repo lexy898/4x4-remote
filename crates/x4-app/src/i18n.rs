@@ -20,11 +20,12 @@ use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
-    ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, Filter, HumanSize, HumanSpeed,
-    Indicator, QueueKind, Ratio, SizeUnit, SortDirection, SpeedUnit, Subtitle, TimeUnit,
-    UnsupportedReason,
+    ActionError, ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, Filter, HumanSize,
+    HumanSpeed, Indicator, QueueKind, Ratio, SizeUnit, SortDirection, SpeedUnit, Subtitle,
+    TimeUnit, UnsupportedReason,
 };
 
+use crate::actions::{ActionKind, PendingAction};
 use crate::app::ConfigProblem;
 
 #[cfg(test)]
@@ -409,6 +410,67 @@ pub(crate) fn connection_reason_detail_text(error: &ConnectionError) -> SharedSt
         ConnectionError::Unauthorized => t!("connection-reason-unauthorized-detail"),
         ConnectionError::Protocol(_) => t!("connection-reason-protocol-detail"),
         ConnectionError::Server(_) => t!("connection-reason-server-detail"),
+    }
+    .into()
+}
+
+/// What a notification says when an action on torrents failed: what it was and for how many
+/// torrents (`pending`, the action as it was sent; `None` when that is not known), and what is
+/// known about it from `error`.
+///
+/// Refused because the daemon was not connected, it was not sent. When the daemon did not answer
+/// in time, or the connection broke, it may have been carried out all the same, so the text says
+/// so and leaves the result to the list. Otherwise it failed, for the short reason of the status
+/// bar, or for the server's own text when it sent one.
+pub(crate) fn action_failure_text(
+    pending: Option<PendingAction>,
+    error: &ActionError,
+) -> SharedString {
+    let (outcome, reason) = match error {
+        ActionError::NotConnected => ("not-sent", String::new()),
+        ActionError::Rpc(ConnectionError::Timeout | ConnectionError::Unreachable) => {
+            ("no-answer", String::new())
+        }
+        ActionError::Rpc(ConnectionError::Server(text)) if has_text(text) => {
+            ("failed", text.clone())
+        }
+        ActionError::Rpc(error) => ("failed", connection_reason_text(error).to_string()),
+        ActionError::EmptySelection => ("failed", t!("action-reason-nothing-selected")),
+    };
+    let Some(PendingAction { kind, count }) = pending else {
+        return t!("action-failed-other", outcome = outcome, reason = reason).into();
+    };
+    match kind {
+        ActionKind::Start => t!(
+            "action-failed-start",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
+        ActionKind::Pause => t!(
+            "action-failed-pause",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
+        ActionKind::StartNow => t!(
+            "action-failed-start-now",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
+        ActionKind::Verify => t!(
+            "action-failed-verify",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
+        ActionKind::Reannounce => t!(
+            "action-failed-reannounce",
+            outcome = outcome,
+            count = count,
+            reason = reason
+        ),
     }
     .into()
 }
