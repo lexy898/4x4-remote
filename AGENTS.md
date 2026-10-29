@@ -25,7 +25,11 @@ just lint-policy      # lint exceptions, workspace lints, dependency direction, 
                       # gpui-pre-wgpu patch (scripts/lint-policy.sh)
 just run              # run the app (debug build)
 just release          # optimized build
-just measure          # startup time and memory of the release build
+just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp
+                      # state dir; --synthetic measures the demo; run it inside `just virtual`
+just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
+just demo-synthetic   # the main window over 2000 made-up torrents, no network
+                      # (--static, --scroll, --select N)
 just update           # update dependencies, then run the full gate
 just setup            # enable git hooks and verify required tools
 ```
@@ -158,6 +162,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
   settings (`session_set`) from tests or while debugging. Reading is fine.
 - The owner's daemon: `http://192.168.1.5:9091/transmission/rpc`, on a Raspberry Pi 3 with little
   RAM — keep the request rate modest. Server notes: `/home/alexey/garage/raspberrypi/CLAUDE.md`.
+- Agents open app windows only through `just virtual …` (headless KWin, own D-Bus, own XDG and
+  runtime dirs); never run KWin, spectacle or test windows against the owner's session bus, XDG
+  dirs or screens. Debug builds use the `.Devel` app id.
 - Everything in the repository is English.
 
 ## Git
