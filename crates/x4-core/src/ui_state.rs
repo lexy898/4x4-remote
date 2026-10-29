@@ -210,17 +210,20 @@ fn default_column(id: ColumnId) -> ColumnState {
     }
 }
 
-/// How wide a column is before the user resizes it.
+/// How wide a column is before the user resizes it: room for its widest usual text
+/// ("Downloading", a two-part ETA such as "23 h 59 m", a sorted header with its mark) in a 14 px
+/// sans-serif font plus the cell's padding. Together they take 978 px, which fits the default
+/// 1200 px window next to the sidebar.
 fn default_width(id: ColumnId) -> f32 {
     match id {
-        ColumnId::Name => 300.0,
+        ColumnId::Name => 285.0,
         ColumnId::Size => 80.0,
-        ColumnId::Progress => 140.0,
-        ColumnId::State => 90.0,
-        ColumnId::Down | ColumnId::Up => 85.0,
-        ColumnId::Eta => 65.0,
-        ColumnId::Ratio => 60.0,
-        ColumnId::Peers => 55.0,
+        ColumnId::Progress => 120.0,
+        ColumnId::State => 105.0,
+        ColumnId::Down | ColumnId::Up => 88.0,
+        ColumnId::Eta => 82.0,
+        ColumnId::Ratio => 64.0,
+        ColumnId::Peers => 66.0,
     }
 }
 

@@ -74,19 +74,21 @@ fn ui_state_default_is_the_first_run() {
 #[test]
 fn default_columns_show_everything_at_their_widths() {
     let expected = [
-        (ColumnId::Name, 300.0),
+        (ColumnId::Name, 285.0),
         (ColumnId::Size, 80.0),
-        (ColumnId::Progress, 140.0),
-        (ColumnId::State, 90.0),
-        (ColumnId::Down, 85.0),
-        (ColumnId::Up, 85.0),
-        (ColumnId::Eta, 65.0),
-        (ColumnId::Ratio, 60.0),
-        (ColumnId::Peers, 55.0),
+        (ColumnId::Progress, 120.0),
+        (ColumnId::State, 105.0),
+        (ColumnId::Down, 88.0),
+        (ColumnId::Up, 88.0),
+        (ColumnId::Eta, 82.0),
+        (ColumnId::Ratio, 64.0),
+        (ColumnId::Peers, 66.0),
     ]
     .map(|(id, width)| column(id, true, width));
 
     assert_eq!(default_columns(), expected);
+    let total: f32 = expected.iter().map(|column| column.width).sum();
+    assert!((total - 978.0).abs() < f32::EPSILON, "{total}");
 }
 
 #[test]
@@ -121,7 +123,7 @@ maximized = false
 [[columns]]
 id = "name"
 visible = true
-width = 300.0
+width = 285.0
 
 [[columns]]
 id = "size"
@@ -131,37 +133,37 @@ width = 80.0
 [[columns]]
 id = "progress"
 visible = true
-width = 140.0
+width = 120.0
 
 [[columns]]
 id = "state"
 visible = true
-width = 90.0
+width = 105.0
 
 [[columns]]
 id = "down"
 visible = true
-width = 85.0
+width = 88.0
 
 [[columns]]
 id = "up"
 visible = true
-width = 85.0
+width = 88.0
 
 [[columns]]
 id = "eta"
 visible = true
-width = 65.0
+width = 82.0
 
 [[columns]]
 id = "ratio"
 visible = true
-width = 60.0
+width = 64.0
 
 [[columns]]
 id = "peers"
 visible = true
-width = 55.0
+width = 66.0
 
 [sort]
 key = "name"
@@ -385,7 +387,7 @@ fn ui_state_a_column_without_visible_or_width_takes_the_defaults() {
     // The second entry names no column, so it goes.
     assert_eq!(
         state.columns,
-        completed(&[column(ColumnId::Ratio, true, 60.0)])
+        completed(&[column(ColumnId::Ratio, true, 64.0)])
     );
 }
 
@@ -432,12 +434,12 @@ fn ui_state_normalizes_columns() {
             column(ColumnId::Peers, true, 40.0),
             column(ColumnId::Name, true, 1200.0),
             column(ColumnId::Size, true, 80.0),
-            column(ColumnId::Progress, true, 140.0),
-            column(ColumnId::State, true, 90.0),
-            column(ColumnId::Down, true, 85.0),
-            column(ColumnId::Up, true, 85.0),
-            column(ColumnId::Eta, true, 65.0),
-            column(ColumnId::Ratio, true, 60.0),
+            column(ColumnId::Progress, true, 120.0),
+            column(ColumnId::State, true, 105.0),
+            column(ColumnId::Down, true, 88.0),
+            column(ColumnId::Up, true, 88.0),
+            column(ColumnId::Eta, true, 82.0),
+            column(ColumnId::Ratio, true, 64.0),
         ]
     );
 }
@@ -609,13 +611,13 @@ fn ui_state_parse_returns_a_normalized_state() {
         [
             column(ColumnId::Peers, true, 1200.0),
             column(ColumnId::Name, true, 360.0),
-            column(ColumnId::Eta, true, 65.0),
+            column(ColumnId::Eta, true, 82.0),
             column(ColumnId::Size, true, 80.0),
-            column(ColumnId::Progress, true, 140.0),
-            column(ColumnId::State, true, 90.0),
-            column(ColumnId::Down, true, 85.0),
-            column(ColumnId::Up, true, 85.0),
-            column(ColumnId::Ratio, true, 60.0),
+            column(ColumnId::Progress, true, 120.0),
+            column(ColumnId::State, true, 105.0),
+            column(ColumnId::Down, true, 88.0),
+            column(ColumnId::Up, true, 88.0),
+            column(ColumnId::Ratio, true, 64.0),
         ]
     );
     assert_eq!(parsed.state.clone().normalized(), parsed.state);

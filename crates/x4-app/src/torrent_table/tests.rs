@@ -88,7 +88,8 @@ fn columns_carry_the_stored_widths(cx: &mut TestAppContext) {
     cx.update(|cx| {
         assert_eq!(table.column(0, cx).width, px(300.));
         assert_eq!(table.column(1, cx).width, px(120.));
-        assert_eq!(table.column(2, cx).width, px(140.), "the default");
+        let progress = default_columns().get(2).map(|column| px(column.width));
+        assert_eq!(Some(table.column(2, cx).width), progress, "the default");
         let size = table.column(1, cx);
         assert_eq!(size.min_width, px(MIN_COLUMN_WIDTH));
         assert_eq!(size.max_width, px(MAX_COLUMN_WIDTH));

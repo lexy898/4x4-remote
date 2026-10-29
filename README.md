@@ -64,8 +64,9 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing
 in the window ever waits for the network. The first time it opens at 1200 by 720 pixels, where
-every column fits; after that at the size it had last time, and maximized if it was (see
-[What 4x4 remembers](#what-4x4-remembers)).
+every column fits at its first width, which leaves room for its usual text: "Downloading", a time
+left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
+last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
 The window has four parts: a toolbar along the top, with the search box on the left and the theme
 button and the "Columns" menu on the right; the filter sidebar down the left side; the torrent

@@ -31,6 +31,9 @@ const SIZE: usize = 1;
 const PROGRESS: usize = 2;
 const STATE: usize = 3;
 const PEERS: usize = 8;
+/// The width of gpui-component's overlay scrollbar (`WIDTH` in gpui-base's `scrollbar.rs`, which
+/// is private): the last column must end before it.
+const SCROLLBAR_WIDTH: f32 = 16.;
 
 /// An open main window and the far ends of its channels, standing in for the service.
 struct Window {
@@ -454,11 +457,13 @@ fn default_columns_fit_the_default_window(cx: &mut TestAppContext) {
     window.act(cx, |window, _| {
         let list = window.find("torrent-list").bounds();
         let peers = window.find(("col-header", PEERS)).bounds();
+        // The overlay scrollbar lies over the right edge of the list.
+        let edge = list.right() - px(SCROLLBAR_WIDTH);
         assert!(
-            peers.right() <= list.right(),
-            "the last column ends at {:?}, past the list's edge at {:?}",
+            peers.right() <= edge,
+            "the last column ends at {:?}, under the scrollbar from {:?}",
             peers.right(),
-            list.right()
+            edge
         );
     });
 }
