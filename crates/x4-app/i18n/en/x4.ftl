@@ -130,6 +130,9 @@ status-alt-speed-detail = Alternative speed limits are on
 # Shown when config.toml cannot be used; one of the config-problem-* messages is its tooltip.
 status-config-problem = Config file not used
 status-dismiss = Dismiss
+# Shown while state.toml cannot be written, until a save works again; the detail is its tooltip.
+status-state-not-saved = Layout not saved
+status-state-not-saved-detail = The columns, sorting, filter, theme and window size cannot be saved to state.toml; the log says why
 
 ## Why config.toml is not used (the defaults are used instead)
 

@@ -1,6 +1,6 @@
-//! The status bar at the bottom of the main window: how the connection is doing, a notice about
-//! the config file, whether the alternative speed limits apply, the free space and the total
-//! speeds.
+//! The status bar at the bottom of the main window: how the connection is doing, notices about
+//! the config file and the saved state, whether the alternative speed limits apply, the free space
+//! and the total speeds.
 //!
 //! [`StatusModel`] from `x4-core` decides the values, down to which state the connection
 //! indicator shows ([`Indicator`]); this module words them and lays them out.
@@ -42,16 +42,20 @@ fn connection_tooltip(indicator: &Indicator) -> Option<SharedString> {
 }
 
 /// The status bar for `status`, in the colors of `theme`. `config_problem` adds a notice whose
-/// button calls `on_dismiss`.
+/// button calls `on_dismiss`, and `state_not_saved` one that the UI state cannot be saved.
 pub(crate) fn status_bar(
     status: &StatusModel,
     config_problem: Option<ConfigProblem>,
+    state_not_saved: bool,
     theme: &Theme,
     on_dismiss: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> StatusBar {
     let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), theme));
     if let Some(problem) = config_problem {
         bar = bar.left(config_notice(problem, on_dismiss));
+    }
+    if state_not_saved {
+        bar = bar.left(state_notice());
     }
     if status.alt_speed {
         bar = bar.right(
@@ -136,6 +140,23 @@ fn config_notice(
                 .label(t!("status-dismiss"))
                 .on_click(on_dismiss),
         )
+}
+
+/// The notice that the UI state cannot be saved, with what that means in its tooltip. It stays
+/// until a save works again; the log has the error.
+fn state_notice() -> impl IntoElement {
+    let detail = SharedString::from(t!("status-state-not-saved-detail"));
+    div()
+        .id("state-not-saved")
+        .child(t!("status-state-not-saved"))
+        .tooltip({
+            let detail = detail.clone();
+            move |window, cx| Tooltip::new(detail.clone()).build(window, cx)
+        })
+        .role(Role::Status)
+        .aria_label(SharedString::from(t!("status-state-not-saved")))
+        .aria_description(detail)
+        .test_support()
 }
 
 /// A number that changes every tick, in tabular digits so the bar does not jitter, and dimmed

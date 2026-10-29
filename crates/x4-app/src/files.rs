@@ -164,13 +164,6 @@ pub(crate) fn read_ui_state(path: &Path) -> Result<LoadedState, FilesError> {
 /// [`FilesError::Serialize`] if the state cannot be turned into TOML, [`FilesError::CreateDir`]
 /// if the directory cannot be created and [`FilesError::Write`] if the file cannot be written. On
 /// any error the old file is left as it was and no temporary file stays behind.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired in stage 2 Task 8, when the window saves its state"
-    )
-)]
 pub(crate) fn write_ui_state(path: &Path, state: &UiState) -> Result<(), FilesError> {
     let text = state.to_toml().map_err(|source| FilesError::Serialize {
         path: path.to_path_buf(),

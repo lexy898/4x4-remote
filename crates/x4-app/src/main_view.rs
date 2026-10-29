@@ -17,7 +17,14 @@
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
+//!
+//! What the user changes in the [`UiState`] (the columns, the sort order, the filter, the theme
+//! and the window size) is saved a second after the last change, and when the window closes or
+//! the app quits (the `persistence` module).
 
+mod persistence;
+
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -47,6 +54,7 @@ use crate::sidebar::filter_sidebar;
 use crate::status_bar::status_bar;
 use crate::theme::{STALE_OPACITY, apply_theme, follow_appearance, next_theme};
 use crate::torrent_table::{TorrentTable, new_table_state, show_column, show_rows};
+use persistence::Saver;
 
 /// The height of a row of the table, for the two lines of the name cell.
 const ROW_HEIGHT: f32 = 44.;
@@ -71,6 +79,8 @@ pub struct MainView {
     last_snapshot: Option<Arc<Snapshot>>,
     /// The state to remember between runs, as the user has changed it.
     ui: UiState,
+    /// Saves `ui` when it changes.
+    saver: Saver,
     /// Why `config.toml` is not used, until the user dismisses it.
     config_problem: Option<ConfigProblem>,
     /// Where commands for the service go.
@@ -81,24 +91,28 @@ pub struct MainView {
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
-    /// The table's and the search box's events and the window's activation, visibility and
-    /// appearance observers.
+    /// The table's and the search box's events, the window's activation, visibility, appearance
+    /// and bounds observers, and the save when the app quits.
     _subscriptions: Vec<Subscription>,
 }
 
 impl MainView {
     /// The view of the service whose channels are `events` and `commands`, starting from the
     /// saved state `ui` (the columns, the filter, the sort order and the theme). The theme itself
-    /// is applied by whoever opens the window, before the first frame. The table has the focus
-    /// from the start.
+    /// is applied by whoever opens the window, before the first frame, and so is the window size.
+    /// The table has the focus from the start.
     ///
     /// `service` is the handle of the thread behind the channels: the view keeps it, so that
     /// closing the window stops the thread. Without one (in tests), the channels are all there is.
+    ///
+    /// The view saves its state to `state_file` when the user changes it, and before the window
+    /// closes or the app quits; with `None` it never saves.
     pub fn new(
         events: async_channel::Receiver<Event>,
         commands: Sender<Command>,
         service: Option<ServiceHandle>,
         ui: UiState,
+        state_file: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
@@ -119,8 +133,24 @@ impl MainView {
             cx.observe_window_appearance(window, |view, window, cx| {
                 follow_appearance(view.ui.theme, window, cx);
             }),
+            cx.observe_window_bounds(window, |view, window, cx| {
+                view.window_changed(window, cx);
+            }),
+            // Quitting (Ctrl+Q) closes no window first, so the close below does not see it.
+            cx.on_app_quit(|view, cx| {
+                view.save_before_close(cx);
+                std::future::ready(())
+            }),
         ];
+        let this = cx.weak_entity();
+        window.on_window_should_close(cx, move |_, cx| {
+            if let Err(error) = this.update(cx, Self::save_before_close) {
+                tracing::debug!(%error, "the window closes after its view was released");
+            }
+            true
+        });
         let pump = cx.spawn(async move |view, cx| pump(events, view, cx).await);
+        let saver = Saver::new(&ui, state_file);
         let mut view = Self {
             status: StatusModel::default(),
             view: view_state,
@@ -129,6 +159,7 @@ impl MainView {
             search,
             last_snapshot: None,
             ui,
+            saver,
             config_problem: None,
             commands,
             last_visibility: None,
@@ -180,9 +211,16 @@ impl MainView {
         &self.ui
     }
 
+    /// How many times the view has started to save its state since it opened, failed saves
+    /// included. Each save writes the whole state once.
+    #[must_use]
+    pub fn state_saves(&self) -> u64 {
+        self.saver.writes()
+    }
+
     /// Shows the torrents `view` asks for (the filter, the search and the sort order), from the
     /// last snapshot and without waiting for the next one, and remembers its filter and sort
-    /// order in the [`UiState`]. The search is not remembered.
+    /// order in the [`UiState`]. The search is not remembered, so an edit of it saves nothing.
     pub fn set_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
         if view == self.view {
             return;
@@ -192,6 +230,7 @@ impl MainView {
             key: view.sort_key,
             direction: view.sort_direction,
         };
+        self.ui_changed(cx);
         let sort = (view.sort_key, view.sort_direction);
         self.view = view;
         // The header marks the order even when the rows stay as they were.
@@ -324,8 +363,9 @@ impl MainView {
     }
 
     /// Copies the table's columns into the state to remember between runs.
-    fn remember_columns(&mut self, cx: &App) {
+    fn remember_columns(&mut self, cx: &mut Context<'_, Self>) {
         self.ui.columns = self.table.read(cx).delegate().columns().to_vec();
+        self.ui_changed(cx);
     }
 
     /// Whether each column is shown, in the order of [`ColumnId::ALL`], as the column menu lists
@@ -434,6 +474,7 @@ impl MainView {
         self.ui.theme = next_theme(self.ui.theme);
         tracing::debug!(theme = ?self.ui.theme, "theme switched");
         apply_theme(self.ui.theme, window, cx);
+        self.ui_changed(cx);
         cx.notify();
     }
 
@@ -539,7 +580,13 @@ impl Render for MainView {
             },
         );
         let on_dismiss = cx.listener(|view, _, _, cx| view.dismiss_config_problem(cx));
-        let status_bar = status_bar(&self.status, self.config_problem, theme, on_dismiss);
+        let status_bar = status_bar(
+            &self.status,
+            self.config_problem,
+            self.saver.failing(),
+            theme,
+            on_dismiss,
+        );
         v_flex()
             .key_context(MAIN_CONTEXT)
             .size_full()

@@ -535,6 +535,38 @@ fn ui_state_normalizes_the_window_size() {
 }
 
 #[test]
+fn a_window_size_alone_is_normalized_like_a_whole_state() {
+    let huge = WindowState {
+        width: 20000.0,
+        height: 700.0,
+        maximized: true,
+    };
+    let usable = WindowState {
+        width: 1600.0,
+        height: 900.0,
+        maximized: false,
+    };
+
+    assert_eq!(
+        huge.normalized(),
+        WindowState {
+            maximized: true,
+            ..WindowState::default()
+        }
+    );
+    assert_eq!(usable.normalized(), usable);
+    assert_eq!(
+        huge.normalized(),
+        UiState {
+            window: huge,
+            ..UiState::default()
+        }
+        .normalized()
+        .window
+    );
+}
+
+#[test]
 fn ui_state_parse_returns_a_normalized_state() {
     let text = r#"
         [window]

@@ -3,7 +3,9 @@
 //!
 //! [`run`] is the front door the `4x4` binary uses: it reads the files and starts the service
 //! against the configured daemon. [`run_with`] takes a [`Startup`] built by its caller instead,
-//! so that a demo or a measurement can run the window against a service of its own.
+//! so that a demo or a measurement can run the window against a service of its own, and
+//! [`launch`] opens the window of a [`Startup`] in an application that runs already, such as a
+//! test's.
 
 use std::cell::RefCell;
 use std::env;
@@ -16,7 +18,7 @@ use std::time::Instant;
 use anyhow::Context as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, KeyBinding, NoAction, QuitMode,
-    TitlebarOptions, WindowBounds, WindowOptions, actions, px, size,
+    TitlebarOptions, WindowOptions, actions, px, size,
 };
 use x4_core::service::{self, ServiceHandle};
 use x4_core::{Command, Config, ConfigError, EngineConfig, Event, UiState};
@@ -27,6 +29,7 @@ use crate::files::{FilesError, read_config, read_ui_state};
 use crate::main_view::MainView;
 use crate::paths::AppPaths;
 use crate::theme::apply_theme;
+use crate::window_state::opening_bounds;
 
 actions!(
     x4,
@@ -63,6 +66,8 @@ const DEVEL_ENV: &str = "X4_DEVEL";
 
 /// Everything the app starts with, as plain values: the service, the saved UI state and what
 /// went wrong while reading the files.
+///
+/// [`Startup::from_state_file`] reads the UI state the way [`run`] does.
 #[derive(Debug)]
 pub struct Startup {
     /// The service thread the window shows, or why it could not be started. On an error the
@@ -78,6 +83,48 @@ pub struct Startup {
     /// Why `config.toml` is not used, if it is not. The window shows it until the user
     /// dismisses it.
     pub config_problem: Option<ConfigProblem>,
+}
+
+impl Startup {
+    /// A start with `service`, the UI state saved at `state_path` and no config problem.
+    ///
+    /// The file is read as [`run`] reads it: a missing file gives the defaults, which are saved
+    /// there once the user changes something; a corrupt one is moved aside first. A file that
+    /// cannot be read, or that a newer version wrote, gives the defaults, and nothing is saved over
+    /// it. With no `state_path`, the state is the defaults and is never saved.
+    #[must_use]
+    pub fn from_state_file(
+        service: io::Result<ServiceHandle>,
+        state_path: Option<PathBuf>,
+    ) -> Self {
+        let (ui, state_writable) = state_path
+            .as_deref()
+            .map_or_else(|| (UiState::default(), false), load_ui_state);
+        Self {
+            service,
+            ui,
+            state_writable,
+            state_path,
+            config_problem: None,
+        }
+    }
+
+    /// Where the window saves its state: `state_path`, if it may be saved there.
+    fn state_file(&self) -> Option<PathBuf> {
+        match (&self.state_path, self.state_writable) {
+            (Some(path), true) => Some(path.clone()),
+            (Some(path), false) => {
+                tracing::info!(path = %path.display(), "the UI state file is left as it is; changes in this session are not saved");
+                None
+            }
+            (None, _) => {
+                tracing::info!(
+                    "there is no place for the UI state; changes in this session are not saved"
+                );
+                None
+            }
+        }
+    }
 }
 
 /// Why `config.toml` is not used, as the window tells the user (in their language). The log
@@ -138,19 +185,14 @@ pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
         || (Config::default(), None),
         |paths| load_config(&paths.config_file),
     );
-    let (ui, state_writable) = paths.map_or_else(
-        || (UiState::default(), false),
-        |paths| load_ui_state(&paths.state_file),
-    );
     let client = Client::new(UreqTransport::new(&config.connection.url, DEFAULT_TIMEOUT));
+    // Spawning only starts the thread; the state file is read while it connects.
+    let service = service::spawn(client, EngineConfig::default());
     run_with(
         started,
         Startup {
-            service: service::spawn(client, EngineConfig::default()),
-            ui,
-            state_writable,
-            state_path: paths.map(|paths| paths.state_file.clone()),
             config_problem,
+            ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))
         },
     )
 }
@@ -212,13 +254,21 @@ fn load_ui_state(path: &Path) -> (UiState, bool) {
     }
 }
 
-/// Opens the main window for `startup`. A service that could not start, and a config problem,
-/// are shown in the status bar.
-fn launch(startup: Startup, cx: &mut App) -> anyhow::Result<(AnyWindowHandle, Entity<MainView>)> {
+/// Opens the main window for `startup`, at the remembered size and maximized if it was. A service
+/// that could not start, and a config problem, are shown in the status bar. The window saves its
+/// UI state to `startup.state_path` if it may. Call [`init`] first.
+///
+/// # Errors
+///
+/// Returns an error if the platform cannot create the window.
+pub fn launch(
+    startup: Startup,
+    cx: &mut App,
+) -> anyhow::Result<(AnyWindowHandle, Entity<MainView>)> {
+    let state_file = startup.state_file();
     let Startup {
         service,
         ui,
-        // Saving the UI state is wired in with the window state.
         state_writable: _,
         state_path: _,
         config_problem,
@@ -235,7 +285,7 @@ fn launch(startup: Startup, cx: &mut App) -> anyhow::Result<(AnyWindowHandle, En
         }
     };
     let failed = service.is_none();
-    let (window, view) = open_main_window(events, commands, service, &ui, cx)?;
+    let (window, view) = open_window(events, commands, service, &ui, state_file, cx)?;
     view.update(cx, |view, cx| {
         if failed {
             view.service_failed(cx);
@@ -271,9 +321,10 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-/// Opens the main window, centered, in the theme `ui` asks for, with a [`MainView`] of the
-/// service whose channels are `events` and `commands` as its content. The view keeps `service`
-/// so that closing the window stops it; pass `None` when there is no thread behind the channels.
+/// Opens the main window, centered, at the size and in the theme `ui` asks for, with a
+/// [`MainView`] of the service whose channels are `events` and `commands` as its content. The
+/// view keeps `service` so that closing the window stops it; pass `None` when there is no thread
+/// behind the channels. The window never saves its UI state; [`launch`] opens one that does.
 /// Call [`init`] (or at least `gpui_kit::init`) first.
 ///
 /// # Errors
@@ -286,9 +337,21 @@ pub fn open_main_window(
     ui: &UiState,
     cx: &mut App,
 ) -> anyhow::Result<(AnyWindowHandle, Entity<MainView>)> {
+    open_window(events, commands, service, ui, None, cx)
+}
+
+/// [`open_main_window`], whose view saves its state to `state_file` (none: never).
+fn open_window(
+    events: async_channel::Receiver<Event>,
+    commands: crossbeam_channel::Sender<Command>,
+    service: Option<ServiceHandle>,
+    ui: &UiState,
+    state_file: Option<PathBuf>,
+    cx: &mut App,
+) -> anyhow::Result<(AnyWindowHandle, Entity<MainView>)> {
     let bounds = Bounds::centered(None, size(px(ui.window.width), px(ui.window.height)), cx);
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(opening_bounds(ui.window, bounds)),
         titlebar: Some(TitlebarOptions {
             title: Some(PRODUCT_NAME.into()),
             ..Default::default()
@@ -300,7 +363,7 @@ pub fn open_main_window(
         // Before the view exists, so that the first frame is drawn in the right theme.
         apply_theme(ui.theme, window, cx);
         let ui = ui.clone();
-        cx.new(|cx| MainView::new(events, commands, service, ui, window, cx))
+        cx.new(|cx| MainView::new(events, commands, service, ui, state_file, window, cx))
     })
     .context("failed to open the main window")
 }
@@ -543,6 +606,30 @@ mod tests {
         });
         assert_eq!(names, ["seeding"], "the saved filter applies");
         assert_eq!(shown_ui, ui);
+    }
+
+    #[test]
+    fn a_start_from_the_state_file_saves_only_where_it_may() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let no_service = || Err(io::Error::other("no service in this test"));
+
+        let nowhere = Startup::from_state_file(no_service(), None);
+        assert_eq!(nowhere.ui, UiState::default());
+        assert!(!nowhere.state_writable);
+        assert_eq!(nowhere.state_file(), None);
+
+        let first_run = dir.path().join("missing.toml");
+        let fresh = Startup::from_state_file(no_service(), Some(first_run.clone()));
+        assert_eq!(fresh.ui, UiState::default());
+        assert_eq!(fresh.state_file(), Some(first_run), "a first run saves");
+
+        let newer = dir.path().join("newer.toml");
+        fs::write(&newer, "version = 99\n").expect("written");
+        let kept = Startup::from_state_file(no_service(), Some(newer.clone()));
+        assert!(!kept.state_writable);
+        assert_eq!(kept.state_path, Some(newer));
+        assert_eq!(kept.state_file(), None, "a newer file is left alone");
+        assert_eq!(kept.config_problem, None);
     }
 
     #[test]

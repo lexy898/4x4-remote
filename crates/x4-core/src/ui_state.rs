@@ -105,7 +105,11 @@ impl Default for WindowState {
 impl WindowState {
     /// The window as it is, or with the default size if it is too small or too large to use or
     /// the size is not a number. Whether it is maximized stays.
-    fn normalized(self) -> Self {
+    ///
+    /// [`UiState::normalized`] does this for a whole state; this is for a size the window reports
+    /// while it runs, before it is remembered.
+    #[must_use]
+    pub fn normalized(self) -> Self {
         let usable = (MIN_WINDOW_WIDTH..=MAX_WINDOW_SIZE).contains(&self.width)
             && (MIN_WINDOW_HEIGHT..=MAX_WINDOW_SIZE).contains(&self.height);
         if usable {

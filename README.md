@@ -8,7 +8,8 @@ Early development — stage 2 (the main window, read-only), in progress. The win
 daemon set in `config.toml` and shows every torrent in a table, with its state, progress and
 speeds; a sidebar filters them by state, with live counts, and a search box finds them by name. The
 status bar shows the total download and upload speeds, the free space and the state of the
-connection. 4x4 only reads from the daemon so far; it changes nothing there.
+connection. The window remembers its columns, sorting, filter, theme and size between runs. 4x4
+only reads from the daemon so far; it changes nothing there.
 
 ## What it will do
 
@@ -63,7 +64,8 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing
 in the window ever waits for the network. The first time it opens at 1200 by 720 pixels, where
-every column fits.
+every column fits; after that at the size it had last time, and maximized if it was (see
+[What 4x4 remembers](#what-4x4-remembers)).
 
 The table lists the torrents, sorted by name at first. Each row shows:
 
@@ -84,7 +86,8 @@ Click a column header to sort by it; click it again to reverse the order. ▲ or
 shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;
 names sort from A to Z, the time left soonest first, and the state with errors first and paused
 torrents last. Drag a header to move the column, and drag the edge of a header to resize it.
-"Columns" in the toolbar shows and hides columns; the name column always stays.
+"Columns" in the toolbar shows and hides columns; the name column always stays. The sort order and
+the columns are remembered between runs.
 
 Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent;
 Escape clears the selection. The selection stays on the same torrent when the list is re-sorted or
@@ -103,7 +106,7 @@ The sidebar on the left filters the list by state:
 Each filter has an icon in the color of its state and the number of torrents it matches. The
 numbers count every torrent, whatever the filter and the search show, and appear once the daemon's
 list of torrents has come; the Error count turns red when any torrent has an error. Click a filter
-to show its torrents; the chosen one is highlighted. The filter is not remembered between runs yet.
+to show its torrents; the chosen one is highlighted and remembered between runs.
 
 The search box in the toolbar narrows the list, as you type, to the torrents whose names contain
 every word typed, in any order and ignoring case. It works together with the filter. `Ctrl+F` moves
@@ -126,10 +129,30 @@ talks to the daemon stops or cannot start, the status bar says "Service stopped"
 not start", the data is dimmed for good, and the reason is in the log.
 
 The button in the toolbar switches the theme: the system's (light or dark, following the desktop),
-light, or dark. It is not remembered between runs yet.
+light, or dark. The choice is remembered between runs.
 
 While the window is minimized or does not have the focus, 4x4 asks the daemon for updates every
 10 seconds instead of every 1.5 seconds, to go easy on a small server.
+
+## What 4x4 remembers
+
+Between runs 4x4 remembers, in `state.toml`:
+
+- the columns: their order, which are shown and their widths;
+- the column the list is sorted by, and the direction;
+- the filter chosen in the sidebar;
+- the theme chosen with the toolbar button (system, light or dark);
+- the size of the window and whether it is maximized. Not its position: on Wayland the desktop
+  places windows, and an app can neither read nor set where its window is.
+
+The search text, the selected torrent and the scroll position are not remembered.
+
+4x4 saves a second after the last change, so that dragging a column edge or the window edge writes
+the file once, and at once when the window is closed or 4x4 quits (`Ctrl+Q`). Typing in the search
+box never writes it. When a save fails (a full disk, a directory 4x4 cannot write to), the window
+keeps working: the status bar says "Layout not saved" (its tooltip says what is not saved) until a
+save works again, the log has the reason once, and 4x4 tries again at the next change and when the
+window closes.
 
 ## Files and logs
 
@@ -156,7 +179,8 @@ the defaults are used; neither ever shows the URL, which may hold a password.
 
 4x4 writes `state.toml` atomically, so a crash cannot leave half a file. If the file cannot be
 parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
-file written by a newer version of 4x4 is left alone, and 4x4 does not save over it.
+file written by a newer version of 4x4, or one that cannot be read, is left alone: 4x4 starts from
+the defaults and saves nothing in that session.
 
 The log lines also go to stderr. `RUST_LOG` sets the level for both (for example
 `RUST_LOG=x4_app=debug`); without it 4x4 logs its own lifecycle events and the problems of its
