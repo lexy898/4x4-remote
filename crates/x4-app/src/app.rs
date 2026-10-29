@@ -1,5 +1,5 @@
-//! Application startup: the config and the saved state, the service, global actions and key
-//! bindings, the main window and the first-frame log.
+//! Application startup: the config and the saved state, the service, the global Quit action and
+//! the key bindings of [`keymap`](crate::keymap), the main window and the first-frame log.
 //!
 //! [`run`] is the front door the `4x4` binary uses: it reads the files and starts the service
 //! against the configured daemon. [`run_with`] takes a [`Startup`] built by its caller instead,
@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, KeyBinding, NoAction, QuitMode,
-    TitlebarOptions, WindowOptions, actions, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, QuitMode, TitlebarOptions,
+    WindowOptions, px, size,
 };
 use x4_core::service::{self, ServiceHandle};
 use x4_core::{
@@ -28,35 +28,12 @@ use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
 use crate::files::{FilesError, read_config, read_ui_state};
+use crate::icons::AppAssets;
+use crate::keymap::{Quit, key_bindings};
 use crate::main_view::MainView;
 use crate::paths::AppPaths;
 use crate::theme::apply_theme;
 use crate::window_state::opening_bounds;
-
-actions!(
-    x4,
-    [
-        /// Quits the application.
-        Quit,
-        /// Moves the focus to the next control, out of the torrent table.
-        FocusNext,
-        /// Moves the focus to the previous control, out of the torrent table.
-        FocusPrevious,
-        /// Moves the focus to the search box and selects its text.
-        FocusSearch,
-        /// Empties the search box and hands the focus back to the torrent table.
-        ClearSearch,
-    ]
-);
-
-/// The key context of the main window's content.
-pub(crate) const MAIN_CONTEXT: &str = "MainWindow";
-/// The main window while no text field has the focus: a key bound here can still be typed in one.
-const MAIN_OUTSIDE_TEXT_CONTEXT: &str = "MainWindow && !Input";
-/// The key context of the search box, around gpui-component's `Input` context.
-pub(crate) const SEARCH_CONTEXT: &str = "SearchBox";
-/// The key context of gpui-component's table.
-const TABLE_CONTEXT: &str = "DataTable";
 
 /// Identifies the application to the desktop environment (the Wayland `app_id`).
 const APP_ID: &str = "io.github.lexy898.FourByFour";
@@ -222,9 +199,10 @@ pub fn run_driven(
 ) -> anyhow::Result<()> {
     let launch_error = Rc::new(RefCell::new(None));
     let launch_error_slot = Rc::clone(&launch_error);
-    // The component icons (the sidebar's, the search box's, the menus' checks); no others.
+    // The component icons (the sidebar's, the search box's, the toolbar's, the menus' checks) and
+    // the few the app adds; not the whole catalog.
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(AppAssets)
         .run(move |cx| {
             init(cx);
             let opened = launch(startup, cx).and_then(|(window, view)| {
@@ -316,28 +294,17 @@ pub fn launch(
     Ok((window, view))
 }
 
-/// Initializes the UI libraries and registers the application-wide actions and key bindings.
+/// Initializes the UI libraries and registers the application-wide actions and the key bindings
+/// of [`keymap`](crate::keymap).
 ///
-/// This is the one table of key bindings. They come after the libraries' own, so that ours win
-/// where both bind a key in the same context.
+/// The bindings come after the libraries' own, so that ours win where both bind a key in the same
+/// context.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
     cx.set_quit_mode(QuitMode::LastWindowClosed);
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.bind_keys([
-        KeyBinding::new("ctrl-q", Quit, None),
-        KeyBinding::new("ctrl-f", FocusSearch, Some(MAIN_CONTEXT)),
-        KeyBinding::new("/", FocusSearch, Some(MAIN_OUTSIDE_TEXT_CONTEXT)),
-        // Shallower than the text field's own Escape, which goes first: it closes the field's menu
-        // or drops extra cursors, and passes the key on when there is nothing of that kind.
-        KeyBinding::new("escape", ClearSearch, Some(SEARCH_CONTEXT)),
-        // The table binds Tab and the side arrows to moving between its columns. A list of
-        // torrents has rows only: Tab leaves it, and the side arrows do nothing.
-        KeyBinding::new("tab", FocusNext, Some(TABLE_CONTEXT)),
-        KeyBinding::new("shift-tab", FocusPrevious, Some(TABLE_CONTEXT)),
-        KeyBinding::new("left", NoAction, Some(TABLE_CONTEXT)),
-        KeyBinding::new("right", NoAction, Some(TABLE_CONTEXT)),
-    ]);
+    let bindings = key_bindings(cx);
+    cx.bind_keys(bindings);
 }
 
 /// Opens the main window, centered, at the size and in the theme `ui` asks for, with a

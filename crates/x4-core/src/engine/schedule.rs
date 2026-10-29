@@ -145,7 +145,7 @@ impl Engine {
             Request::RecentlyActive | Request::SessionStats | Request::Details(_) => {
                 &mut self.tick_timer
             }
-            Request::CheckServer | Request::Action(..) => return,
+            Request::CheckServer | Request::Action(..) | Request::MagnetLinks(..) => return,
         };
         timer.answered(now);
     }

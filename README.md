@@ -1,15 +1,19 @@
 # 4x4
 
-A native desktop client for a remote [Transmission](https://transmissionbt.com/) daemon, written in Rust.
+A native desktop client for a remote [Transmission](https://transmissionbt.com/) daemon, written
+in Rust.
 
 ## Status
 
-Early development — stage 2, the main window (read-only). The window connects to the
-daemon set in `config.toml` and shows every torrent in a table, with its state, progress and
-speeds; a sidebar filters them by state, with live counts, and a search box finds them by name. The
-status bar shows the total download and upload speeds, the free space and the state of the
-connection. The window remembers its columns, sorting, filter, theme and size between runs. 4x4
-only reads from the daemon so far; it changes nothing there.
+Early development — stage 3, actions. The window connects to the daemon set in `config.toml` and
+shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
+state, with live counts, and a search box finds them by name. The status bar shows the total
+download and upload speeds, the free space and the state of the connection; it switches the
+alternative speed limits and sets the global download and upload limits. The window remembers its
+columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
+started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
+the toolbar and a context menu; removing asks first, and deleting the files too only after an
+explicit confirmation.
 
 ## What it will do
 
@@ -57,8 +61,8 @@ just setup
 just run
 ```
 
-The second command installs the system libraries the GUI toolkit builds and links against; Wayland and
-the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
+The second command installs the system libraries the GUI toolkit builds and links against; Wayland
+and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
 ## The main window
 
@@ -68,9 +72,10 @@ every column fits at its first width, which leaves room for its usual text: "Dow
 left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
 last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
-The window has four parts: a toolbar along the top, with the search box on the left and the theme
-button and the "Columns" menu on the right; the filter sidebar down the left side; the torrent
-table, which takes the rest; and the status bar along the bottom.
+The window has four parts: a toolbar along the top, with the search box, the Start and Pause
+buttons and the Remove menu on the left and the theme button and the "Columns" menu on the right;
+the filter sidebar down the left side; the torrent table, which takes the rest; and the status bar
+along the bottom.
 
 The table lists the torrents, sorted by name at first. Each row shows:
 
@@ -83,21 +88,113 @@ The table lists the torrents, sorted by name at first. Each row shows:
   muted otherwise.
 
 Rows where nothing happens (an idle seeder, a paused or queued torrent) are dimmed, so the active
-ones stand out; an error is never dimmed, and a selected row keeps its full highlight. Until the daemon's list of torrents has come, the table
-stays blank; after that, when there is nothing to show, it says "No torrents", or "No torrents
-match" when the filter or the search hides every torrent.
+ones stand out; an error is never dimmed, and a selected row keeps its full highlight. Until the
+daemon's list of torrents has come, the table stays blank; after that, when there is nothing to
+show, it says "No torrents", or "No torrents match" when the filter or the search hides every
+torrent.
 
 Click a column header to sort by it; click it again to reverse the order. ▲ or ▼ after the header
 shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;
 names sort from A to Z, the time left soonest first (then an unknown time, then "—"), and the state
-with errors first and paused torrents last. Drag a header to move the column, and drag the edge of a header to resize it.
-"Columns" in the toolbar shows and hides columns; the name column always stays. The sort order and
-the columns are remembered between runs.
+with errors first and paused torrents last. Drag a header to move the column, and drag the edge of a
+header to resize it. "Columns" in the toolbar shows and hides columns; the name column always stays.
+The sort order and the columns are remembered between runs.
 
-Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent;
-Escape clears the selection. The selection stays on the same torrent when the list is re-sorted or
-updated, and an update never scrolls the list. Tab moves on from the table to the search box and
-the buttons. The table has the keyboard focus when the window opens.
+Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent.
+Several torrents can be selected: Ctrl+click adds a torrent to the selection or takes it out,
+Shift+click selects the range from the last plain click or Ctrl+click to the row clicked, Shift+Up
+and Shift+Down grow or shrink that range by a row, and Shift+Home and Shift+End stretch it to the
+first or the last torrent. Ctrl+A selects every torrent the list shows, and only those; Escape or
+Ctrl+Shift+A selects none. Every selected row has the same highlight. The selection stays on the
+same torrents when the list is re-sorted or updated, and an update never scrolls the list. A click
+or a right-click acts on the torrent the button went down on, even if an update moves another one
+under the pointer before the button comes up, and on nothing if that torrent has left the list by
+then. A selected torrent that the filter or the search hides, or that is gone from the daemon,
+leaves the selection, and it is not selected again when it shows again. With no row to start from
+(nothing clicked yet, or the selection cleared with Escape), Up, Down, Page Up, Page Down and Home
+select the first torrent, and End the last. Tab moves on from the table to the turtle and the speed
+limits in the status bar, then to the search box and the toolbar's buttons; a disabled button is
+passed over. The table has the keyboard focus when the window opens.
+
+The selected torrents that the list shows are what an action works on, in the order shown; a
+torrent the filter or the search hides is never touched. With the table focused:
+
+- `Ctrl+S` starts them, or queues them if the daemon's download queue is full; ▷ in the toolbar
+  does the same;
+- `Ctrl+P` pauses them; ⏸ in the toolbar does the same;
+- `Space` pauses them if any of them runs, and starts them if all are stopped;
+- `Ctrl+Shift+S` starts them at once, ahead of the queue;
+- `Ctrl+Shift+R` verifies their downloaded data, which reads all of it on the server;
+- `Ctrl+R` asks their trackers for more peers;
+- `Delete` asks whether to remove them from the list; their downloaded files stay on the server.
+  "Remove from list…" in the toolbar's Remove menu (the trash can) does the same;
+- `Shift+Delete` asks whether to remove them and delete their files from the server; "Remove and
+  delete files…" in the Remove menu does the same;
+- `Ctrl+C` copies their magnet links, one per line, in the order shown. The links come from the
+  daemon, so they are on the clipboard a moment later (see the clipboard notes below). A newer copy
+  takes the place of one still waiting for the daemon, so the clipboard gets what was asked for
+  last. If the daemon no longer has some of the torrents, the other links are copied and a
+  notification says how many are missing;
+- `Ctrl+Shift+C` copies their info hashes, one per line, in the order shown, at once, also while
+  the daemon is not connected.
+
+Right-click a torrent for a menu of all of these: Start, Pause, Start now, Verify and Reannounce;
+Copy magnet link and Copy hash; "Remove from list…" and "Remove and delete files…". A right-click
+on a torrent outside the selection selects only that torrent, as a file manager does; a
+right-click inside the selection keeps it, so the menu acts on every selected torrent. The menu
+works on the torrents that were selected when it opened, even if the list changes while it is
+open. Each item shows its key, and an item that can do nothing is disabled. A right-click below
+the rows opens no menu. While the menu is open, it keeps the keys: the list's keys do nothing to
+the torrents (Delete removes nothing, and Home, End, Page Up and Page Down do not move the
+selection), and Tab, Shift+Tab, `Ctrl+F` and `/` do not leave it; Up, Down and Enter choose an
+item, and Escape closes the menu. Choosing an item gives the keys back to the table. The toolbar's
+Remove and Columns menus keep the keys in the same way: while one is open, Tab, Shift+Tab, `Ctrl+F`
+and `/` do not leave it.
+
+Two notes on the clipboard:
+
+- the magnet links reach the clipboard only if 4x4 still has the focus when the daemon's answer
+  comes, a moment after `Ctrl+C`: 4x4 does not set the clipboard while another app has the focus
+  (on Wayland it could not). If you have switched to another app by then, nothing is copied and a
+  notification asks you to copy them again. The hashes are copied at once, so this never happens to
+  them;
+- 4x4 itself holds the copied text and hands it to the app that pastes it: when 4x4 quits, the
+  copied text is lost unless a clipboard manager keeps it.
+
+Removing always asks first. The dialog names the first five torrents in full, a long name wrapped
+over several lines, says how many more there are, and says what becomes of the files: that they stay
+on the server, or how much downloaded data will be deleted for good. It removes the torrents it
+named when it opened, even if the list changes while it is open. "Remove from list" has Remove
+focused, so Enter removes. "Remove and delete files" has Cancel focused: Enter or Space press the
+button that has the focus, so they cancel, and only a click on "Delete files", or Tab to it and
+Enter, deletes anything. Escape, Cancel or a click beside the dialog close it and remove nothing.
+While the dialog is open, Delete and Shift+Delete open no second one, and holding the key opens it
+once; a key already held when the dialog opens presses no button in it, so an Enter held on a menu
+item opens the dialog without confirming it. The mouse cannot confirm by accident either: the
+dialogs ignore clicks during their first moment (half a second, and 1 s for "Delete files"), so that
+a double-click on a menu item cannot confirm the dialog it opens, however slowly it is clicked. A
+click counts from when the button was pressed, not from when it was let go, and the second click of
+a double-click never counts. While the daemon is not connected, Remove and its keys do nothing, and
+the confirm button of an open dialog is disabled until the connection is back; Cancel still works.
+Closing the dialog gives the keys back to the table.
+
+Holding a key down sends its action once, not again with every repeat of the key. While the action
+sent last waits for the daemon's answer, it is not sent again for the same torrents, so a second
+press or a double click does nothing more; after a different action, though, the same one goes
+again (Pause, Start and Pause again send all three, and the torrents end up paused).
+
+An action is available only when it can do something to at least one of the torrents (Start needs
+a paused or failed one, Pause one that is not stopped, Start now a stopped or queued one, and asking
+for peers one that is downloading or seeding), and only while the daemon is connected; only copying
+the hashes works without it. Otherwise its button and its menu item are disabled and its key does
+nothing. The toolbar buttons' tooltips name their keys. An action shows nothing when it works: the
+list shows the change at the next update, in a second or two. When it fails, a notification at the
+top right says what failed, for how many torrents, and why; it stays until clicked. Each kind of
+action has its own notification: a newer failure of a pause replaces the older one, and leaves the
+one of a failed verify in place. If the daemon did not answer, the action may have happened all the
+same, and the notification says so: the list shows the result. Copying magnet links fails the same
+way, with a notification, when the daemon cannot send them or no longer has the torrents; the
+clipboard then keeps what it had.
 
 The sidebar on the left filters the list by state:
 
@@ -125,9 +222,31 @@ The status bar at the bottom shows:
   reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or newer). Next to
   it, "Connecting…" or "Reconnecting (attempt N)… timed out" and the like; the tooltip says more
   about why the daemon could not be reached;
-- "Alt speed" while the daemon's alternative speed limits apply;
+- the turtle, which switches the daemon's alternative speed limits on and off (`Ctrl+T`). It is
+  highlighted, in yellow, while they apply, and its tooltip gives them, such as "Alternative speed
+  limits: ↓ 50 KiB/s ↑ 50 KiB/s";
+- the global speed limits, such as "↓ 500 KiB/s · ↑ no limit". A click on them, or `Ctrl+L`, opens
+  a popover that sets them (see below);
 - the free space where new torrents are saved;
 - the total download and upload speeds, ↓ and ↑.
+
+The speed limits popover has, for the download and the upload limit each, a switch that turns the
+limit on and a field for it in KiB/s (1024 bytes per second), as every speed in 4x4 is shown. The
+daemon keeps its limits in kB/s (1000 bytes per second), and 4x4 converts them both ways, to the
+nearest whole number: 500 KiB/s typed here is stored as 512 kB/s, and a limit of 100 kB/s set in
+another client shows here as 98 KiB/s. Each field starts with the daemon's value, also while that
+limit is off. Typing a speed into a field switches its limit on, and clearing the field switches it
+off. `Enter` in a field, or Apply, sends the limits that changed, and only those, and closes the
+popover; `Escape`, a click beside it, or moving the focus out of it (`Tab` past Apply, `Shift+Tab`,
+`Ctrl+F`) closes it and changes nothing. Switching to another app leaves it open, with what was
+typed, until you come back. A click on blank space in the popover leaves the cursor in the field. A
+limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note under its
+field, and nothing is sent; a limit switched on with an empty field asks for a speed. A key held
+down to open the popover does not type into it or apply it. While a menu is open, the context menu
+or one of the toolbar, `Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are disabled
+until the daemon has sent its settings, and while it is not connected; an open popover then keeps
+what was typed, and Apply waits for the connection. A change that fails shows a notification, as an
+action does, one for the turtle and one for each limit.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -147,14 +266,38 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+F`                                            | anywhere in the window    | moves to the search box and selects its text |
 | `/`                                                 | anywhere but a text field | the same as `Ctrl+F`                         |
 | `Escape`                                            | in the search box         | empties it and goes back to the table        |
-| `Escape`                                            | in the table              | clears the selection                         |
+| `Escape`, `Ctrl+Shift+A`                            | in the table              | clear the selection                          |
 | `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the table              | select a torrent                             |
+| `Shift+Up`, `Shift+Down`                            | in the table              | grow or shrink the selected range by a row   |
+| `Shift+Home`, `Shift+End`                           | in the table              | stretch the selected range to either end     |
+| `Ctrl+A`                                            | in the table              | selects every torrent the list shows         |
+| `Ctrl+S`                                            | in the table              | starts the selected torrents                 |
+| `Ctrl+P`                                            | in the table              | pauses the selected torrents                 |
+| `Space`                                             | in the table              | pauses them if any runs, else starts them    |
+| `Ctrl+Shift+S`                                      | in the table              | starts them now, ahead of the queue          |
+| `Ctrl+Shift+R`                                      | in the table              | verifies their data                          |
+| `Ctrl+R`                                            | in the table              | asks their trackers for more peers           |
+| `Delete`                                            | in the table              | asks whether to remove them from the list    |
+| `Shift+Delete`                                      | in the table              | asks whether to remove them with their files |
+| `Ctrl+C`                                            | in the table              | copies their magnet links                    |
+| `Ctrl+Shift+C`                                      | in the table              | copies their info hashes                     |
+| `Up`, `Down`, `Enter`                               | in a menu                 | move to an item and choose it                |
+| `Escape`                                            | in a menu                 | closes it                                    |
+| `Enter`, `Space`                                    | in a removal dialog       | press the button that has the focus          |
+| `Escape`                                            | in a removal dialog       | closes it and removes nothing                |
+| `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
+| `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
+| `Enter`                                             | in the speed limits       | applies them                                 |
+| `Escape`                                            | in the speed limits       | closes them and changes nothing              |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
+In the search box, `Ctrl+A` selects the text, not the torrents, `Ctrl+C` copies the selected text,
+`Space` types a space, and `Delete` deletes a character, never a torrent.
 `Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
 place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
-`/`, which types a period.
+`/`, which types a period. Verify is `Ctrl+Shift+R` rather than Transmission's `Ctrl+V`, which is
+kept for pasting a magnet link.
 
 ## What 4x4 remembers
 
@@ -237,26 +380,26 @@ the message `number-decimal-separator` (a dot in English).
 ## Performance
 
 `just measure` builds the release binary, starts it with a temporary state directory (so its
-`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits
-5 seconds and prints one line: the time to the first rendered frame, then the memory as
-proportional (`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`)
-size, the thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary
-size. It adds a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when
-the OpenGL stack is mapped, which it should not be where a Vulkan driver is installed. The exit
-code stays 0 unless the measurement itself failed. `--cpu <seconds>` adds a second line, the CPU
-time of all its threads over that many seconds after the memory figures, as a percentage of one
-core (`cpu_percent`); `--synthetic` measures the release build of the
-[synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to the program, as
-in `just measure --synthetic --cpu 30 -- --static`.
+`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits 5
+seconds and prints one line: the time to the first rendered frame, then the memory as proportional
+(`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the
+thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary size. It adds
+a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private
+memory, 55 MiB PSS, 120 MiB RSS) or when the OpenGL stack is mapped, which it should not be where a
+Vulkan driver is installed. The exit code stays 0 unless the measurement itself failed.
+`--cpu <seconds>` adds a second line, the CPU time of all its threads over that many seconds after
+the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic` measures the release
+build of the [synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to
+the program, as in `just measure --synthetic --cpu 30 -- --static`.
 
-The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS. RSS
-counts every resident page the app maps, including shared driver libraries (`libLLVM`, `libgallium`)
-that the desktop shell and the browser already keep in memory anyway, so it overstates what 4x4
-costs and swings with the page cache. PSS divides each shared page among the processes that map it,
-which is the fair share, though it depends on what else is running. Private memory is what 4x4 alone
-holds and what only swap can take back. USS (private clean and dirty pages) adds the file pages only
-4x4 maps, such as its own code, which the kernel can drop without swap. The RSS stays in the report as
-a reference.
+The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS.
+RSS counts every resident page the app maps, including shared driver libraries (`libLLVM`,
+`libgallium`) that the desktop shell and the browser already keep in memory anyway, so it overstates
+what 4x4 costs and swings with the page cache. PSS divides each shared page among the processes that
+map it, which is the fair share, though it depends on what else is running. Private memory is what
+4x4 alone holds and what only swap can take back. USS (private clean and dirty pages) adds the file
+pages only 4x4 maps, such as its own code, which the kernel can drop without swap. The RSS stays in
+the report as a reference.
 
 4x4 creates its GPU context Vulkan-first: it uses a hardware Vulkan adapter when there is one and
 loads the OpenGL driver only when Vulkan cannot draw the window (no Vulkan driver, some virtual
@@ -392,8 +535,16 @@ state, made up in memory: nothing goes over the network, and none of 4x4's files
 (the log goes to stderr only). The rates of the active torrents change on every poll. `--static`
 keeps every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10
 seconds, logs the intervals between the frames and quits; `--select N` selects the row at index `N`
-(from 0) once the list is there. For example, `just virtual just demo-synthetic --scroll` runs it
-off screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
+(from 0) once the list is there, and `--extend K` then extends the selection `K` rows down, as
+Shift+Down would. The made-up daemon carries out the actions on its own torrents: pausing,
+starting (a torrent that lacks data downloads, a complete one seeds), starting ahead of the queue,
+verifying (the torrent checks for three updates, then goes back to what it was), removing and
+the speed settings. `--press KEY`, which can be given several times, presses each key in turn
+once the list is there and selected, one every three seconds, as on the keyboard: for example
+`just virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the
+sixth torrent and starts it again, and `--press shift-delete` opens the dialog that would delete
+its files. `just virtual just demo-synthetic --scroll` runs it off
+screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
 does not contain it.
 
 ### Live tests
@@ -402,9 +553,11 @@ does not contain it.
 daemon; `just test` and `just check` skip them. They never touch existing torrents or the daemon's
 settings. One test only reads the server version. Each of the others writes a random 3 MiB file
 into a test directory, adds it as a trackerless torrent, works only on that torrent (stop, start,
-verify, reannounce, sequential download, file priority, adding it twice), and removes it together
-with its file. Every test checks that every other torrent kept its status, sequential mode, file
-priorities and wanted files. The torrent and the file are removed even when a test fails.
+start now, verify, reannounce, sequential download, file priority, adding it twice), and removes it
+together with its file. One removes it from the list only, checks that the daemon kept the file,
+and then deletes the file itself. Every test checks that every other torrent kept its status,
+sequential mode, file priorities and wanted files. The torrent and the file are removed even when a
+test fails.
 
 An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and
 the file of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with
@@ -412,7 +565,10 @@ data file <path>`). To recover, remove the torrent with that hash in any Transmi
 choosing to delete its local data. If no such line was printed, the run most likely stopped before
 the torrent was added: delete the single `4x4-live-<hex>.bin` file from the test directory instead.
 The next run refuses to start while any torrent downloads into the test directory, so a leftover
-torrent cannot go unnoticed; remove it the same way.
+torrent cannot go unnoticed; remove it the same way. The test that removes its torrent from the list
+only, keeping the file, may be interrupted after the removal: then the daemon no longer has the
+torrent, and the file stays. Delete by hand the file named on its `live test: added torrent …`
+line.
 
 The test directory is one directory seen from both sides: the daemon reads it under one path and
 this machine writes to it under another (for example over NFS), so both must be able to write

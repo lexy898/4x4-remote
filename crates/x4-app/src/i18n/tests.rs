@@ -4,12 +4,16 @@ use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
-    ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView, Filter,
-    HumanSize, QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit, UnsupportedReason,
-    human_size, human_speed,
+    ActionError, ColumnId, CompactDuration, ConnectionError, Direction, DisplayState, EmptyTable,
+    EtaView, Filter, HumanSize, KbPerSecond, KibPerSecond, LimitError, MAX_LIMIT_KIB, QueueKind,
+    Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedControls, SpeedLimit, Subtitle, TimeUnit,
+    UnsupportedReason, human_size, human_speed,
 };
+use x4_rpc::RemoveData;
 
 use super::*;
+use crate::actions::{ActionKind, PendingAction};
+use crate::speed_limits::LimitFeedback;
 
 /// Message files held in memory, by path such as `ru/x4.ftl`.
 struct MemoryAssets(HashMap<&'static str, &'static str>);
@@ -508,4 +512,364 @@ fn a_second_language_is_one_more_file() {
     assert_eq!(files(5), "5 файлов");
     assert_eq!(files(21), "21 файл");
     assert_eq!(loader.get("only-english"), "Hello");
+}
+
+fn failed(kind: ActionKind, count: usize, error: &ActionError) -> String {
+    action_failure_text(Some(PendingAction { kind, count }), error).to_string()
+}
+
+#[test]
+fn a_failed_action_names_what_failed_with_plurals() {
+    let server = ActionError::Rpc(ConnectionError::Server("no such torrent".to_owned()));
+    assert_eq!(
+        failed(ActionKind::Start, 1, &server),
+        "Could not start the torrent: no such torrent"
+    );
+    assert_eq!(
+        failed(ActionKind::Start, 3, &server),
+        "Could not start 3 torrents: no such torrent"
+    );
+    let forbidden = ActionError::Rpc(ConnectionError::Forbidden);
+    let expected = [
+        (
+            ActionKind::Pause,
+            "Could not pause 2 torrents: access denied",
+        ),
+        (
+            ActionKind::StartNow,
+            "Could not start 2 torrents right away: access denied",
+        ),
+        (
+            ActionKind::Verify,
+            "Could not verify 2 torrents: access denied",
+        ),
+        (
+            ActionKind::Reannounce,
+            "Could not ask the trackers of 2 torrents for more peers: access denied",
+        ),
+    ];
+    for (kind, text) in expected {
+        assert_eq!(failed(kind, 2, &forbidden), text);
+    }
+}
+
+#[test]
+fn a_refused_action_says_it_was_not_sent() {
+    assert_eq!(
+        failed(ActionKind::Pause, 1, &ActionError::NotConnected),
+        "Could not pause the torrent: the server is not connected, so nothing was sent"
+    );
+    assert_eq!(
+        failed(ActionKind::Reannounce, 4, &ActionError::NotConnected),
+        "Could not ask the trackers of 4 torrents for more peers: the server is not connected, \
+         so nothing was sent"
+    );
+}
+
+#[test]
+fn an_unanswered_action_may_have_happened() {
+    for error in [ConnectionError::Timeout, ConnectionError::Unreachable] {
+        let error = ActionError::Rpc(error);
+        assert_eq!(
+            failed(ActionKind::Start, 1, &error),
+            "The server did not answer while starting the torrent; it may have started. The list \
+             will show the result"
+        );
+        assert_eq!(
+            failed(ActionKind::Pause, 2, &error),
+            "The server did not answer while pausing 2 torrents; they may have been paused. The \
+             list will show the result"
+        );
+        for kind in [
+            ActionKind::StartNow,
+            ActionKind::Verify,
+            ActionKind::Reannounce,
+        ] {
+            let text = failed(kind, 5, &error);
+            assert!(text.contains("may have"), "{text}");
+            assert!(text.contains("5 torrents"), "{text}");
+            assert!(!text.contains("in time"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn the_reason_of_a_failed_action_is_short_or_the_servers_own() {
+    let reasons = [
+        (ConnectionError::Unauthorized, "login required"),
+        (
+            ConnectionError::Protocol("odd".to_owned()),
+            "unexpected answer",
+        ),
+        (ConnectionError::Server(" ".to_owned()), "server error"),
+    ];
+    for (error, reason) in reasons {
+        assert_eq!(
+            failed(ActionKind::Verify, 1, &ActionError::Rpc(error)),
+            format!("Could not verify the torrent: {reason}")
+        );
+    }
+    assert_eq!(
+        failed(ActionKind::Start, 0, &ActionError::EmptySelection),
+        "Could not start 0 torrents: no torrent was selected"
+    );
+}
+
+#[test]
+fn a_failed_action_of_an_unknown_kind_is_still_worded() {
+    let unknown = |error: &ActionError| action_failure_text(None, error).to_string();
+    assert_eq!(
+        unknown(&ActionError::NotConnected),
+        "An action could not be carried out: the server is not connected, so nothing was sent"
+    );
+    assert_eq!(
+        unknown(&ActionError::Rpc(ConnectionError::Timeout)),
+        "The server did not answer; the action may have happened. The list will show the result"
+    );
+    assert_eq!(
+        unknown(&ActionError::Rpc(ConnectionError::Server(
+            "busy".to_owned()
+        ))),
+        "An action failed: busy"
+    );
+}
+
+#[test]
+fn a_failed_copy_of_magnet_links_says_why_with_plurals() {
+    let copy = |count: usize, failure: MagnetFailure| magnet_failure_text(count, &failure);
+    assert_eq!(
+        copy(1, MagnetFailure::Gone),
+        "Could not copy the magnet link: the torrent is no longer on the server"
+    );
+    assert_eq!(
+        copy(3, MagnetFailure::Gone),
+        "Could not copy the magnet links of 3 torrents: they are no longer on the server"
+    );
+    assert_eq!(
+        copy(1, MagnetFailure::Error(ActionError::NotConnected)),
+        "Could not copy the magnet link: the server is not connected"
+    );
+    assert_eq!(
+        copy(2, MagnetFailure::Error(ActionError::NotConnected)),
+        "Could not copy the magnet links of 2 torrents: the server is not connected"
+    );
+    // A read that got no answer changed nothing: the timeout is only the reason.
+    assert_eq!(
+        copy(
+            2,
+            MagnetFailure::Error(ActionError::Rpc(ConnectionError::Timeout))
+        ),
+        "Could not copy the magnet links of 2 torrents: timed out"
+    );
+    assert_eq!(
+        copy(
+            1,
+            MagnetFailure::Error(ActionError::Rpc(ConnectionError::Server("busy".to_owned())))
+        ),
+        "Could not copy the magnet link: busy"
+    );
+    assert_eq!(
+        copy(1, MagnetFailure::Error(ActionError::EmptySelection)),
+        "Could not copy the magnet link: no torrent was selected"
+    );
+}
+
+#[test]
+fn a_partial_copy_of_magnet_links_counts_what_is_missing() {
+    assert_eq!(
+        magnet_partial_text(2, 3),
+        "Copied 2 of 3 magnet links; 1 torrent is no longer on the server"
+    );
+    assert_eq!(
+        magnet_partial_text(1, 4),
+        "Copied 1 of 4 magnet links; 3 torrents are no longer on the server"
+    );
+}
+
+fn summary(count: usize, downloaded: u64, names: &[&str]) -> RemovalSummary {
+    RemovalSummary {
+        count,
+        downloaded: human_size(downloaded),
+        names: names.iter().map(|name| (*name).to_owned()).collect(),
+        more: count - names.len(),
+    }
+}
+
+#[test]
+fn the_dialog_states_count_names_and_downloaded_size() {
+    let one = summary(1, 1536, &["a"]);
+    let seven = summary(7, 24_592_841_836, &["a", "b", "c", "d", "e"]);
+
+    assert_eq!(
+        removal_title_text(RemoveData::Keep, &one),
+        "Remove 1 torrent from the list?"
+    );
+    assert_eq!(
+        removal_title_text(RemoveData::Keep, &seven),
+        "Remove 7 torrents from the list?"
+    );
+    assert_eq!(
+        removal_title_text(RemoveData::Delete, &one),
+        "Delete 1 torrent and its files?"
+    );
+    assert_eq!(
+        removal_title_text(RemoveData::Delete, &seven),
+        "Delete 7 torrents and their files?"
+    );
+
+    assert_eq!(removal_more_text(&one), None, "every name is listed");
+    assert_eq!(
+        removal_more_text(&seven).as_deref(),
+        Some("and 2 more"),
+        "after the first five names"
+    );
+
+    assert_eq!(
+        removal_files_text(RemoveData::Keep, &seven),
+        "The downloaded files stay on the server."
+    );
+    assert_eq!(
+        removal_files_text(RemoveData::Delete, &seven),
+        "22.9 GiB of downloaded data will be deleted from the server. This cannot be undone."
+    );
+    assert_eq!(
+        removal_files_text(RemoveData::Delete, &one),
+        "1.5 KiB of downloaded data will be deleted from the server. This cannot be undone."
+    );
+}
+
+#[test]
+fn a_failed_removal_says_whether_the_files_were_to_go() {
+    let keep = ActionKind::Remove(RemoveData::Keep);
+    let delete = ActionKind::Remove(RemoveData::Delete);
+    let busy = ActionError::Rpc(ConnectionError::Server("busy".to_owned()));
+
+    assert_eq!(failed(keep, 1, &busy), "Could not remove the torrent: busy");
+    assert_eq!(
+        failed(delete, 3, &busy),
+        "Could not remove 3 torrents and delete their files: busy"
+    );
+    assert_eq!(
+        failed(delete, 1, &ActionError::NotConnected),
+        "Could not remove the torrent and delete its files: the server is not connected, so \
+         nothing was sent"
+    );
+    let timeout = ActionError::Rpc(ConnectionError::Timeout);
+    assert_eq!(
+        failed(keep, 2, &timeout),
+        "The server did not answer while removing 2 torrents; they may have been removed. The \
+         list will show the result"
+    );
+    assert_eq!(
+        failed(delete, 2, &timeout),
+        "The server did not answer while removing 2 torrents and deleting their files; they may \
+         have been removed and their files deleted. The list will show the result"
+    );
+}
+
+#[test]
+fn a_failed_change_of_the_speeds_says_which_one() {
+    let busy = ActionError::Rpc(ConnectionError::Server("busy".to_owned()));
+    let timeout = ActionError::Rpc(ConnectionError::Timeout);
+    let turtle_on = ActionKind::AltSpeed(true);
+    let turtle_off = ActionKind::AltSpeed(false);
+    let down = ActionKind::SpeedLimit {
+        direction: Direction::Down,
+        limit: Some(KbPerSecond(524)),
+    };
+    let up_off = ActionKind::SpeedLimit {
+        direction: Direction::Up,
+        limit: None,
+    };
+
+    assert_eq!(
+        failed(turtle_on, 0, &busy),
+        "Could not turn the alternative speed limits on: busy"
+    );
+    assert_eq!(
+        failed(turtle_off, 0, &ActionError::NotConnected),
+        "Could not turn the alternative speed limits off: the server is not connected, so \
+         nothing was sent"
+    );
+    assert_eq!(
+        failed(turtle_on, 0, &timeout),
+        "The server did not answer while turning the alternative speed limits on; they may be on \
+         now. The status bar will show the result"
+    );
+    assert_eq!(
+        failed(turtle_off, 0, &timeout),
+        "The server did not answer while turning the alternative speed limits off; they may be \
+         off now. The status bar will show the result"
+    );
+    assert_eq!(
+        failed(down, 0, &busy),
+        "Could not change the download speed limit: busy"
+    );
+    assert_eq!(
+        failed(up_off, 0, &ActionError::NotConnected),
+        "Could not change the upload speed limit: the server is not connected, so nothing was \
+         sent"
+    );
+    assert_eq!(
+        failed(up_off, 0, &timeout),
+        "The server did not answer while changing the upload speed limit; it may have changed. \
+         The status bar will show the result"
+    );
+}
+
+#[test]
+fn whole_numbers_group_their_digits() {
+    assert_eq!(with_groups(0, ","), "0");
+    assert_eq!(with_groups(999, ","), "999");
+    assert_eq!(with_groups(1000, ","), "1,000");
+    assert_eq!(with_groups(65_536, ","), "65,536");
+    assert_eq!(with_groups(1_000_000, ","), "1,000,000");
+    assert_eq!(with_groups(12_345, "\u{a0}"), "12\u{a0}345");
+    assert_eq!(integer(u32::MAX), "4,294,967,295");
+}
+
+#[test]
+fn the_speed_controls_are_worded_in_whole_kib() {
+    let controls = SpeedControls {
+        alt_speed: true,
+        alt_down: KibPerSecond(49),
+        alt_up: KibPerSecond(1000),
+        limit_down: SpeedLimit {
+            kbps: KbPerSecond(512),
+            enabled: true,
+        },
+        limit_up: SpeedLimit {
+            kbps: KbPerSecond(100),
+            enabled: false,
+        },
+    };
+
+    assert_eq!(kib_speed_string(KibPerSecond(500)), "500 KiB/s");
+    assert_eq!(kib_speed_string(MAX_LIMIT_KIB), "1,000,000 KiB/s");
+    assert_eq!(
+        limits_button_text(Some(controls)),
+        "↓ 500 KiB/s · ↑ no limit"
+    );
+    assert_eq!(limits_button_text(None), "Speed limits");
+    assert_eq!(
+        alt_speed_tooltip_text(Some(controls)),
+        "Alternative speed limits: ↓ 49 KiB/s ↑ 1,000 KiB/s"
+    );
+    assert_eq!(alt_speed_tooltip_text(None), "Alternative speed limits");
+}
+
+#[test]
+fn a_limit_that_cannot_be_applied_says_why() {
+    assert_eq!(
+        limit_feedback_text(LimitFeedback::Invalid(LimitError::NotANumber)),
+        "Enter a whole number of KiB/s"
+    );
+    assert_eq!(
+        limit_feedback_text(LimitFeedback::Invalid(LimitError::OutOfRange)),
+        "Enter a speed from 1 to 1,000,000 KiB/s"
+    );
+    assert_eq!(
+        limit_feedback_text(LimitFeedback::NeedsValue),
+        "Enter a speed to turn the limit on"
+    );
 }

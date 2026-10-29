@@ -64,6 +64,9 @@ crates/x4-app   Binary `4x4`: GPUI views and platform integration (windows, clip
 - The UI thread never waits on the network; all RPC goes through the core worker.
 - Long-lived references to torrents use `hash_string`, never the numeric `id`
   (ids change when the daemon restarts).
+- Key bindings live only in `crates/x4-app/src/keymap.rs`.
+- An open menu, popover or dialog keeps the keys: a key bound outside it must not act while it is
+  open (the `NoAction` rows and their test).
 
 ## Code Style
 

@@ -4,7 +4,8 @@
 # The check only runs when one of its inputs changed since the last green run. The
 # fingerprint covers path + content of every tracked or untracked, non-ignored file
 # except Markdown and the license texts, plus the toolchain versions, so a toolchain
-# upgrade (which can bring new lints) invalidates the last green. A red result blocks
+# upgrade (which can bring new lints) invalidates the last green. The README at the
+# top stays in: a test reads its table of keys. A red result blocks
 # the stop (exit 2, output on stderr goes to the agent). After 3 blocked stops on the
 # same fingerprint the hook gives up (exit 0) so a check the agent cannot fix never
 # traps it in a loop.
@@ -25,7 +26,11 @@ mkdir -p "$state_dir"
 
 fingerprint() {
     {
-        git ls-files -co --exclude-standard -z -- . ':!*.md' ':!LICENSE-*' |
+        {
+            git ls-files -co --exclude-standard -z -- . ':!*.md' ':!LICENSE-*'
+            # The key-table test (crates/x4-app/src/keymap/tests.rs) reads it.
+            git ls-files -co --exclude-standard -z -- ':(top)README.md'
+        } |
             LC_ALL=C sort -zu |
             while IFS= read -r -d '' file; do
                 # Tracked files deleted from the work tree are still listed; skipping

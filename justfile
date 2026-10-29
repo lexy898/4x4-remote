@@ -80,7 +80,7 @@ run *args:
 release:
     cargo build -p x4-app --release --locked
 
-# The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N).
+# The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N), `--extend K` (then Shift+Down K times), `--right-click` (then right-click row N), `--press KEY` (press a key, repeatable, one every 3 s).
 demo-synthetic *args:
     RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
         cargo run -p x4-app --features synthetic --bin x4-synthetic --locked -- {{args}}

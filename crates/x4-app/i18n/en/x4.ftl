@@ -8,6 +8,10 @@
 
 # The decimal separator of the language. The app formats numbers with a dot and swaps it for this.
 number-decimal-separator = .
+# What sets the groups of three digits of a whole number apart, as in 1,000,000. Fluent trims a
+# plain space (U+0020) at either end of a value, so a space separator must be written { " " }, or
+# be a no-break space (U+00A0) or a narrow no-break space (U+202F).
+number-group-separator = ,
 
 ## Units
 
@@ -124,15 +128,38 @@ status-download = ↓ { $speed }
 status-upload = ↑ { $speed }
 # $size: the formatted free space where new torrents are saved, such as "22.9 GiB".
 status-free-space = { $size } free
-# Shown while the alternative speed limits apply; the detail is its tooltip.
-status-alt-speed = Alt speed
-status-alt-speed-detail = Alternative speed limits are on
 # Shown when config.toml cannot be used; one of the config-problem-* messages is its tooltip.
 status-config-problem = Config file not used
 status-dismiss = Dismiss
 # Shown while state.toml cannot be written, until a save works again; the detail is its tooltip.
 status-state-not-saved = Layout not saved
 status-state-not-saved-detail = The columns, sorting, filter, theme and window size cannot be saved to state.toml; the log says why
+
+## The turtle and the speed limits, in the status bar
+
+# The turtle button switches the alternative speed limits on and off: its name for screen readers,
+# and its tooltip, which shows its key too. $down and $up: the alternative limits, such as "50 KiB/s".
+alt-speed = Alternative speed limits
+alt-speed-tooltip = Alternative speed limits: ↓ { $down } ↑ { $up }
+# The button that opens the normal speed limits shows them. $down and $up: a limit such as
+# "500 KiB/s", or limit-none while it is off.
+speed-limits-button = ↓ { $down } · ↑ { $up }
+limit-none = no limit
+# The same button before the server has sent its settings; also its tooltip, which shows its key too.
+speed-limits = Speed limits
+# The popover the button opens: for each direction a switch that turns the limit on and a field for
+# it, in KiB/s (unit-kib-per-s follows the field), and the button that applies both.
+limit-down-switch = Limit download speed
+limit-up-switch = Limit upload speed
+limit-down-field = Download speed limit
+limit-up-field = Upload speed limit
+limit-apply = Apply
+# Under a field, when its limit cannot be applied: the text is not a whole number; the number is out
+# of range ($min: the lowest limit; $max: the highest, with its unit, such as "1,000,000 KiB/s");
+# or the switch is on with no speed in the field.
+limit-not-a-number = Enter a whole number of KiB/s
+limit-out-of-range = Enter a speed from { $min } to { $max }
+limit-needs-value = Enter a speed to turn the limit on
 
 ## Why config.toml is not used (the defaults are used instead)
 
@@ -149,6 +176,274 @@ theme-system = System theme
 theme-light = Light theme
 theme-dark = Dark theme
 theme-switch-tooltip = Switch between the system, light and dark themes
+
+# The toolbar buttons that start and pause the selected torrents: their names for screen readers,
+# which their tooltips show too, with the key.
+action-start = Start
+action-pause = Pause
+# The toolbar button whose menu removes the selected torrents: its name for screen readers, which
+# its tooltip shows too, with the key; and the two items of its menu, each of which asks first.
+action-remove = Remove
+remove-from-list-menu = Remove from list…
+remove-with-data-menu = Remove and delete files…
+# The other items of the torrent list's context menu, besides action-start, action-pause and the
+# two of the Remove menu. Start now starts ahead of the download queue; Verify checks the downloaded
+# data; Reannounce asks the trackers for more peers now.
+action-start-now = Start now
+action-verify = Verify
+action-reannounce = Reannounce
+# Copy the magnet links or the info hashes of the selected torrents, one per line.
+action-copy-magnet = Copy magnet link
+action-copy-hash = Copy hash
+
+## The dialogs that ask before torrents are removed
+
+# Removing from the list keeps the downloaded files. $count: the torrents removed (a number).
+remove-from-list-title =
+    { $count ->
+        [one] Remove { $count } torrent from the list?
+       *[other] Remove { $count } torrents from the list?
+    }
+remove-from-list-keeps-files = The downloaded files stay on the server.
+remove-from-list-confirm = Remove
+# Removing with the data deletes the downloaded files from the server's disk.
+# $count: the torrents removed (a number).
+remove-with-data-title =
+    { $count ->
+        [one] Delete { $count } torrent and its files?
+       *[other] Delete { $count } torrents and their files?
+    }
+# $size: how much downloaded data goes, such as "22.9 GiB".
+remove-with-data-deletes-files = { $size } of downloaded data will be deleted from the server. This cannot be undone.
+remove-with-data-confirm = Delete files
+# Both dialogs list the names of the first five torrents, then how many more they remove.
+# $more: the torrents not named (a number).
+remove-more = and { $more } more
+remove-cancel = Cancel
+
+## Why an action failed, in a notification
+
+# One message per action. $count: the torrents it named (a number), for the actions on torrents.
+# $outcome is what is known:
+#   not-sent: the server is not connected, so the action was not sent;
+#   no-answer: the server did not answer, so the action may have happened;
+#   failed: the server refused it or answered unexpectedly, and $reason says why: one of the
+#     connection-reason-* messages, action-reason-nothing-selected or the server's own text.
+action-failed-start =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not start the torrent: the server is not connected, so nothing was sent
+               *[other] Could not start { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while starting the torrent; it may have started. The list will show the result
+               *[other] The server did not answer while starting { $count } torrents; they may have started. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not start the torrent: { $reason }
+               *[other] Could not start { $count } torrents: { $reason }
+            }
+    }
+action-failed-pause =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not pause the torrent: the server is not connected, so nothing was sent
+               *[other] Could not pause { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while pausing the torrent; it may have been paused. The list will show the result
+               *[other] The server did not answer while pausing { $count } torrents; they may have been paused. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not pause the torrent: { $reason }
+               *[other] Could not pause { $count } torrents: { $reason }
+            }
+    }
+# Start now: start ahead of the download queue.
+action-failed-start-now =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not start the torrent right away: the server is not connected, so nothing was sent
+               *[other] Could not start { $count } torrents right away: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while starting the torrent right away; it may have started. The list will show the result
+               *[other] The server did not answer while starting { $count } torrents right away; they may have started. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not start the torrent right away: { $reason }
+               *[other] Could not start { $count } torrents right away: { $reason }
+            }
+    }
+# Verify: check the downloaded data against the torrent.
+action-failed-verify =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not verify the torrent: the server is not connected, so nothing was sent
+               *[other] Could not verify { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while verifying the torrent; the check may have started. The list will show the result
+               *[other] The server did not answer while verifying { $count } torrents; the checks may have started. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not verify the torrent: { $reason }
+               *[other] Could not verify { $count } torrents: { $reason }
+            }
+    }
+# Reannounce: ask the trackers for more peers now.
+action-failed-reannounce =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not ask the trackers of the torrent for more peers: the server is not connected, so nothing was sent
+               *[other] Could not ask the trackers of { $count } torrents for more peers: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while asking the trackers of the torrent for more peers; they may have been asked. The list will show the result
+               *[other] The server did not answer while asking the trackers of { $count } torrents for more peers; they may have been asked. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not ask the trackers of the torrent for more peers: { $reason }
+               *[other] Could not ask the trackers of { $count } torrents for more peers: { $reason }
+            }
+    }
+# Remove: take the torrents off the server's list and keep their downloaded files.
+action-failed-remove =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not remove the torrent: the server is not connected, so nothing was sent
+               *[other] Could not remove { $count } torrents: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while removing the torrent; it may have been removed. The list will show the result
+               *[other] The server did not answer while removing { $count } torrents; they may have been removed. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not remove the torrent: { $reason }
+               *[other] Could not remove { $count } torrents: { $reason }
+            }
+    }
+# Remove with the data: take the torrents off the list and delete their files from the server.
+action-failed-remove-with-data =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not remove the torrent and delete its files: the server is not connected, so nothing was sent
+               *[other] Could not remove { $count } torrents and delete their files: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $count ->
+                [one] The server did not answer while removing the torrent and deleting its files; it may have been removed and its files deleted. The list will show the result
+               *[other] The server did not answer while removing { $count } torrents and deleting their files; they may have been removed and their files deleted. The list will show the result
+            }
+       *[failed]
+            { $count ->
+                [one] Could not remove the torrent and delete its files: { $reason }
+               *[other] Could not remove { $count } torrents and delete their files: { $reason }
+            }
+    }
+# Switching the alternative speed limits. $state: on or off, the way they were switched;
+# $outcome and $reason as above.
+action-failed-alt-speed =
+    { $outcome ->
+        [not-sent]
+            { $state ->
+                [on] Could not turn the alternative speed limits on: the server is not connected, so nothing was sent
+               *[off] Could not turn the alternative speed limits off: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $state ->
+                [on] The server did not answer while turning the alternative speed limits on; they may be on now. The status bar will show the result
+               *[off] The server did not answer while turning the alternative speed limits off; they may be off now. The status bar will show the result
+            }
+       *[failed]
+            { $state ->
+                [on] Could not turn the alternative speed limits on: { $reason }
+               *[off] Could not turn the alternative speed limits off: { $reason }
+            }
+    }
+# Setting a normal speed limit, or turning it off. $direction: down or up; $outcome and $reason as
+# above.
+action-failed-speed-limit =
+    { $outcome ->
+        [not-sent]
+            { $direction ->
+                [down] Could not change the download speed limit: the server is not connected, so nothing was sent
+               *[up] Could not change the upload speed limit: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $direction ->
+                [down] The server did not answer while changing the download speed limit; it may have changed. The status bar will show the result
+               *[up] The server did not answer while changing the upload speed limit; it may have changed. The status bar will show the result
+            }
+       *[failed]
+            { $direction ->
+                [down] Could not change the download speed limit: { $reason }
+               *[up] Could not change the upload speed limit: { $reason }
+            }
+    }
+# An action whose kind is not known; $outcome and $reason as above.
+action-failed-other =
+    { $outcome ->
+        [not-sent] An action could not be carried out: the server is not connected, so nothing was sent
+        [no-answer] The server did not answer; the action may have happened. The list will show the result
+       *[failed] An action failed: { $reason }
+    }
+# The reason when an action named no torrent, so it was not sent.
+action-reason-nothing-selected = no torrent was selected
+# Copying magnet links failed: they are read from the server first. $count: the torrents whose
+# links were asked for (a number). $outcome is what is known:
+#   not-sent: the server is not connected, so nothing was asked;
+#   gone: the server answered, and has none of the torrents any more;
+#   failed: $reason says why, as for the actions above.
+copy-magnet-failed =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not copy the magnet link: the server is not connected
+               *[other] Could not copy the magnet links of { $count } torrents: the server is not connected
+            }
+        [gone]
+            { $count ->
+                [one] Could not copy the magnet link: the torrent is no longer on the server
+               *[other] Could not copy the magnet links of { $count } torrents: they are no longer on the server
+            }
+       *[failed]
+            { $count ->
+                [one] Could not copy the magnet link: { $reason }
+               *[other] Could not copy the magnet links of { $count } torrents: { $reason }
+            }
+    }
+# Some of the magnet links were copied: the server no longer has the other torrents.
+# $copied: the links copied; $asked: the torrents whose links were asked for; $missing: the
+# torrents left out (numbers).
+copy-magnet-partial =
+    Copied { $copied } of { $asked } magnet links; { $missing ->
+        [one] { $missing } torrent is
+       *[other] { $missing } torrents are
+    } no longer on the server
+# The magnet links came from the server while another window had the focus, so they were not
+# copied: 4x4 writes the clipboard only while it is in focus. It names no key: the links can be
+# copied from the context menu too, and the keys may change.
+copy-magnet-not-in-focus = The magnet links are ready, but 4x4 was not in focus — copy them again
 
 ## The sidebar
 

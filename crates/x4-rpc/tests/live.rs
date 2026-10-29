@@ -7,8 +7,10 @@
 //! `torrent_add` has confirmed it; `session_set` is never called, and each test checks that every
 //! other torrent kept its status, sequential mode, file priorities and wanted files. A drop guard
 //! removes the test torrent with its data, the local file and the directory it created on every
-//! path, including a failed assertion. An interrupted run skips the guards, so each new torrent
-//! is named on stderr as soon as it is added.
+//! path, including a failed assertion. One test removes its torrent keeping the data, checks that
+//! the file stayed, and deletes it itself; a guard of the file deletes it on every path too. An
+//! interrupted run skips the guards, so each new torrent is named on stderr as soon as it is
+//! added.
 //!
 //! The offline tests of the support code (bencode, piece hashes, accepting the added torrent)
 //! run in `just test` too.
@@ -21,14 +23,17 @@ mod support;
 use std::time::Duration;
 
 use support::{
-    LiveEnv, TestTorrent, assert_others_unchanged, file_is_gone, others_fingerprint,
-    torrent_by_hash, wait_until,
+    FILE_SIZE, LiveEnv, TestTorrent, assert_others_unchanged, file_is_gone, file_size,
+    others_fingerprint, torrent_by_hash, wait_until,
 };
 use x4_rpc::{AddOutcome, FilePriority, GetIds, Status, TorrentAction, TorrentField, TorrentSet};
 
 const STOPPED_AFTER_STOP: Duration = Duration::from_secs(10);
 const SEEDING_AFTER_START: Duration = Duration::from_secs(30);
 const REMOVAL_REPORTED: Duration = Duration::from_secs(5);
+/// How long a file the daemon was told to keep must stay after the removal: a daemon that deletes
+/// it all the same does so within moments.
+const KEPT_FOR: Duration = Duration::from_secs(2);
 
 #[test]
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
@@ -166,4 +171,64 @@ fn live_add_duplicate_is_reported() {
 
     assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
     assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn start_now_starts_a_stopped_own_torrent() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    let torrent = TestTorrent::create(&mut client, &env);
+    let hash = torrent.hash().clone();
+    let own = Some(&hash);
+    let selection = torrent.selection();
+    client
+        .torrent_action(TorrentAction::Stop, &selection)
+        .expect("torrent_stop failed");
+    torrent.wait_for(&mut client, Status::Stopped, STOPPED_AFTER_STOP);
+    assert_others_unchanged(&mut client, own, &before);
+
+    client
+        .torrent_action(TorrentAction::StartNow, &selection)
+        .expect("torrent_start_now failed");
+
+    torrent.wait_for(&mut client, Status::Seeding, SEEDING_AFTER_START);
+    assert_others_unchanged(&mut client, own, &before);
+    torrent.remove_with_data(&mut client);
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+    assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn remove_keeping_data_leaves_the_file() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    let torrent = TestTorrent::create(&mut client, &env);
+    let hash = torrent.hash().clone();
+
+    let kept = torrent.remove_keeping_data(&mut client);
+
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+    // `kept` is the file this run wrote into X4_LIVE_LOCAL_DIR (`LocalFile::write` builds its
+    // path there, and deletes only what this run created), so it needs no check of its place.
+    assert!(
+        !wait_until(KEPT_FOR, || file_is_gone(kept.path())),
+        "the daemon deleted {} although it was told to keep it",
+        kept.path().display()
+    );
+    assert_eq!(
+        file_size(kept.path()).ok(),
+        u64::try_from(FILE_SIZE).ok(),
+        "{} is not the whole file",
+        kept.path().display()
+    );
+    assert_others_unchanged(&mut client, None, &before);
+
+    // The daemon no longer knows the file, so the test deletes it.
+    let path = kept.path().to_owned();
+    kept.delete();
+    assert!(file_is_gone(&path), "{} is still there", path.display());
 }

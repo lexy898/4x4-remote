@@ -19,7 +19,19 @@
 //! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts (and, for an
 //! empty table, the [`EmptyTable`] reason it gives), [`status_model`] builds the status bar,
 //! whose [`Indicator`] says which of the [`ServiceStatus`] and the [`ConnectionState`] the
-//! connection dot shows, and [`visibility`] tells whether the user can see the window.
+//! connection dot shows, and [`visibility`] tells whether the user can see the window. What the
+//! user does to the rows is decided here too: a [`Selection`] holds the selected hashes and
+//! follows clicks and arrow keys, its `targets` are the rows an action reaches, and
+//! [`availability()`] and [`toggle_kind`] tell which actions those rows allow.
+//! [`removal_summary`] gives the [`RemovalSummary`] the removal dialog shows.
+//!
+//! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
+//! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
+//! and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
+//! each [`SpeedLimit`] with its switch, so a limit that is off keeps its value, and the status
+//! bar's [`SpeedControls`] carry them while the session is known. [`limit_prefill`] gives the
+//! text a limit's input starts with, and [`limit_edit`] the [`LimitEdit`] that leaving it sends;
+//! [`limit_needs_value`] tells when it was switched on without a speed.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
@@ -42,7 +54,9 @@
 //! names the [`Request`]s that are due, takes each [`Response`] and each [`Command`] of the UI,
 //! and hands out a new [`Snapshot`] only when something changed. It carries out [`Action`]s
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
-//! the [`TorrentDetails`] of the selected torrent every tick.
+//! the [`TorrentDetails`] of the selected torrent every tick. A speed limit is set one
+//! [`Direction`] at a time. Magnet links are read once, on [`Command::ReadMagnetLinks`], under
+//! the same rules as an action.
 //!
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
@@ -59,6 +73,7 @@ mod details;
 mod engine;
 mod filter;
 mod format;
+mod limits;
 mod model;
 mod playable;
 pub mod service;
@@ -72,7 +87,7 @@ mod toml_error;
 mod ui_state;
 mod view;
 
-pub use action::{Action, ActionError, ActionId};
+pub use action::{Action, ActionError, ActionId, Direction};
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails};
 pub use engine::{Command, Engine, EngineConfig, Event, Request, Response, Visibility};
@@ -81,9 +96,13 @@ pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,
     human_speed,
 };
+pub use limits::{
+    KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB, kbps_to_kib,
+    kib_to_kbps, limit_edit, limit_needs_value, limit_prefill, parse_limit,
+};
 pub use model::{Eta, ModelError, Ratio, Torrent};
 pub use playable::{file_offsets, playable_prefix};
-pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
+pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
@@ -94,8 +113,10 @@ pub use ui_state::{
     default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
-    ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, Row, ServiceStatus, StatusModel,
-    Subtitle, TableModel, TimeUnit, ViewState, status_model, table_model, visibility,
+    Availability, ColumnId, CompactDuration, Edge, EmptyTable, EtaView, Indicator, RemovalSummary,
+    Row, Selection, ServiceStatus, SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit,
+    ToggleKind, ViewState, availability, removal_summary, status_model, table_model, toggle_kind,
+    visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

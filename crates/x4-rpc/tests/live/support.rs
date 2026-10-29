@@ -5,10 +5,13 @@
 //! - a [`TestTorrent`] exists only for a torrent `torrent_add` reported as newly added under the
 //!   info hash of the metainfo this run built (or, when the reply was lost, that the daemon lists
 //!   under that hash), and every selection it builds holds nothing but that hash;
-//! - [`TestTorrent::remove_with_data`] and the drop guard share one removal path, the only use of
-//!   `RemoveData::Delete` in the tests, and it deletes data only after the daemon has confirmed
-//!   that the torrent lives in the test directory;
-//! - only files and directories this run created are deleted locally.
+//! - [`TestTorrent::remove_with_data`], [`TestTorrent::remove_keeping_data`] and the drop guard
+//!   share one removal path, the only `torrent_remove` of the live tests. It removes a torrent
+//!   only after the daemon has confirmed that the torrent lives in the test directory, and asks
+//!   for `RemoveData::Delete` only for `remove_with_data` and the guard;
+//! - only files and directories this run created are deleted locally. When the daemon was told to
+//!   keep the data, the file is handed to the test as a [`KeptFile`], which deletes it, on every
+//!   path.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -26,7 +29,7 @@ use x4_rpc::{
 use crate::metainfo::{random_bytes, random_seed, single_file_metainfo};
 
 /// The size of the test torrent's file.
-const FILE_SIZE: usize = 3 * 1024 * 1024;
+pub(crate) const FILE_SIZE: usize = 3 * 1024 * 1024;
 /// The piece length of the test torrent: 12 pieces for [`FILE_SIZE`].
 const PIECE_LENGTH: usize = 262_144;
 /// How often waits poll the daemon; it runs on a Raspberry Pi, so keep the rate modest.
@@ -105,10 +108,10 @@ fn live_client(url: &str) -> Client<UreqTransport> {
 
 /// A torrent this test created: a random file in the test directory, added to the daemon.
 ///
-/// Dropping it without [`TestTorrent::remove_with_data`] (a failed assertion, a panic) still
-/// removes the torrent with its data and deletes the local file and the directory this run
-/// created; problems are reported on stderr, since a guard cannot fail a test that is already
-/// failing.
+/// Dropping it without [`TestTorrent::remove_with_data`] or [`TestTorrent::remove_keeping_data`]
+/// (a failed assertion, a panic) still removes the torrent with its data and deletes the local
+/// file and the directory this run created; problems are reported on stderr, since a guard cannot
+/// fail a test that is already failing.
 #[derive(Debug)]
 pub(crate) struct TestTorrent {
     hash: HashString,
@@ -289,12 +292,31 @@ impl TestTorrent {
         );
     }
 
-    /// The one removal path, shared by [`TestTorrent::remove_with_data`] and the drop guard;
-    /// returns what went wrong. Never panics, so the guard can run while a test unwinds.
+    /// Removes the torrent from the daemon but keeps its data, waits until the daemon no longer
+    /// lists it, and hands the data file over to the test, which checks that it is still there
+    /// and deletes it. If the removal fails, the guard removes the torrent with its data.
+    #[expect(
+        clippy::panic,
+        reason = "a live test stops at the first failure; the guard cleans up"
+    )]
+    pub(crate) fn remove_keeping_data(mut self, client: &mut Client<UreqTransport>) -> KeptFile {
+        if let Err(problem) = self.remove_from_daemon(client, RemoveData::Keep) {
+            panic!(
+                "removing test torrent {} and keeping its data failed: {problem}",
+                self.hash
+            );
+        }
+        self.removed = true;
+        KeptFile(self.file.hand_over())
+    }
+
+    /// The cleanup of [`TestTorrent::remove_with_data`] and the drop guard, around the one
+    /// removal path; returns what went wrong. Never panics, so the guard can run while a test
+    /// unwinds.
     fn clean_up(&mut self, client: &mut Client<UreqTransport>) -> Vec<String> {
         let mut problems = Vec::new();
         if !self.removed {
-            match self.remove_from_daemon(client) {
+            match self.remove_from_daemon(client, RemoveData::Delete) {
                 Ok(()) => self.removed = true,
                 Err(problem) => problems.push(problem),
             }
@@ -312,12 +334,18 @@ impl TestTorrent {
         problems
     }
 
-    /// Removes the torrent with its data, then waits until the daemon no longer lists it.
-    fn remove_from_daemon(&self, client: &mut Client<UreqTransport>) -> Result<(), String> {
+    /// The one removal path: removes the torrent, with its data or keeping it as `data` says,
+    /// then waits until the daemon no longer lists it.
+    fn remove_from_daemon(
+        &self,
+        client: &mut Client<UreqTransport>,
+        data: RemoveData,
+    ) -> Result<(), String> {
         let Some(record) = torrent_by_hash(client, &self.hash)? else {
             return Ok(());
         };
-        // Data is deleted only for a torrent in the test directory, whatever happened before.
+        // Only a torrent in the test directory is removed, and its data deleted, whatever
+        // happened before.
         let download_dir = record.download_dir.as_deref().unwrap_or_default();
         if download_dir.trim_end_matches('/') != self.remote_dir.trim_end_matches('/') {
             return Err(format!(
@@ -327,7 +355,7 @@ impl TestTorrent {
             ));
         }
         client
-            .torrent_remove(&self.selection(), RemoveData::Delete)
+            .torrent_remove(&self.selection(), data)
             .map_err(|error| format!("torrent_remove of {} failed: {error}", self.hash))?;
         let mut last_error = None;
         let gone = wait_until(REMOVAL_TIMEOUT, || {
@@ -412,6 +440,20 @@ impl LocalFile {
         !self.owns_file && !self.owns_dir
     }
 
+    /// Moves what this run owns into a new `LocalFile`, which deletes it from then on; this one
+    /// is left clean.
+    fn hand_over(&mut self) -> Self {
+        let taken = Self {
+            path: self.path.clone(),
+            dir: self.dir.clone(),
+            owns_file: self.owns_file,
+            owns_dir: self.owns_dir,
+        };
+        self.owns_file = false;
+        self.owns_dir = false;
+        taken
+    }
+
     /// Deletes the file and the directory this run created; returns what went wrong.
     fn delete(&mut self) -> Vec<String> {
         let mut problems = Vec::new();
@@ -460,6 +502,30 @@ impl Drop for LocalFile {
     }
 }
 
+/// The data file of a test torrent that was removed while the daemon kept its data. The daemon no
+/// longer knows the file, so deleting it is the test's job: [`KeptFile::delete`] deletes it and
+/// the directory if this run created it, and dropping it deletes them too, so a failed check
+/// leaves nothing behind.
+#[derive(Debug)]
+pub(crate) struct KeptFile(LocalFile);
+
+impl KeptFile {
+    /// The file, as mounted on this machine.
+    pub(crate) fn path(&self) -> &Path {
+        &self.0.path
+    }
+
+    /// Deletes the file, and the directory if this run created it.
+    pub(crate) fn delete(mut self) {
+        let problems = self.0.delete();
+        assert!(
+            problems.is_empty(),
+            "deleting the kept file {} failed: {problems:#?}",
+            self.0.path.display()
+        );
+    }
+}
+
 /// The id of the torrent `torrent_add` reported, if it is the one this run built: newly added,
 /// under the info hash of this run's metainfo. Anything else is not this run's to remove.
 fn accept_added(outcome: &AddOutcome, expected: &HashString) -> Result<TorrentId, String> {
@@ -481,6 +547,16 @@ fn accept_added(outcome: &AddOutcome, expected: &HashString) -> Result<TorrentId
 /// Opening asks the server, whereas a `stat` over NFS may answer from a cache for a while.
 pub(crate) fn file_is_gone(path: &Path) -> bool {
     matches!(File::open(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
+}
+
+/// The size of the file at `path` as the server has it: opening asks the server, as in
+/// [`file_is_gone`], and the size comes with that answer.
+///
+/// # Errors
+///
+/// The file cannot be opened, or its size cannot be read.
+pub(crate) fn file_size(path: &Path) -> io::Result<u64> {
+    File::open(path)?.metadata().map(|metadata| metadata.len())
 }
 
 /// Calls `done` until it returns true or `timeout` passes; returns whether it did.
@@ -672,5 +748,40 @@ mod tests {
         let outcome = AddOutcome::Duplicate(torrent(hash('a')));
 
         assert!(accept_added(&outcome, &hash('a')).is_err());
+    }
+
+    /// A local test file in a directory of its own, which the file creates.
+    fn local_file() -> (PathBuf, LocalFile) {
+        let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
+        let file = LocalFile::write(&dir, "kept.bin", b"data").unwrap();
+        (dir, file)
+    }
+
+    #[test]
+    fn a_kept_file_outlives_the_torrent_and_is_deleted_by_the_test() {
+        let (dir, mut file) = local_file();
+
+        let kept = KeptFile(file.hand_over());
+        drop(file);
+
+        assert!(
+            !file_is_gone(kept.path()),
+            "the torrent's guard deleted the kept file"
+        );
+        let path = kept.path().to_owned();
+        kept.delete();
+        assert!(file_is_gone(&path), "{} is still there", path.display());
+        assert!(!dir.exists(), "{} is left behind", dir.display());
+    }
+
+    #[test]
+    fn a_kept_file_is_deleted_when_the_test_fails_before_deleting_it() {
+        let (dir, mut file) = local_file();
+        let kept = KeptFile(file.hand_over());
+        drop(file);
+
+        drop(kept);
+
+        assert!(!dir.exists(), "{} is left behind", dir.display());
     }
 }

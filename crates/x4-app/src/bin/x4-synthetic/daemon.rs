@@ -1,10 +1,25 @@
 //! A synthetic Transmission daemon: a [`Transport`] that answers the engine's requests from
 //! torrents it makes up, in the shapes a real Transmission 4.1 daemon sends, without a network.
 //!
-//! It answers the reads the engine sends in this stage (`session_get`, `session_stats`,
-//! `free_space` and `torrent_get` of every torrent or of the recently active ones) and refuses
-//! every other method with a JSON-RPC error, so nothing can ever change through it.
+//! It answers the reads (`session_get`, `session_stats`, `free_space`, and `torrent_get` of every
+//! torrent, of the recently active ones or of a list of torrents, with only the fields asked for)
+//! and carries out the actions on its own made-up torrents and settings, so that they can be tried
+//! in the demo:
+//!
+//! - `torrent_stop` pauses a torrent; `torrent_start` runs a stopped one, downloading or seeding
+//!   by how much it has; `torrent_start_now` also takes a queued one out of its queue;
+//! - `torrent_verify` checks a torrent for [`VERIFY_POLLS`] polls of the recently active torrents,
+//!   then puts it back as it was; `torrent_reannounce` changes nothing;
+//! - `torrent_remove` takes torrents out, and the next poll of the recently active torrents reports
+//!   them removed; `torrent_set` keeps the sequential download (the torrents have no files);
+//! - `session_set` keeps the speed settings, and `session_get` answers with them.
+//!
+//! As a real daemon does, an action without `ids` reaches every torrent, an unknown torrent is
+//! skipped, and a torrent an action changed is among the recently active ones at the next poll.
+//! It adds no torrents: `torrent_add`, like any other method, is refused with a JSON-RPC error. It
+//! never touches the network or a file.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
@@ -29,6 +44,10 @@ const MAX_RATE_UP: u32 = 2 * 1024 * 1024;
 const POLL_TENTHS_OF_A_SECOND: u32 = 15;
 /// The JSON-RPC error code of a method the daemon does not have.
 const METHOD_NOT_FOUND: i64 = -32601;
+/// The JSON-RPC error code of parameters the daemon cannot use.
+const INVALID_PARAMS: i64 = -32602;
+/// How many polls of the recently active torrents a verify takes.
+pub(crate) const VERIFY_POLLS: u32 = 3;
 
 /// How the made-up torrents behave between polls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,6 +76,8 @@ impl SyntheticDaemon {
         Self {
             state: Mutex::new(State {
                 torrents,
+                removed: Vec::new(),
+                session: Session::default(),
                 activity,
                 random,
             }),
@@ -79,21 +100,29 @@ impl Transport for SyntheticDaemon {
         let params = envelope.get("params");
         let mut state = lock(&self.state);
         let result = match method {
-            "session_get" => Some(session()),
-            "session_stats" => Some(state.stats()),
-            "free_space" => Some(free_space()),
+            "session_get" => Ok(state.session.answer()),
+            "session_set" => state.session.set(params).map(|()| json!({})),
+            "session_stats" => Ok(state.stats()),
+            "free_space" => Ok(free_space()),
             "torrent_get" => state.torrent_get(params),
-            _ => None,
+            "torrent_start" => state.act(params, |torrent| torrent.start(false)),
+            "torrent_start_now" => state.act(params, |torrent| torrent.start(true)),
+            "torrent_stop" => state.act(params, Torrent::stop),
+            "torrent_verify" => state.act(params, Torrent::verify),
+            "torrent_reannounce" => state.act(params, |_| {}),
+            "torrent_remove" => state.remove(params),
+            "torrent_set" => state.torrent_set(params),
+            _ => Err(Refusal {
+                code: METHOD_NOT_FOUND,
+                message: format!("the synthetic daemon has no {method:?}"),
+            }),
         };
         let body = match result {
-            Some(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            None => json!({
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err(refusal) => json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": {
-                    "code": METHOD_NOT_FOUND,
-                    "message": format!("the synthetic daemon only reads; it has no {method:?}"),
-                },
+                "error": { "code": refusal.code, "message": refusal.message },
             }),
         };
         Ok(HttpResponse {
@@ -104,45 +133,173 @@ impl Transport for SyntheticDaemon {
     }
 }
 
-/// The torrents and what moves them.
+/// Why the daemon refused a request: the JSON-RPC error it answers with.
+#[derive(Debug)]
+struct Refusal {
+    code: i64,
+    message: String,
+}
+
+impl Refusal {
+    fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            code: INVALID_PARAMS,
+            message: message.into(),
+        }
+    }
+}
+
+/// The torrents and what moves them, and the settings.
 struct State {
     torrents: Vec<Torrent>,
+    /// The ids of the torrents removed since the last poll of the recently active ones.
+    removed: Vec<u32>,
+    session: Session,
     activity: Activity,
     random: Lcg,
 }
 
 impl State {
-    /// The answer to `torrent_get`: every torrent without `ids`, the recently active ones with
-    /// `"ids": "recently_active"` (after moving them on), and `None`, a refusal, for a list of
-    /// ids: the details of chosen torrents are not made up.
-    fn torrent_get(&mut self, params: Option<&Value>) -> Option<Value> {
+    /// The answer to `torrent_get`, with the `fields` asked for: every torrent without `ids`, the
+    /// recently active ones with `"ids": "recently_active"` (after moving them on), and the
+    /// torrents of a list of ids or hashes, in its order.
+    fn torrent_get(&mut self, params: Option<&Value>) -> Result<Value, Refusal> {
+        let fields = Fields::of(params)?;
         match params.and_then(|params| params.get("ids")) {
             None => {
-                let torrents: Vec<Value> = self.torrents.iter().map(Torrent::record).collect();
-                Some(json!({ "torrents": torrents }))
+                let torrents: Vec<Value> = self
+                    .torrents
+                    .iter()
+                    .map(|torrent| torrent.record(&fields))
+                    .collect();
+                Ok(json!({ "torrents": torrents }))
             }
             Some(ids) if ids == "recently_active" => {
-                let torrents = self.tick();
-                Some(json!({ "torrents": torrents, "removed": [] }))
+                let torrents = self.tick(&fields);
+                let removed = std::mem::take(&mut self.removed);
+                Ok(json!({ "torrents": torrents, "removed": removed }))
             }
-            Some(_) => None,
+            Some(ids) => {
+                let torrents: Vec<Value> = self
+                    .listed(ids)?
+                    .into_iter()
+                    .filter_map(|index| self.torrents.get(index))
+                    .map(|torrent| torrent.record(&fields))
+                    .collect();
+                Ok(json!({ "torrents": torrents }))
+            }
         }
     }
 
-    /// Moves every active torrent on and returns the records of those that changed; none when
-    /// the daemon is static.
-    fn tick(&mut self) -> Vec<Value> {
-        if self.activity == Activity::Static {
-            return Vec::new();
-        }
-        self.torrents
-            .iter_mut()
-            .filter(|torrent| torrent.kind.moves())
-            .map(|torrent| {
+    /// Moves every active torrent on and returns the records of the recently active ones: those
+    /// that moved, those being verified and those an action changed. With a static daemon only
+    /// the last two move.
+    fn tick(&mut self, fields: &Fields) -> Vec<Value> {
+        let ticking = self.activity == Activity::Ticking;
+        let mut records = Vec::new();
+        for torrent in &mut self.torrents {
+            let verifying = torrent.verify_poll();
+            let moves = ticking && !verifying && torrent.kind.moves();
+            if moves {
                 torrent.tick(&mut self.random);
-                torrent.record()
+            }
+            let touched = std::mem::take(&mut torrent.touched);
+            if moves || verifying || touched {
+                records.push(torrent.record(fields));
+            }
+        }
+        records
+    }
+
+    /// The indices of the torrents an action's `params` name: every torrent without `ids`, and
+    /// otherwise those of the list, by id or hash, in its order. Unknown ones are skipped.
+    fn targets(&self, params: Option<&Value>) -> Result<Vec<usize>, Refusal> {
+        match params.and_then(|params| params.get("ids")) {
+            None => Ok((0..self.torrents.len()).collect()),
+            Some(ids) => self.listed(ids),
+        }
+    }
+
+    /// The indices of the torrents of the list `ids`, by id or hash, in its order; unknown ones
+    /// are skipped.
+    fn listed(&self, ids: &Value) -> Result<Vec<usize>, Refusal> {
+        let ids = ids
+            .as_array()
+            .ok_or_else(|| Refusal::invalid("ids must be a list of ids or hashes"))?;
+        // Indexed first, so that a list of every torrent is not looked up one by one.
+        let by_id: HashMap<u64, usize> = self
+            .torrents
+            .iter()
+            .enumerate()
+            .map(|(index, torrent)| (u64::from(torrent.id), index))
+            .collect();
+        let by_hash: HashMap<&str, usize> = self
+            .torrents
+            .iter()
+            .enumerate()
+            .map(|(index, torrent)| (torrent.hash.as_str(), index))
+            .collect();
+        ids.iter()
+            .map(|id| match id {
+                Value::Number(number) => Ok(number
+                    .as_u64()
+                    .and_then(|number| by_id.get(&number).copied())),
+                Value::String(hash) => Ok(by_hash.get(hash.as_str()).copied()),
+                _ => Err(Refusal::invalid("an id is a number or a hash")),
             })
+            .filter_map(Result::transpose)
             .collect()
+    }
+
+    /// Applies `action` to the torrents `params` name; the answer has no arguments.
+    fn act(
+        &mut self,
+        params: Option<&Value>,
+        action: impl Fn(&mut Torrent),
+    ) -> Result<Value, Refusal> {
+        for index in self.targets(params)? {
+            if let Some(torrent) = self.torrents.get_mut(index) {
+                action(torrent);
+            }
+        }
+        Ok(json!({}))
+    }
+
+    /// The answer to `torrent_remove`: the torrents are gone, with their data if there were any,
+    /// and the next poll of the recently active torrents reports them removed.
+    fn remove(&mut self, params: Option<&Value>) -> Result<Value, Refusal> {
+        let targets: HashSet<usize> = self.targets(params)?.into_iter().collect();
+        let mut index = 0;
+        let removed = &mut self.removed;
+        self.torrents.retain(|torrent| {
+            let keep = !targets.contains(&index);
+            index += 1;
+            if !keep {
+                removed.push(torrent.id);
+            }
+            keep
+        });
+        Ok(json!({}))
+    }
+
+    /// The answer to `torrent_set`: the sequential download is kept; the file lists are taken and
+    /// change nothing, as the torrents have no files.
+    fn torrent_set(&mut self, params: Option<&Value>) -> Result<Value, Refusal> {
+        let sequential = match params.and_then(|params| params.get("sequential_download")) {
+            None => None,
+            Some(Value::Bool(sequential)) => Some(*sequential),
+            Some(_) => return Err(Refusal::invalid("sequential_download must be a boolean")),
+        };
+        let targets = self.targets(params)?;
+        if let Some(sequential) = sequential {
+            for index in targets {
+                if let Some(torrent) = self.torrents.get_mut(index) {
+                    torrent.sequential = sequential;
+                    torrent.touched = true;
+                }
+            }
+        }
+        Ok(json!({}))
     }
 
     /// The answer to `session_stats`: the totals of the torrents' rates and states.
@@ -177,21 +334,110 @@ impl State {
     }
 }
 
-/// The answer to `session_get`, for the server check and for the session settings.
-fn session() -> Value {
-    json!({
-        "alt_speed_down": 50,
-        "alt_speed_enabled": false,
-        "alt_speed_up": 50,
-        "download_dir": DOWNLOAD_DIR,
-        "rpc_version_semver": "6.0.1",
-        "sequential_download": false,
-        "speed_limit_down": 100,
-        "speed_limit_down_enabled": false,
-        "speed_limit_up": 100,
-        "speed_limit_up_enabled": false,
-        "version": "4.1.3 (synthetic)",
-    })
+/// The fields a `torrent_get` asks for; every field when it names none.
+struct Fields(Option<Vec<String>>);
+
+impl Fields {
+    fn of(params: Option<&Value>) -> Result<Self, Refusal> {
+        let Some(fields) = params.and_then(|params| params.get("fields")) else {
+            return Ok(Self(None));
+        };
+        fields
+            .as_array()
+            .and_then(|fields| {
+                fields
+                    .iter()
+                    .map(|field| field.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .map(|fields| Self(Some(fields)))
+            .ok_or_else(|| Refusal::invalid("fields must be a list of names"))
+    }
+
+    fn wants(&self, field: &str) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|fields| fields.iter().any(|wanted| wanted == field))
+    }
+}
+
+/// The settings `session_set` changes and `session_get` reports: the speeds, in kB/s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Session {
+    alt_speed_enabled: bool,
+    alt_speed_down: u64,
+    alt_speed_up: u64,
+    speed_limit_down: u64,
+    speed_limit_down_enabled: bool,
+    speed_limit_up: u64,
+    speed_limit_up_enabled: bool,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            alt_speed_enabled: false,
+            alt_speed_down: 50,
+            alt_speed_up: 50,
+            speed_limit_down: 100,
+            speed_limit_down_enabled: false,
+            speed_limit_up: 100,
+            speed_limit_up_enabled: false,
+        }
+    }
+}
+
+impl Session {
+    /// The answer to `session_get`, for the server check and for the session settings.
+    fn answer(&self) -> Value {
+        json!({
+            "alt_speed_down": self.alt_speed_down,
+            "alt_speed_enabled": self.alt_speed_enabled,
+            "alt_speed_up": self.alt_speed_up,
+            "download_dir": DOWNLOAD_DIR,
+            "rpc_version_semver": "6.0.1",
+            "sequential_download": false,
+            "speed_limit_down": self.speed_limit_down,
+            "speed_limit_down_enabled": self.speed_limit_down_enabled,
+            "speed_limit_up": self.speed_limit_up,
+            "speed_limit_up_enabled": self.speed_limit_up_enabled,
+            "version": "4.1.3 (synthetic)",
+        })
+    }
+
+    /// Takes the speed settings of a `session_set`; the others are ignored, as a daemon ignores
+    /// what it does not know. A value of the wrong type refuses the whole request and changes
+    /// nothing.
+    fn set(&mut self, params: Option<&Value>) -> Result<(), Refusal> {
+        let Some(params) = params.and_then(Value::as_object) else {
+            return Err(Refusal::invalid("session_set needs its settings"));
+        };
+        let mut next = *self;
+        for (key, value) in params {
+            let flag = |value: &Value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| Refusal::invalid(format!("{key} must be a boolean")))
+            };
+            let speed = |value: &Value| {
+                value
+                    .as_u64()
+                    .ok_or_else(|| Refusal::invalid(format!("{key} must be a number of kB/s")))
+            };
+            match key.as_str() {
+                "alt_speed_enabled" => next.alt_speed_enabled = flag(value)?,
+                "alt_speed_down" => next.alt_speed_down = speed(value)?,
+                "alt_speed_up" => next.alt_speed_up = speed(value)?,
+                "speed_limit_down" => next.speed_limit_down = speed(value)?,
+                "speed_limit_down_enabled" => next.speed_limit_down_enabled = flag(value)?,
+                "speed_limit_up" => next.speed_limit_up = speed(value)?,
+                "speed_limit_up_enabled" => next.speed_limit_up_enabled = flag(value)?,
+                _ => {}
+            }
+        }
+        *self = next;
+        Ok(())
+    }
 }
 
 /// The answer to `free_space`: 800 GiB free of 1 TiB.
@@ -312,6 +558,19 @@ struct Torrent {
     ratio_thousandths: u32,
     added_after: u32,
     recheck_thousandths: u32,
+    sequential: bool,
+    /// Whether an action changed it since the last poll of the recently active torrents.
+    touched: bool,
+    /// A verify the torrent is going through.
+    verify: Option<Verify>,
+}
+
+/// A verify under way: how many more polls of the recently active torrents it takes, and what the
+/// torrent goes back to afterwards.
+#[derive(Debug, Clone, Copy)]
+struct Verify {
+    polls_left: u32,
+    then: Kind,
 }
 
 impl Torrent {
@@ -355,6 +614,9 @@ impl Torrent {
             } else {
                 0
             },
+            sequential: false,
+            touched: false,
+            verify: None,
         };
         if activity == Activity::Ticking {
             torrent.tick(random);
@@ -388,8 +650,107 @@ impl Torrent {
         }
     }
 
-    /// The torrent as `torrent_get` sends it, with every field of the app's list.
-    fn record(&self) -> Value {
+    /// Starts a stopped torrent, downloading or seeding by how much it has, and with `now` also a
+    /// queued one, which leaves its queue. A running torrent, or one still queued without `now`,
+    /// stays as it is, as on a real daemon.
+    fn start(&mut self, now: bool) {
+        let kind = match self.kind {
+            Kind::Paused | Kind::LocalError => self.running(),
+            Kind::DownloadWait | Kind::SeedWait if now => self.running(),
+            Kind::CheckWait if now => Kind::Checking,
+            _ => return,
+        };
+        self.kind = kind;
+        // As many peers as a torrent of the kind has when the demo starts.
+        self.peers_connected = match kind {
+            Kind::Downloading => 12,
+            Kind::Seeding => 3,
+            _ => 0,
+        };
+        self.touched = true;
+    }
+
+    /// What a torrent runs as: downloading while it lacks data, seeding once it has it all.
+    fn running(&self) -> Kind {
+        if self.left_kib > 0 {
+            Kind::Downloading
+        } else {
+            Kind::Seeding
+        }
+    }
+
+    /// Stops the torrent; a stopped one stays as it is. A verify under way stops too.
+    fn stop(&mut self) {
+        if matches!(self.kind, Kind::Paused | Kind::LocalError) {
+            return;
+        }
+        self.kind = Kind::Paused;
+        self.verify = None;
+        self.recheck_thousandths = 0;
+        self.rate_down = 0;
+        self.rate_up = 0;
+        self.peers_connected = 0;
+        self.peers_getting_from_us = 0;
+        self.peers_sending_to_us = 0;
+        self.touched = true;
+    }
+
+    /// Starts checking the torrent's data, for [`VERIFY_POLLS`] polls; then it goes back to what it
+    /// was. A verify of a torrent being verified starts over.
+    fn verify(&mut self) {
+        let then = self.verify.map_or(self.kind, |verify| verify.then);
+        self.verify = Some(Verify {
+            polls_left: VERIFY_POLLS,
+            then,
+        });
+        self.kind = Kind::Checking;
+        self.recheck_thousandths = 0;
+        self.rate_down = 0;
+        self.rate_up = 0;
+        self.touched = true;
+    }
+
+    /// Moves a verify on by a poll of the recently active torrents; returns whether the torrent was
+    /// being verified.
+    fn verify_poll(&mut self) -> bool {
+        let Some(verify) = &mut self.verify else {
+            return false;
+        };
+        verify.polls_left = verify.polls_left.saturating_sub(1);
+        if verify.polls_left == 0 {
+            self.kind = verify.then;
+            self.verify = None;
+            self.recheck_thousandths = 0;
+        } else {
+            self.recheck_thousandths = 1000 * (VERIFY_POLLS - verify.polls_left) / VERIFY_POLLS;
+        }
+        true
+    }
+
+    /// A magnet link of the torrent, with its hash and its name.
+    fn magnet_link(&self) -> String {
+        format!(
+            "magnet:?xt=urn:btih:{}&dn={}",
+            self.hash,
+            self.name.replace(' ', "%20")
+        )
+    }
+
+    /// The torrent as `torrent_get` sends it: the `fields` asked for, among every field of the
+    /// app's list and the magnet link.
+    fn record(&self, fields: &Fields) -> Value {
+        let mut record = self.list_record();
+        if let Value::Object(record) = &mut record {
+            record.retain(|field, _| fields.wants(field));
+            if fields.wants("magnet_link") {
+                record.insert("magnet_link".to_owned(), self.magnet_link().into());
+            }
+        }
+        record
+    }
+
+    /// The torrent with every field of the app's list.
+    fn list_record(&self) -> Value {
         let (error, error_string) = self.kind.error();
         let total = u64::from(self.total_kib) * 1024;
         let left = u64::from(self.left_kib) * 1024;
@@ -421,7 +782,7 @@ impl Torrent {
             "rate_download": self.rate_down,
             "rate_upload": self.rate_up,
             "recheck_progress": f64::from(self.recheck_thousandths) / 1000.0,
-            "sequential_download": false,
+            "sequential_download": self.sequential,
             "size_when_done": total,
             "status": self.kind.status(),
             "total_size": total,

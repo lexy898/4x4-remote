@@ -6,6 +6,7 @@
 //! takes the current [`Instant`], so the schedule is tested without waiting.
 
 mod answers;
+mod magnet_links;
 mod schedule;
 #[cfg(test)]
 mod tests;
@@ -88,6 +89,10 @@ pub enum Command {
     Select(Option<HashString>),
     /// Carry out an action; [`Event::ActionFinished`] with the same id tells how it went.
     Run(ActionId, Action),
+    /// Read the magnet links of these torrents once; [`Event::MagnetLinks`] with the same id
+    /// brings them. Refused like [`Command::Run`]: when it names no torrent, and while the
+    /// daemon is not connected.
+    ReadMagnetLinks(ActionId, Vec<HashString>),
     /// Read the session, the whole list, the statistics, the free space and the selected
     /// torrent's details again now; connect again if the daemon is not connected.
     Refresh,
@@ -118,6 +123,9 @@ pub enum Request {
     Details(HashString),
     /// Carry out an action; answered with [`Response::Done`].
     Action(ActionId, Action),
+    /// Read the hashes and magnet links of these torrents once; answered with
+    /// [`Response::MagnetLinks`].
+    MagnetLinks(ActionId, Vec<HashString>),
 }
 
 /// The daemon's answer to a [`Request`].
@@ -137,6 +145,8 @@ pub enum Response {
     Details(TorrentGetResponse),
     /// The action was carried out, for [`Request::Action`].
     Done,
+    /// The torrents with their hashes and magnet links, for [`Request::MagnetLinks`].
+    MagnetLinks(TorrentGetResponse),
 }
 
 /// What the UI hears from the engine.
@@ -153,6 +163,14 @@ pub enum Event {
         id: ActionId,
         /// How it went.
         result: Result<(), ActionError>,
+    },
+    /// The magnet links of a [`Command::ReadMagnetLinks`] arrived, or could not be read.
+    MagnetLinks {
+        /// The id they were asked for with.
+        id: ActionId,
+        /// Each torrent's hash and magnet link, in the order they were asked for, each torrent
+        /// once. A torrent the daemon no longer has, or that has no magnet link, is left out.
+        result: Result<Vec<(HashString, String)>, ActionError>,
     },
 }
 
@@ -172,8 +190,8 @@ pub enum Event {
 /// Each poll is next due one interval after it was handed out, or after its answer came if that
 /// is later, so a slow daemon rests a full interval between turns.
 ///
-/// Actions are sent only while connected; otherwise they fail at once with
-/// [`ActionError::NotConnected`] instead of waiting.
+/// Actions and reads of magnet links are sent only while connected; otherwise they fail at once
+/// with [`ActionError::NotConnected`] instead of waiting.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Engine {
     config: EngineConfig,
@@ -193,8 +211,9 @@ pub struct Engine {
     tick_timer: Timer,
     /// The selected torrent was just chosen, so its details are wanted before the next tick.
     details_now: bool,
-    /// Actions accepted while connected and not handed out yet.
-    actions: VecDeque<(ActionId, Action)>,
+    /// Actions and reads of magnet links accepted while connected and not handed out yet,
+    /// oldest first.
+    queued: VecDeque<Queued>,
     /// How many times requests were handed out; numbers the batches.
     batch: u64,
     /// The batch the last tick went out in.
@@ -237,7 +256,7 @@ impl Engine {
             free_space_timer: Timer::default(),
             tick_timer: Timer::default(),
             details_now: false,
-            actions: VecDeque::new(),
+            queued: VecDeque::new(),
             batch: 0,
             tick_batch: None,
             action_batches: HashMap::new(),
@@ -271,7 +290,8 @@ impl Engine {
                 self.select(hash);
                 Vec::new()
             }
-            Command::Run(id, action) => self.run(id, action),
+            Command::Run(id, action) => self.accept(Queued::Action(id, action)),
+            Command::ReadMagnetLinks(id, hashes) => self.accept(Queued::MagnetLinks(id, hashes)),
             Command::Refresh if self.connection == ConnectionState::Connected => {
                 self.session_timer.force();
                 self.full_list_timer.force();
@@ -285,8 +305,8 @@ impl Engine {
         }
     }
 
-    /// The requests to send at `now`: the actions waiting to be sent first, then the polls that
-    /// are due, in a fixed order.
+    /// The requests to send at `now`: the actions and reads of magnet links waiting to be sent
+    /// first, in the order they came, then the polls that are due, in a fixed order.
     ///
     /// Each poll handed out is next due one interval after `now`, whether or not its answer has
     /// come back, so a request is never handed out twice for the same turn; an answer that comes
@@ -294,10 +314,15 @@ impl Engine {
     #[must_use]
     pub fn due_requests(&mut self, now: Instant) -> Vec<Request> {
         self.batch = self.batch.wrapping_add(1);
-        let mut due = Vec::with_capacity(self.actions.len());
-        for (id, action) in self.actions.drain(..) {
-            self.action_batches.insert(id, self.batch);
-            due.push(Request::Action(id, action));
+        let mut due = Vec::with_capacity(self.queued.len());
+        for queued in self.queued.drain(..) {
+            due.push(match queued {
+                Queued::Action(id, action) => {
+                    self.action_batches.insert(id, self.batch);
+                    Request::Action(id, action)
+                }
+                Queued::MagnetLinks(id, hashes) => Request::MagnetLinks(id, hashes),
+            });
         }
         match self.connection {
             ConnectionState::Connecting | ConnectionState::Reconnecting { .. } => {
@@ -317,13 +342,14 @@ impl Engine {
     /// Whether the answer to `request` still matters: a poll is out of date once the daemon is
     /// no longer connected, and details once their torrent is no longer selected.
     ///
-    /// The worker skips a request that is not current instead of sending it. Server checks and
-    /// actions are always current: an action handed out is always sent.
+    /// The worker skips a request that is not current instead of sending it. Server checks,
+    /// actions and reads of magnet links are always current: once handed out, they are always
+    /// sent, and their answer always reaches the UI.
     #[must_use]
     pub fn is_current(&self, request: &Request) -> bool {
         let connected = self.connection == ConnectionState::Connected;
         match request {
-            Request::CheckServer | Request::Action(..) => true,
+            Request::CheckServer | Request::Action(..) | Request::MagnetLinks(..) => true,
             Request::Details(hash) => connected && self.selected.as_ref() == Some(hash),
             Request::SessionGet
             | Request::SessionStats
@@ -353,6 +379,14 @@ impl Engine {
         match request {
             Request::CheckServer => self.server_checked(now, result),
             Request::Action(id, action) => self.action_finished(now, *id, action, result),
+            Request::MagnetLinks(id, hashes) => {
+                let result = match result {
+                    Ok(Response::MagnetLinks(answer)) => Ok(answer),
+                    Ok(other) => Err(unexpected(request, &other)),
+                    Err(error) => Err(error),
+                };
+                self.magnet_links_read(now, *id, hashes, result)
+            }
             poll if !self.is_current(poll) => {
                 tracing::debug!(
                     request = poll.name(),
@@ -393,7 +427,7 @@ impl Engine {
     /// minute from `now` when nothing is scheduled.
     #[must_use]
     pub fn next_wakeup(&self, now: Instant) -> Instant {
-        if !self.actions.is_empty() {
+        if !self.queued.is_empty() {
             return now;
         }
         let earliest = match self.connection {
@@ -419,28 +453,26 @@ impl Engine {
         self.selected = hash;
     }
 
-    fn run(&mut self, id: ActionId, action: Action) -> Vec<Event> {
-        let refused = if action.selects_nothing() {
-            // The daemon would apply it to every torrent or every file.
+    /// Queues an action or a read of magnet links, or refuses it at once: when it names
+    /// nothing, which the daemon would read as everything, or while the daemon is not connected.
+    fn accept(&mut self, queued: Queued) -> Vec<Event> {
+        let refused = if queued.selects_nothing() {
             tracing::warn!(
-                action = action.name(),
-                "refused an action that names no torrents or no files"
+                request = queued.name(),
+                "refused a request that names no torrents or no files"
             );
             ActionError::EmptySelection
         } else if self.connection == ConnectionState::Connected {
-            self.actions.push_back((id, action));
+            self.queued.push_back(queued);
             return Vec::new();
         } else {
             tracing::debug!(
-                action = action.name(),
-                "refused an action while not connected"
+                request = queued.name(),
+                "refused a request while not connected"
             );
             ActionError::NotConnected
         };
-        vec![Event::ActionFinished {
-            id,
-            result: Err(refused),
-        }]
+        vec![queued.refused(refused)]
     }
 
     /// Starts connecting again now, from the first step of the backoff.
@@ -451,8 +483,8 @@ impl Engine {
         self.set_connection(ConnectionState::Connecting)
     }
 
-    /// Moves to `state`; leaving `Connected` fails the actions not handed out yet, which are
-    /// never kept for later.
+    /// Moves to `state`; leaving `Connected` fails the actions and reads of magnet links not
+    /// handed out yet, which are never kept for later.
     fn set_connection(&mut self, state: ConnectionState) -> Vec<Event> {
         if state != self.connection {
             self.connection = state;
@@ -461,12 +493,9 @@ impl Engine {
         if self.connection == ConnectionState::Connected {
             return Vec::new();
         }
-        self.actions
+        self.queued
             .drain(..)
-            .map(|(id, _)| Event::ActionFinished {
-                id,
-                result: Err(ActionError::NotConnected),
-            })
+            .map(|queued| queued.refused(ActionError::NotConnected))
             .collect()
     }
 
@@ -587,12 +616,19 @@ impl Engine {
             id,
             result: Err(ActionError::Rpc(ConnectionError::from(&error))),
         }];
-        events.extend(match Failure::of(&error) {
-            Failure::Unusable => self.connection_lost(now, &error),
+        events.extend(self.call_failed(now, &error));
+        events
+    }
+
+    /// What a failed action or read of magnet links says about the connection: a daemon that
+    /// cannot be used is reconnected to, an unsupported one is given up on, and a refusal leaves
+    /// the connection as it is. Nothing is retried.
+    fn call_failed(&mut self, now: Instant, error: &RpcError) -> Vec<Event> {
+        match Failure::of(error) {
+            Failure::Unusable => self.connection_lost(now, error),
             Failure::Unsupported(reason) => self.unsupported(reason.clone()),
             Failure::Refused => Vec::new(),
-        });
-        events
+        }
     }
 
     fn poll_failed(&mut self, now: Instant, poll: &Request, error: &RpcError) -> Vec<Event> {
@@ -622,6 +658,48 @@ impl Engine {
     }
 }
 
+/// An action or a read of magnet links that the UI asked for and that waits for the next batch,
+/// in which it goes out before the polls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Queued {
+    /// [`Command::Run`].
+    Action(ActionId, Action),
+    /// [`Command::ReadMagnetLinks`].
+    MagnetLinks(ActionId, Vec<HashString>),
+}
+
+impl Queued {
+    /// Whether it names no torrent or no file, which the daemon would read as all of them.
+    fn selects_nothing(&self) -> bool {
+        match self {
+            Self::Action(_, action) => action.selects_nothing(),
+            Self::MagnetLinks(_, hashes) => hashes.is_empty(),
+        }
+    }
+
+    /// A short name for logs; it carries no torrent names, hashes or paths.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Action(_, action) => action.name(),
+            Self::MagnetLinks(..) => "read magnet links",
+        }
+    }
+
+    /// The event that tells the UI it was not sent, and why.
+    fn refused(self, error: ActionError) -> Event {
+        match self {
+            Self::Action(id, _) => Event::ActionFinished {
+                id,
+                result: Err(error),
+            },
+            Self::MagnetLinks(id, _) => Event::MagnetLinks {
+                id,
+                result: Err(error),
+            },
+        }
+    }
+}
+
 /// A kind of poll, without its arguments: [`Request::SessionGet`] and so on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PollKind {
@@ -634,7 +712,8 @@ enum PollKind {
 }
 
 impl Request {
-    /// The kind of poll this is; `None` for the server check and actions, which are not polls.
+    /// The kind of poll this is; `None` for the server check, actions and reads of magnet links,
+    /// which are not polls.
     fn poll_kind(&self) -> Option<PollKind> {
         match self {
             Self::SessionGet => Some(PollKind::SessionGet),
@@ -643,7 +722,7 @@ impl Request {
             Self::FullList => Some(PollKind::FullList),
             Self::RecentlyActive => Some(PollKind::RecentlyActive),
             Self::Details(_) => Some(PollKind::Details),
-            Self::CheckServer | Self::Action(..) => None,
+            Self::CheckServer | Self::Action(..) | Self::MagnetLinks(..) => None,
         }
     }
 
@@ -658,6 +737,7 @@ impl Request {
             Self::RecentlyActive => "recently active",
             Self::Details(_) => "details",
             Self::Action(..) => "action",
+            Self::MagnetLinks(..) => "magnet links",
         }
     }
 }
@@ -673,6 +753,7 @@ impl Response {
             Self::Torrents(_) => "torrents",
             Self::Details(_) => "details",
             Self::Done => "done",
+            Self::MagnetLinks(_) => "magnet links",
         }
     }
 }

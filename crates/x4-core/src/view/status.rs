@@ -4,7 +4,8 @@ use x4_rpc::UnsupportedReason;
 
 use crate::engine::Visibility;
 use crate::format::{HumanSize, HumanSpeed, human_size, human_speed};
-use crate::snapshot::{ConnectionError, ConnectionState, Snapshot};
+use crate::limits::{KibPerSecond, kbps_to_kib};
+use crate::snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 
 /// Whether the service thread is there to send snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -45,6 +46,34 @@ pub enum Indicator {
     Connected,
 }
 
+/// The turtle and the normal speed limits, as the daemon's session has them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeedControls {
+    /// Whether the alternative speed limits apply: the turtle is on.
+    pub alt_speed: bool,
+    /// The alternative download limit, in whole KiB/s.
+    pub alt_down: KibPerSecond,
+    /// The alternative upload limit, in whole KiB/s.
+    pub alt_up: KibPerSecond,
+    /// The normal download limit as the daemon stores it, also while it is off.
+    pub limit_down: SpeedLimit,
+    /// The normal upload limit as the daemon stores it, also while it is off.
+    pub limit_up: SpeedLimit,
+}
+
+impl From<&SessionSummary> for SpeedControls {
+    /// Takes the switches and the stored limits; the alternative speeds turn into KiB/s.
+    fn from(session: &SessionSummary) -> Self {
+        Self {
+            alt_speed: session.alt_speed_enabled,
+            alt_down: kbps_to_kib(session.alt_speed_down_kbps),
+            alt_up: kbps_to_kib(session.alt_speed_up_kbps),
+            limit_down: session.speed_limit_down,
+            limit_up: session.speed_limit_up,
+        }
+    }
+}
+
 /// What the status bar shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusModel {
@@ -58,8 +87,9 @@ pub struct StatusModel {
     pub connection: ConnectionState,
     /// Whether the numbers are old, because the daemon has not answered lately.
     pub stale: bool,
-    /// Whether the alternative speed limits apply; `false` while the session is not known.
-    pub alt_speed: bool,
+    /// The turtle and the speed limits; `None` while the session is not known, when neither
+    /// can be shown or changed.
+    pub speed: Option<SpeedControls>,
     /// Whether the service still runs.
     pub service: ServiceStatus,
 }
@@ -78,6 +108,27 @@ impl StatusModel {
     pub fn service_failed(&mut self) {
         self.service = ServiceStatus::Failed;
         self.stale = true;
+    }
+
+    /// Whether actions can go to the daemon: the service runs and the daemon answers. Only then
+    /// does [`availability`](crate::availability) allow the actions that need the daemon.
+    #[must_use]
+    pub fn connected(&self) -> bool {
+        self.service == ServiceStatus::Running && self.connection == ConnectionState::Connected
+    }
+
+    /// Whether the alternative speed limits apply; `false` while the session is not known.
+    #[must_use]
+    pub fn alt_speed(&self) -> bool {
+        self.speed.is_some_and(|speed| speed.alt_speed)
+    }
+
+    /// The turtle and the speed limits when they can be changed: the session is known and
+    /// actions can go to the daemon ([`StatusModel::connected`]). `None` otherwise, when the UI
+    /// disables them.
+    #[must_use]
+    pub fn changeable_speed(&self) -> Option<SpeedControls> {
+        self.speed.filter(|_| self.connected())
     }
 
     /// What the connection indicator shows (see [`Indicator`] for which state wins).
@@ -112,7 +163,7 @@ impl Default for StatusModel {
             free_space: None,
             connection: ConnectionState::Connecting,
             stale: false,
-            alt_speed: false,
+            speed: None,
             service: ServiceStatus::Running,
         }
     }
@@ -127,10 +178,7 @@ pub fn status_model(snapshot: &Snapshot) -> StatusModel {
         free_space: snapshot.free_space_bytes.map(human_size),
         connection: snapshot.connection.clone(),
         stale: snapshot.stale,
-        alt_speed: snapshot
-            .session
-            .as_ref()
-            .is_some_and(|session| session.alt_speed_enabled),
+        speed: snapshot.session.as_ref().map(SpeedControls::from),
         service: ServiceStatus::Running,
     }
 }
@@ -149,7 +197,7 @@ pub fn visibility(window_active: bool, window_visible: bool) -> Visibility {
 mod tests {
     use super::*;
     use crate::format::{SizeUnit, SpeedUnit};
-    use crate::snapshot::SessionSummary;
+    use crate::limits::KbPerSecond;
 
     fn snapshot() -> Snapshot {
         Snapshot {
@@ -165,13 +213,125 @@ mod tests {
     }
 
     fn session(alt_speed_enabled: bool) -> SessionSummary {
+        let off = SpeedLimit {
+            kbps: KbPerSecond(0),
+            enabled: false,
+        };
         SessionSummary {
             version: "4.1.0".to_owned(),
             download_dir: "/downloads".to_owned(),
             alt_speed_enabled,
-            speed_limit_down_kbps: None,
-            speed_limit_up_kbps: None,
+            speed_limit_down: off,
+            speed_limit_up: off,
+            alt_speed_down_kbps: KbPerSecond(0),
+            alt_speed_up_kbps: KbPerSecond(0),
         }
+    }
+
+    #[test]
+    fn only_a_running_service_with_an_answering_daemon_is_connected() {
+        let connected = status_model(&snapshot());
+        assert!(connected.connected());
+
+        for connection in [
+            ConnectionState::Connecting,
+            ConnectionState::Reconnecting {
+                attempt: 1,
+                last_error: ConnectionError::Timeout,
+            },
+            ConnectionState::Unsupported {
+                reason: UnsupportedReason::Legacy,
+            },
+        ] {
+            let status = StatusModel {
+                connection: connection.clone(),
+                ..connected.clone()
+            };
+            assert!(!status.connected(), "{connection:?}");
+        }
+        let mut stopped = connected.clone();
+        stopped.service_stopped();
+        assert!(!stopped.connected(), "the last snapshot said connected");
+        let mut failed = connected;
+        failed.service_failed();
+        assert!(!failed.connected());
+        assert!(!StatusModel::default().connected(), "still connecting");
+    }
+
+    #[test]
+    fn status_model_carries_the_e2_values() {
+        let limit_down = SpeedLimit {
+            kbps: KbPerSecond(1024),
+            enabled: true,
+        };
+        // Off, but the daemon keeps the value.
+        let limit_up = SpeedLimit {
+            kbps: KbPerSecond(100),
+            enabled: false,
+        };
+        let status = status_model(&Snapshot {
+            session: Some(SessionSummary {
+                // 48.83 and exactly 1000 KiB/s.
+                alt_speed_down_kbps: KbPerSecond(50),
+                alt_speed_up_kbps: KbPerSecond(1024),
+                speed_limit_down: limit_down,
+                speed_limit_up: limit_up,
+                ..session(true)
+            }),
+            ..snapshot()
+        });
+
+        assert_eq!(
+            status.speed,
+            Some(SpeedControls {
+                alt_speed: true,
+                alt_down: KibPerSecond(49),
+                alt_up: KibPerSecond(1000),
+                limit_down,
+                limit_up,
+            })
+        );
+        assert!(status.alt_speed());
+
+        // A session with every value zero and off still has controls; no session has none.
+        let zeros = status_model(&Snapshot {
+            session: Some(session(false)),
+            ..snapshot()
+        });
+        assert!(zeros.speed.is_some());
+        assert!(!zeros.alt_speed());
+        assert_eq!(status_model(&snapshot()).speed, None);
+    }
+
+    #[test]
+    fn the_speed_can_be_changed_only_with_a_session_and_a_connection() {
+        let with_session = status_model(&Snapshot {
+            session: Some(session(true)),
+            ..snapshot()
+        });
+        assert_eq!(with_session.changeable_speed(), with_session.speed);
+        assert!(with_session.changeable_speed().is_some());
+
+        assert_eq!(
+            status_model(&snapshot()).changeable_speed(),
+            None,
+            "no session"
+        );
+        let reconnecting = StatusModel {
+            connection: ConnectionState::Reconnecting {
+                attempt: 1,
+                last_error: ConnectionError::Timeout,
+            },
+            ..with_session.clone()
+        };
+        assert_eq!(
+            reconnecting.changeable_speed(),
+            None,
+            "the last session is kept"
+        );
+        let mut stopped = with_session;
+        stopped.service_stopped();
+        assert_eq!(stopped.changeable_speed(), None);
     }
 
     #[test]
@@ -194,19 +354,22 @@ mod tests {
                 unit: SizeUnit::B
             })
         );
-        assert!(status.alt_speed);
+        assert!(status.alt_speed());
         assert_eq!(status.connection, ConnectionState::Connected);
         assert!(!status.stale);
 
         let unknown = status_model(&snapshot());
         assert_eq!(unknown.free_space, None);
-        assert!(!unknown.alt_speed, "no session means no alternative limits");
+        assert!(
+            !unknown.alt_speed(),
+            "no session means no alternative limits"
+        );
 
         let normal = status_model(&Snapshot {
             session: Some(session(false)),
             ..snapshot()
         });
-        assert!(!normal.alt_speed);
+        assert!(!normal.alt_speed());
     }
 
     #[test]
@@ -218,7 +381,8 @@ mod tests {
         assert_eq!(status.rate_up, human_speed(0));
         assert_eq!(status.free_space, None);
         assert!(!status.stale);
-        assert!(!status.alt_speed);
+        assert!(!status.alt_speed());
+        assert_eq!(status.speed, None);
         assert_eq!(status.service, ServiceStatus::Running);
         assert_eq!(status.indicator(), Indicator::Connecting);
     }

@@ -16,7 +16,8 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Subscription, TestAppContext, WindowVisibility,
 };
-use x4_app::app::{self, Quit};
+use x4_app::app;
+use x4_app::keymap::Quit;
 use x4_app::main_view::MainView;
 use x4_core::test_support::torrent;
 use x4_core::{
