@@ -8,7 +8,9 @@
 
 # The decimal separator of the language. The app formats numbers with a dot and swaps it for this.
 number-decimal-separator = .
-# What sets the groups of three digits of a whole number apart, as in 1,000,000.
+# What sets the groups of three digits of a whole number apart, as in 1,000,000. Fluent trims a
+# plain space (U+0020) at either end of a value, so a space separator must be written { " " }, or
+# be a no-break space (U+00A0) or a narrow no-break space (U+202F).
 number-group-separator = ,
 
 ## Units

@@ -26,7 +26,7 @@
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
 //! again here in its context, later, so that ours win (see [`BINDINGS`]). While the context menu is
 //! open, its own Up, Down, Enter and Escape go first, and Home, End, Page Up, Page Down, Tab,
-//! Shift+Tab, Ctrl+F and `/` do nothing: the menu keeps the keys until it closes.
+//! Shift+Tab, Ctrl+F, `/`, Ctrl+L and Ctrl+T do nothing: the menu keeps the keys until it closes.
 
 use std::rc::Rc;
 
@@ -188,8 +188,9 @@ pub const BINDINGS: &[Binding] = &[
     // The context menu is modal. Up and Down in it move its highlight (the menu's own bindings are
     // deeper). It has no Home, End, Page Up or Page Down: ours do not work behind it, and the
     // table's own are bound to nothing in it, which is deeper than the table, so that they do
-    // nothing either. Neither may Tab, Shift+Tab, Ctrl+F or `/` take the focus out of the open
-    // menu: the list's keys would then act on the torrents behind it.
+    // nothing either. Neither may Tab, Shift+Tab, Ctrl+F, `/` or Ctrl+L (which opens the speed
+    // limits) take the focus out of the open menu: the list's keys would then act on the torrents
+    // behind it. Ctrl+T does nothing behind it either.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
@@ -207,6 +208,16 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         keys: "/",
+        action: || Box::new(NoAction),
+        context: Some(TABLE_MENU),
+    },
+    Binding {
+        keys: "ctrl-l",
+        action: || Box::new(NoAction),
+        context: Some(TABLE_MENU),
+    },
+    Binding {
+        keys: "ctrl-t",
         action: || Box::new(NoAction),
         context: Some(TABLE_MENU),
     },

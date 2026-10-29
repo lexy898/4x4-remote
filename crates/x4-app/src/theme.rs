@@ -111,10 +111,11 @@ pub(crate) fn connection_color(indicator: &Indicator, theme: &Theme) -> Hsla {
     }
 }
 
-/// The color of the turtle's icon while the alternative speed limits apply: the theme's primary
-/// color, which goes with the selected look of its button.
+/// The color of the turtle's icon while the alternative speed limits apply: the warning color, so
+/// that slowed-down transfers show at a glance. While they do not apply, the icon keeps the
+/// button's own muted look.
 pub(crate) fn alt_speed_color(theme: &Theme) -> Hsla {
-    theme.primary
+    theme.warning
 }
 
 /// Digits of one width, so that numbers that change every tick do not make the text around them
@@ -234,6 +235,15 @@ mod tests {
             state_color(DisplayState::Paused, &dark),
             dark.muted_foreground
         );
+    }
+
+    #[gpui_kit::test]
+    fn the_turtle_is_on_in_the_warning_color(cx: &mut TestAppContext) {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let theme = theme(mode, cx);
+            assert_eq!(alt_speed_color(&theme), theme.warning, "{mode:?}");
+            assert_ne!(alt_speed_color(&theme), theme.muted_foreground, "{mode:?}");
+        }
     }
 
     #[gpui_kit::test]

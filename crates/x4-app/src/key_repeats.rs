@@ -25,8 +25,13 @@ impl KeyRepeats {
         self.repeating = self
             .held
             .as_ref()
-            .is_some_and(|held| held.key == keystroke.key && held.modifiers == keystroke.modifiers);
+            .is_some_and(|held| same_key(held, keystroke));
         self.held = Some(keystroke.clone());
+    }
+
+    /// The key held down now: the one that went down last and has not gone up since.
+    pub(crate) fn held(&self) -> Option<&Keystroke> {
+        self.held.as_ref()
     }
 
     /// Forgets the held key: it went up, or its key-up may never arrive, as when the key was let go
@@ -41,6 +46,11 @@ impl KeyRepeats {
     pub(crate) fn repeating(&self) -> bool {
         self.repeating
     }
+}
+
+/// Whether `first` and `second` are the same key with the same modifiers, whatever text they type.
+pub(crate) fn same_key(first: &Keystroke, second: &Keystroke) -> bool {
+    first.key == second.key && first.modifiers == second.modifiers
 }
 
 #[cfg(test)]
@@ -85,6 +95,21 @@ mod tests {
             repeats(&["ctrl-s", "s", "ctrl-shift-s", "ctrl-shift-s", "space"]),
             [false, false, false, true, false]
         );
+    }
+
+    #[test]
+    fn the_held_key_is_the_last_one_down_until_a_key_goes_up() {
+        let mut repeats = KeyRepeats::default();
+        assert!(repeats.held().is_none());
+        repeats.key_down(&key("space"));
+        repeats.key_down(&key("ctrl-l"));
+        assert!(
+            repeats
+                .held()
+                .is_some_and(|held| same_key(held, &key("ctrl-l")))
+        );
+        repeats.release();
+        assert!(repeats.held().is_none());
     }
 
     #[test]

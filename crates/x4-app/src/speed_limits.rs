@@ -7,7 +7,9 @@
 //! - each field starts with `x4-core`'s [`limit_prefill`] of its limit, the stored value whether
 //!   the limit is on or off, and each switch with whether the limit is on. The download field has
 //!   the focus, with its text selected, so that what is typed replaces it;
-//! - typing a speed into a field switches its limit on; clearing the field leaves the switch alone;
+//! - typing a speed into a field switches its limit on, and clearing the field switches it off, so
+//!   that what the form shows is what it sends. A switch clicked on while its field is empty asks
+//!   for a speed;
 //! - Enter in a field, or Apply, checks both directions with `x4-core`'s [`limit_edit`] (and
 //!   [`limit_needs_value`]). If either cannot be applied, the line under its field says why and
 //!   nothing is sent; otherwise the form hands both edits to the main view
@@ -15,9 +17,15 @@
 //!   An edit of the text or the switch takes the line away again.
 //!
 //! While the daemon is not connected, or its settings are not known, Apply is disabled and Enter
-//! applies nothing; the popover stays open as it is. Like the other keys, Enter applies only when
-//! it is pressed, not when it repeats while held: an Enter held on the limits button opens the
-//! popover, and its repeats must not apply what it was filled with.
+//! applies nothing; the popover stays open as it is. The main view closes the popover when the
+//! focus leaves the form, as Tab, Shift+Tab or Ctrl+F take it out: the list's keys must not act
+//! behind a popover that looks active.
+//!
+//! Like the other keys, the key that opened the popover acts only when it is pressed, not when it
+//! repeats while held. An Enter held on the limits button opens the popover, and its repeats must
+//! not apply what it was filled with; a Space held there must not type over the selected value.
+//! So the repeats of that key do nothing in the form until it goes up, and Enter in a field
+//! applies only when it is a new press.
 //!
 //! The fields are plain text fields, not number inputs: gpui-component's number input names its
 //! buttons in English, outside our messages, and `x4-core` decides what the text means.
@@ -30,10 +38,10 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
-    px,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TestSupportExt as _, Window, div, px,
 };
 use x4_core::{
     Direction, LimitEdit, LimitError, SpeedControls, SpeedLimit, limit_edit, limit_needs_value,
@@ -41,7 +49,7 @@ use x4_core::{
 };
 
 use crate::i18n::{limit_feedback_text, t};
-use crate::key_repeats::KeyRepeats;
+use crate::key_repeats::{KeyRepeats, same_key};
 
 /// The width of the form inside the popover.
 const FORM_WIDTH: f32 = 320.;
@@ -142,7 +150,13 @@ pub(crate) struct SpeedLimits {
     opened: Option<Opened>,
     /// Whether Apply can send: the daemon is connected and its settings are known.
     can_apply: bool,
-    /// The key held down now, shared with the main view, so that a held Enter applies nothing.
+    /// The focus of the whole form, which the main view watches to close the popover when the
+    /// focus leaves it.
+    focus: FocusHandle,
+    /// The key that was held down when the form was filled, which opened the popover, until a
+    /// key goes up in the form; its repeats do nothing here.
+    opener: Option<Keystroke>,
+    /// The key held down now, shared with the main view, so that a held key acts once.
     key_repeats: Rc<RefCell<KeyRepeats>>,
     /// The fields' events.
     _subscriptions: Vec<Subscription>,
@@ -179,6 +193,8 @@ impl SpeedLimits {
             up: field(Direction::Up, up),
             opened: None,
             can_apply: false,
+            focus: cx.focus_handle(),
+            opener: None,
             key_repeats,
             _subscriptions: subscriptions,
         }
@@ -190,13 +206,15 @@ impl SpeedLimits {
     }
 
     /// Fills the form from the daemon's limits in `speed`, which its edits are measured against
-    /// from now on, and selects the download field's text.
+    /// from now on, and selects the download field's text. The key held down now opened the
+    /// popover; its repeats are held back.
     pub(crate) fn fill(
         &mut self,
         speed: SpeedControls,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        self.opener = self.key_repeats.borrow().held().cloned();
         self.opened = Some(Opened {
             down: speed.limit_down,
             up: speed.limit_up,
@@ -224,8 +242,8 @@ impl SpeedLimits {
         }
     }
 
-    /// Follows the field of `direction`: an edit takes its line away, and a speed typed switches
-    /// its limit on; Enter applies.
+    /// Follows the field of `direction`: an edit takes its line away, and switches the limit on
+    /// when the field has a speed and off when it is empty; Enter applies.
     fn on_field_event(
         &mut self,
         direction: Direction,
@@ -236,9 +254,7 @@ impl SpeedLimits {
             InputEvent::Change => {
                 let field = self.field_mut(direction);
                 field.feedback = None;
-                if !field.input.read(cx).value().trim().is_empty() {
-                    field.enabled = true;
-                }
+                field.enabled = !field.input.read(cx).value().trim().is_empty();
                 cx.notify();
             }
             InputEvent::PressEnter { .. } => {
@@ -249,6 +265,25 @@ impl SpeedLimits {
                 }
             }
             InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
+    /// Holds back a key-down in the form that repeats the key which opened the popover, before
+    /// anything in the form sees it: no field types it, and no binding runs.
+    fn hold_back_opener(
+        &mut self,
+        event: &KeyDownEvent,
+        _: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let repeats_opener = self.key_repeats.borrow().repeating()
+            && self
+                .opener
+                .as_ref()
+                .is_some_and(|opener| same_key(opener, &event.keystroke));
+        if repeats_opener {
+            tracing::trace!("the key that opened the speed limits repeats; held back");
+            cx.stop_propagation();
         }
     }
 
@@ -342,10 +377,21 @@ impl SpeedLimits {
     }
 }
 
+impl Focusable for SpeedLimits {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl Render for SpeedLimits {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         v_flex()
             .id("speed-limits-form")
+            .track_focus(&self.focus)
+            // In the capture phase, before the fields: the key-down of a held key repeats before
+            // any key-up, and any key-up ends the hold.
+            .capture_key_down(cx.listener(Self::hold_back_opener))
+            .capture_key_up(cx.listener(|form, _: &KeyUpEvent, _, _| form.opener = None))
             .w(px(FORM_WIDTH))
             .gap_3()
             .text_sm()

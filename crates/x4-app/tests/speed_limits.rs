@@ -16,9 +16,10 @@ use gpui_kit::{
 use x4_app::app;
 use x4_app::keymap::{EditSpeedLimits, ToggleAltSpeed};
 use x4_app::main_view::MainView;
+use x4_core::test_support::torrent;
 use x4_core::{
-    Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, Direction, Event,
-    KbPerSecond, SessionSummary, Snapshot, SpeedLimit, UiState,
+    Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, Direction,
+    DisplayState, Event, KbPerSecond, SessionSummary, Snapshot, SpeedLimit, Torrent, UiState,
 };
 
 /// The turtle: the alternative speed limits.
@@ -35,6 +36,12 @@ const UP_SWITCH: &str = "limit-up-enabled";
 const UP_FEEDBACK: &str = "limit-up-feedback";
 /// The popover's Apply button.
 const APPLY: &str = "limits-apply";
+/// The search box.
+const SEARCH: &str = "search";
+/// The free space in the status bar, a place to click beside the popover.
+const FREE_SPACE: &str = "free-space";
+/// The id of the context menu.
+const MENU: &str = "popup-menu";
 /// The id of a notification.
 const NOTIFICATION: &str = "notification";
 /// What a field says under it when its text is not a whole number.
@@ -64,6 +71,10 @@ impl Window {
                 app::open_main_window(events_rx, commands_tx, None, &UiState::default(), cx)
             })
             .expect("the main window opens");
+        // A test window opens inactive, and only an active window tells where the focus goes:
+        // the popover closes when the focus leaves it.
+        cx.update_window(handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
         cx.run_until_parked();
         Self {
             handle,
@@ -93,10 +104,22 @@ impl Window {
         connection: ConnectionState,
         cx: &mut TestAppContext,
     ) {
+        self.send_snapshot(Vec::new(), session, connection, cx);
+    }
+
+    /// Sends a snapshot of `torrents`, with the daemon's `session` and the connection in
+    /// `connection`.
+    fn send_snapshot(
+        &self,
+        torrents: Vec<Torrent>,
+        session: Option<SessionSummary>,
+        connection: ConnectionState,
+        cx: &mut TestAppContext,
+    ) {
         let stale = connection != ConnectionState::Connected;
         self.send_event(
             Event::Snapshot(Arc::new(Snapshot {
-                torrents: Vec::new(),
+                torrents,
                 listed: true,
                 session,
                 free_space_bytes: Some(24_592_841_836),
@@ -152,6 +175,17 @@ impl Window {
 
     fn click(&self, id: &'static str, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| window.click(id, cx));
+    }
+
+    /// Sends a key-down of `key` that types its text when nothing takes the key, as a repeat of
+    /// a held Space does in a field.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a key that does not parse fails the test"
+    )]
+    fn key_down_typing(&self, key: &str, cx: &mut TestAppContext) {
+        let keystroke = Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key");
+        self.act(cx, |window, cx| window.dispatch_keystroke(keystroke, cx));
     }
 
     fn press(&self, key: &str, cx: &mut TestAppContext) {
@@ -237,6 +271,11 @@ impl Window {
                 .try_find(feedback)
                 .and_then(|line| line.label().map(str::to_owned))
         })
+    }
+
+    /// Whether the context menu is open.
+    fn menu_open(&self, cx: &mut TestAppContext) -> bool {
+        self.act(cx, |window, _| window.try_find(MENU).is_some())
     }
 
     /// Whether the popover of the limits is open.
@@ -681,7 +720,7 @@ fn the_status_bar_shows_the_limits(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_keys_work_from_the_search_box_and_show_in_the_tooltips(cx: &mut TestAppContext) {
+fn the_keys_work_from_the_search_box_and_are_bound_in_the_window(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
 
@@ -709,4 +748,170 @@ fn the_keys_work_from_the_search_box_and_show_in_the_tooltips(cx: &mut TestAppCo
             assert_eq!(shown, [keys]);
         }
     });
+}
+
+#[gpui_kit::test]
+fn the_speed_keys_do_nothing_behind_the_context_menu(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let downloading = |name| Torrent {
+        state: DisplayState::Downloading,
+        ..torrent(name)
+    };
+    window.send_snapshot(
+        vec![downloading("a"), downloading("b")],
+        Some(session(limit(1024, true), off(), false)),
+        ConnectionState::Connected,
+        cx,
+    );
+    window.act(cx, |window, cx| window.right_click(("row", 0usize), cx));
+    assert!(window.menu_open(cx));
+
+    for key in ["ctrl-l", "ctrl-t"] {
+        window.press(key, cx);
+        assert!(!window.limits_open(cx), "{key}");
+        assert!(window.menu_open(cx), "{key}: the menu keeps the keys");
+        assert_eq!(window.sent(), [], "{key}");
+    }
+    // Pause, behind the menu, does nothing either; closed, the menu gives the keys back.
+    window.press("ctrl-p", cx);
+    assert_eq!(window.sent(), []);
+    window.press("escape", cx);
+    assert!(!window.menu_open(cx));
+    assert!(window.table_focused(cx));
+}
+
+#[gpui_kit::test]
+fn the_popover_closes_when_the_focus_leaves_it(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(limit(1024, true), off(), false, cx);
+
+    // Tab moves through the switches, the fields and Apply, and then out.
+    window.press("ctrl-l", cx);
+    window.type_text("512", cx);
+    for _ in 0..3 {
+        window.press("tab", cx);
+        assert!(window.limits_open(cx), "the focus is still in the popover");
+    }
+    assert!(window.focused(APPLY, cx));
+    window.press("tab", cx);
+    assert!(!window.limits_open(cx), "Tab took the focus out");
+    assert_eq!(window.sent(), []);
+    assert!(
+        window.focused(SEARCH, cx),
+        "the focus stays where Tab took it, the first control of the window"
+    );
+
+    // Shift+Tab: from the download field to its switch, and then out.
+    window.press("ctrl-l", cx);
+    window.press("shift-tab", cx);
+    assert!(window.limits_open(cx));
+    assert!(window.focused(DOWN_SWITCH, cx));
+    window.press("shift-tab", cx);
+    assert!(!window.limits_open(cx), "Shift+Tab took the focus out");
+    assert!(
+        window.focused(LIMITS, cx),
+        "the focus stays on the button before the popover"
+    );
+    assert_eq!(window.sent(), []);
+
+    // Ctrl+F: the focus goes to the search box, and stays there.
+    window.press("ctrl-l", cx);
+    window.press("ctrl-f", cx);
+    assert!(!window.limits_open(cx));
+    assert!(window.focused(SEARCH, cx), "the focus stays where it went");
+    assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn an_edit_is_measured_against_the_limits_the_popover_opened_with(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let opened = || session(limit(1024, true), limit(100, false), false);
+    // Meanwhile another client switched the download limit off and the upload limit on.
+    let changed = || session(limit(1024, false), limit(2048, true), false);
+
+    window.send_session(Some(opened()), ConnectionState::Connected, cx);
+    window.press("ctrl-l", cx);
+    window.send_session(Some(changed()), ConnectionState::Connected, cx);
+    window.click(APPLY, cx);
+    assert_eq!(window.sent(), [], "nothing was touched");
+    assert!(!window.limits_open(cx));
+
+    window.send_session(Some(opened()), ConnectionState::Connected, cx);
+    window.press("ctrl-l", cx);
+    window.send_session(Some(changed()), ConnectionState::Connected, cx);
+    // 300 KiB/s are 307 kB/s; the untouched download limit stays as the daemon has it now.
+    window.retype(UP, "300", cx);
+    window.click(APPLY, cx);
+    assert_eq!(window.sent_actions(), [set_limit(Direction::Up, Some(307))]);
+}
+
+#[gpui_kit::test]
+fn a_held_space_that_opened_the_popover_types_nothing(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(limit(1024, true), off(), false, cx);
+    window.press("tab", cx);
+    window.press("tab", cx);
+    assert!(window.focused(LIMITS, cx));
+
+    window.key_down("space", false, cx);
+    assert!(window.limits_open(cx));
+    assert!(window.focused(DOWN, cx));
+    // The repeats would type spaces over the selected value, which would clear the limit.
+    window.key_down_typing("space", cx);
+    window.key_down_typing("space", cx);
+    window.key_up("space", cx);
+    assert_eq!(window.value(DOWN, cx).as_deref(), Some("1000"));
+    assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true));
+
+    window.press("enter", cx);
+    assert_eq!(window.sent(), [], "the limit is as it was");
+    assert!(!window.limits_open(cx));
+}
+
+#[gpui_kit::test]
+fn clearing_a_field_switches_its_limit_off(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(limit(1024, true), off(), false, cx);
+    window.press("ctrl-l", cx);
+
+    window.retype(DOWN, "", cx);
+    assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false));
+    window.type_text("2", cx);
+    assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true));
+    window.press("backspace", cx);
+    assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false));
+    window.click(APPLY, cx);
+    assert_eq!(window.sent_actions(), [set_limit(Direction::Down, None)]);
+
+    // A switch clicked on while its field is empty still asks for a speed.
+    window.send_limits(off(), off(), false, cx);
+    window.press("ctrl-l", cx);
+    window.retype(UP, "", cx);
+    window.click(UP_SWITCH, cx);
+    window.click(APPLY, cx);
+    assert_eq!(window.sent(), []);
+    assert_eq!(
+        window.feedback(UP_FEEDBACK, cx).as_deref(),
+        Some("Enter a speed to turn the limit on")
+    );
+}
+
+#[gpui_kit::test]
+fn an_edit_left_without_applying_is_forgotten(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(off(), off(), false, cx);
+
+    for close_by in [FREE_SPACE, LIMITS] {
+        window.press("ctrl-l", cx);
+        window.type_text("512", cx);
+        assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true), "{close_by}");
+        window.click(close_by, cx);
+        assert!(!window.limits_open(cx), "{close_by}");
+        assert_eq!(window.sent(), [], "{close_by}");
+
+        window.press("ctrl-l", cx);
+        assert_eq!(window.value(DOWN, cx).as_deref(), Some("98"), "{close_by}");
+        assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false), "{close_by}");
+        window.press("escape", cx);
+    }
 }

@@ -10,7 +10,8 @@
 //!
 //! The popover is filled when it opens, from the daemon's limits then. Apply sends each limit
 //! whose edit changes something, then closes the popover; Escape and a click beside it close it
-//! and send nothing. Either way the keys go back to the list.
+//! and send nothing. Either way the keys go back to the list. When the focus leaves the popover
+//! (Tab, Shift+Tab, Ctrl+F), it closes too, sends nothing, and the focus stays where it went.
 
 use gpui_kit::{Context, Div, Entity, Focusable as _, InteractiveElement as _, Window};
 use x4_core::Direction;
@@ -77,6 +78,16 @@ impl MainView {
         self.limits_open = false;
         window.focus(&self.table.focus_handle(cx), cx);
         cx.notify();
+    }
+
+    /// The focus left the popover of the speed limits, as Tab, Shift+Tab or Ctrl+F take it out:
+    /// closes the popover and sends nothing. The focus stays where it went.
+    pub(super) fn limits_lost_focus(&mut self, cx: &mut Context<'_, Self>) {
+        if self.limits_open {
+            tracing::debug!("the focus left the speed limits; they close");
+            self.limits_open = false;
+            cx.notify();
+        }
     }
 
     /// Handles Apply in the popover: sends each limit whose edit changes something, then closes

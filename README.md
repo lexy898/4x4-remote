@@ -205,8 +205,8 @@ The status bar at the bottom shows:
   it, "Connecting…" or "Reconnecting (attempt N)… timed out" and the like; the tooltip says more
   about why the daemon could not be reached;
 - the turtle, which switches the daemon's alternative speed limits on and off (`Ctrl+T`). It is
-  highlighted while they apply, and its tooltip gives them, such as "Alternative speed limits:
-  ↓ 50 KiB/s ↑ 50 KiB/s";
+  highlighted, in yellow, while they apply, and its tooltip gives them, such as "Alternative speed
+  limits: ↓ 50 KiB/s ↑ 50 KiB/s";
 - the global speed limits, such as "↓ 500 KiB/s · ↑ no limit". A click on them, or `Ctrl+L`, opens
   a popover that sets them (see below);
 - the free space where new torrents are saved;
@@ -215,11 +215,13 @@ The status bar at the bottom shows:
 The speed limits popover has, for the download and the upload limit each, a switch that turns the
 limit on and a field for it in KiB/s, as every speed in 4x4 is shown (the daemon keeps limits in
 kB/s, 1000 bytes per second; 4x4 converts them). Each field starts with the daemon's value, also
-while that limit is off, and typing a speed into a field switches its limit on. `Enter` in a field,
-or Apply, sends the limits that changed, and only those, and closes the popover; `Escape` or a click
-beside it closes it and changes nothing. A limit is a whole number from 1 to 1,000,000 KiB/s:
-anything else is refused with a note under its field, and nothing is sent. A limit switched on with
-an empty field asks for a speed; clearing the field of a limit that is on turns it off. The turtle
+while that limit is off. Typing a speed into a field switches its limit on, and clearing the field
+switches it off. `Enter` in a field, or Apply, sends the limits that changed, and only those, and
+closes the popover; `Escape`, a click beside it, or moving the focus out of it (`Tab` past Apply,
+`Shift+Tab`, `Ctrl+F`) closes it and changes nothing. A limit is a whole number from 1 to 1,000,000
+KiB/s: anything else is refused with a note under its field, and nothing is sent; a limit switched
+on with an empty field asks for a speed. A key held down to open the popover does not type into it
+or apply it. While the context menu is open, `Ctrl+T` and `Ctrl+L` do nothing. The turtle
 and the limits are disabled until the daemon has sent its settings, and while it is not connected;
 an open popover then keeps what was typed, and Apply waits for the connection. A change that fails
 shows a notification, as an action does, one for the turtle and one for each limit.

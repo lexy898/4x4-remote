@@ -141,8 +141,9 @@ pub struct MainView {
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
     /// The table's, the search box's and the speed limits form's events, the table's changes, the
-    /// focus coming back to the table, the window's activation, visibility, appearance and bounds
-    /// observers, the save when the app quits, and the keystroke interceptor.
+    /// focus coming back to the table and leaving the speed limits, the window's activation,
+    /// visibility, appearance and bounds observers, the save when the app quits, and the
+    /// keystroke interceptor.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -173,6 +174,7 @@ impl MainView {
         let search = cx.new(|cx| new_search_state(window, cx));
         let key_repeats = Rc::new(RefCell::new(KeyRepeats::default()));
         let speed_limits = cx.new(|cx| SpeedLimits::new(Rc::clone(&key_repeats), window, cx));
+        let limits_focus = speed_limits.focus_handle(cx);
         let mut subscriptions = vec![
             cx.subscribe_in(&table, window, Self::on_table_event),
             // The selection and the rows live in the table; the toolbar follows what they allow.
@@ -184,6 +186,10 @@ impl MainView {
             }),
             cx.subscribe_in(&search, window, Self::on_search_event),
             cx.subscribe_in(&speed_limits, window, Self::on_limits_applied),
+            // Tab, Shift+Tab and Ctrl+F take the focus out of the popover, which then closes.
+            cx.on_focus_out(&limits_focus, window, |view, _, _, cx| {
+                view.limits_lost_focus(cx);
+            }),
             cx.observe_window_activation(window, |view, window, _| {
                 view.report_visibility(window);
             }),

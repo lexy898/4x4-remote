@@ -100,8 +100,9 @@ pub(crate) fn status_bar(
     .right(number("rate-up", upload_rate_text(status.rate_up), stale))
 }
 
-/// The turtle: switches the alternative speed limits, drawn selected, its icon in the selected
-/// color, while they apply. Its tooltip gives them, with the key.
+/// The turtle: switches the alternative speed limits, drawn selected, its icon in the warning
+/// color, while they apply; dimmed as well while it is disabled, like the stale numbers. Its
+/// tooltip gives them, with the key.
 fn turtle(
     status: &StatusModel,
     enabled: bool,
@@ -109,8 +110,15 @@ fn turtle(
     cx: &Context<'_, MainView>,
 ) -> impl IntoElement + use<> {
     let on = status.alt_speed();
-    let icon = Icon::new(gpui_kit::assets::IconName::Turtle)
-        .when(on, |icon| icon.text_color(alt_speed_color(theme)));
+    // The icon's own color overrides the disabled button's, so it is dimmed here.
+    let color = alt_speed_color(theme);
+    let icon = Icon::new(gpui_kit::assets::IconName::Turtle).when(on, |icon| {
+        icon.text_color(if enabled {
+            color
+        } else {
+            color.opacity(STALE_OPACITY)
+        })
+    });
     Button::new("alt-speed")
         .ghost()
         .xsmall()
