@@ -83,14 +83,14 @@ The table lists the torrents, sorted by name at first. Each row shows:
   muted otherwise.
 
 Rows where nothing happens (an idle seeder, a paused or queued torrent) are dimmed, so the active
-ones stand out; an error is never dimmed. Until the daemon's list of torrents has come, the table
+ones stand out; an error is never dimmed, and a selected row keeps its full highlight. Until the daemon's list of torrents has come, the table
 stays blank; after that, when there is nothing to show, it says "No torrents", or "No torrents
 match" when the filter or the search hides every torrent.
 
 Click a column header to sort by it; click it again to reverse the order. ▲ or ▼ after the header
 shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;
-names sort from A to Z, the time left soonest first, and the state with errors first and paused
-torrents last. Drag a header to move the column, and drag the edge of a header to resize it.
+names sort from A to Z, the time left soonest first (then an unknown time, then "—"), and the state
+with errors first and paused torrents last. Drag a header to move the column, and drag the edge of a header to resize it.
 "Columns" in the toolbar shows and hides columns; the name column always stays. The sort order and
 the columns are remembered between runs.
 
@@ -297,44 +297,59 @@ Measured on 2026-10-29 on the same laptop, with release builds, inside the headl
 the window has the focus, so 4x4 polls every 1.5 seconds). The virtual session adds startup time
 of its own, so the stage 1 window was measured again there: 387 ms to its first frame, against 197
 ms on the desktop. Compare these columns with each other, not with the table above. Medians of
-three runs, except the owner's daemon, run once to keep its load low:
+three runs, except the owner's daemon, run once to keep its load low. The targets are those of the
+app with a real daemon; the 2000-torrent columns also carry the synthetic daemon (see below), and
+"not met" marks every cell over its target:
 
 | Metric                     | Target              | Stage 1 window | Owner's daemon      | 2000 torrents, idle | 2000 torrents, busy |
 | -------------------------- | ------------------- | -------------- | ------------------- | ------------------- | ------------------- |
-| First frame                | ≤ 500 ms            | 387 ms         | 465 ms              | 451 ms              | 455 ms              |
-| Resident memory (RSS)      | ≤ 100 MiB           | 70.2 MiB       | 79.4 MiB            | 98.5 MiB            | 100.0 MiB           |
-| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 51.8 MiB       | 60.7 MiB (not met)  | 80.0 MiB            | 81.6 MiB            |
-| Unique memory (USS)        | —                   | 43.2 MiB       | 52.0 MiB            | 71.2 MiB            | 72.8 MiB            |
-| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 13.7 MiB       | 17.4 MiB (not met)  | 37.1 MiB            | 38.4 MiB            |
+| First frame                | ≤ 500 ms            | 387 ms         | 465 ms              | 486 ms              | 494 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 70.2 MiB       | 79.4 MiB            | 98.9 MiB            | 100.0 MiB           |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 51.8 MiB       | 60.7 MiB (not met)  | 80.5 MiB (not met)  | 81.6 MiB (not met)  |
+| Unique memory (USS)        | —                   | 43.2 MiB       | 52.0 MiB            | 71.7 MiB            | 72.8 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 13.7 MiB       | 17.4 MiB (not met)  | 37.3 MiB (not met)  | 38.6 MiB (not met)  |
 | Threads                    | —                   | 32             | 34                  | 33                  | 33                  |
-| CPU over 30 s, one core    | near 0 % when idle  | —              | 0.10 %              | 0.03 %              | 2.27 %              |
-| Binary size                | —                   | 31.4 MiB       | 36.6 MiB            | 36.5 MiB            | 36.5 MiB            |
+| CPU over 30 s, one core    | near 0 % when idle  | —              | 0.10 %              | 0.03 %              | 2.23 %              |
+| Binary size                | —                   | 31.4 MiB       | 36.6 MiB            | 36.2 MiB            | 36.2 MiB            |
 
 The owner's daemon had 6 torrents, all seeding without traffic (`just virtual just measure --cpu
-30`). The 2000 torrents are the [synthetic demo](#synthetic-demo), measured after a 10 second settle
+30`, the release build of `4x4`). The 2000 torrents are the [synthetic demo](#synthetic-demo), the
+release build of its `x4-synthetic` binary, measured after a 10 second settle
 (`X4_MEASURE_SETTLE_SECONDS=10 just virtual just measure --synthetic --cpu 30`, with
 `-- --static` for idle); while busy, 513 of them change their rates or progress on every poll. The
 synthetic daemon runs inside the measured process, so its own work, making up the answers, counts
 in those two columns.
 
+Much of the startup time the virtual session adds comes from Mesa's shader cache: the session
+starts with an empty `XDG_CACHE_HOME`, so RADV compiles every shader of the first start. A second
+start of the demo in the same session, with the cache the first one left, drew its first frame
+133 ms sooner (medians of three sessions: 490 ms, then 357 ms), while with Mesa's cache disabled
+(`MESA_SHADER_CACHE_DISABLE=true`) the second start was not faster (434 ms, then 457 ms). With the
+cache warm the demo also had about 7 MiB less PSS and RSS and 6 fewer threads, so the figures above
+are those of a first start.
+
 - Stage 2 adds 78 ms to the first frame, 3.7 MiB of private memory and 8.9 MiB of PSS to the empty
   stage 1 window, and the binary grew by 5.2 MiB. The proposed private-memory and PSS targets are
   missed by 1.4 and 5.7 MiB.
-- 2000 torrents add 20 MiB of private memory to the same demo with 6 torrents (17.5 MiB). 16 MiB of
-  it is the memory allocator's arena of the thread that talks to the daemon: what one read of the
-  whole list took at its peak (the synthetic daemon's JSON and the parsing of it), which the
-  allocator keeps for the next read rather than returning. The window's own share is about 3 MiB. A
-  real daemon would not add the synthetic daemon's part; that has not been measured.
+- 2000 torrents add 20.1 MiB of private memory to the same demo with 6 torrents (17.2 MiB), both
+  release builds of `x4-synthetic`. 15.7 MiB of it is the memory allocator's arena of the thread
+  that talks to the daemon: what one read of the whole list took at its peak (the synthetic
+  daemon's JSON, the parsing of it and the torrents made from it), which the allocator keeps for
+  the next read rather than returning. The main thread's heap, where the window keeps its rows and
+  their text, grows by 2.8 MiB, and smaller mappings by 1.6 MiB. A real daemon would not add the
+  synthetic daemon's part; that has not been measured.
 - With nothing changing, the window costs no CPU to speak of: 0.03 % with the synthetic daemon and
   0.10 % with the owner's, which is asked for news every 1.5 seconds. It redraws only when
   something it shows has changed.
 - Scrolling 2000 torrents by one row per frame for 10 seconds (`--scroll` of the release build,
-  `cargo run --release -p x4-app --features synthetic --bin x4-synthetic -- --scroll`, six runs, idle and busy; a debug
-  build takes about 115 ms per frame) gave 3602 frame intervals with a median of 16.68 ms and a
-  longest of 22.3 ms; none was over 33 ms, so no frame was missed. Many intervals (45 %) are just
-  over 16.7 ms only because a 60 Hz pace jitters around 16.67 ms. GPUI's own timing of each frame's
-  drawing and presenting (`ZED_MEASUREMENTS=1`) had a median of 7.5 ms and a 99th percentile of
-  14.3 ms; 3 of 3620 frames took over 16.7 ms, the longest 21.2 ms.
+  `cargo run --release -p x4-app --features synthetic --bin x4-synthetic -- --scroll`, six runs,
+  idle and busy; a debug build takes about 115 ms per frame) gave 3601 intervals between frames,
+  with a median of 16.67 to 16.68 ms, a 99th percentile of 17.4 to 17.6 ms in each run and a
+  longest of 18.0 ms. No interval reached two frames (33 ms) on the virtual output's 60 Hz; the
+  real screen's pace was not measured. Many intervals (43 %) are just over 16.7 ms only because a
+  60 Hz pace jitters around 16.67 ms. GPUI's own timing of each frame's drawing and presenting
+  (`ZED_MEASUREMENTS=1`) had a median of 7.5 ms and a 99th percentile of 14.3 ms; 3 of 3619 frames
+  took over 16.7 ms, the longest 19.2 ms.
 - In 2 minutes against the owner's daemon (a debug build), 4x4 sent 169 requests, 1.4 per second:
   the recently active torrents and the session totals every 1.5 seconds, the free space every 30
   seconds, and the whole list and the session settings every minute.
