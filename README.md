@@ -4,7 +4,7 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 
 ## Status
 
-Early development — stage 2 (the main window, read-only), in progress. The window connects to the
+Early development — stage 2, the main window (read-only). The window connects to the
 daemon set in `config.toml` and shows every torrent in a table, with its state, progress and
 speeds; a sidebar filters them by state, with live counts, and a search box finds them by name. The
 status bar shows the total download and upload speeds, the free space and the state of the
@@ -67,6 +67,10 @@ in the window ever waits for the network. The first time it opens at 1200 by 720
 every column fits; after that at the size it had last time, and maximized if it was (see
 [What 4x4 remembers](#what-4x4-remembers)).
 
+The window has four parts: a toolbar along the top, with the search box on the left and the theme
+button and the "Columns" menu on the right; the filter sidebar down the left side; the torrent
+table, which takes the rest; and the status bar along the bottom.
+
 The table lists the torrents, sorted by name at first. Each row shows:
 
 - a colored dot for the state (blue downloading, green seeding, yellow queued or checking, red
@@ -110,8 +114,9 @@ to show its torrents; the chosen one is highlighted and remembered between runs.
 
 The search box in the toolbar narrows the list, as you type, to the torrents whose names contain
 every word typed, in any order and ignoring case. It works together with the filter. `Ctrl+F` moves
-to the search box from anywhere in the window, and `/` from anywhere but a text field; `Escape` in
-the box empties it and goes back to the table. The search is not remembered between runs.
+to the search box from anywhere in the window, and `/` from anywhere but a text field (see
+[Keys](#keys) for keyboard layouts); `Escape` in the box empties it and goes back to the table. The
+search is not remembered between runs.
 
 The status bar at the bottom shows:
 
@@ -133,6 +138,22 @@ light, or dark. The choice is remembered between runs.
 
 While the window is minimized or does not have the focus, 4x4 asks the daemon for updates every
 10 seconds instead of every 1.5 seconds, to go easy on a small server.
+
+### Keys
+
+| Key                                                 | Where                     | What it does                                 |
+| --------------------------------------------------- | ------------------------- | -------------------------------------------- |
+| `Ctrl+F`                                            | anywhere in the window    | moves to the search box and selects its text |
+| `/`                                                 | anywhere but a text field | the same as `Ctrl+F`                         |
+| `Escape`                                            | in the search box         | empties it and goes back to the table        |
+| `Escape`                                            | in the table              | clears the selection                         |
+| `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the table              | select a torrent                             |
+| `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
+| `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
+
+`Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
+place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
+`/`, which types a period.
 
 ## What 4x4 remembers
 
@@ -243,8 +264,9 @@ driver threads) loaded next to the Vulkan one, so 4x4 builds a patched copy of G
 ([`vendor/gpui-pre-wgpu`](vendor/gpui-pre-wgpu/PATCHED.md)) until upstream fixes this
 ([zed#63327](https://github.com/zed-industries/zed/issues/63327)).
 
-Medians of three runs on 2026-10-28 under the same conditions (KDE Plasma 6 on Wayland, AMD Radeon
-780M with RADV, the window on the built-in screen without focus), before and after that change:
+Medians of three runs of the stage 1 window, which was still empty, on 2026-10-28 under the same
+conditions (KDE Plasma 6 on Wayland, AMD Radeon 780M with RADV, the window on the built-in screen
+without focus), before and after that change:
 
 | Metric                     | Target              | Vulkan and OpenGL | Vulkan-first         |
 | -------------------------- | ------------------- | ----------------- | -------------------- |
@@ -265,6 +287,55 @@ accept. Without Vulkan, the OpenGL fallback takes about 160 MiB RSS and 26 MiB o
 These figures vary with how much of the shared driver stays resident: on the same laptop under heavy
 memory pressure (about 15 GiB in swap), a run showed 61 MiB RSS and the same 12.6 MiB of private
 memory.
+
+### The main window (stage 2)
+
+Measured on 2026-10-29 on the same laptop, with release builds, inside the headless KWin of
+`just virtual` (a 1440 by 900 virtual screen paced at 60 Hz and drawn on the real GPU through RADV;
+the window has the focus, so 4x4 polls every 1.5 seconds). The virtual session adds startup time
+of its own, so the stage 1 window was measured again there: 387 ms to its first frame, against 197
+ms on the desktop. Compare these columns with each other, not with the table above. Medians of
+three runs, except the owner's daemon, run once to keep its load low:
+
+| Metric                     | Target              | Stage 1 window | Owner's daemon      | 2000 torrents, idle | 2000 torrents, busy |
+| -------------------------- | ------------------- | -------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 387 ms         | 465 ms              | 451 ms              | 455 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 70.2 MiB       | 79.4 MiB            | 98.5 MiB            | 100.0 MiB           |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 51.8 MiB       | 60.7 MiB (not met)  | 80.0 MiB            | 81.6 MiB            |
+| Unique memory (USS)        | —                   | 43.2 MiB       | 52.0 MiB            | 71.2 MiB            | 72.8 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 13.7 MiB       | 17.4 MiB (not met)  | 37.1 MiB            | 38.4 MiB            |
+| Threads                    | —                   | 32             | 34                  | 33                  | 33                  |
+| CPU over 30 s, one core    | near 0 % when idle  | —              | 0.10 %              | 0.03 %              | 2.27 %              |
+| Binary size                | —                   | 31.4 MiB       | 36.6 MiB            | 36.5 MiB            | 36.5 MiB            |
+
+The owner's daemon had 6 torrents, all seeding without traffic (`just virtual just measure --cpu
+30`). The 2000 torrents are the [synthetic demo](#synthetic-demo), measured after a 10 second settle
+(`X4_MEASURE_SETTLE_SECONDS=10 just virtual just measure --example synthetic --cpu 30`, with
+`-- --static` for idle); while busy, 513 of them change their rates or progress on every poll. The
+synthetic daemon runs inside the measured process, so its own work, making up the answers, counts
+in those two columns.
+
+- Stage 2 adds 78 ms to the first frame, 3.7 MiB of private memory and 8.9 MiB of PSS to the empty
+  stage 1 window, and the binary grew by 5.2 MiB. The proposed private-memory and PSS targets are
+  missed by 1.4 and 5.7 MiB.
+- 2000 torrents add 20 MiB of private memory to the same demo with 6 torrents (17.5 MiB). 16 MiB of
+  it is the memory allocator's arena of the thread that talks to the daemon: what one read of the
+  whole list took at its peak (the synthetic daemon's JSON and the parsing of it), which the
+  allocator keeps for the next read rather than returning. The window's own share is about 3 MiB. A
+  real daemon would not add the synthetic daemon's part; that has not been measured.
+- With nothing changing, the window costs no CPU to speak of: 0.03 % with the synthetic daemon and
+  0.10 % with the owner's, which is asked for news every 1.5 seconds. It redraws only when
+  something it shows has changed.
+- Scrolling 2000 torrents by one row per frame for 10 seconds (`--scroll` of the release build,
+  `cargo run --release -p x4-app --example synthetic -- --scroll`, six runs, idle and busy; a debug
+  build takes about 115 ms per frame) gave 3602 frame intervals with a median of 16.68 ms and a
+  longest of 22.3 ms; none was over 33 ms, so no frame was missed. Many intervals (45 %) are just
+  over 16.7 ms only because a 60 Hz pace jitters around 16.67 ms. GPUI's own timing of each frame's
+  drawing and presenting (`ZED_MEASUREMENTS=1`) had a median of 7.5 ms and a 99th percentile of
+  14.3 ms; 3 of 3620 frames took over 16.7 ms, the longest 21.2 ms.
+- In 2 minutes against the owner's daemon (a debug build), 4x4 sent 169 requests, 1.4 per second:
+  the recently active torrents and the session totals every 1.5 seconds, the free space every 30
+  seconds, and the whole list and the session settings every minute.
 
 ## Development
 
