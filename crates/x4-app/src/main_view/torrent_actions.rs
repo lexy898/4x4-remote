@@ -196,6 +196,17 @@ impl MainView {
         true
     }
 
+    /// Forgets the key held down: it went up where the main view does not see it, in a removal
+    /// dialog, which lies beside the view.
+    pub(crate) fn release_held_key(&self) {
+        self.key_repeats.borrow_mut().release();
+    }
+
+    /// Whether the last key-down repeated a held key, wherever in the window it went.
+    pub(crate) fn key_held(&self) -> bool {
+        self.key_repeats.borrow().repeating()
+    }
+
     /// Handles a press of a toolbar button: carries out `request`, then hands the keyboard focus
     /// back to the table. A click leaves the focus where it is, but a button pressed with the
     /// keyboard holds it, and the list's keys would no longer reach the list.

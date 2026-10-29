@@ -19,8 +19,8 @@ use x4_app::app;
 use x4_app::main_view::MainView;
 use x4_core::test_support::torrent;
 use x4_core::{
-    Action, Command, ConnectionError, ConnectionState, DisplayState, Event, Snapshot, Torrent,
-    UiState,
+    Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, DisplayState, Event,
+    Snapshot, Torrent, UiState,
 };
 use x4_rpc::{HashString, RemoveData};
 
@@ -36,6 +36,11 @@ const DANGER_CONFIRM: &str = "remove-files-confirm";
 const NAME: &str = "removal-name";
 /// The id of the line that counts the torrents a dialog does not name.
 const MORE: &str = "removal-more";
+/// The ids of a dialog's title and of its line about the files.
+const TITLE: &str = "removal-title";
+const FILES: &str = "removal-files";
+/// The id of a notification.
+const NOTIFICATION: &str = "notification";
 /// The id of a dialog.
 const DIALOG: &str = "dialog";
 /// The items of the Remove menu.
@@ -256,15 +261,63 @@ impl Window {
 
     /// The one action the window has sent since the last look.
     #[track_caller]
+    fn sent_action(&self) -> Action {
+        self.sent_run().1
+    }
+
+    /// The one action the window has sent since the last look, with its id.
+    #[track_caller]
     #[expect(
         clippy::panic,
         reason = "a test helper: anything but one action fails the test"
     )]
-    fn sent_action(&self) -> Action {
+    fn sent_run(&self) -> (ActionId, Action) {
         match self.sent().as_slice() {
-            [Command::Run(_, action)] => action.clone(),
+            [Command::Run(id, action)] => (*id, action.clone()),
             other => panic!("expected one action, got {other:?}"),
         }
+    }
+
+    /// Answers the action `id` with `result`, as the service does once the daemon has answered.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a window that stopped listening fails the test"
+    )]
+    fn finish(&self, id: ActionId, result: Result<(), ActionError>, cx: &mut TestAppContext) {
+        self.events
+            .send_blocking(Event::ActionFinished { id, result })
+            .expect("the window listens");
+        cx.run_until_parked();
+    }
+
+    /// The text of the dialog's line `id`, as a screen reader reads it.
+    fn text(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) -> Option<String> {
+        let id = id.into();
+        self.act(cx, |window, _| window.find(id).value().map(str::to_owned))
+    }
+
+    /// The value of the search box.
+    fn search_text(&self, cx: &mut TestAppContext) -> Option<String> {
+        self.act(cx, |window, _| {
+            window.find("search").value().map(str::to_owned)
+        })
+    }
+
+    /// The height of the element `id` as it was drawn last.
+    fn height(&self, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) -> f32 {
+        let id = id.into();
+        self.act(cx, |window, _| {
+            f32::from(window.find(id).bounds().size.height)
+        })
+    }
+
+    fn last_failure(&self, cx: &mut TestAppContext) -> Option<String> {
+        cx.update(|cx| self.view.read(cx).last_failure().map(str::to_owned))
+    }
+
+    /// How many notifications are on screen.
+    fn notifications(&self, cx: &mut TestAppContext) -> usize {
+        self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
     }
 }
 
@@ -284,6 +337,15 @@ fn remove(names: &[&str], data: RemoveData) -> Action {
     Action::Remove {
         hashes: hashes(names),
         data,
+    }
+}
+
+/// A torrent with 1 GiB downloaded.
+fn gibibyte(name: &str) -> Torrent {
+    Torrent {
+        size_when_done: 1 << 30,
+        left_until_done: 0,
+        ..torrent(name)
     }
 }
 
@@ -312,6 +374,15 @@ fn delete_opens_the_light_dialog_and_enter_removes_from_list(cx: &mut TestAppCon
     assert_eq!(window.label(LIGHT_CONFIRM, cx).as_deref(), Some("Remove"));
     assert_eq!(window.label(LIGHT_CANCEL, cx).as_deref(), Some("Cancel"));
     assert_eq!(window.names(cx), 2);
+    assert_eq!(
+        window.text(TITLE, cx).as_deref(),
+        Some("Remove 2 torrents from the list?")
+    );
+    assert_eq!(window.text((NAME, 1_usize), cx).as_deref(), Some("c"));
+    assert_eq!(
+        window.text(FILES, cx).as_deref(),
+        Some("The downloaded files stay on the server.")
+    );
     assert!(!window.shown(MORE, cx));
 
     window.press("enter", cx);
@@ -453,26 +524,41 @@ fn escape_cancels_the_danger_dialog(cx: &mut TestAppContext) {
 fn clicking_delete_files_sends_remove_with_data_for_the_captured_hashes(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     let names = ["a", "b", "c", "d", "e", "f", "g"];
-    window.send(names.into_iter().map(torrent).collect(), cx);
+    window.send(names.into_iter().map(gibibyte).collect(), cx);
     window.press("ctrl-a", cx);
     window.press("shift-delete", cx);
     assert_eq!(window.names(cx), 5, "five names, and how many more");
-    assert!(window.shown(MORE, cx));
 
     // Meanwhile one of them is removed elsewhere, and another one changes.
     window.send(
         vec![
-            downloading("a"),
-            torrent("c"),
-            torrent("d"),
-            torrent("e"),
-            torrent("f"),
-            torrent("g"),
+            Torrent {
+                state: DisplayState::Downloading,
+                ..gibibyte("a")
+            },
+            gibibyte("c"),
+            gibibyte("d"),
+            gibibyte("e"),
+            gibibyte("f"),
+            gibibyte("g"),
         ],
         cx,
     );
-    assert_eq!(window.names(cx), 5, "the dialog says what it said");
-    assert!(window.shown(MORE, cx));
+
+    // The dialog says what it said when it opened.
+    assert_eq!(
+        window.text(TITLE, cx).as_deref(),
+        Some("Delete 7 torrents and their files?")
+    );
+    assert_eq!(window.names(cx), 5);
+    for (index, name) in ["a", "b", "c", "d", "e"].into_iter().enumerate() {
+        assert_eq!(window.text((NAME, index), cx).as_deref(), Some(name));
+    }
+    assert_eq!(window.text(MORE, cx).as_deref(), Some("and 2 more"));
+    assert_eq!(
+        window.text(FILES, cx).as_deref(),
+        Some("7.0 GiB of downloaded data will be deleted from the server. This cannot be undone.")
+    );
 
     window.click(DANGER_CONFIRM, cx);
 
@@ -655,8 +741,115 @@ fn delete_in_the_search_box_edits_text_and_opens_no_dialog(cx: &mut TestAppConte
     window.act(cx, |window, cx| window.input("ab", cx));
     window.press("home", cx);
     window.press("delete", cx);
+    assert_eq!(window.search_text(cx).as_deref(), Some("b"));
     window.press("shift-delete", cx);
+    assert_eq!(window.search_text(cx).as_deref(), Some(""));
 
     assert_eq!(window.dialogs(cx), 0);
     assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn a_dialog_closed_with_the_mouse_lets_the_key_ask_again(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    window.press("shift-delete", cx);
+    window.click(DANGER_CANCEL, cx);
+    window.press("shift-delete", cx);
+    assert_eq!(window.dialogs(cx), 1, "Shift+Delete asks again");
+    assert!(window.shown(DANGER_CONFIRM, cx));
+    window.click(DANGER_CANCEL, cx);
+
+    window.press("delete", cx);
+    window.click(LIGHT_CONFIRM, cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
+    window.click_row(1, cx);
+    window.press("delete", cx);
+    assert_eq!(window.dialogs(cx), 1, "Delete asks again");
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+}
+
+#[gpui_kit::test]
+fn an_enter_held_on_the_menu_opens_the_dialog_but_does_not_confirm_it(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    // "Remove from list…" chosen with Enter, held: its repeats land on the focused Remove.
+    window.click(REMOVE, cx);
+    window.press("down", cx);
+    window.key_down("enter", false, cx);
+    assert!(window.focused(LIGHT_CONFIRM, cx), "the dialog opened");
+    window.key_down("enter", true, cx);
+    window.key_down("enter", true, cx);
+    window.key_up("enter", cx);
+    assert_eq!(window.sent(), [], "the held Enter did not confirm");
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+
+    // X11 does not mark its repeats.
+    window.press("escape", cx);
+    window.click(REMOVE, cx);
+    window.press("down", cx);
+    window.key_down("enter", false, cx);
+    window.key_down("enter", false, cx);
+    window.key_up("enter", cx);
+    assert_eq!(window.sent(), []);
+    assert!(window.shown(LIGHT_CONFIRM, cx));
+
+    // A fresh press confirms.
+    window.press("enter", cx);
+    assert_eq!(window.sent_action(), remove(&["a"], RemoveData::Keep));
+}
+
+#[gpui_kit::test]
+fn names_are_shown_in_full_however_long(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let long = |year: u32| {
+        format!(
+            "Some.Very.Long.Movie.Title.With.Many.Words.In.It.Directors.Cut.Remastered.\
+             1080p.BluRay.x264-GROUP ({year})"
+        )
+    };
+    window.send(
+        vec![torrent(&long(2019)), torrent(&long(2020)), torrent("x")],
+        cx,
+    );
+    window.press("ctrl-a", cx);
+    window.press("shift-delete", cx);
+
+    assert_eq!(window.text((NAME, 0_usize), cx), Some(long(2019)));
+    assert_eq!(window.text((NAME, 1_usize), cx), Some(long(2020)));
+    let (long_height, short_height) = (
+        window.height((NAME, 0_usize), cx),
+        window.height((NAME, 2_usize), cx),
+    );
+    assert!(
+        long_height > short_height * 1.5,
+        "a long name wraps over more lines instead of being cut: {long_height} vs {short_height}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_removal_is_shown(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.press("ctrl-a", cx);
+    window.press("shift-delete", cx);
+    window.click(DANGER_CONFIRM, cx);
+    let (id, action) = window.sent_run();
+    assert_eq!(action, remove(&["a", "b"], RemoveData::Delete));
+
+    window.finish(
+        id,
+        Err(ActionError::Rpc(ConnectionError::Server("busy".to_owned()))),
+        cx,
+    );
+
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some("Could not remove 2 torrents and delete their files: busy")
+    );
+    assert_eq!(window.notifications(cx), 1);
 }

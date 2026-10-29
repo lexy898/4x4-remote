@@ -22,6 +22,15 @@
 //! The light dialog is built the same way, with Remove focused, so that Enter removes from the
 //! list. Closing either dialog gives the focus back to what had it when it opened, which the main
 //! view makes the torrent list.
+//!
+//! The dialog lies beside the main view, not inside it, so the main view does not see the keys
+//! pressed in it. Its footer passes the key-ups on, so that the key that opened the dialog is not
+//! taken as held after it went up. It also makes the repeats of a held key press no button: an
+//! Enter held on a menu item opens the dialog, and its repeats must not confirm it too.
+//!
+//! The names are the user's one check of what goes, so each is shown in full, wrapped over as
+//! many lines as it takes: names that differ only at their end must stay apart. Every line of
+//! text is a label for screen readers, as gpui's accessible text is.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -30,8 +39,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, v_flex};
 use gpui_kit::{
-    App, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Styled as _, TestSupportExt as _, WeakEntity, Window, div,
+    App, ElementId, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Role,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
+    WeakEntity, Window, div,
 };
 use x4_core::RemovalSummary;
 use x4_rpc::{HashString, RemoveData};
@@ -135,7 +145,7 @@ pub(crate) fn open(
             .is_some_and(|view| view.read(cx).status().connected());
         dialog
             .close_button(false)
-            .title(removal.title.clone())
+            .title(text_line("removal-title", &removal.title).test_support())
             .child(body(&removal, cx))
             .footer(footer(&removal, &focus, connected, &view))
     });
@@ -151,29 +161,35 @@ fn body(removal: &Removal, cx: &App) -> impl IntoElement + use<> {
     };
     v_flex()
         .gap_1()
-        .children(removal.names.iter().enumerate().map(|(index, name)| {
-            div()
-                .id(("removal-name", index))
-                .w_full()
-                .truncate()
-                .child(name.clone())
-                .test_support()
-        }))
-        .children(removal.more.clone().map(|more| {
-            div()
-                .id("removal-more")
+        .children(
+            removal
+                .names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| text_line(("removal-name", index), name).test_support()),
+        )
+        .children(removal.more.as_ref().map(|more| {
+            text_line("removal-more", more)
                 .text_color(theme.muted_foreground)
-                .child(more)
                 .test_support()
         }))
         .child(
-            div()
-                .id("removal-files")
+            text_line("removal-files", &removal.files)
                 .pt_2()
                 .text_color(files_color)
-                .child(removal.files.clone())
                 .test_support(),
         )
+}
+
+/// A line of the dialog's text, `id`, shown in full however long: it wraps instead of being cut.
+/// Screen readers read it as a label whose value is the text.
+fn text_line(id: impl Into<ElementId>, text: &SharedString) -> Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .w_full()
+        .role(Role::Label)
+        .aria_value(text.clone())
+        .child(text.clone())
 }
 
 /// Cancel and the confirm button, in the key context where Enter presses the focused one. The
@@ -201,8 +217,24 @@ fn footer(
         RemoveData::Keep => confirm.primary().label(t!("remove-from-list-confirm")),
         RemoveData::Delete => confirm.danger().label(t!("remove-with-data-confirm")),
     };
+    let (on_key_up, on_key_down) = (view.clone(), view.clone());
     div()
         .key_context(REMOVAL_FOOTER_CONTEXT)
+        .capture_key_up(move |_, _, cx| {
+            if let Some(view) = on_key_up.upgrade() {
+                view.read(cx).release_held_key();
+            }
+        })
+        // Before the focused button takes the key-down that its key-up would turn into a press.
+        .capture_key_down(move |event, window, cx| {
+            let repeat = event.is_held
+                || on_key_down
+                    .upgrade()
+                    .is_some_and(|view| view.read(cx).key_held());
+            if repeat {
+                window.prevent_default();
+            }
+        })
         .child(DialogFooter::new().child(cancel).child(confirm))
 }
 

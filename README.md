@@ -71,8 +71,9 @@ left such as "23 h 59 m", or a header with its sort mark. After that it opens at
 last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
 The window has four parts: a toolbar along the top, with the search box, the Start and Pause
-buttons and the Remove menu on the left and the theme button and the "Columns" menu on the right; the filter sidebar
-down the left side; the torrent table, which takes the rest; and the status bar along the bottom.
+buttons and the Remove menu on the left and the theme button and the "Columns" menu on the right;
+the filter sidebar down the left side; the torrent table, which takes the rest; and the status bar
+along the bottom.
 
 The table lists the torrents, sorted by name at first. Each row shows:
 
@@ -123,16 +124,18 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Shift+Delete` asks whether to remove them and delete their files from the server; "Remove and
   delete files…" in the Remove menu does the same.
 
-Removing always asks first. The dialog names the first five torrents, says how many more there
-are, and says what becomes of the files: that they stay on the server, or how much downloaded data
-will be deleted for good. It removes the torrents it named when it opened, even if the list changes
-while it is open. "Remove from list" has Remove focused, so Enter removes. "Remove and delete files"
-has Cancel focused: Enter or Space press the button that has the focus, so they cancel, and only a
-click on "Delete files", or Tab to it and Enter, deletes anything. Escape, Cancel or a click beside
-the dialog close it and remove nothing. While the dialog is open, Delete and Shift+Delete open no
-second one, and holding the key opens it once. While the daemon is not connected, Remove and its keys
-do nothing, and the confirm button of an open dialog is disabled until the connection is back;
-Cancel still works. Closing the dialog gives the keys back to the table.
+Removing always asks first. The dialog names the first five torrents in full, a long name wrapped
+over several lines, says how many more there are, and says what becomes of the files: that they
+stay on the server, or how much downloaded data will be deleted for good. It removes the torrents
+it named when it opened, even if the list changes while it is open. "Remove from list" has Remove
+focused, so Enter removes. "Remove and delete files" has Cancel focused: Enter or Space press the
+button that has the focus, so they cancel, and only a click on "Delete files", or Tab to it and
+Enter, deletes anything. Escape, Cancel or a click beside the dialog close it and remove nothing.
+While the dialog is open, Delete and Shift+Delete open no second one, and holding the key opens it
+once; a key held down presses no button in the dialog, so an Enter held on a menu item opens the
+dialog without confirming it. While the daemon is not connected, Remove and its keys do nothing,
+and the confirm button of an open dialog is disabled until the connection is back; Cancel still
+works. Closing the dialog gives the keys back to the table.
 
 Holding a key down sends its action once, not again with every repeat of the key. While the action
 sent last waits for the daemon's answer, it is not sent again for the same torrents, so a second
