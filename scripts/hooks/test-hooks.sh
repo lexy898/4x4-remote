@@ -802,9 +802,11 @@ test_measure_rejects_unknown_options() {
 
 # A directory with a fake `dbus-run-session`, which runs its command, and a fake `kwin_wayland`,
 # which runs its --exit-with-session script as KWin does once the virtual screen is up and prints
-# some noise of its own. Each writes its arguments and the XDG dirs it sees to <dir>/<tool>.txt.
-# Also an owner's home with a kdeglobals, and an empty TMPDIR for the session's directory.
+# some noise of its own. Each writes its arguments, the XDG dirs and the display variables it
+# sees to <dir>/<tool>.txt. Also an owner's home with a kdeglobals, and an empty TMPDIR for the
+# session's directory.
 virtual_dir=
+virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY)='
 new_virtual_env() {
     virtual_dir=$(mktemp -d "$tmp_root/virtual.XXXXXX")
     mkdir -p "$virtual_dir/bin" "$virtual_dir/home/.config/fontconfig" "$virtual_dir/tmp"
@@ -812,13 +814,15 @@ new_virtual_env() {
     printf '<fontconfig/>\n' >"$virtual_dir/home/.config/fontconfig/fonts.conf"
     cat >"$virtual_dir/bin/dbus-run-session" <<EOF
 #!/usr/bin/env bash
-{ echo "args: \$*"; env | grep '^XDG_' || true; } >"$virtual_dir/dbus-run-session.txt"
+seen='$virtual_seen'
+{ echo "args: \$*"; env | grep -E "\$seen" || true; } >"$virtual_dir/dbus-run-session.txt"
 [[ \$1 == -- ]] && shift
 exec "\$@"
 EOF
     cat >"$virtual_dir/bin/kwin_wayland" <<EOF
 #!/usr/bin/env bash
-{ echo "args: \$*"; env | grep '^XDG_' || true; } >"$virtual_dir/kwin_wayland.txt"
+seen='$virtual_seen'
+{ echo "args: \$*"; env | grep -E "\$seen" || true; } >"$virtual_dir/kwin_wayland.txt"
 echo "kwin noise"
 while ((\$#)); do
     if [[ \$1 == --exit-with-session ]]; then "\$2"; exit 0; fi
@@ -830,11 +834,15 @@ EOF
 }
 
 # run_virtual <command...>: the helper with the fakes first on PATH, in the fake home, with the
-# owner's XDG dirs left to their defaults and DISPLAY set as on a desktop.
+# owner's XDG dirs left to their defaults and the owner's displays, X authority and runtime dir set
+# as on a desktop.
 run_virtual() {
+    mkdir -p "$virtual_dir/owner-runtime"
     run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
         -u X4_VIRTUAL_KEEP PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
-        TMPDIR="$virtual_dir/tmp" DISPLAY=:0 "$BASH" "$virtual_session" "$@"
+        TMPDIR="$virtual_dir/tmp" DISPLAY=:0 XAUTHORITY="$virtual_dir/home/.Xauthority" \
+        WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$virtual_dir/owner-runtime" \
+        "$BASH" "$virtual_session" "$@"
 }
 
 test_virtual_session_propagates_the_exit_code() {
@@ -878,6 +886,52 @@ test_virtual_session_gives_kwin_and_the_command_temp_xdg_dirs() {
         fail "KWin's own output belongs in its log, got: $stdout $stderr"
 }
 
+# Services on the session's bus (the portal, ksecretd) must not reach the owner's X server or
+# runtime dir: KWin, the bus and the command see the session's Wayland socket, no DISPLAY and no
+# XAUTHORITY, and a runtime dir of the session's own.
+test_virtual_session_keeps_the_owner_display_and_runtime_dir_away() {
+    local seen socket runtime
+    new_virtual_env
+    run_virtual bash -c 'echo "runtime=$XDG_RUNTIME_DIR mode=$(stat -c %a "$XDG_RUNTIME_DIR")"
+        echo "wayland=$WAYLAND_DISPLAY display=${DISPLAY-unset} xauthority=${XAUTHORITY-unset}"'
+    expect_status 0
+    socket=$(sed -n 's/.*--socket \([^ ]*\).*/\1/p' "$virtual_dir/kwin_wayland.txt")
+    [[ $socket == x4-virtual-* ]] || fail "unexpected KWin socket: '$socket'"
+    runtime=$(sed -n 's/^runtime=\([^ ]*\) .*/\1/p' <<<"$stdout")
+    [[ $runtime == "$virtual_dir/tmp/x4-virtual."*/runtime ]] || fail "unexpected runtime dir: '$runtime'"
+    expect_contains "mode=700" "$stdout" "the runtime dir's mode"
+    expect_contains "wayland=$socket display=unset xauthority=unset" "$stdout" "the command's display"
+    for seen in dbus-run-session kwin_wayland; do
+        expect_contains "WAYLAND_DISPLAY=$socket" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+        expect_contains "XDG_RUNTIME_DIR=$runtime" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+        if grep -Eq '^(DISPLAY|XAUTHORITY)=' "$virtual_dir/$seen.txt"; then
+            fail "$seen sees the owner's X server: $(<"$virtual_dir/$seen.txt")"
+        fi
+    done
+}
+
+# A fontconfig dir and a kdeglobals that are symlinks (into a dotfiles repository, say) are copied
+# as a real dir and file, so the session's writes never follow the links into the owner's files.
+test_virtual_session_copies_linked_settings_as_files() {
+    local config
+    new_virtual_env
+    config=$virtual_dir/home/.config
+    mkdir -p "$virtual_dir/dotfiles"
+    mv "$config/fontconfig" "$config/kdeglobals" "$virtual_dir/dotfiles/"
+    ln -s "$virtual_dir/dotfiles/fontconfig" "$config/fontconfig"
+    ln -s "$virtual_dir/dotfiles/kdeglobals" "$config/kdeglobals"
+    run_virtual bash -c 'cd "$XDG_CONFIG_HOME"
+        [[ -L fontconfig || -L kdeglobals ]] && echo "linked"
+        [[ -d fontconfig && -f fontconfig/fonts.conf && -f kdeglobals ]] && echo "copied"
+        echo changed >kdeglobals; echo changed >fontconfig/fonts.conf'
+    expect_status 0
+    [[ $stdout == copied ]] || fail "expected real copies, got: $stdout"
+    [[ $(<"$virtual_dir/dotfiles/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
+        fail "the owner's kdeglobals changed"
+    [[ $(<"$virtual_dir/dotfiles/fontconfig/fonts.conf") == '<fontconfig/>' ]] ||
+        fail "the owner's fonts.conf changed"
+}
+
 test_virtual_session_keeps_arguments_with_spaces() {
     new_virtual_env
     # The literal $HOME and * must reach the command unexpanded.
@@ -913,13 +967,22 @@ test_virtual_session_keeps_its_dir_on_request() {
 
 # Services the session's D-Bus starts (the desktop portal, ksecretd) outlive KWin and write to the
 # session's dirs; the fake KWin leaves such a process behind, with the session's environment.
+# The fake KWin leaves behind a process with the session's environment, one that ignores SIGTERM,
+# and two decoys that must survive: one whose XDG_DATA_HOME only starts like the session's, and
+# one without it, like the owner's own processes.
 test_virtual_session_stops_what_the_session_left_running() {
-    local leftover
+    local name pid
     new_virtual_env
     cat >"$virtual_dir/bin/kwin_wayland" <<EOF
 #!/usr/bin/env bash
 sleep 300 </dev/null >/dev/null 2>&1 &
 echo \$! >"$virtual_dir/leftover.pid"
+bash -c 'trap "" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/stubborn.pid"
+env XDG_DATA_HOME="\${XDG_DATA_HOME}2" sleep 300 </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/near-miss.pid"
+env -u XDG_DATA_HOME sleep 300 </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/unrelated.pid"
 while ((\$#)); do
     if [[ \$1 == --exit-with-session ]]; then "\$2"; exit 0; fi
     shift
@@ -927,11 +990,18 @@ done
 EOF
     run_virtual true
     expect_status 0
-    leftover=$(<"$virtual_dir/leftover.pid")
-    if kill -0 "$leftover" 2>/dev/null; then
-        kill "$leftover"
-        fail "the process the session left running is still there"
-    fi
+    for name in near-miss unrelated; do
+        pid=$(<"$virtual_dir/$name.pid")
+        kill -0 "$pid" 2>/dev/null || fail "the $name decoy was stopped"
+        kill "$pid"
+    done
+    for name in leftover stubborn; do
+        pid=$(<"$virtual_dir/$name.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid"
+            fail "the $name process the session left running is still there"
+        fi
+    done
     [[ -z $(ls -A "$virtual_dir/tmp") ]] || fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
 }
 
@@ -1004,6 +1074,8 @@ cases=(
     measure_rejects_unknown_options
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
+    virtual_session_keeps_the_owner_display_and_runtime_dir_away
+    virtual_session_copies_linked_settings_as_files
     virtual_session_keeps_arguments_with_spaces
     virtual_session_names_a_missing_tool
     virtual_session_keeps_its_dir_on_request

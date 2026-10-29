@@ -362,10 +362,12 @@ the newest, and it redraws only when what it shows has changed, so an idle daemo
 ### Windows off screen
 
 `just virtual <command>` runs a command inside a headless KWin with a D-Bus session and XDG
-directories of its own, so the windows it opens show on no monitor, take no focus and leave the
-desktop's settings alone; `spectacle -b -n -f -o shot.png` inside it captures the virtual screen.
-For example, `just virtual just measure` measures the app without a window on your screens. It
-needs KDE Plasma (`kwin_wayland` and `dbus-run-session`) and works nowhere else.
+directories of its own, runtime directory included, and without your desktop's `DISPLAY`, so the
+windows it opens show on no monitor, take no focus and leave the desktop's settings alone;
+`spectacle -b -n -f -o /tmp/shot.png` inside it captures the virtual screen. Whatever the session
+started is stopped when it ends. For example, `just virtual just measure` measures the app without a
+window on your screens. It needs KDE Plasma (`kwin_wayland` and `dbus-run-session`) and works
+nowhere else.
 
 ### Synthetic demo
 
