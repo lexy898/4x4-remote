@@ -46,6 +46,12 @@ const DIALOG: &str = "dialog";
 /// The items of the Remove menu.
 const REMOVE_FROM_LIST: &str = "Remove from list…";
 const REMOVE_WITH_DATA: &str = "Remove and delete files…";
+/// The id of an open menu.
+const MENU: &str = "popup-menu";
+/// The id of the search box.
+const SEARCH: &str = "search";
+/// The id of the toolbar's Columns button, whose menu shows and hides columns.
+const COLUMNS: &str = "column-menu";
 
 /// An open main window and the far ends of its channels, standing in for the service.
 struct Window {
@@ -729,6 +735,43 @@ fn the_remove_button_asks_either_way_from_its_menu(cx: &mut TestAppContext) {
             assert_eq!(shown, [keys]);
         }
     });
+}
+
+/// An open menu of the toolbar keeps the keys until it closes, as the context menu does: no key
+/// takes the focus elsewhere and leaves the menu open, so that the keys of the list or the search
+/// box would act behind it. The Columns menu is the toolbar's other one.
+#[gpui_kit::test]
+fn focus_keys_in_an_open_toolbar_menu_do_nothing(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    for button in [REMOVE, COLUMNS] {
+        window.click(button, cx);
+        assert!(window.shown(MENU, cx), "{button}");
+        for key in ["tab", "shift-tab", "ctrl-f", "/"] {
+            window.press(key, cx);
+            assert!(
+                window.shown(MENU, cx),
+                "{button}, {key}: the menu stays open"
+            );
+            assert!(!window.focused(SEARCH, cx), "{button}, {key}");
+            assert!(
+                !window.table_focused(cx),
+                "{button}, {key}: the keys stay in the menu"
+            );
+        }
+        window.press("space", cx);
+        assert_eq!(window.sent(), [], "{button}: nothing acts behind the menu");
+
+        window.press("escape", cx);
+        assert!(!window.shown(MENU, cx), "{button}");
+    }
+    window.press("ctrl-f", cx);
+    assert!(
+        window.focused(SEARCH, cx),
+        "closed, the menus let Ctrl+F work again"
+    );
 }
 
 #[gpui_kit::test]

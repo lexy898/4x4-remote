@@ -24,9 +24,10 @@
 //! `DataTable`, inside the torrent list) binds Escape to clearing its own selected row and passes
 //! the key on when it has none; Escape in the list then clears the selection here. The table also
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
-//! again here in its context, later, so that ours win (see [`BINDINGS`]). While the context menu is
-//! open, its own Up, Down, Enter and Escape go first, and Home, End, Page Up, Page Down, Tab,
-//! Shift+Tab, Ctrl+F, `/`, Ctrl+L and Ctrl+T do nothing: the menu keeps the keys until it closes.
+//! again here in its context, later, so that ours win (see [`BINDINGS`]). While a menu is open (the
+//! context menu, or a menu of the toolbar), its own Up, Down, Enter and Escape go first, and Tab,
+//! Shift+Tab, Ctrl+F, `/`, Ctrl+L and Ctrl+T do nothing, nor do Home, End, Page Up and Page Down
+//! in the context menu: the menu keeps the keys until it closes.
 
 use std::rc::Rc;
 
@@ -96,6 +97,8 @@ const TABLE_CONTEXT: &str = "DataTable";
 const TABLE_NO_MENU: &str = "DataTable && !PopupMenu";
 /// An open menu of the table: its context menu.
 const TABLE_MENU: &str = "DataTable > PopupMenu";
+/// Any open menu: the table's context menu, or a menu of the toolbar (Remove, Columns).
+const ANY_MENU: &str = "PopupMenu";
 /// Where the torrent actions work: in the torrent list, while no menu of it is open. An open
 /// context menu is drawn inside the list, so without `!PopupMenu` Delete would act on the
 /// torrents behind it.
@@ -185,42 +188,43 @@ pub const BINDINGS: &[Binding] = &[
         action: || Box::new(MoveSelectionDown),
         context: Some(TABLE_CONTEXT),
     },
-    // The context menu is modal. Up and Down in it move its highlight (the menu's own bindings are
-    // deeper). It has no Home, End, Page Up or Page Down: ours do not work behind it, and the
-    // table's own are bound to nothing in it, which is deeper than the table, so that they do
-    // nothing either. Neither may Tab, Shift+Tab, Ctrl+F, `/` or Ctrl+L (which opens the speed
-    // limits) take the focus out of the open menu: the list's keys would then act on the torrents
-    // behind it. Ctrl+T does nothing behind it either.
+    // A menu is modal. Up and Down in it move its highlight (the menu's own bindings are deeper).
+    // Neither Tab, Shift+Tab, Ctrl+F, `/` nor Ctrl+L (which opens the speed limits) may take the
+    // focus out of an open menu, which does not close when it loses the focus: the keys of the
+    // list or the search box would then act behind it. Ctrl+T does nothing behind it either.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
-        context: Some(TABLE_MENU),
+        context: Some(ANY_MENU),
     },
     Binding {
         keys: "shift-tab",
         action: || Box::new(NoAction),
-        context: Some(TABLE_MENU),
+        context: Some(ANY_MENU),
     },
     Binding {
         keys: "ctrl-f",
         action: || Box::new(NoAction),
-        context: Some(TABLE_MENU),
+        context: Some(ANY_MENU),
     },
     Binding {
         keys: "/",
         action: || Box::new(NoAction),
-        context: Some(TABLE_MENU),
+        context: Some(ANY_MENU),
     },
     Binding {
         keys: "ctrl-l",
         action: || Box::new(NoAction),
-        context: Some(TABLE_MENU),
+        context: Some(ANY_MENU),
     },
     Binding {
         keys: "ctrl-t",
         action: || Box::new(NoAction),
-        context: Some(TABLE_MENU),
+        context: Some(ANY_MENU),
     },
+    // The context menu has no Home, End, Page Up or Page Down: ours do not work behind it, and the
+    // table's own are bound to nothing in it, which is deeper than the table, so that they do
+    // nothing either.
     Binding {
         keys: "home",
         action: || Box::new(NoAction),

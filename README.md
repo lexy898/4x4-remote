@@ -143,7 +143,9 @@ open. Each item shows its key, and an item that can do nothing is disabled. A ri
 the rows opens no menu. While the menu is open, it keeps the keys: the list's keys do nothing to
 the torrents (Delete removes nothing, and Home, End, Page Up and Page Down do not move the
 selection), and Tab, Shift+Tab, `Ctrl+F` and `/` do not leave it; Up, Down and Enter choose an
-item, and Escape closes the menu. Choosing an item gives the keys back to the table.
+item, and Escape closes the menu. Choosing an item gives the keys back to the table. The toolbar's
+Remove and Columns menus keep the keys in the same way: while one is open, Tab, Shift+Tab, `Ctrl+F`
+and `/` do not leave it.
 
 On Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
 lost when 4x4 quits, unless a clipboard manager keeps it.
@@ -223,11 +225,11 @@ closes the popover; `Escape`, a click beside it, or moving the focus out of it (
 what was typed, until you come back. A click on blank space in the popover leaves the cursor in the
 field. A limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note
 under its field, and nothing is sent; a limit switched on with an empty field asks for a speed. A
-key held down to open the popover does not type into it or apply it. While the context menu is open,
-`Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are disabled until the daemon has sent
-its settings, and while it is not connected; an open popover then keeps what was typed, and Apply
-waits for the connection. A change that fails shows a notification, as an action does, one for the
-turtle and one for each limit.
+key held down to open the popover does not type into it or apply it. While a menu is open, the
+context menu or one of the toolbar, `Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are
+disabled until the daemon has sent its settings, and while it is not connected; an open popover then
+keeps what was typed, and Apply waits for the connection. A change that fails shows a notification,
+as an action does, one for the turtle and one for each limit.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
