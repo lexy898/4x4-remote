@@ -29,6 +29,9 @@
 //! Shift+Tab, Ctrl+F, `/`, Ctrl+L and Ctrl+T do nothing, nor do Home, End, Page Up and Page Down
 //! in the context menu: the menu keeps the keys until it closes.
 
+#[cfg(test)]
+mod tests;
+
 use std::rc::Rc;
 
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, NoAction, actions};

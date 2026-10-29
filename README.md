@@ -5,12 +5,12 @@ in Rust.
 
 ## Status
 
-Early development — stage 3, actions, under way. The window connects to the daemon set in
-`config.toml` and shows every torrent in a table, with its state, progress and speeds; a sidebar
-filters them by state, with live counts, and a search box finds them by name. The status bar shows
-the total download and upload speeds, the free space and the state of the connection; it switches
-the alternative speed limits and sets the global download and upload limits. The window remembers
-its columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
+Early development — stage 3, actions. The window connects to the daemon set in `config.toml` and
+shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
+state, with live counts, and a search box finds them by name. The status bar shows the total
+download and upload speeds, the free space and the state of the connection; it switches the
+alternative speed limits and sets the global download and upload limits. The window remembers its
+columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
 started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
 the toolbar and a context menu; removing asks first, and deleting the files too only after an
 explicit confirmation.
@@ -108,8 +108,10 @@ first or the last torrent. Ctrl+A selects every torrent the list shows, and only
 Ctrl+Shift+A selects none. Every selected row has the same highlight. The selection stays on the
 same torrents when the list is re-sorted or updated, and an update never scrolls the list. A
 selected torrent that the filter or the search hides, or that is gone from the daemon, leaves the
-selection, and it is not selected again when it shows again. Tab moves on from the table to the
-search box and the buttons. The table has the keyboard focus when the window opens.
+selection, and it is not selected again when it shows again. With nothing selected, Up, Down, Page
+Up, Page Down and Home select the first torrent, and End the last. Tab moves on from the table to
+the turtle and the speed limits in the status bar, then to the search box and the toolbar's buttons;
+a disabled button is passed over. The table has the keyboard focus when the window opens.
 
 The selected torrents that the list shows are what an action works on, in the order shown; a
 torrent the filter or the search hides is never touched. With the table focused:
@@ -126,11 +128,10 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Shift+Delete` asks whether to remove them and delete their files from the server; "Remove and
   delete files…" in the Remove menu does the same;
 - `Ctrl+C` copies their magnet links, one per line, in the order shown. The links come from the
-  daemon, so they are on the clipboard a moment later, and only if 4x4 still has the focus then;
-  otherwise a notification asks for `Ctrl+C` again. A newer copy takes the place of one still
-  waiting for the daemon, so the clipboard gets what was asked for last. If the daemon no longer
-  has some of the torrents, the other links are copied and a notification says how many are
-  missing;
+  daemon, so they are on the clipboard a moment later (see the clipboard notes below). A newer copy
+  takes the place of one still waiting for the daemon, so the clipboard gets what was asked for
+  last. If the daemon no longer has some of the torrents, the other links are copied and a
+  notification says how many are missing;
 - `Ctrl+Shift+C` copies their info hashes, one per line, in the order shown, at once, also while
   the daemon is not connected.
 
@@ -147,21 +148,27 @@ item, and Escape closes the menu. Choosing an item gives the keys back to the ta
 Remove and Columns menus keep the keys in the same way: while one is open, Tab, Shift+Tab, `Ctrl+F`
 and `/` do not leave it.
 
-On Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
-lost when 4x4 quits, unless a clipboard manager keeps it.
+Two notes on the clipboard:
+
+- the magnet links reach the clipboard only if 4x4 still has the focus when the daemon's answer
+  comes, a moment after `Ctrl+C`: on Wayland an app that does not have the focus cannot set the
+  clipboard. If you have switched to another app by then, nothing is copied and a notification asks
+  for `Ctrl+C` again. The hashes are copied at once, so this never happens to them;
+- on Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
+  lost when 4x4 quits, unless a clipboard manager keeps it.
 
 Removing always asks first. The dialog names the first five torrents in full, a long name wrapped
-over several lines, says how many more there are, and says what becomes of the files: that they
-stay on the server, or how much downloaded data will be deleted for good. It removes the torrents
-it named when it opened, even if the list changes while it is open. "Remove from list" has Remove
+over several lines, says how many more there are, and says what becomes of the files: that they stay
+on the server, or how much downloaded data will be deleted for good. It removes the torrents it
+named when it opened, even if the list changes while it is open. "Remove from list" has Remove
 focused, so Enter removes. "Remove and delete files" has Cancel focused: Enter or Space press the
 button that has the focus, so they cancel, and only a click on "Delete files", or Tab to it and
 Enter, deletes anything. Escape, Cancel or a click beside the dialog close it and remove nothing.
 While the dialog is open, Delete and Shift+Delete open no second one, and holding the key opens it
-once; a key held down presses no button in the dialog, so an Enter held on a menu item opens the
-dialog without confirming it. While the daemon is not connected, Remove and its keys do nothing,
-and the confirm button of an open dialog is disabled until the connection is back; Cancel still
-works. Closing the dialog gives the keys back to the table.
+once; a key already held when the dialog opens presses no button in it, so an Enter held on a menu
+item opens the dialog without confirming it. While the daemon is not connected, Remove and its keys
+do nothing, and the confirm button of an open dialog is disabled until the connection is back;
+Cancel still works. Closing the dialog gives the keys back to the table.
 
 Holding a key down sends its action once, not again with every repeat of the key. While the action
 sent last waits for the daemon's answer, it is not sent again for the same torrents, so a second
@@ -216,20 +223,22 @@ The status bar at the bottom shows:
 - the total download and upload speeds, ↓ and ↑.
 
 The speed limits popover has, for the download and the upload limit each, a switch that turns the
-limit on and a field for it in KiB/s, as every speed in 4x4 is shown (the daemon keeps limits in
-kB/s, 1000 bytes per second; 4x4 converts them). Each field starts with the daemon's value, also
-while that limit is off. Typing a speed into a field switches its limit on, and clearing the field
-switches it off. `Enter` in a field, or Apply, sends the limits that changed, and only those, and
-closes the popover; `Escape`, a click beside it, or moving the focus out of it (`Tab` past Apply,
-`Shift+Tab`, `Ctrl+F`) closes it and changes nothing. Switching to another app leaves it open, with
-what was typed, until you come back. A click on blank space in the popover leaves the cursor in the
-field. A limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note
-under its field, and nothing is sent; a limit switched on with an empty field asks for a speed. A
-key held down to open the popover does not type into it or apply it. While a menu is open, the
-context menu or one of the toolbar, `Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are
-disabled until the daemon has sent its settings, and while it is not connected; an open popover then
-keeps what was typed, and Apply waits for the connection. A change that fails shows a notification,
-as an action does, one for the turtle and one for each limit.
+limit on and a field for it in KiB/s (1024 bytes per second), as every speed in 4x4 is shown. The
+daemon keeps its limits in kB/s (1000 bytes per second), and 4x4 converts them both ways, to the
+nearest whole number: 500 KiB/s typed here is stored as 512 kB/s, and a limit of 100 kB/s set in
+another client shows here as 98 KiB/s. Each field starts with the daemon's value, also while that
+limit is off. Typing a speed into a field switches its limit on, and clearing the field switches it
+off. `Enter` in a field, or Apply, sends the limits that changed, and only those, and closes the
+popover; `Escape`, a click beside it, or moving the focus out of it (`Tab` past Apply, `Shift+Tab`,
+`Ctrl+F`) closes it and changes nothing. Switching to another app leaves it open, with what was
+typed, until you come back. A click on blank space in the popover leaves the cursor in the field. A
+limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note under its
+field, and nothing is sent; a limit switched on with an empty field asks for a speed. A key held
+down to open the popover does not type into it or apply it. While a menu is open, the context menu
+or one of the toolbar, `Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are disabled
+until the daemon has sent its settings, and while it is not connected; an open popover then keeps
+what was typed, and Apply waits for the connection. A change that fails shows a notification, as an
+action does, one for the turtle and one for each limit.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -264,8 +273,8 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Shift+Delete`                                      | in the table              | asks whether to remove them with their files |
 | `Ctrl+C`                                            | in the table              | copies their magnet links                    |
 | `Ctrl+Shift+C`                                      | in the table              | copies their info hashes                     |
-| `Up`, `Down`, `Enter`                               | in the context menu       | move to an item and choose it                |
-| `Escape`                                            | in the context menu       | closes it                                    |
+| `Up`, `Down`, `Enter`                               | in a menu                 | move to an item and choose it                |
+| `Escape`                                            | in a menu                 | closes it                                    |
 | `Enter`, `Space`                                    | in a removal dialog       | press the button that has the focus          |
 | `Escape`                                            | in a removal dialog       | closes it and removes nothing                |
 | `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
