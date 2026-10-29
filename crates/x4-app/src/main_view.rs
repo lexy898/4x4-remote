@@ -26,6 +26,10 @@
 //! torrents are removed, with or without their files. Their hashes and magnet links can be copied
 //! (the `copying` module). The `menu` module carries out the items of the context menu.
 //!
+//! The status bar's turtle switches the daemon's alternative speed limits, and its limits button
+//! opens a popover that sets the normal ones (the `speed_controls` module); Ctrl+T and Ctrl+L do
+//! the same from the keyboard.
+//!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
 //!
@@ -38,6 +42,7 @@ mod events;
 mod menu;
 mod persistence;
 mod selection_keys;
+mod speed_controls;
 mod torrent_actions;
 
 use std::cell::RefCell;
@@ -71,7 +76,8 @@ use crate::keymap::{
 };
 use crate::search::{clear_search, focus_search, new_search_state};
 use crate::sidebar::filter_sidebar;
-use crate::status_bar::status_bar;
+use crate::speed_limits::SpeedLimits;
+use crate::status_bar::{LimitsPopover, status_bar};
 use crate::theme::{apply_theme, follow_appearance, next_theme};
 use crate::toolbar::{ToolbarState, toolbar};
 use crate::torrent_table::{
@@ -80,6 +86,7 @@ use crate::torrent_table::{
 };
 use persistence::Saver;
 use selection_keys::on_selection_keys;
+use speed_controls::on_speed_actions;
 use torrent_actions::{follow_key_repeats, on_torrent_actions};
 
 /// The height of a row of the table, for the two lines of the name cell.
@@ -125,13 +132,17 @@ pub struct MainView {
     /// The key held down now, so that its repeats do not run its action again; shared with the
     /// app's keystroke interceptor, which sees the key-downs before the bindings do.
     key_repeats: Rc<RefCell<KeyRepeats>>,
+    /// The form of the speed limits popover.
+    speed_limits: Entity<SpeedLimits>,
+    /// Whether the speed limits popover is open.
+    limits_open: bool,
     /// The event pump; dropping the view drops it, which cancels it.
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
-    /// The table's and the search box's events, the table's changes, the focus coming back to the
-    /// table, the window's activation, visibility, appearance and bounds observers, the save when
-    /// the app quits, and the keystroke interceptor.
+    /// The table's, the search box's and the speed limits form's events, the table's changes, the
+    /// focus coming back to the table, the window's activation, visibility, appearance and bounds
+    /// observers, the save when the app quits, and the keystroke interceptor.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -161,6 +172,7 @@ impl MainView {
         window.focus(&table.focus_handle(cx), cx);
         let search = cx.new(|cx| new_search_state(window, cx));
         let key_repeats = Rc::new(RefCell::new(KeyRepeats::default()));
+        let speed_limits = cx.new(|cx| SpeedLimits::new(Rc::clone(&key_repeats), window, cx));
         let mut subscriptions = vec![
             cx.subscribe_in(&table, window, Self::on_table_event),
             // The selection and the rows live in the table; the toolbar follows what they allow.
@@ -171,6 +183,7 @@ impl MainView {
                 view.key_repeats.borrow_mut().release();
             }),
             cx.subscribe_in(&search, window, Self::on_search_event),
+            cx.subscribe_in(&speed_limits, window, Self::on_limits_applied),
             cx.observe_window_activation(window, |view, window, _| {
                 view.report_visibility(window);
             }),
@@ -218,6 +231,8 @@ impl MainView {
             magnet: MagnetCopy::default(),
             last_failure: None,
             key_repeats,
+            speed_limits,
+            limits_open: false,
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,
@@ -477,7 +492,8 @@ impl MainView {
     }
 
     /// Tells the table whether its rows are stale data, which it draws at the stale opacity, and
-    /// whether the daemon is connected, which its context menu needs for most of its items.
+    /// whether the daemon is connected, which its context menu needs for most of its items; and
+    /// the speed limits popover whether it can apply.
     fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
         let connected = self.status.connected();
@@ -488,6 +504,7 @@ impl MainView {
                 cx.notify();
             }
         });
+        self.show_speed_status(cx);
     }
 
     /// Recomputes the table from the last snapshot for the current view and hands the rows to
@@ -608,10 +625,14 @@ impl Render for MainView {
             &self.status,
             self.config_problem,
             self.saver.failing(),
-            theme,
+            &LimitsPopover {
+                form: &self.speed_limits,
+                open: self.limits_open,
+            },
             on_dismiss,
+            cx,
         );
-        let root = on_selection_keys(on_torrent_actions(v_flex(), cx), cx);
+        let root = on_speed_actions(on_selection_keys(on_torrent_actions(v_flex(), cx), cx), cx);
         root.key_context(MAIN_CONTEXT)
             .size_full()
             .bg(theme.background)

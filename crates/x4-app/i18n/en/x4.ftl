@@ -8,6 +8,8 @@
 
 # The decimal separator of the language. The app formats numbers with a dot and swaps it for this.
 number-decimal-separator = .
+# What sets the groups of three digits of a whole number apart, as in 1,000,000.
+number-group-separator = ,
 
 ## Units
 
@@ -124,15 +126,38 @@ status-download = ↓ { $speed }
 status-upload = ↑ { $speed }
 # $size: the formatted free space where new torrents are saved, such as "22.9 GiB".
 status-free-space = { $size } free
-# Shown while the alternative speed limits apply; the detail is its tooltip.
-status-alt-speed = Alt speed
-status-alt-speed-detail = Alternative speed limits are on
 # Shown when config.toml cannot be used; one of the config-problem-* messages is its tooltip.
 status-config-problem = Config file not used
 status-dismiss = Dismiss
 # Shown while state.toml cannot be written, until a save works again; the detail is its tooltip.
 status-state-not-saved = Layout not saved
 status-state-not-saved-detail = The columns, sorting, filter, theme and window size cannot be saved to state.toml; the log says why
+
+## The turtle and the speed limits, in the status bar
+
+# The turtle button switches the alternative speed limits on and off: its name for screen readers,
+# and its tooltip, which shows its key too. $down and $up: the alternative limits, such as "50 KiB/s".
+alt-speed = Alternative speed limits
+alt-speed-tooltip = Alternative speed limits: ↓ { $down } ↑ { $up }
+# The button that opens the normal speed limits shows them. $down and $up: a limit such as
+# "500 KiB/s", or limit-none while it is off.
+speed-limits-button = ↓ { $down } · ↑ { $up }
+limit-none = no limit
+# The same button before the server has sent its settings; also its tooltip, which shows its key too.
+speed-limits = Speed limits
+# The popover the button opens: for each direction a switch that turns the limit on and a field for
+# it, in KiB/s (unit-kib-per-s follows the field), and the button that applies both.
+limit-down-switch = Limit download speed
+limit-up-switch = Limit upload speed
+limit-down-field = Download speed limit
+limit-up-field = Upload speed limit
+limit-apply = Apply
+# Under a field, when its limit cannot be applied: the text is not a whole number; the number is out
+# of range ($min: the lowest limit; $max: the highest, with its unit, such as "1,000,000 KiB/s");
+# or the switch is on with no speed in the field.
+limit-not-a-number = Enter a whole number of KiB/s
+limit-out-of-range = Enter a speed from { $min } to { $max }
+limit-needs-value = Enter a speed to turn the limit on
 
 ## Why config.toml is not used (the defaults are used instead)
 
@@ -194,9 +219,10 @@ remove-with-data-confirm = Delete files
 remove-more = and { $more } more
 remove-cancel = Cancel
 
-## Why an action on torrents failed, in a notification
+## Why an action failed, in a notification
 
-# One message per action. $count: the torrents it named (a number). $outcome is what is known:
+# One message per action. $count: the torrents it named (a number), for the actions on torrents.
+# $outcome is what is known:
 #   not-sent: the server is not connected, so the action was not sent;
 #   no-answer: the server did not answer, so the action may have happened;
 #   failed: the server refused it or answered unexpectedly, and $reason says why: one of the
@@ -330,6 +356,46 @@ action-failed-remove-with-data =
             { $count ->
                 [one] Could not remove the torrent and delete its files: { $reason }
                *[other] Could not remove { $count } torrents and delete their files: { $reason }
+            }
+    }
+# Switching the alternative speed limits. $state: on or off, the way they were switched;
+# $outcome and $reason as above.
+action-failed-alt-speed =
+    { $outcome ->
+        [not-sent]
+            { $state ->
+                [on] Could not turn the alternative speed limits on: the server is not connected, so nothing was sent
+               *[off] Could not turn the alternative speed limits off: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $state ->
+                [on] The server did not answer while turning the alternative speed limits on; they may be on now. The status bar will show the result
+               *[off] The server did not answer while turning the alternative speed limits off; they may be off now. The status bar will show the result
+            }
+       *[failed]
+            { $state ->
+                [on] Could not turn the alternative speed limits on: { $reason }
+               *[off] Could not turn the alternative speed limits off: { $reason }
+            }
+    }
+# Setting a normal speed limit, or turning it off. $direction: down or up; $outcome and $reason as
+# above.
+action-failed-speed-limit =
+    { $outcome ->
+        [not-sent]
+            { $direction ->
+                [down] Could not change the download speed limit: the server is not connected, so nothing was sent
+               *[up] Could not change the upload speed limit: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $direction ->
+                [down] The server did not answer while changing the download speed limit; it may have changed. The status bar will show the result
+               *[up] The server did not answer while changing the upload speed limit; it may have changed. The status bar will show the result
+            }
+       *[failed]
+            { $direction ->
+                [down] Could not change the download speed limit: { $reason }
+               *[up] Could not change the upload speed limit: { $reason }
             }
     }
 # An action whose kind is not known; $outcome and $reason as above.

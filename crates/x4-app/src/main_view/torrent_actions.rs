@@ -133,9 +133,9 @@ impl MainView {
         Some((kind, targets.iter().map(|row| row.hash.clone()).collect()))
     }
 
-    /// Sends the action `kind` on the torrents `hashes` and keeps it until it is answered, unless
-    /// the action sent last is the same and still waits.
-    fn send(
+    /// Sends the action `kind` on the torrents `hashes` (none for a change of the speed settings)
+    /// and keeps it until it is answered, unless the action sent last is the same and still waits.
+    pub(super) fn send(
         &mut self,
         kind: ActionKind,
         hashes: Vec<HashString>,
@@ -151,7 +151,7 @@ impl MainView {
             );
             return;
         };
-        tracing::info!(action = kind.name(), count, "torrent action sent");
+        tracing::info!(action = kind.name(), count, "action sent");
         if self
             .commands
             .send(Command::Run(id, kind.action(hashes)))
@@ -412,7 +412,7 @@ fn handler<A: Action>(
 
 /// The handler of the action `A`, which runs `run` on the view of `cx`, unless the action comes
 /// from a repeat of a held key.
-fn once_per_press<A: Action>(
+pub(super) fn once_per_press<A: Action>(
     cx: &Context<'_, MainView>,
     run: impl Fn(&mut MainView, &mut Window, &mut Context<'_, MainView>) + 'static,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {

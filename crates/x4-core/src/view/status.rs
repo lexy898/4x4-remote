@@ -123,6 +123,14 @@ impl StatusModel {
         self.speed.is_some_and(|speed| speed.alt_speed)
     }
 
+    /// The turtle and the speed limits when they can be changed: the session is known and
+    /// actions can go to the daemon ([`StatusModel::connected`]). `None` otherwise, when the UI
+    /// disables them.
+    #[must_use]
+    pub fn changeable_speed(&self) -> Option<SpeedControls> {
+        self.speed.filter(|_| self.connected())
+    }
+
     /// What the connection indicator shows (see [`Indicator`] for which state wins).
     #[must_use]
     pub fn indicator(&self) -> Indicator {
@@ -293,6 +301,37 @@ mod tests {
         assert!(zeros.speed.is_some());
         assert!(!zeros.alt_speed());
         assert_eq!(status_model(&snapshot()).speed, None);
+    }
+
+    #[test]
+    fn the_speed_can_be_changed_only_with_a_session_and_a_connection() {
+        let with_session = status_model(&Snapshot {
+            session: Some(session(true)),
+            ..snapshot()
+        });
+        assert_eq!(with_session.changeable_speed(), with_session.speed);
+        assert!(with_session.changeable_speed().is_some());
+
+        assert_eq!(
+            status_model(&snapshot()).changeable_speed(),
+            None,
+            "no session"
+        );
+        let reconnecting = StatusModel {
+            connection: ConnectionState::Reconnecting {
+                attempt: 1,
+                last_error: ConnectionError::Timeout,
+            },
+            ..with_session.clone()
+        };
+        assert_eq!(
+            reconnecting.changeable_speed(),
+            None,
+            "the last session is kept"
+        );
+        let mut stopped = with_session;
+        stopped.service_stopped();
+        assert_eq!(stopped.changeable_speed(), None);
     }
 
     #[test]

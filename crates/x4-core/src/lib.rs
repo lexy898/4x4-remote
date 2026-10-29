@@ -30,7 +30,8 @@
 //! and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
 //! each [`SpeedLimit`] with its switch, so a limit that is off keeps its value, and the status
 //! bar's [`SpeedControls`] carry them while the session is known. [`limit_prefill`] gives the
-//! text a limit's input starts with, and [`limit_edit`] the [`LimitEdit`] that leaving it sends.
+//! text a limit's input starts with, and [`limit_edit`] the [`LimitEdit`] that leaving it sends;
+//! [`limit_needs_value`] tells when it was switched on without a speed.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
@@ -96,8 +97,8 @@ pub use format::{
     human_speed,
 };
 pub use limits::{
-    KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, kbps_to_kib, kib_to_kbps,
-    limit_edit, limit_prefill, parse_limit,
+    KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB, kbps_to_kib,
+    kib_to_kbps, limit_edit, limit_needs_value, limit_prefill, parse_limit,
 };
 pub use model::{Eta, ModelError, Ratio, Torrent};
 pub use playable::{file_offsets, playable_prefix};

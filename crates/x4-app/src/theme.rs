@@ -111,6 +111,12 @@ pub(crate) fn connection_color(indicator: &Indicator, theme: &Theme) -> Hsla {
     }
 }
 
+/// The color of the turtle's icon while the alternative speed limits apply: the theme's primary
+/// color, which goes with the selected look of its button.
+pub(crate) fn alt_speed_color(theme: &Theme) -> Hsla {
+    theme.primary
+}
+
 /// Digits of one width, so that numbers that change every tick do not make the text around them
 /// jump. The UI fonts of Linux desktops (Adwaita Sans, Cantarell, Noto Sans) have the feature.
 pub(crate) fn tabular_digits() -> FontFeatures {

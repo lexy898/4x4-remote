@@ -10,7 +10,8 @@
 //! can be done to the selected torrents, the `context_menu` module the menu of a right-click on
 //! them, the `removal` module the dialogs that ask before they are removed, the `clipboard` module
 //! the copies of their hashes and magnet links, and the `key_repeats` module tells a press of
-//! their keys from the repeats of a held key. [`paths`] finds the config, state and log locations,
+//! their keys from the repeats of a held key. The `speed_limits` module is the popover of the
+//! status bar that sets the daemon's speed limits. [`paths`] finds the config, state and log locations,
 //! [`logging`] logs to stderr and a daily file there, and the `files` module reads `config.toml`
 //! and reads and writes `state.toml`; the `saving` module decides when the window's state is
 //! written, and the `window_state` module turns the window's bounds into the size to remember and
@@ -37,6 +38,7 @@ mod removal;
 mod saving;
 mod search;
 mod sidebar;
+mod speed_limits;
 mod status_bar;
 #[cfg(test)]
 mod test_dirs;

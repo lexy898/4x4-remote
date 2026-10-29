@@ -9,7 +9,9 @@
 //!   while no menu of it is open (`!PopupMenu`): the context menu is drawn inside the list, and
 //!   Delete there must not act on the torrents behind it. The search box lies outside the list, so
 //!   Ctrl+A, Ctrl+C, Delete or Space there edit or copy its text and never reach the torrents;
-//! - the window's own keys (Ctrl+F, `/`) work in the whole main window (`MainWindow`);
+//! - the window's own keys (Ctrl+F, `/`, and Ctrl+T and Ctrl+L for the turtle and the speed
+//!   limits) work in the whole main window (`MainWindow`), the search box and the popover of the
+//!   limits included: their text fields bind neither Ctrl+T nor Ctrl+L;
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
@@ -72,6 +74,10 @@ actions!(
         ExtendSelectionToFirst,
         /// Moves the lead to the last torrent and selects the range from the anchor to it.
         ExtendSelectionToLast,
+        /// Switches the alternative speed limits (the turtle) on or off.
+        ToggleAltSpeed,
+        /// Opens the popover of the normal speed limits.
+        EditSpeedLimits,
     ]
 );
 
@@ -125,6 +131,16 @@ pub const BINDINGS: &[Binding] = &[
         keys: "/",
         action: || Box::new(FocusSearch),
         context: Some(MAIN_OUTSIDE_TEXT_CONTEXT),
+    },
+    Binding {
+        keys: "ctrl-t",
+        action: || Box::new(ToggleAltSpeed),
+        context: Some(MAIN_CONTEXT),
+    },
+    Binding {
+        keys: "ctrl-l",
+        action: || Box::new(EditSpeedLimits),
+        context: Some(MAIN_CONTEXT),
     },
     // Shallower than the text field's own Escape, which goes first: it closes the field's menu or
     // drops extra cursors, and passes the key on when there is nothing of that kind.

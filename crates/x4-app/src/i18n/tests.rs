@@ -4,14 +4,16 @@ use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
-    ActionError, ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView,
-    Filter, HumanSize, QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, Subtitle,
-    TimeUnit, UnsupportedReason, human_size, human_speed,
+    ActionError, ColumnId, CompactDuration, ConnectionError, Direction, DisplayState, EmptyTable,
+    EtaView, Filter, HumanSize, KbPerSecond, KibPerSecond, LimitError, MAX_LIMIT_KIB, QueueKind,
+    Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedControls, SpeedLimit, Subtitle, TimeUnit,
+    UnsupportedReason, human_size, human_speed,
 };
 use x4_rpc::RemoveData;
 
 use super::*;
 use crate::actions::{ActionKind, PendingAction};
+use crate::speed_limits::LimitFeedback;
 
 /// Message files held in memory, by path such as `ru/x4.ftl`.
 struct MemoryAssets(HashMap<&'static str, &'static str>);
@@ -762,5 +764,112 @@ fn a_failed_removal_says_whether_the_files_were_to_go() {
         failed(delete, 2, &timeout),
         "The server did not answer while removing 2 torrents and deleting their files; they may \
          have been removed and their files deleted. The list will show the result"
+    );
+}
+
+#[test]
+fn a_failed_change_of_the_speeds_says_which_one() {
+    let busy = ActionError::Rpc(ConnectionError::Server("busy".to_owned()));
+    let timeout = ActionError::Rpc(ConnectionError::Timeout);
+    let turtle_on = ActionKind::AltSpeed(true);
+    let turtle_off = ActionKind::AltSpeed(false);
+    let down = ActionKind::SpeedLimit {
+        direction: Direction::Down,
+        limit: Some(KbPerSecond(524)),
+    };
+    let up_off = ActionKind::SpeedLimit {
+        direction: Direction::Up,
+        limit: None,
+    };
+
+    assert_eq!(
+        failed(turtle_on, 0, &busy),
+        "Could not turn the alternative speed limits on: busy"
+    );
+    assert_eq!(
+        failed(turtle_off, 0, &ActionError::NotConnected),
+        "Could not turn the alternative speed limits off: the server is not connected, so \
+         nothing was sent"
+    );
+    assert_eq!(
+        failed(turtle_on, 0, &timeout),
+        "The server did not answer while turning the alternative speed limits on; they may be on \
+         now. The status bar will show the result"
+    );
+    assert_eq!(
+        failed(turtle_off, 0, &timeout),
+        "The server did not answer while turning the alternative speed limits off; they may be \
+         off now. The status bar will show the result"
+    );
+    assert_eq!(
+        failed(down, 0, &busy),
+        "Could not change the download speed limit: busy"
+    );
+    assert_eq!(
+        failed(up_off, 0, &ActionError::NotConnected),
+        "Could not change the upload speed limit: the server is not connected, so nothing was \
+         sent"
+    );
+    assert_eq!(
+        failed(up_off, 0, &timeout),
+        "The server did not answer while changing the upload speed limit; it may have changed. \
+         The status bar will show the result"
+    );
+}
+
+#[test]
+fn whole_numbers_group_their_digits() {
+    assert_eq!(with_groups(0, ","), "0");
+    assert_eq!(with_groups(999, ","), "999");
+    assert_eq!(with_groups(1000, ","), "1,000");
+    assert_eq!(with_groups(65_536, ","), "65,536");
+    assert_eq!(with_groups(1_000_000, ","), "1,000,000");
+    assert_eq!(with_groups(12_345, "\u{a0}"), "12\u{a0}345");
+    assert_eq!(integer(u32::MAX), "4,294,967,295");
+}
+
+#[test]
+fn the_speed_controls_are_worded_in_whole_kib() {
+    let controls = SpeedControls {
+        alt_speed: true,
+        alt_down: KibPerSecond(49),
+        alt_up: KibPerSecond(1000),
+        limit_down: SpeedLimit {
+            kbps: KbPerSecond(512),
+            enabled: true,
+        },
+        limit_up: SpeedLimit {
+            kbps: KbPerSecond(100),
+            enabled: false,
+        },
+    };
+
+    assert_eq!(kib_speed_string(KibPerSecond(500)), "500 KiB/s");
+    assert_eq!(kib_speed_string(MAX_LIMIT_KIB), "1,000,000 KiB/s");
+    assert_eq!(
+        limits_button_text(Some(controls)),
+        "↓ 500 KiB/s · ↑ no limit"
+    );
+    assert_eq!(limits_button_text(None), "Speed limits");
+    assert_eq!(
+        alt_speed_tooltip_text(Some(controls)),
+        "Alternative speed limits: ↓ 49 KiB/s ↑ 1,000 KiB/s"
+    );
+    assert_eq!(alt_speed_tooltip_text(None), "Alternative speed limits");
+}
+
+#[test]
+fn a_limit_that_cannot_be_applied_says_why() {
+    assert_eq!(
+        limit_feedback_text(LimitFeedback::Invalid(LimitError::NotANumber)),
+        "Enter a whole number of KiB/s"
+    );
+    assert_eq!(
+        limit_feedback_text(LimitFeedback::Invalid(LimitError::OutOfRange)),
+        "Enter a speed from 1 to 1,000,000 KiB/s"
+    );
+    assert_eq!(
+        limit_feedback_text(LimitFeedback::NeedsValue),
+        "Enter a speed to turn the limit on"
     );
 }

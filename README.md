@@ -7,11 +7,12 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 Early development — stage 3, actions, under way. The window connects to the daemon set in
 `config.toml` and shows every torrent in a table, with its state, progress and speeds; a sidebar
 filters them by state, with live counts, and a search box finds them by name. The status bar shows
-the total download and upload speeds, the free space and the state of the connection. The window
-remembers its columns, sorting, filter, theme and size between runs. Several torrents can be
-selected, and started, paused, started ahead of the queue, verified, reannounced and removed, from
-the keyboard and the toolbar; removing asks first, and deleting the files too only after an explicit
-confirmation. The context menu and the speed limits are still to come.
+the total download and upload speeds, the free space and the state of the connection; it switches
+the alternative speed limits and sets the global download and upload limits. The window remembers
+its columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
+started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
+the toolbar and a context menu; removing asks first, and deleting the files too only after an
+explicit confirmation.
 
 ## What it will do
 
@@ -203,9 +204,25 @@ The status bar at the bottom shows:
   reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or newer). Next to
   it, "Connecting…" or "Reconnecting (attempt N)… timed out" and the like; the tooltip says more
   about why the daemon could not be reached;
-- "Alt speed" while the daemon's alternative speed limits apply;
+- the turtle, which switches the daemon's alternative speed limits on and off (`Ctrl+T`). It is
+  highlighted while they apply, and its tooltip gives them, such as "Alternative speed limits:
+  ↓ 50 KiB/s ↑ 50 KiB/s";
+- the global speed limits, such as "↓ 500 KiB/s · ↑ no limit". A click on them, or `Ctrl+L`, opens
+  a popover that sets them (see below);
 - the free space where new torrents are saved;
 - the total download and upload speeds, ↓ and ↑.
+
+The speed limits popover has, for the download and the upload limit each, a switch that turns the
+limit on and a field for it in KiB/s, as every speed in 4x4 is shown (the daemon keeps limits in
+kB/s, 1000 bytes per second; 4x4 converts them). Each field starts with the daemon's value, also
+while that limit is off, and typing a speed into a field switches its limit on. `Enter` in a field,
+or Apply, sends the limits that changed, and only those, and closes the popover; `Escape` or a click
+beside it closes it and changes nothing. A limit is a whole number from 1 to 1,000,000 KiB/s:
+anything else is refused with a note under its field, and nothing is sent. A limit switched on with
+an empty field asks for a speed; clearing the field of a limit that is on turns it off. The turtle
+and the limits are disabled until the daemon has sent its settings, and while it is not connected;
+an open popover then keeps what was typed, and Apply waits for the connection. A change that fails
+shows a notification, as an action does, one for the turtle and one for each limit.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -244,6 +261,10 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Escape`                                            | in the context menu       | closes it                                    |
 | `Enter`, `Space`                                    | in a removal dialog       | press the button that has the focus          |
 | `Escape`                                            | in a removal dialog       | closes it and removes nothing                |
+| `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
+| `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
+| `Enter`                                             | in the speed limits       | applies them                                 |
+| `Escape`                                            | in the speed limits       | closes them and changes nothing              |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 

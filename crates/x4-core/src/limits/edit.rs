@@ -73,6 +73,15 @@ pub fn limit_edit(current: SpeedLimit, text: &str, enabled: bool) -> Result<Limi
     })
 }
 
+/// Whether the user switched the limit `current` on without a speed: the switch is on
+/// (`enabled`), the text is empty, and the limit is off now, so [`limit_edit`] leaves it off.
+/// The UI asks for a speed then, rather than doing nothing without a word. A limit that is on
+/// now is turned off by clearing its text, which is an edit, not a missing speed.
+#[must_use]
+pub fn limit_needs_value(current: SpeedLimit, text: &str, enabled: bool) -> bool {
+    enabled && !current.enabled && text.trim().is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +204,23 @@ mod tests {
             limit_edit(limit(100, true), "99999999", false),
             Ok(LimitEdit::Off)
         );
+    }
+
+    #[test]
+    fn a_limit_switched_on_without_text_needs_a_value() {
+        // Off now: switching it on with no speed leaves it off, which the user is told.
+        assert!(limit_needs_value(limit(100, false), "", true));
+        assert!(limit_needs_value(limit(100, false), "  ", true));
+        assert_eq!(
+            limit_edit(limit(100, false), "", true),
+            Ok(LimitEdit::Unchanged)
+        );
+        // On now, clearing the text turns it off: that is an edit, not a missing value.
+        assert!(!limit_needs_value(limit(100, true), "", true));
+        // Switched off, or with a speed, nothing is missing.
+        assert!(!limit_needs_value(limit(100, false), "", false));
+        assert!(!limit_needs_value(limit(100, false), "512", true));
+        assert!(!limit_needs_value(limit(100, false), "abc", true));
     }
 
     #[test]

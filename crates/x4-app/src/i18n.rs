@@ -20,15 +20,17 @@ use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
-    ActionError, ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, Filter, HumanSize,
-    HumanSpeed, Indicator, QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedUnit,
-    Subtitle, TimeUnit, UnsupportedReason,
+    ActionError, ColumnId, ConnectionError, Direction, DisplayState, EmptyTable, EtaView, Filter,
+    HumanSize, HumanSpeed, Indicator, KibPerSecond, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB,
+    QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedControls, SpeedLimit,
+    SpeedUnit, Subtitle, TimeUnit, UnsupportedReason, kbps_to_kib,
 };
 use x4_rpc::RemoveData;
 
 use crate::actions::{ActionKind, PendingAction};
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetFailure;
+use crate::speed_limits::LimitFeedback;
 
 #[cfg(test)]
 mod parity;
@@ -83,6 +85,25 @@ fn with_separator(value: f64, fraction_digits: usize, separator: &str) -> String
     format!("{value:.fraction_digits$}").replacen('.', separator, 1)
 }
 
+/// Formats the whole number `value` with its digits in groups of three, apart by the separator
+/// of the language (the message `number-group-separator`), such as "1,000,000".
+pub(crate) fn integer(value: u32) -> String {
+    with_groups(value, &t!("number-group-separator"))
+}
+
+fn with_groups(value: u32, separator: &str) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() * 2);
+    for (index, digit) in digits.chars().enumerate() {
+        // `index` is below the length, so this counts the digits still to come, this one included.
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push_str(separator);
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 /// A size such as "22.9 GiB".
 pub(crate) fn size_text(size: HumanSize) -> SharedString {
     size_string(size).into()
@@ -130,6 +151,69 @@ pub(crate) fn download_rate_text(speed: HumanSpeed) -> SharedString {
 /// The total upload speed in the status bar, such as "↑ 180 KiB/s".
 pub(crate) fn upload_rate_text(speed: HumanSpeed) -> SharedString {
     t!("status-upload", speed = speed_string(speed)).into()
+}
+
+/// A speed in whole KiB/s, as the speed limits are shown, such as "500 KiB/s".
+fn kib_speed_string(speed: KibPerSecond) -> String {
+    t!(
+        "quantity",
+        value = integer(speed.0),
+        unit = t!("unit-kib-per-s")
+    )
+}
+
+/// A normal speed limit as the status bar shows it: its value in whole KiB/s while it is on, "no
+/// limit" while it is off.
+fn limit_string(limit: SpeedLimit) -> String {
+    if limit.enabled {
+        kib_speed_string(kbps_to_kib(limit.kbps))
+    } else {
+        t!("limit-none")
+    }
+}
+
+/// What the limits button of the status bar says: both normal limits of `speed`, such as
+/// "↓ 500 KiB/s · ↑ no limit", or "Speed limits" while the daemon's settings are not known.
+pub(crate) fn limits_button_text(speed: Option<SpeedControls>) -> SharedString {
+    match speed {
+        Some(speed) => t!(
+            "speed-limits-button",
+            down = limit_string(speed.limit_down),
+            up = limit_string(speed.limit_up)
+        ),
+        None => t!("speed-limits"),
+    }
+    .into()
+}
+
+/// The tooltip of the turtle: the alternative limits of `speed` it applies, such as "Alternative
+/// speed limits: ↓ 50 KiB/s ↑ 50 KiB/s", or its name alone while they are not known.
+pub(crate) fn alt_speed_tooltip_text(speed: Option<SpeedControls>) -> SharedString {
+    match speed {
+        Some(speed) => t!(
+            "alt-speed-tooltip",
+            down = kib_speed_string(speed.alt_down),
+            up = kib_speed_string(speed.alt_up)
+        ),
+        None => t!("alt-speed"),
+    }
+    .into()
+}
+
+/// What the line under a speed limit's field says when the limit cannot be applied: why its text
+/// is not a limit, naming the range for a number out of it, or that it was switched on without a
+/// speed.
+pub(crate) fn limit_feedback_text(feedback: LimitFeedback) -> SharedString {
+    match feedback {
+        LimitFeedback::Invalid(LimitError::NotANumber) => t!("limit-not-a-number"),
+        LimitFeedback::Invalid(LimitError::OutOfRange) => t!(
+            "limit-out-of-range",
+            min = integer(MIN_LIMIT_KIB.0),
+            max = kib_speed_string(MAX_LIMIT_KIB)
+        ),
+        LimitFeedback::NeedsValue => t!("limit-needs-value"),
+    }
+    .into()
 }
 
 /// The free space in the status bar, such as "22.9 GiB free".
@@ -416,9 +500,9 @@ pub(crate) fn connection_reason_detail_text(error: &ConnectionError) -> SharedSt
     .into()
 }
 
-/// What a notification says when an action on torrents failed: what it was and for how many
-/// torrents (`pending`, the action as it was sent; `None` when that is not known), and what is
-/// known about it from `error`.
+/// What a notification says when an action failed: what it was and for how many torrents
+/// (`pending`, the action as it was sent; `None` when that is not known), or which speed setting
+/// it changed, and what is known about it from `error`.
 ///
 /// Refused because the daemon was not connected, it was not sent. When the daemon did not answer
 /// in time, or the connection broke, it may have been carried out all the same, so the text says
@@ -479,6 +563,21 @@ pub(crate) fn action_failure_text(
             "action-failed-remove-with-data",
             outcome = outcome,
             count = count,
+            reason = reason
+        ),
+        ActionKind::AltSpeed(enabled) => t!(
+            "action-failed-alt-speed",
+            outcome = outcome,
+            state = if enabled { "on" } else { "off" },
+            reason = reason
+        ),
+        ActionKind::SpeedLimit { direction, .. } => t!(
+            "action-failed-speed-limit",
+            outcome = outcome,
+            direction = match direction {
+                Direction::Down => "down",
+                Direction::Up => "up",
+            },
             reason = reason
         ),
     }

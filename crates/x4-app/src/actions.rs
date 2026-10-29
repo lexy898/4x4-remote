@@ -7,6 +7,11 @@
 //! (a key, a toolbar button, an item of the list's context menu) goes through `decide`, so a
 //! disabled action does nothing from any of them.
 //!
+//! The turtle and the speed limits change the daemon's session rather than torrents; they are
+//! kinds of action too (`ActionKind::AltSpeed` and `ActionKind::SpeedLimit`, the latter made only
+//! from what `x4-core`'s `limit_edit` decided), sent and kept the same way, with no torrents
+//! named.
+//!
 //! Removing is not a request: [`RemoveTorrents`] and [`RemoveTorrentsWithData`] only open a dialog
 //! that asks first (the `removal` module), and the dialog's own button sends the removal of the
 //! torrents it named when it opened. Copying is not one either: [`CopyHashes`] and
@@ -25,7 +30,10 @@
 use std::collections::HashMap;
 
 use gpui_kit::{SharedString, actions};
-use x4_core::{Action, ActionError, ActionId, Availability, Row, ToggleKind, toggle_kind};
+use x4_core::{
+    Action, ActionError, ActionId, Availability, Direction, KbPerSecond, LimitEdit, Row,
+    ToggleKind, toggle_kind,
+};
 use x4_rpc::{HashString, RemoveData};
 
 use crate::i18n::action_failure_text;
@@ -76,7 +84,7 @@ pub(crate) enum TorrentRequest {
     Reannounce,
 }
 
-/// An action on torrents that is sent to the daemon.
+/// An action that is sent to the daemon: on torrents, or on the daemon's speed settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ActionKind {
     /// Start, or queue.
@@ -91,10 +99,32 @@ pub(crate) enum ActionKind {
     Reannounce,
     /// Remove from the list, keeping the downloaded files on the server or deleting them.
     Remove(RemoveData),
+    /// Switch the alternative speed limits (the turtle) on (`true`) or off.
+    AltSpeed(bool),
+    /// Set the normal speed limit of `direction` to `limit`, switched on, or switch it off
+    /// (`None`). Made by [`ActionKind::speed_limit`] only, from the edit `x4-core` decided.
+    SpeedLimit {
+        /// The limit changed.
+        direction: Direction,
+        /// The new limit; `None` switches it off.
+        limit: Option<KbPerSecond>,
+    },
 }
 
 impl ActionKind {
-    /// The action to send for the torrents `hashes`.
+    /// The action that sends `edit` of the speed limit of `direction`, as `x4-core`'s
+    /// `limit_edit` decided it; `None` when the edit leaves the limit as it is.
+    pub(crate) fn speed_limit(direction: Direction, edit: LimitEdit) -> Option<Self> {
+        let limit = match edit {
+            LimitEdit::Unchanged => return None,
+            LimitEdit::Set(kbps) => Some(kbps),
+            LimitEdit::Off => None,
+        };
+        Some(Self::SpeedLimit { direction, limit })
+    }
+
+    /// The action to send for the torrents `hashes`. A change of the speed settings names no
+    /// torrents, so it takes none.
     pub(crate) fn action(self, hashes: Vec<HashString>) -> Action {
         match self {
             Self::Start => Action::Start(hashes),
@@ -103,10 +133,13 @@ impl ActionKind {
             Self::Verify => Action::Verify(hashes),
             Self::Reannounce => Action::Reannounce(hashes),
             Self::Remove(data) => Action::Remove { hashes, data },
+            Self::AltSpeed(enabled) => Action::SetAltSpeed(enabled),
+            Self::SpeedLimit { direction, limit } => Action::SetSpeedLimit { direction, limit },
         }
     }
 
-    /// Whether `availability` allows it.
+    /// Whether `availability` allows it. The speed settings are not an action on the selected
+    /// torrents, which is all a request asks for, so no request becomes one of them.
     fn allowed(self, availability: Availability) -> bool {
         match self {
             Self::Start => availability.start,
@@ -115,10 +148,12 @@ impl ActionKind {
             Self::Verify => availability.verify,
             Self::Reannounce => availability.reannounce,
             Self::Remove(_) => availability.remove,
+            Self::AltSpeed(_) | Self::SpeedLimit { .. } => false,
         }
     }
 
-    /// A short name for logs.
+    /// A short name for logs, which also marks its failure's notification: one notification
+    /// per name. The turtle has one name whichever way it was switched, and each speed limit one.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Start => "start",
@@ -128,6 +163,15 @@ impl ActionKind {
             Self::Reannounce => "reannounce",
             Self::Remove(RemoveData::Keep) => "remove",
             Self::Remove(RemoveData::Delete) => "remove with data",
+            Self::AltSpeed(_) => "alternative speed",
+            Self::SpeedLimit {
+                direction: Direction::Down,
+                ..
+            } => "download limit",
+            Self::SpeedLimit {
+                direction: Direction::Up,
+                ..
+            } => "upload limit",
         }
     }
 }
@@ -244,11 +288,11 @@ impl PendingActions {
         }
         match result {
             Ok(()) => {
-                tracing::debug!(?id, action, count, "the daemon accepted a torrent action");
+                tracing::debug!(?id, action, count, "the daemon accepted an action");
                 None
             }
             Err(error) => {
-                tracing::error!(?id, action, count, %error, "torrent action failed");
+                tracing::error!(?id, action, count, %error, "an action failed");
                 Some(Failure {
                     kind,
                     text: action_failure_text(pending, error),
@@ -370,6 +414,69 @@ mod tests {
                 hashes,
                 data: RemoveData::Delete
             }
+        );
+    }
+
+    #[test]
+    fn a_speed_change_names_no_torrents_and_no_request_becomes_one() {
+        let down = ActionKind::speed_limit(Direction::Down, LimitEdit::Set(KbPerSecond(524)));
+        let up_off = ActionKind::speed_limit(Direction::Up, LimitEdit::Off);
+        assert_eq!(
+            down,
+            Some(ActionKind::SpeedLimit {
+                direction: Direction::Down,
+                limit: Some(KbPerSecond(524)),
+            })
+        );
+        assert_eq!(
+            ActionKind::speed_limit(Direction::Down, LimitEdit::Unchanged),
+            None,
+            "an edit that changes nothing sends nothing"
+        );
+        let (Some(down), Some(up_off)) = (down, up_off) else {
+            panic!("both edits change a limit: {down:?}, {up_off:?}");
+        };
+        assert_eq!(
+            down.action(Vec::new()),
+            Action::SetSpeedLimit {
+                direction: Direction::Down,
+                limit: Some(KbPerSecond(524)),
+            }
+        );
+        assert_eq!(
+            up_off.action(Vec::new()),
+            Action::SetSpeedLimit {
+                direction: Direction::Up,
+                limit: None,
+            }
+        );
+        assert_eq!(
+            ActionKind::AltSpeed(true).action(Vec::new()),
+            Action::SetAltSpeed(true)
+        );
+        // Each limit has a notification of its own, the turtle one for both ways.
+        assert_ne!(down.name(), up_off.name());
+        assert_eq!(
+            ActionKind::AltSpeed(true).name(),
+            ActionKind::AltSpeed(false).name()
+        );
+        let everything = availability(true, &[&row(DisplayState::Paused)]);
+        assert!(!down.allowed(everything));
+        assert!(!ActionKind::AltSpeed(true).allowed(everything));
+    }
+
+    #[test]
+    fn the_turtle_switched_the_same_way_again_waits_for_the_answer() {
+        let mut pending = PendingActions::default();
+        let Some(on) = pending.start(ActionKind::AltSpeed(true), &[]) else {
+            panic!("the first switch goes");
+        };
+        assert_eq!(pending.start(ActionKind::AltSpeed(true), &[]), None);
+        pending.finish(on, &Ok(()));
+        assert!(pending.start(ActionKind::AltSpeed(true), &[]).is_some());
+        assert!(
+            pending.start(ActionKind::AltSpeed(false), &[]).is_some(),
+            "the other way is a new choice"
         );
     }
 

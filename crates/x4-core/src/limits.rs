@@ -9,11 +9,12 @@
 //! value the user typed comes back as typed. The other way, kB/s → KiB/s → kB/s, can move a
 //! value by one: 21 kB/s show as 21 KiB/s, which go out as 22 kB/s. That is why
 //! [`limit_edit`] decides what an edit sends from the text the input started with
-//! ([`limit_prefill`]): an untouched value is never converted back.
+//! ([`limit_prefill`]): an untouched value is never converted back. [`limit_needs_value`] tells
+//! when a limit was switched on without a speed, which sends nothing.
 
 mod edit;
 
-pub use edit::{LimitEdit, limit_edit, limit_prefill};
+pub use edit::{LimitEdit, limit_edit, limit_needs_value, limit_prefill};
 
 use std::num::IntErrorKind;
 
@@ -24,6 +25,9 @@ pub struct KbPerSecond(pub u32);
 /// A speed in KiB/s, 1024 bytes per second, the unit the UI shows and takes limits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KibPerSecond(pub u32);
+
+/// The lowest limit [`parse_limit`] accepts: a limit of 0 would stop that direction.
+pub const MIN_LIMIT_KIB: KibPerSecond = KibPerSecond(1);
 
 /// The highest limit [`parse_limit`] accepts: almost 1 GiB/s.
 pub const MAX_LIMIT_KIB: KibPerSecond = KibPerSecond(1_000_000);
@@ -43,7 +47,7 @@ pub enum LimitError {
     /// between digits, a letter or another character.
     #[error("the speed limit is not a whole number")]
     NotANumber,
-    /// The number is 0 or above [`MAX_LIMIT_KIB`].
+    /// The number is below [`MIN_LIMIT_KIB`] (0) or above [`MAX_LIMIT_KIB`].
     #[error("the speed limit is out of range")]
     OutOfRange,
 }
@@ -51,13 +55,13 @@ pub enum LimitError {
 /// Reads a speed limit the user typed; `Ok(None)` means no limit.
 ///
 /// Spaces around the text are ignored, and empty text means no limit. Anything else must be
-/// ASCII digits only, making a number from 1 to [`MAX_LIMIT_KIB`].
+/// ASCII digits only, making a number from [`MIN_LIMIT_KIB`] to [`MAX_LIMIT_KIB`].
 ///
 /// # Errors
 ///
 /// [`LimitError::NotANumber`] when the text holds anything but ASCII digits;
-/// [`LimitError::OutOfRange`] when the number is 0 or above [`MAX_LIMIT_KIB`], however many
-/// digits it has.
+/// [`LimitError::OutOfRange`] when the number is below [`MIN_LIMIT_KIB`] or above
+/// [`MAX_LIMIT_KIB`], however many digits it has.
 pub fn parse_limit(text: &str) -> Result<Option<KibPerSecond>, LimitError> {
     let text = text.trim();
     if text.is_empty() {
@@ -74,7 +78,7 @@ pub fn parse_limit(text: &str) -> Result<Option<KibPerSecond>, LimitError> {
             LimitError::NotANumber
         }
     })?;
-    if (1..=MAX_LIMIT_KIB.0).contains(&kib) {
+    if (MIN_LIMIT_KIB.0..=MAX_LIMIT_KIB.0).contains(&kib) {
         Ok(Some(KibPerSecond(kib)))
     } else {
         Err(LimitError::OutOfRange)
