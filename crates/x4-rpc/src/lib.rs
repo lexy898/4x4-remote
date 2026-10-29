@@ -38,6 +38,6 @@ pub use session::{
 pub use torrent::{
     AddOutcome, AddSource, AddedTorrent, ErrorKind, FilePriority, FileRecord, FileStatRecord,
     Pieces, RemoveData, Status, TorrentAction, TorrentAdd, TorrentField, TorrentGetResponse,
-    TorrentRecord, TorrentSet,
+    TorrentRecord, TorrentSet, TrackerStatRecord,
 };
 pub use transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};

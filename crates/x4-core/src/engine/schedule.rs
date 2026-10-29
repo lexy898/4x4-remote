@@ -127,23 +127,21 @@ impl Engine {
             due.push(Request::FreeSpace(dir.clone()));
             self.free_space_timer.sent(now);
         }
-        if let Some(hash) = &self.selected
-            && (tick || self.details_now)
-        {
-            due.push(Request::Details(hash.clone()));
-            self.details_now = false;
+        if let Some(read) = self.due_details(now, full_list) {
+            due.push(read);
         }
     }
 
-    /// Measures the next turn of `poll` from its answer, which came at `now`. Details ride on
-    /// the tick, so their answer counts for the tick.
+    /// Measures the next turn of `poll` from its answer, which came at `now`.
     pub(super) fn answered_at(&mut self, poll: &Request, now: Instant) {
         let timer = match poll {
             Request::SessionGet => &mut self.session_timer,
             Request::FullList => &mut self.full_list_timer,
             Request::FreeSpace(_) => &mut self.free_space_timer,
-            Request::RecentlyActive | Request::SessionStats | Request::Details(_) => {
-                &mut self.tick_timer
+            Request::RecentlyActive | Request::SessionStats => &mut self.tick_timer,
+            Request::Details { .. } => {
+                self.details_answered_at(now);
+                return;
             }
             Request::CheckServer | Request::Action(..) | Request::MagnetLinks(..) => return,
         };
@@ -156,7 +154,7 @@ impl Engine {
             self.free_space_timer
                 .due_at(now, self.config.free_space_interval)
         });
-        let details = (self.details_now && self.selected.is_some()).then_some(now);
+        let details = self.next_details(now);
         [
             self.session_timer.due_at(now, self.config.session_interval),
             self.full_list_timer

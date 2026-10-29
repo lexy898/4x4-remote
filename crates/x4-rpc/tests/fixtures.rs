@@ -58,7 +58,17 @@ fn is_scrubbed(key: &str, text: &str) -> bool {
             .and_then(|rest| rest.split_once("&dn=Torrent+"))
             .is_some_and(|(hash, number)| is_fake_hash(hash) && numbered(number, "", "")),
         "download_dir" | "path" => text == "/data/torrents/video",
-        "comment" | "creator" => text == "redacted",
+        // The metainfo's texts, and those of `tracker_stats`: URLs, host names and what the
+        // trackers answered.
+        "comment"
+        | "creator"
+        | "source"
+        | "announce"
+        | "scrape"
+        | "host"
+        | "sitename"
+        | "last_announce_result"
+        | "last_scrape_result" => text == "redacted",
         "error_string" => text.is_empty() || text == "redacted error",
         "labels" => text == "label",
         _ => false,
@@ -129,8 +139,21 @@ fn list_fixtures_cover_several_torrents_and_the_details_cover_several_files() {
     let files = torrent["files"].as_array().expect("files");
     assert!(files.len() > 1, "the details torrent needs several files");
     assert_eq!(
-        torrent["file_stats"].as_array().map(Vec::len),
-        Some(files.len())
+        torrent["file_count"].as_u64(),
+        u64::try_from(files.len()).ok()
+    );
+    for per_file in ["priorities", "wanted"] {
+        assert_eq!(
+            torrent[per_file].as_array().map(Vec::len),
+            Some(files.len()),
+            "{per_file}"
+        );
+    }
+    assert!(
+        torrent["tracker_stats"]
+            .as_array()
+            .is_some_and(|trackers| !trackers.is_empty()),
+        "the details torrent needs a tracker"
     );
 }
 

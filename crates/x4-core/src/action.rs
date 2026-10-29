@@ -139,6 +139,28 @@ impl Action {
         }
     }
 
+    /// Whether the action may change what the details of the torrent `hash` show: it names that
+    /// torrent and leaves it on the daemon.
+    ///
+    /// No wildcard: a new action has to decide.
+    pub(crate) fn changes_details_of(&self, hash: &HashString) -> bool {
+        match self {
+            Self::Start(hashes)
+            | Self::StartNow(hashes)
+            | Self::Stop(hashes)
+            | Self::Verify(hashes)
+            | Self::Reannounce(hashes) => hashes.contains(hash),
+            Self::SetSequential { hash: named, .. }
+            | Self::SetFilePriority { hash: named, .. }
+            | Self::SetFilesWanted { hash: named, .. } => named == hash,
+            // A removed torrent has no details left to read.
+            Self::Remove { .. }
+            | Self::SetAltSpeed(_)
+            | Self::SetSpeedLimit { .. }
+            | Self::Add(_) => false,
+        }
+    }
+
     /// A short name for logs; it carries no torrent names or paths.
     pub(crate) fn name(&self) -> &'static str {
         match self {
@@ -240,6 +262,53 @@ mod tests {
             Action::Add(add()),
         ] {
             assert!(!action.selects_nothing(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn only_actions_that_name_a_torrent_and_keep_it_change_its_details() {
+        let named = torrent("a").hash;
+        let other = torrent("b").hash;
+        let both = || vec![other.clone(), named.clone()];
+        let lists: [fn(Vec<HashString>) -> Action; 5] = [
+            Action::Start,
+            Action::StartNow,
+            Action::Stop,
+            Action::Verify,
+            Action::Reannounce,
+        ];
+        for action in lists {
+            assert!(action(both()).changes_details_of(&named));
+            assert!(!action(vec![other.clone()]).changes_details_of(&named));
+        }
+        for action in [
+            Action::SetSequential {
+                hash: named.clone(),
+                enabled: true,
+            },
+            Action::SetFilePriority {
+                hash: named.clone(),
+                files: vec![0],
+                priority: FilePriority::Low,
+            },
+            Action::SetFilesWanted {
+                hash: named.clone(),
+                files: vec![1],
+                wanted: true,
+            },
+        ] {
+            assert!(action.changes_details_of(&named), "{action:?}");
+            assert!(!action.changes_details_of(&other), "{action:?}");
+        }
+        for action in [
+            Action::Remove {
+                hashes: both(),
+                data: RemoveData::Keep,
+            },
+            Action::SetAltSpeed(true),
+            Action::Add(add()),
+        ] {
+            assert!(!action.changes_details_of(&named), "{action:?}");
         }
     }
 

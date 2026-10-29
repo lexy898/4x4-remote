@@ -74,6 +74,8 @@ pub enum TorrentField {
     Creator,
     /// `date_created`
     DateCreated,
+    /// `source`: the private tracker's tag in the metainfo, served since Transmission 4.1.0.
+    Source,
     /// `magnet_link`
     MagnetLink,
     /// `is_private`
@@ -88,10 +90,20 @@ pub enum TorrentField {
     Files,
     /// `file_stats`
     FileStats,
+    /// `file_count`
+    FileCount,
+    /// `bytes_completed`: one number per file.
+    BytesCompleted,
+    /// `priorities`: one priority per file.
+    Priorities,
+    /// `wanted`: one switch per file.
+    Wanted,
     /// `downloaded_ever`
     DownloadedEver,
     /// `uploaded_ever`
     UploadedEver,
+    /// `tracker_stats`
+    TrackerStats,
 }
 
 impl TorrentField {
@@ -125,23 +137,44 @@ impl TorrentField {
         Self::Labels,
     ];
 
-    /// The fields of the details of one torrent.
-    pub const DETAILS: &'static [TorrentField] = &[
+    /// The fields of the whole details of one torrent: its metainfo, its files, its trackers and
+    /// everything of [`TorrentField::DETAILS_PROGRESS`].
+    ///
+    /// `files` carries each file's bytes completed, and the compact `priorities` and `wanted`
+    /// arrays stand in for `file_stats`, which costs several times as much per file.
+    pub const DETAILS_FULL: &'static [TorrentField] = &[
         Self::Id,
         Self::HashString,
         Self::Comment,
         Self::Creator,
         Self::DateCreated,
-        Self::MagnetLink,
+        Self::Source,
         Self::IsPrivate,
         Self::PieceCount,
         Self::PieceSize,
-        Self::Pieces,
+        Self::FileCount,
         Self::Files,
-        Self::FileStats,
+        Self::Priorities,
+        Self::Wanted,
+        Self::Pieces,
         Self::DownloadedEver,
         Self::UploadedEver,
-        Self::TotalSize,
+        Self::TrackerStats,
+    ];
+
+    /// The fields of the details of one torrent that change while it downloads: the per-file
+    /// arrays, the pieces and the totals. The file names, the metainfo and the trackers are left
+    /// out; `file_count` tells when the files themselves changed.
+    pub const DETAILS_PROGRESS: &'static [TorrentField] = &[
+        Self::Id,
+        Self::HashString,
+        Self::FileCount,
+        Self::BytesCompleted,
+        Self::Priorities,
+        Self::Wanted,
+        Self::Pieces,
+        Self::DownloadedEver,
+        Self::UploadedEver,
     ];
 }
 
@@ -302,6 +335,44 @@ pub struct FileStatRecord {
     pub priority: FilePriority,
 }
 
+/// One entry of `tracker_stats`: what one tracker last answered. Only the keys 4x4 uses are
+/// kept; the daemon sends 28.
+///
+/// A key the daemon leaves out holds its default (empty text, `false`, `None`), so that an odd
+/// tracker entry cannot fail the whole `torrent_get`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a record of the daemon's flags for one tracker, as the wire has them"
+)]
+pub struct TrackerStatRecord {
+    /// `host`: the tracker's host and port, such as `tracker.example.org:443`.
+    pub host: String,
+    /// `has_announced`: whether the torrent was announced to this tracker since it started; the
+    /// other announce keys hold nothing until then.
+    pub has_announced: bool,
+    /// `last_announce_succeeded`
+    pub last_announce_succeeded: bool,
+    /// `last_announce_timed_out`
+    pub last_announce_timed_out: bool,
+    /// `last_announce_result`: the daemon's text, such as `Success` or the tracker's own error.
+    pub last_announce_result: String,
+    /// `has_scraped`: whether this tracker was scraped since the torrent started; the other
+    /// scrape keys hold nothing until then.
+    pub has_scraped: bool,
+    /// `last_scrape_succeeded`
+    pub last_scrape_succeeded: bool,
+    /// `last_scrape_timed_out`
+    pub last_scrape_timed_out: bool,
+    /// `last_scrape_result`
+    pub last_scrape_result: String,
+    /// `seeder_count`; `-1` when the tracker did not say.
+    pub seeder_count: Option<i64>,
+    /// `leecher_count`; `-1` when the tracker did not say.
+    pub leecher_count: Option<i64>,
+}
+
 /// One torrent of a `torrent_get` response; a field is `Some` only if it was requested (and
 /// the server sent it).
 ///
@@ -372,6 +443,8 @@ pub struct TorrentRecord {
     pub creator: Option<String>,
     /// `date_created`, Unix seconds; `0` when the metainfo has none.
     pub date_created: Option<i64>,
+    /// `source`: the metainfo's source tag; empty when it has none.
+    pub source: Option<String>,
     /// `magnet_link`
     pub magnet_link: Option<String>,
     /// `is_private`
@@ -386,10 +459,20 @@ pub struct TorrentRecord {
     pub files: Option<Vec<FileRecord>>,
     /// `file_stats`, in the same order as `files`.
     pub file_stats: Option<Vec<FileStatRecord>>,
+    /// `file_count`: how many files the torrent has; 0 while a magnet link has no metadata.
+    pub file_count: Option<u32>,
+    /// `bytes_completed`: each file's bytes downloaded and verified, in the order of `files`.
+    pub bytes_completed: Option<Vec<u64>>,
+    /// `priorities`: each file's download priority, in the order of `files`.
+    pub priorities: Option<Vec<FilePriority>>,
+    /// `wanted`: whether each file is to be downloaded, in the order of `files`.
+    pub wanted: Option<Vec<bool>>,
     /// `downloaded_ever`, bytes.
     pub downloaded_ever: Option<u64>,
     /// `uploaded_ever`, bytes.
     pub uploaded_ever: Option<u64>,
+    /// `tracker_stats`: one entry per tracker.
+    pub tracker_stats: Option<Vec<TrackerStatRecord>>,
 }
 
 /// The result of `torrent_get`.
@@ -553,25 +636,133 @@ mod tests {
             ])
         );
         assert_eq!(
-            serde_json::to_value(TorrentField::DETAILS).unwrap(),
+            serde_json::to_value(TorrentField::DETAILS_FULL).unwrap(),
             json!([
                 "id",
                 "hash_string",
                 "comment",
                 "creator",
                 "date_created",
-                "magnet_link",
+                "source",
                 "is_private",
                 "piece_count",
                 "piece_size",
-                "pieces",
+                "file_count",
                 "files",
-                "file_stats",
+                "priorities",
+                "wanted",
+                "pieces",
                 "downloaded_ever",
                 "uploaded_ever",
-                "total_size",
+                "tracker_stats",
             ])
         );
+        assert_eq!(
+            serde_json::to_value(TorrentField::DETAILS_PROGRESS).unwrap(),
+            json!([
+                "id",
+                "hash_string",
+                "file_count",
+                "bytes_completed",
+                "priorities",
+                "wanted",
+                "pieces",
+                "downloaded_ever",
+                "uploaded_ever",
+            ])
+        );
+    }
+
+    #[test]
+    fn details_fields_no_longer_include_magnet_link_or_total_size() {
+        for fields in [TorrentField::DETAILS_FULL, TorrentField::DETAILS_PROGRESS] {
+            for dropped in [
+                TorrentField::MagnetLink,
+                TorrentField::TotalSize,
+                TorrentField::FileStats,
+            ] {
+                assert!(!fields.contains(&dropped), "{dropped:?} in {fields:?}");
+            }
+        }
+        // What does not change while a torrent downloads stays out of the frequent read.
+        for fixed in [
+            TorrentField::Files,
+            TorrentField::TrackerStats,
+            TorrentField::Comment,
+            TorrentField::Creator,
+            TorrentField::Source,
+        ] {
+            assert!(
+                !TorrentField::DETAILS_PROGRESS.contains(&fixed),
+                "{fixed:?} in the progress read"
+            );
+        }
+    }
+
+    #[test]
+    fn per_file_arrays_and_tracker_stats_parse() {
+        let record: TorrentRecord = serde_json::from_value(json!({
+            "file_count": 2,
+            "bytes_completed": [6, 0],
+            "priorities": [1, -1],
+            "wanted": [true, false],
+            "source": "tag",
+            "tracker_stats": [{
+                "host": "tracker.example:443",
+                "has_announced": true,
+                "last_announce_succeeded": false,
+                "last_announce_timed_out": true,
+                "last_announce_result": "Tracker did not respond",
+                "has_scraped": true,
+                "last_scrape_succeeded": true,
+                "last_scrape_timed_out": false,
+                "last_scrape_result": "",
+                "seeder_count": 12,
+                "leecher_count": -1,
+                "tier": 0,
+                "is_backup": false,
+            }],
+        }))
+        .unwrap();
+
+        assert_eq!(record.file_count, Some(2));
+        assert_eq!(record.bytes_completed, Some(vec![6, 0]));
+        assert_eq!(
+            record.priorities,
+            Some(vec![FilePriority::High, FilePriority::Low])
+        );
+        assert_eq!(record.wanted, Some(vec![true, false]));
+        assert_eq!(record.source.as_deref(), Some("tag"));
+        assert_eq!(
+            record.tracker_stats,
+            Some(vec![TrackerStatRecord {
+                host: "tracker.example:443".to_owned(),
+                has_announced: true,
+                last_announce_succeeded: false,
+                last_announce_timed_out: true,
+                last_announce_result: "Tracker did not respond".to_owned(),
+                has_scraped: true,
+                last_scrape_succeeded: true,
+                last_scrape_timed_out: false,
+                last_scrape_result: String::new(),
+                seeder_count: Some(12),
+                leecher_count: Some(-1),
+            }])
+        );
+    }
+
+    #[test]
+    fn a_tracker_stat_missing_keys_still_parses() {
+        let stat: TrackerStatRecord = serde_json::from_value(json!({ "host": "t:80" })).unwrap();
+
+        assert_eq!(
+            stat,
+            TrackerStatRecord {
+                host: "t:80".to_owned(),
+                ..TrackerStatRecord::default()
+            }
+        );
+        assert_eq!(stat.seeder_count, None);
     }
 
     #[test]

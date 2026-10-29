@@ -1,5 +1,7 @@
 //! Tests of the engine, driven by one base `Instant` plus offsets and answered from the
-//! recorded fixtures.
+//! recorded fixtures. The details reads have their own module.
+
+mod details;
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -91,13 +93,56 @@ fn answer(request: &Request) -> Response {
         }
         Request::FullList => Response::Torrents(list()),
         Request::RecentlyActive => Response::Torrents(recent()),
-        Request::Details(_) => {
-            Response::Details(serde_json::from_value(fixture_result(TORRENT_GET_DETAILS)).unwrap())
-        }
+        Request::Details {
+            kind: DetailsRead::Full,
+            ..
+        } => Response::Details(full_details()),
+        Request::Details {
+            kind: DetailsRead::Progress,
+            ..
+        } => Response::Details(progress_details()),
         Request::Action(..) => Response::Done,
-        Request::MagnetLinks(..) => Response::MagnetLinks(
-            serde_json::from_value(fixture_result(TORRENT_GET_DETAILS)).unwrap(),
-        ),
+        Request::MagnetLinks(_, hashes) => Response::MagnetLinks(TorrentGetResponse {
+            torrents: hashes
+                .iter()
+                .map(|hash| {
+                    let link = format!("magnet:?xt=urn:btih:{hash}");
+                    link_record(hash.as_str(), Some(&link))
+                })
+                .collect(),
+            removed: Vec::new(),
+        }),
+    }
+}
+
+/// The details fixture: a full read of the first torrent.
+fn full_details() -> TorrentGetResponse {
+    serde_json::from_value(fixture_result(TORRENT_GET_DETAILS)).unwrap()
+}
+
+/// A progress read of the first torrent, holding what the details fixture holds.
+fn progress_details() -> TorrentGetResponse {
+    let torrents = full_details()
+        .torrents
+        .into_iter()
+        .map(|full| TorrentRecord {
+            id: full.id,
+            hash_string: full.hash_string,
+            file_count: full.file_count,
+            bytes_completed: full
+                .files
+                .map(|files| files.iter().map(|file| file.bytes_completed).collect()),
+            priorities: full.priorities,
+            wanted: full.wanted,
+            pieces: full.pieces,
+            downloaded_ever: full.downloaded_ever,
+            uploaded_ever: full.uploaded_ever,
+            ..TorrentRecord::default()
+        })
+        .collect();
+    TorrentGetResponse {
+        torrents,
+        removed: Vec::new(),
     }
 }
 
@@ -758,7 +803,10 @@ fn is_current_follows_the_connection_and_the_selection() {
     ];
     let action = Request::Action(ActionId(1), stop_first());
     let read = Request::MagnetLinks(ActionId(2), vec![first()]);
-    let details = Request::Details(first());
+    let details = Request::Details {
+        hash: first(),
+        kind: DetailsRead::Progress,
+    };
     let mut engine = Engine::new(EngineConfig::default(), base);
     command(&mut engine, base, Command::Select(Some(first())));
 
@@ -779,10 +827,14 @@ fn is_current_follows_the_connection_and_the_selection() {
     assert!(engine.is_current(&details));
     command(&mut engine, base, Command::Select(Some(second())));
     assert!(!engine.is_current(&details));
-    assert!(engine.is_current(&Request::Details(second())));
+    let full_second = Request::Details {
+        hash: second(),
+        kind: DetailsRead::Full,
+    };
+    assert!(engine.is_current(&full_second));
 
     respond(&mut engine, base, &Request::SessionStats, Err(timeout()));
-    for poll in polls.iter().chain([&Request::Details(second())]) {
+    for poll in polls.iter().chain([&full_second]) {
         assert!(!engine.is_current(poll), "{poll:?} while reconnecting");
     }
     assert!(engine.is_current(&Request::CheckServer));
@@ -1193,167 +1245,6 @@ fn a_magnet_read_answered_with_something_else_is_a_protocol_error() {
 }
 
 #[test]
-fn details_only_for_selection() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    let (due, _) = exchange(&mut engine, base + ms(1500));
-    assert_eq!(due, [Request::RecentlyActive, Request::SessionStats]);
-
-    let now = base + ms(2000);
-    command(&mut engine, now, Command::Select(Some(first())));
-    assert_eq!(engine.due_requests(now), [Request::Details(first())]);
-    for tick in [3000, 4500] {
-        assert_eq!(
-            hand_out(&mut engine, base + ms(tick)),
-            [
-                Request::RecentlyActive,
-                Request::SessionStats,
-                Request::Details(first())
-            ],
-            "at {tick} ms"
-        );
-    }
-
-    command(&mut engine, base + ms(5000), Command::Select(None));
-    assert_eq!(
-        hand_out(&mut engine, base + ms(6000)),
-        [Request::RecentlyActive, Request::SessionStats]
-    );
-}
-
-#[test]
-fn a_selection_made_before_connecting_is_read_on_connecting() {
-    let base = Instant::now();
-    let mut engine = Engine::new(EngineConfig::default(), base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    assert_eq!(engine.due_requests(base), [Request::CheckServer]);
-
-    respond(
-        &mut engine,
-        base,
-        &Request::CheckServer,
-        Ok(answer(&Request::CheckServer)),
-    );
-
-    assert_eq!(
-        hand_out(&mut engine, base),
-        [
-            Request::SessionGet,
-            Request::FullList,
-            Request::SessionStats,
-            Request::Details(first())
-        ]
-    );
-}
-
-#[test]
-fn details_compute_playable() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-
-    let (due, events) = exchange(&mut engine, base);
-
-    assert_eq!(due, [Request::Details(first())]);
-    let [details] = details_events(&events).try_into().unwrap();
-    assert_eq!(details.hash, first());
-    assert_eq!(details.files.len(), 10);
-    for file in &details.files {
-        assert_eq!(file.bytes_completed, file.length, "{}", file.name);
-        assert_eq!(file.playable_from_start, file.length, "{}", file.name);
-    }
-}
-
-#[test]
-fn identical_details_send_no_event() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    assert_eq!(details_events(&exchange(&mut engine, base).1).len(), 1);
-
-    let (due, events) = exchange(&mut engine, base + ms(1500));
-
-    assert!(due.contains(&Request::Details(first())));
-    assert_eq!(details_events(&events), []);
-}
-
-#[test]
-fn selecting_another_torrent_drops_the_details() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    exchange(&mut engine, base);
-
-    command(&mut engine, base, Command::Select(Some(second())));
-    assert_eq!(engine.details, None);
-    command(&mut engine, base, Command::Select(Some(first())));
-
-    // The same details again are news: the UI dropped them with the selection.
-    let (due, events) = exchange(&mut engine, base);
-    assert_eq!(due, [Request::Details(first())]);
-    assert_eq!(details_events(&events).len(), 1);
-}
-
-#[test]
-fn details_for_a_deselected_torrent_are_ignored() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    let due = engine.due_requests(base);
-    assert_eq!(due, [Request::Details(first())]);
-
-    command(&mut engine, base, Command::Select(Some(second())));
-
-    assert!(!engine.is_current(&due[0]));
-    assert_eq!(respond(&mut engine, base, &due[0], Ok(answer(&due[0]))), []);
-    assert_eq!(engine.details, None);
-}
-
-#[test]
-fn an_empty_details_answer_sends_no_event() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    let due = engine.due_requests(base);
-
-    let empty = TorrentGetResponse {
-        torrents: Vec::new(),
-        removed: Vec::new(),
-    };
-    let events = engine.handle_response(base, &due[0], Ok(Response::Details(empty)));
-
-    assert_eq!(events, []);
-    assert_eq!(engine.details, None);
-    assert_eq!(engine.connection, ConnectionState::Connected);
-}
-
-#[test]
-fn details_issues_are_kept_until_they_change() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    let other = TorrentGetResponse {
-        torrents: vec![TorrentRecord {
-            hash_string: Some(SECOND.to_owned()),
-            ..TorrentRecord::default()
-        }],
-        removed: Vec::new(),
-    };
-
-    let events = engine.handle_response(
-        base,
-        &Request::Details(first()),
-        Ok(Response::Details(other)),
-    );
-
-    assert_eq!(events, []);
-    assert_eq!(engine.details_issues, [DetailsIssue::NoMatchingRecord]);
-    // A sound answer clears them.
-    exchange(&mut engine, base);
-    assert_eq!(engine.details_issues, []);
-}
-
-#[test]
 fn snapshot_only_when_changed() {
     let base = Instant::now();
     let mut engine = Engine::new(EngineConfig::default(), base);
@@ -1705,8 +1596,9 @@ fn next_wakeup_is_the_earliest_due_request() {
     assert_eq!(engine.next_wakeup(base + ms(100)), base + ms(1500));
     // An overdue tick is due now, not in the past.
     assert_eq!(engine.next_wakeup(base + secs(5)), base + secs(5));
+    // A new selection is read once it has settled.
     command(&mut engine, base + ms(100), Command::Select(Some(first())));
-    assert_eq!(engine.next_wakeup(base + ms(100)), base + ms(100));
+    assert_eq!(engine.next_wakeup(base + ms(100)), base + ms(350));
 
     let at = base + ms(1500);
     let engine = dropped(base, at);
@@ -1796,7 +1688,10 @@ fn every_poll_that_keeps_failing_backs_off() {
         Request::SessionGet,
         Request::FreeSpace(DOWNLOAD_DIR.to_owned()),
         Request::RecentlyActive,
-        Request::Details(first()),
+        Request::Details {
+            hash: first(),
+            kind: DetailsRead::Full,
+        },
     ] {
         assert_eq!(
             back_off_while_failing(&poll, 8),
@@ -2044,23 +1939,6 @@ fn polls_forced_between_ticks_wake_at_once() {
 }
 
 #[test]
-fn selecting_the_same_torrent_again_keeps_its_details() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    assert_eq!(details_events(&exchange(&mut engine, base).1).len(), 1);
-
-    let now = base + ms(200);
-    assert_eq!(
-        engine.handle_command(now, Command::Select(Some(first()))),
-        []
-    );
-
-    assert!(engine.details.is_some());
-    assert_eq!(hand_out(&mut engine, now), []);
-}
-
-#[test]
 fn an_action_answered_by_an_unsupported_server_stops_polling() {
     let base = Instant::now();
     let mut engine = loaded(base);
@@ -2141,52 +2019,4 @@ fn an_action_sent_with_a_tick_does_not_pull_another_tick_forward() {
         hand_out(&mut engine, base + ms(3000)),
         [Request::RecentlyActive, Request::SessionStats]
     );
-}
-
-#[test]
-fn a_late_details_answer_moves_the_next_tick() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    exchange(&mut engine, base);
-    let tick = base + ms(1500);
-    let due = hand_out(&mut engine, tick);
-    assert_eq!(
-        due,
-        [
-            Request::RecentlyActive,
-            Request::SessionStats,
-            Request::Details(first())
-        ]
-    );
-
-    respond(&mut engine, tick, &due[0], Ok(answer(&due[0])));
-    respond(&mut engine, tick, &due[1], Ok(answer(&due[1])));
-    let answered = tick + secs(3);
-    respond(&mut engine, answered, &due[2], Ok(answer(&due[2])));
-
-    assert_eq!(hand_out(&mut engine, answered), []);
-    assert_eq!(hand_out(&mut engine, answered + ms(1499)), []);
-    assert_eq!(hand_out(&mut engine, answered + ms(1500)), due);
-}
-
-#[test]
-fn a_new_selection_makes_a_details_refusal_news_again() {
-    let base = Instant::now();
-    let mut engine = loaded(base);
-    command(&mut engine, base, Command::Select(Some(first())));
-    let refusal = RpcError::Server {
-        code: 1,
-        message: "system error".to_owned(),
-        detail: None,
-    };
-
-    respond(&mut engine, base, &Request::Details(first()), Err(refusal));
-    assert_eq!(
-        engine.refused,
-        RefusedPolls(HashSet::from([PollKind::Details]))
-    );
-
-    command(&mut engine, base, Command::Select(Some(second())));
-    assert_eq!(engine.refused, RefusedPolls::default());
 }

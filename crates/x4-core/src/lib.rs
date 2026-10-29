@@ -54,7 +54,8 @@
 //! names the [`Request`]s that are due, takes each [`Response`] and each [`Command`] of the UI,
 //! and hands out a new [`Snapshot`] only when something changed. It carries out [`Action`]s
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
-//! the [`TorrentDetails`] of the selected torrent every tick. A speed limit is set one
+//! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
+//! their progress ([`DetailsRead`]), and nothing while the window is hidden. A speed limit is set one
 //! [`Direction`] at a time. Magnet links are read once, on [`Command::ReadMagnetLinks`], under
 //! the same rules as an action.
 //!
@@ -89,8 +90,10 @@ mod view;
 
 pub use action::{Action, ActionError, ActionId, Direction};
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
-pub use details::{FileEntry, TorrentDetails};
-pub use engine::{Command, Engine, EngineConfig, Event, Request, Response, Visibility};
+pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
+pub use engine::{
+    Command, DetailsRead, Engine, EngineConfig, Event, Request, Response, Visibility,
+};
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,

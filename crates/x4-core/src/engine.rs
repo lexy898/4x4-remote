@@ -6,6 +6,7 @@
 //! takes the current [`Instant`], so the schedule is tested without waiting.
 
 mod answers;
+mod details_reads;
 mod magnet_links;
 mod schedule;
 #[cfg(test)]
@@ -26,6 +27,7 @@ use crate::snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot
 use crate::store::Store;
 
 use answers::{RefusedPolls, SkippedSet};
+use details_reads::DetailsReads;
 use schedule::Timer;
 
 /// How long the engine sleeps when nothing is scheduled.
@@ -34,8 +36,8 @@ const IDLE_WAKEUP: Duration = Duration::from_secs(60);
 /// How the engine polls the daemon, and how it waits while the daemon does not answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineConfig {
-    /// The tick while the window is visible: recently active torrents, the session statistics
-    /// and the selected torrent's details.
+    /// The tick while the window is visible: recently active torrents and the session
+    /// statistics.
     pub visible_interval: Duration,
     /// The tick while the window is hidden.
     pub hidden_interval: Duration,
@@ -45,6 +47,12 @@ pub struct EngineConfig {
     pub session_interval: Duration,
     /// How often the free space of the download directory is read.
     pub free_space_interval: Duration,
+    /// How often the progress of the selected torrent is read while it downloads or verifies;
+    /// otherwise it is read once with each whole list.
+    pub details_interval: Duration,
+    /// How long a new selection must stay before its details are read, so that moving through
+    /// the list with the arrow keys reads only the torrent the selection stops on.
+    pub details_settle: Duration,
     /// The wait before each try to reach a daemon that does not answer, the first try first;
     /// the last wait repeats. An empty list waits 30 s.
     pub backoff: Vec<Duration>,
@@ -56,8 +64,9 @@ pub struct EngineConfig {
 
 impl Default for EngineConfig {
     /// Ticks of 1.5 s while visible and 10 s while hidden, the full list and the session every
-    /// minute, the free space every 30 s, and retries after 1, 2, 4, 8, 16 and then every 30 s,
-    /// starting over once the connection has stayed up for 30 s.
+    /// minute, the free space every 30 s, the selected torrent's progress every 3 s once it has
+    /// stayed selected for 250 ms, and retries after 1, 2, 4, 8, 16 and then every 30 s, starting
+    /// over once the connection has stayed up for 30 s.
     fn default() -> Self {
         Self {
             visible_interval: Duration::from_millis(1500),
@@ -65,6 +74,8 @@ impl Default for EngineConfig {
             full_refresh_interval: Duration::from_secs(60),
             session_interval: Duration::from_secs(60),
             free_space_interval: Duration::from_secs(30),
+            details_interval: Duration::from_secs(3),
+            details_settle: Duration::from_millis(250),
             backoff: [1, 2, 4, 8, 16, 30].map(Duration::from_secs).to_vec(),
             stable_after: Duration::from_secs(30),
         }
@@ -85,7 +96,9 @@ pub enum Visibility {
 pub enum Command {
     /// The window was shown or hidden.
     SetVisibility(Visibility),
-    /// The torrent whose details are shown, if any; its details are read every tick.
+    /// The torrent whose details are shown, if any. They are read in full once the selection
+    /// has stayed for [`EngineConfig::details_settle`], then only for their progress, and only
+    /// while the window is visible; the UI sends `None` when nothing shows them.
     Select(Option<HashString>),
     /// Carry out an action; [`Event::ActionFinished`] with the same id tells how it went.
     Run(ActionId, Action),
@@ -119,13 +132,29 @@ pub enum Request {
     /// Read the recently active torrents with the list fields, and the ids of those removed
     /// recently; answered with [`Response::Torrents`].
     RecentlyActive,
-    /// Read one torrent with the details fields; answered with [`Response::Details`].
-    Details(HashString),
+    /// Read the details of one torrent, whole or only their progress; answered with
+    /// [`Response::Details`].
+    Details {
+        /// The torrent.
+        hash: HashString,
+        /// What to read.
+        kind: DetailsRead,
+    },
     /// Carry out an action; answered with [`Response::Done`].
     Action(ActionId, Action),
     /// Read the hashes and magnet links of these torrents once; answered with
     /// [`Response::MagnetLinks`].
     MagnetLinks(ActionId, Vec<HashString>),
+}
+
+/// How much of the selected torrent's details a [`Request::Details`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DetailsRead {
+    /// Everything: the metainfo, the files, the trackers and the progress.
+    Full,
+    /// Only what changes while the torrent downloads: each file's bytes, priority and wanted
+    /// switch, the pieces and the totals. It is merged into the last full read.
+    Progress,
 }
 
 /// The daemon's answer to a [`Request`].
@@ -179,7 +208,10 @@ pub enum Event {
 /// It starts [`ConnectionState::Connecting`] and asks only for [`Request::CheckServer`]. A
 /// supported server makes it [`ConnectionState::Connected`]: it reads the session, the whole
 /// list and the statistics at once, then each on its own interval, and every tick the recently
-/// active torrents, the statistics and the selected torrent's details. When the daemon stops
+/// active torrents and the statistics. The selected torrent's details are read in full once the
+/// selection settles and after connecting, then only for their progress: every
+/// [`EngineConfig::details_interval`] while it downloads or verifies, otherwise with each whole
+/// list, and nothing while the window is hidden. When the daemon stops
 /// answering it becomes [`ConnectionState::Reconnecting`], keeps the last state (marked stale)
 /// and checks the server again after each step of [`EngineConfig::backoff`]; the steps go on
 /// until the connection has stayed up for [`EngineConfig::stable_after`], so a daemon that passes
@@ -207,10 +239,10 @@ pub struct Engine {
     session_timer: Timer,
     full_list_timer: Timer,
     free_space_timer: Timer,
-    /// Recently active torrents, the session statistics and the selected torrent's details.
+    /// Recently active torrents and the session statistics.
     tick_timer: Timer,
-    /// The selected torrent was just chosen, so its details are wanted before the next tick.
-    details_now: bool,
+    /// When the selected torrent's details are read next, and how.
+    details_reads: DetailsReads,
     /// Actions and reads of magnet links accepted while connected and not handed out yet,
     /// oldest first.
     queued: VecDeque<Queued>,
@@ -255,7 +287,7 @@ impl Engine {
             full_list_timer: Timer::default(),
             free_space_timer: Timer::default(),
             tick_timer: Timer::default(),
-            details_now: false,
+            details_reads: DetailsReads::default(),
             queued: VecDeque::new(),
             batch: 0,
             tick_batch: None,
@@ -282,12 +314,13 @@ impl Engine {
     pub fn handle_command(&mut self, now: Instant, command: Command) -> Vec<Event> {
         match command {
             Command::SetVisibility(visibility) => {
+                self.details_visibility(visibility);
                 // The tick is measured from the last one, so the new interval applies at once.
                 self.visibility = visibility;
                 Vec::new()
             }
             Command::Select(hash) => {
-                self.select(hash);
+                self.select(now, hash);
                 Vec::new()
             }
             Command::Run(id, action) => self.accept(Queued::Action(id, action)),
@@ -298,6 +331,7 @@ impl Engine {
                 self.tick_timer.force();
                 // Due only once the download directory is known.
                 self.free_space_timer.force();
+                self.details_refresh();
                 Vec::new()
             }
             Command::Refresh | Command::Reconnect => self.restart(now),
@@ -350,7 +384,7 @@ impl Engine {
         let connected = self.connection == ConnectionState::Connected;
         match request {
             Request::CheckServer | Request::Action(..) | Request::MagnetLinks(..) => true,
-            Request::Details(hash) => connected && self.selected.as_ref() == Some(hash),
+            Request::Details { hash, .. } => connected && self.selected.as_ref() == Some(hash),
             Request::SessionGet
             | Request::SessionStats
             | Request::FreeSpace(_)
@@ -441,18 +475,6 @@ impl Engine {
         }
     }
 
-    fn select(&mut self, hash: Option<HashString>) {
-        if hash == self.selected {
-            return;
-        }
-        // The old torrent's details must not show as the new one's.
-        self.details = None;
-        self.details_issues.clear();
-        self.refused.answered(PollKind::Details);
-        self.details_now = hash.is_some();
-        self.selected = hash;
-    }
-
     /// Queues an action or a read of magnet links, or refuses it at once: when it names
     /// nothing, which the daemon would read as everything, or while the daemon is not connected.
     fn accept(&mut self, queued: Queued) -> Vec<Event> {
@@ -530,13 +552,13 @@ impl Engine {
         );
         self.check_at = None;
         self.connected_since = Some(now);
-        // A timer never sent is due at once. The tick brings the statistics and the details;
-        // its recently active torrents come with the full list.
+        // A timer never sent is due at once. The tick brings the statistics; its recently active
+        // torrents come with the full list.
         self.session_timer = Timer::default();
         self.full_list_timer = Timer::default();
         self.free_space_timer = Timer::default();
         self.tick_timer = Timer::default();
-        self.details_now = false;
+        self.details_connected(now);
         // The daemon may have restarted with another directory; measure the one it reports.
         self.download_dir = None;
         self.set_connection(ConnectionState::Connected)
@@ -609,6 +631,7 @@ impl Engine {
             if action.changes_session() {
                 self.session_timer.force();
             }
+            self.details_after_action(action, sent_in);
             return vec![Event::ActionFinished { id, result: Ok(()) }];
         };
         tracing::error!(action = action.name(), %error, "action failed");
@@ -721,7 +744,7 @@ impl Request {
             Self::FreeSpace(_) => Some(PollKind::FreeSpace),
             Self::FullList => Some(PollKind::FullList),
             Self::RecentlyActive => Some(PollKind::RecentlyActive),
-            Self::Details(_) => Some(PollKind::Details),
+            Self::Details { .. } => Some(PollKind::Details),
             Self::CheckServer | Self::Action(..) | Self::MagnetLinks(..) => None,
         }
     }
@@ -735,7 +758,14 @@ impl Request {
             Self::FreeSpace(_) => "free space",
             Self::FullList => "full list",
             Self::RecentlyActive => "recently active",
-            Self::Details(_) => "details",
+            Self::Details {
+                kind: DetailsRead::Full,
+                ..
+            } => "full details",
+            Self::Details {
+                kind: DetailsRead::Progress,
+                ..
+            } => "details progress",
             Self::Action(..) => "action",
             Self::MagnetLinks(..) => "magnet links",
         }
