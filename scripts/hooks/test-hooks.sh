@@ -19,7 +19,21 @@ virtual_session=$root/scripts/virtual-session.sh
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
 
 tmp_root=$(mktemp -d)
-trap 'rm -rf "$tmp_root"' EXIT
+# Processes a case starts on purpose and stops itself (the virtual session's decoys). A failing
+# case exits at once, so the trap stops whatever of them still runs; a pid is signalled only while
+# its process still has the marker the case gave it, never once it has ended and the pid is reused.
+started_pids=()
+started_marker="X4_HOOK_TEST_ROOT=$tmp_root"
+clean_up() {
+    local pid
+    for pid in "${started_pids[@]}"; do
+        if grep -qzxF -- "$started_marker" "/proc/$pid/environ" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+    rm -rf "$tmp_root"
+}
+trap clean_up EXIT
 
 case_name=
 status=0
@@ -804,6 +818,21 @@ test_measure_gives_the_app_a_temp_state_dir() {
     [[ -z $(ls -A "$dir/home") ]] || fail "something was written to HOME: $(ls -A "$dir/home")"
 }
 
+# The app ignores a relative XDG_STATE_HOME and saves into ~/.local/state instead, so the temp
+# state dir must be absolute even when TMPDIR is relative; the caller's directory is its base.
+test_measure_gives_the_app_an_absolute_state_dir_under_a_relative_tmpdir() {
+    local dir state
+    dir=$(new_measure_env)
+    run_with_input '' env -C "$dir" -u XDG_STATE_HOME PATH="$dir/bin:$PATH" \
+        CARGO_TARGET_DIR="$dir/target" HOME="$dir/home" TMPDIR=tmp X4_MEASURE_SETTLE_SECONDS=1 \
+        "$BASH" "$measure"
+    expect_status 0
+    state=$(<"$dir/state-4x4.txt")
+    [[ $state == "$dir/tmp/"* ]] || fail "the state dir is not an absolute temp dir: '$state'"
+    [[ ! -e $state ]] || fail "the state dir was left behind: $state"
+    [[ -z $(ls -A "$dir/tmp") ]] || fail "temp files were left behind: $(ls -A "$dir/tmp")"
+}
+
 test_measure_rejects_unknown_options() {
     local dir option
     dir=$(new_measure_env)
@@ -991,6 +1020,7 @@ test_virtual_session_stops_what_the_session_left_running() {
     new_virtual_env
     cat >"$virtual_dir/bin/kwin_wayland" <<EOF
 #!/usr/bin/env bash
+export "$started_marker"
 sleep 300 </dev/null >/dev/null 2>&1 &
 echo \$! >"$virtual_dir/leftover.pid"
 bash -c 'trap "" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
@@ -1005,6 +1035,9 @@ while ((\$#)); do
 done
 EOF
     run_virtual true
+    for name in leftover stubborn near-miss unrelated; do
+        started_pids+=("$(<"$virtual_dir/$name.pid")")
+    done
     expect_status 0
     for name in near-miss unrelated; do
         pid=$(<"$virtual_dir/$name.pid")
@@ -1014,11 +1047,26 @@ EOF
     for name in leftover stubborn; do
         pid=$(<"$virtual_dir/$name.pid")
         if kill -0 "$pid" 2>/dev/null; then
-            kill -KILL "$pid"
             fail "the $name process the session left running is still there"
         fi
     done
     [[ -z $(ls -A "$virtual_dir/tmp") ]] || fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
+}
+
+# KWin's socket lives in the session's runtime dir under TMPDIR, and a Unix socket's path holds at
+# most 107 bytes: a longer TMPDIR is refused with a clear message, before KWin starts.
+test_virtual_session_refuses_a_tmpdir_too_long_for_the_socket() {
+    local long
+    new_virtual_env
+    long=$virtual_dir/tmp/$(printf 'd%.0s' {1..80})
+    mkdir -p "$long"
+    run_with_input '' env PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" TMPDIR="$long" \
+        "$BASH" "$virtual_session" true
+    expect_status 2
+    expect_contains "more than the 107 a Unix socket allows" "$stderr" stderr
+    expect_contains "TMPDIR" "$stderr" stderr
+    [[ ! -e $virtual_dir/kwin_wayland.txt ]] || fail "KWin was started"
+    [[ -z $(ls -A "$long") ]] || fail "the session dir was left behind: $(ls -A "$long")"
 }
 
 test_virtual_session_reports_a_session_that_never_ran() {
@@ -1088,6 +1136,7 @@ cases=(
     measure_measures_the_synthetic_demo_with_its_arguments_and_cpu
     measure_measures_the_app_by_default
     measure_gives_the_app_a_temp_state_dir
+    measure_gives_the_app_an_absolute_state_dir_under_a_relative_tmpdir
     measure_rejects_unknown_options
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
@@ -1097,6 +1146,7 @@ cases=(
     virtual_session_names_a_missing_tool
     virtual_session_keeps_its_dir_on_request
     virtual_session_stops_what_the_session_left_running
+    virtual_session_refuses_a_tmpdir_too_long_for_the_socket
     virtual_session_reports_a_session_that_never_ran
     check_tools_names_missing_tool
     check_tools_passes_when_all_present

@@ -68,6 +68,12 @@ while (($# > 0)); do
     esac
 done
 
+# The app ignores a relative XDG_STATE_HOME and would save into the owner's ~/.local/state, so the
+# temp dirs below must be absolute. A relative TMPDIR is taken from the caller's directory, before
+# the cd.
+if [[ -n ${TMPDIR:-} && $TMPDIR != /* ]]; then
+    export TMPDIR=$PWD/$TMPDIR
+fi
 cd "$(dirname "$0")/.."
 source scripts/measure-lib.sh
 if [[ $synthetic == yes ]]; then

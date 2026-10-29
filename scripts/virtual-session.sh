@@ -12,8 +12,9 @@
 #
 # Env: X4_VIRTUAL_WIDTH and X4_VIRTUAL_HEIGHT, the size of the virtual screen (default 1440x900);
 # X4_VIRTUAL_KEEP=1 keeps the session's temp dir (kwin.log, the session's XDG dirs) and prints
-# its path. Exits with 127 when a tool is missing, and with 125 when KWin ended before the command
-# ran (KWin's log is printed then).
+# its path. Exits with 127 when a tool is missing, with 125 when KWin ended before the command ran
+# (KWin's log is printed then), and with 2 for a bad command line or a TMPDIR so long that KWin's
+# socket path in it would not fit a Unix socket address (107 bytes).
 set -euo pipefail
 
 for tool in kwin_wayland dbus-run-session; do
@@ -92,6 +93,16 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+
+# A Unix socket's path holds at most 107 bytes, so under a long TMPDIR KWin could not create its
+# socket. Say so here, before anything starts.
+socket_path=$root/runtime/$socket
+socket_bytes=$(printf '%s' "$socket_path" | wc -c)
+if ((socket_bytes > 107)); then
+    echo "virtual-session: KWin's socket path $socket_path would be $socket_bytes bytes," \
+        "more than the 107 a Unix socket allows; set TMPDIR to a shorter directory" >&2
+    exit 2
+fi
 
 # The session has XDG dirs of its own, and below a D-Bus session of its own, because the nested
 # KWin and spectacle save their settings (kwinoutputconfig.json, kwinrc, kglobalshortcutsrc,

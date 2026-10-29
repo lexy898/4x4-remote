@@ -4,8 +4,8 @@
 //! The view pumps the events channel on the UI thread's executor and never waits on the network
 //! (the `events` module): awaiting the channel yields until the service sends something, and
 //! sending a command never blocks. Each batch of queued events is cut down to its newest snapshot,
-//! which `x4-core` turns into the [`TableModel`] and the [`StatusModel`]; the view redraws only when
-//! one of them changed, so an idle daemon costs no frames.
+//! which `x4-core` turns into the [`TableModel`] and the [`StatusModel`]; the view redraws only
+//! when one of them changed, so an idle daemon costs no frames.
 //!
 //! The torrent table ([`TorrentTable`]) shows the rows; the view owns what they are, as its
 //! [`ViewState`]: a click on a filter in the sidebar, an edit in the search box and a click on a
@@ -57,7 +57,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, TestSupportExt as _, Window, div, px,
+    Styled, Subscription, Task, TestSupportExt as _, Window, div, px,
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
@@ -413,7 +413,11 @@ impl MainView {
     fn sort_by(&mut self, column: ColumnId, cx: &mut Context<'_, Self>) {
         let mut view = self.view.clone();
         view.toggle_sort(column);
-        tracing::debug!(key = ?view.sort_key, direction = ?view.sort_direction, "sorted by a column");
+        tracing::debug!(
+            key = ?view.sort_key,
+            direction = ?view.sort_direction,
+            "sorted by a column"
+        );
         self.set_view(view, cx);
     }
 
@@ -580,7 +584,8 @@ impl MainView {
 
     /// The torrent table, whose rows are dimmed while the data is stale (the table does that, so
     /// that a row is never dimmed twice). Its accessible name says how many torrents it shows.
-    fn torrent_list(&self) -> impl IntoElement + use<> {
+    /// Its style is open to the tests, which check that the list itself is never dimmed.
+    fn torrent_list(&self) -> impl IntoElement + Styled + use<> {
         let table = self.table.clone();
         div()
             .id("torrent-list")
@@ -693,5 +698,27 @@ mod tests {
 
         assert_eq!(cx.update(|cx| view.read(cx).config_problem), None);
         assert_eq!(redraws.get(), 1);
+    }
+
+    /// The table dims its rows while the data is stale; an opacity on the list around it would
+    /// multiply with theirs and dim every row twice.
+    #[gpui_kit::test]
+    fn the_torrent_list_around_the_table_is_never_dimmed(cx: &mut TestAppContext) {
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (_, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        let opacity =
+            |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).torrent_list().style().opacity);
+        assert_eq!(opacity(cx), None, "while the data is fresh");
+
+        cx.update(|cx| view.update(cx, MainView::service_stopped));
+
+        assert!(cx.update(|cx| view.read(cx).status.stale));
+        assert_eq!(opacity(cx), None, "while the data is stale");
     }
 }

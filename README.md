@@ -1,6 +1,7 @@
 # 4x4
 
-A native desktop client for a remote [Transmission](https://transmissionbt.com/) daemon, written in Rust.
+A native desktop client for a remote [Transmission](https://transmissionbt.com/) daemon, written
+in Rust.
 
 ## Status
 
@@ -60,8 +61,8 @@ just setup
 just run
 ```
 
-The second command installs the system libraries the GUI toolkit builds and links against; Wayland and
-the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
+The second command installs the system libraries the GUI toolkit builds and links against; Wayland
+and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
 ## The main window
 
@@ -87,28 +88,28 @@ The table lists the torrents, sorted by name at first. Each row shows:
   muted otherwise.
 
 Rows where nothing happens (an idle seeder, a paused or queued torrent) are dimmed, so the active
-ones stand out; an error is never dimmed, and a selected row keeps its full highlight. Until the daemon's list of torrents has come, the table
-stays blank; after that, when there is nothing to show, it says "No torrents", or "No torrents
-match" when the filter or the search hides every torrent.
+ones stand out; an error is never dimmed, and a selected row keeps its full highlight. Until the
+daemon's list of torrents has come, the table stays blank; after that, when there is nothing to
+show, it says "No torrents", or "No torrents match" when the filter or the search hides every
+torrent.
 
 Click a column header to sort by it; click it again to reverse the order. ▲ or ▼ after the header
 shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;
 names sort from A to Z, the time left soonest first (then an unknown time, then "—"), and the state
-with errors first and paused torrents last. Drag a header to move the column, and drag the edge of a header to resize it.
-"Columns" in the toolbar shows and hides columns; the name column always stays. The sort order and
-the columns are remembered between runs.
+with errors first and paused torrents last. Drag a header to move the column, and drag the edge of a
+header to resize it. "Columns" in the toolbar shows and hides columns; the name column always stays.
+The sort order and the columns are remembered between runs.
 
 Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent.
 Several torrents can be selected: Ctrl+click adds a torrent to the selection or takes it out,
-Shift+click selects the range from the last plain click or Ctrl+click to the row clicked,
-Shift+Up and Shift+Down grow or shrink that range by a row, and Shift+Home and Shift+End stretch it
-to the first or the last torrent. Ctrl+A selects every torrent the list shows, and only those;
-Escape or Ctrl+Shift+A selects none. Every selected row has the same
-highlight. The selection stays on the same torrents when the list is re-sorted or updated, and an
-update never scrolls the list. A selected torrent that the filter or the search hides, or that is
-gone from the daemon, leaves the selection, and it is not selected again when it shows again. Tab
-moves on from the table to the search box and the buttons. The table has the keyboard focus when
-the window opens.
+Shift+click selects the range from the last plain click or Ctrl+click to the row clicked, Shift+Up
+and Shift+Down grow or shrink that range by a row, and Shift+Home and Shift+End stretch it to the
+first or the last torrent. Ctrl+A selects every torrent the list shows, and only those; Escape or
+Ctrl+Shift+A selects none. Every selected row has the same highlight. The selection stays on the
+same torrents when the list is re-sorted or updated, and an update never scrolls the list. A
+selected torrent that the filter or the search hides, or that is gone from the daemon, leaves the
+selection, and it is not selected again when it shows again. Tab moves on from the table to the
+search box and the buttons. The table has the keyboard focus when the window opens.
 
 The selected torrents that the list shows are what an action works on, in the order shown; a
 torrent the filter or the search hides is never touched. With the table focused:
@@ -222,10 +223,11 @@ closes the popover; `Escape`, a click beside it, or moving the focus out of it (
 what was typed, until you come back. A click on blank space in the popover leaves the cursor in the
 field. A limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note
 under its field, and nothing is sent; a limit switched on with an empty field asks for a speed. A
-key held down to open the popover does not type into it or apply it. While the context menu is open, `Ctrl+T` and `Ctrl+L` do nothing. The turtle
-and the limits are disabled until the daemon has sent its settings, and while it is not connected;
-an open popover then keeps what was typed, and Apply waits for the connection. A change that fails
-shows a notification, as an action does, one for the turtle and one for each limit.
+key held down to open the popover does not type into it or apply it. While the context menu is open,
+`Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are disabled until the daemon has sent
+its settings, and while it is not connected; an open popover then keeps what was typed, and Apply
+waits for the connection. A change that fails shows a notification, as an action does, one for the
+turtle and one for each limit.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -359,26 +361,26 @@ the message `number-decimal-separator` (a dot in English).
 ## Performance
 
 `just measure` builds the release binary, starts it with a temporary state directory (so its
-`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits
-5 seconds and prints one line: the time to the first rendered frame, then the memory as
-proportional (`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`)
-size, the thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary
-size. It adds a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when
-the OpenGL stack is mapped, which it should not be where a Vulkan driver is installed. The exit
-code stays 0 unless the measurement itself failed. `--cpu <seconds>` adds a second line, the CPU
-time of all its threads over that many seconds after the memory figures, as a percentage of one
-core (`cpu_percent`); `--synthetic` measures the release build of the
-[synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to the program, as
-in `just measure --synthetic --cpu 30 -- --static`.
+`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits 5
+seconds and prints one line: the time to the first rendered frame, then the memory as proportional
+(`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the
+thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary size. It adds
+a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private
+memory, 55 MiB PSS, 120 MiB RSS) or when the OpenGL stack is mapped, which it should not be where a
+Vulkan driver is installed. The exit code stays 0 unless the measurement itself failed.
+`--cpu <seconds>` adds a second line, the CPU time of all its threads over that many seconds after
+the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic` measures the release
+build of the [synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to
+the program, as in `just measure --synthetic --cpu 30 -- --static`.
 
-The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS. RSS
-counts every resident page the app maps, including shared driver libraries (`libLLVM`, `libgallium`)
-that the desktop shell and the browser already keep in memory anyway, so it overstates what 4x4
-costs and swings with the page cache. PSS divides each shared page among the processes that map it,
-which is the fair share, though it depends on what else is running. Private memory is what 4x4 alone
-holds and what only swap can take back. USS (private clean and dirty pages) adds the file pages only
-4x4 maps, such as its own code, which the kernel can drop without swap. The RSS stays in the report as
-a reference.
+The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS.
+RSS counts every resident page the app maps, including shared driver libraries (`libLLVM`,
+`libgallium`) that the desktop shell and the browser already keep in memory anyway, so it overstates
+what 4x4 costs and swings with the page cache. PSS divides each shared page among the processes that
+map it, which is the fair share, though it depends on what else is running. Private memory is what
+4x4 alone holds and what only swap can take back. USS (private clean and dirty pages) adds the file
+pages only 4x4 maps, such as its own code, which the kernel can drop without swap. The RSS stays in
+the report as a reference.
 
 4x4 creates its GPU context Vulkan-first: it uses a hardware Vulkan adapter when there is one and
 loads the OpenGL driver only when Vulkan cannot draw the window (no Vulkan driver, some virtual
