@@ -53,10 +53,6 @@ macro_rules! t {
         ::i18n_embed_fl::fl!($crate::i18n::LOADER, $($arguments)*)
     };
 }
-#[expect(
-    unused_imports,
-    reason = "the views import the macro from here, starting with the next tasks"
-)]
 pub(crate) use t;
 
 /// Builds a loader on the fallback language of `assets`.
@@ -73,13 +69,6 @@ fn load(assets: &dyn I18nAssets) -> FluentLanguageLoader {
 
 /// Formats `value` with `fraction_digits` decimals and the decimal separator of the language
 /// (the message `number-decimal-separator`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn decimal(value: f64, fraction_digits: usize) -> String {
     with_separator(value, fraction_digits, &t!("number-decimal-separator"))
 }
@@ -91,10 +80,7 @@ fn with_separator(value: f64, fraction_digits: usize, separator: &str) -> String
 /// A size such as "22.9 GiB".
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
+    expect(dead_code, reason = "used by the torrent table in Task 6")
 )]
 pub(crate) fn size_text(size: HumanSize) -> SharedString {
     size_string(size).into()
@@ -118,12 +104,13 @@ fn size_string(size: HumanSize) -> String {
 /// A transfer rate such as "180 KiB/s".
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
+    expect(dead_code, reason = "used by the torrent table in Task 6")
 )]
 pub(crate) fn speed_text(speed: HumanSpeed) -> SharedString {
+    speed_string(speed).into()
+}
+
+fn speed_string(speed: HumanSpeed) -> String {
     let unit = match speed.unit {
         SpeedUnit::BytesPerSec => t!("unit-b-per-s"),
         SpeedUnit::KiBPerSec => t!("unit-kib-per-s"),
@@ -135,7 +122,31 @@ pub(crate) fn speed_text(speed: HumanSpeed) -> SharedString {
         value = decimal(speed.value, speed.fraction_digits()),
         unit = unit
     )
-    .into()
+}
+
+/// The total download speed in the status bar, such as "↓ 2.4 MiB/s".
+pub(crate) fn download_rate_text(speed: HumanSpeed) -> SharedString {
+    t!("status-download", speed = speed_string(speed)).into()
+}
+
+/// The total upload speed in the status bar, such as "↑ 180 KiB/s".
+pub(crate) fn upload_rate_text(speed: HumanSpeed) -> SharedString {
+    t!("status-upload", speed = speed_string(speed)).into()
+}
+
+/// The free space in the status bar, such as "22.9 GiB free".
+pub(crate) fn free_space_text(size: HumanSize) -> SharedString {
+    t!("status-free-space", size = size_string(size)).into()
+}
+
+/// The tooltip of the notice that `config.toml` is not used; `problem` is what is wrong with it.
+pub(crate) fn config_problem_detail_text(problem: &str) -> SharedString {
+    t!("status-config-problem-detail", problem = problem).into()
+}
+
+/// How many torrents the list shows, such as "3 torrents".
+pub(crate) fn torrent_count_text(count: usize) -> SharedString {
+    t!("torrent-count", count = count).into()
 }
 
 /// The caption of a progress bar, such as "63% of 22.9 GiB".
@@ -279,13 +290,6 @@ pub(crate) fn state_text(state: DisplayState) -> SharedString {
 /// The status bar has little room, so a failed reconnect is named in a few words (see
 /// [`connection_reason_text`]). The details the server gave for a protocol or server error are
 /// not part of the text; they are for a tooltip, together with [`connection_reason_detail_text`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn connection_text(state: &ConnectionState) -> SharedString {
     match state {
         ConnectionState::Connecting => t!("connection-connecting"),
@@ -324,10 +328,6 @@ pub(crate) fn connection_reason_text(error: &ConnectionError) -> SharedString {
 
 /// Why the connection failed, as a sentence for a tooltip. Like [`connection_reason_text`], it
 /// leaves out the details the server gave for a protocol or server error.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the status bar tooltip in the next tasks")
-)]
 pub(crate) fn connection_reason_detail_text(error: &ConnectionError) -> SharedString {
     match error {
         ConnectionError::Unreachable => t!("connection-reason-unreachable-detail"),

@@ -217,6 +217,27 @@ fn connection_texts() {
     );
 }
 
+#[test]
+fn status_bar_texts() {
+    assert_eq!(download_rate_text(human_speed(2_516_582)), "↓ 2.4 MiB/s");
+    assert_eq!(upload_rate_text(human_speed(184_320)), "↑ 180 KiB/s");
+    assert_eq!(download_rate_text(human_speed(0)), "↓ 0 B/s");
+    assert_eq!(free_space_text(human_size(24_592_841_836)), "22.9 GiB free");
+    assert_eq!(free_space_text(human_size(0)), "0 B free");
+    assert_eq!(
+        config_problem_detail_text("invalid config file /x/config.toml"),
+        "The defaults are used instead: invalid config file /x/config.toml"
+    );
+}
+
+#[test]
+fn torrent_count_uses_plurals() {
+    assert_eq!(torrent_count_text(0), "0 torrents");
+    assert_eq!(torrent_count_text(1), "1 torrent");
+    assert_eq!(torrent_count_text(2), "2 torrents");
+    assert_eq!(torrent_count_text(2000), "2000 torrents");
+}
+
 /// One of each kind of connection error; the details of the last two must never be shown.
 fn every_connection_error() -> [ConnectionError; 6] {
     [

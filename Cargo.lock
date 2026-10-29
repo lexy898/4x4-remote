@@ -8771,6 +8771,8 @@ name = "x4-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "crossbeam-channel",
  "directories",
  "fluent-syntax",
  "gpui-kit",
@@ -8783,6 +8785,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "x4-core",
+ "x4-rpc",
 ]
 
 [[package]]

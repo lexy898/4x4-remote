@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+async-channel.workspace = true
+crossbeam-channel.workspace = true
 directories.workspace = true
 gpui-kit.workspace = true
 i18n-embed.workspace = true
@@ -24,10 +26,13 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 x4-core.workspace = true
+x4-rpc.workspace = true
 
 [dev-dependencies]
 fluent-syntax.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
+# `x4_core::test_support::torrent` builds the torrents of the snapshots the window tests send.
+x4-core = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

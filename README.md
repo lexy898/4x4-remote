@@ -4,9 +4,10 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 
 ## Status
 
-Early development — stage 1 (protocol and core). The libraries can talk to a Transmission daemon
-and keep track of its torrents, but the app still opens an empty window titled "4x4"; nothing is
-usable yet.
+Early development — stage 2 (the main window, read-only), in progress. The window connects to the
+daemon set in `config.toml` and shows the total download and upload speeds, the free space and the
+state of the connection in its status bar, and how many torrents there are. The torrent table, the
+filters and the search come next. 4x4 only reads from the daemon so far; it changes nothing there.
 
 ## What it will do
 
@@ -57,6 +58,29 @@ just run
 The second command installs the system libraries the GUI toolkit builds and links against; Wayland and
 the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
+## The main window
+
+The window opens at once, before the daemon has answered, and connects in the background; nothing
+in the window ever waits for the network. The status bar at the bottom shows:
+
+- a dot for the connection: green when connected, grey while connecting, yellow while
+  reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or newer). Next to
+  it, "Connecting…" or "Reconnecting (attempt N)… timed out" and the like; the tooltip says more
+  about why the daemon could not be reached;
+- "Alt speed" while the daemon's alternative speed limits apply;
+- the free space where new torrents are saved;
+- the total download and upload speeds, ↓ and ↑.
+
+When the daemon stops answering, the last data stays on screen, dimmed, until it answers again. If
+the part of 4x4 that talks to the daemon stops or cannot start, the status bar says "Service
+stopped" or "Service could not start", the data is dimmed for good, and the reason is in the log.
+
+The button in the toolbar switches the theme: the system's (light or dark, following the desktop),
+light, or dark. It is not remembered between runs yet.
+
+While the window is minimized or does not have the focus, 4x4 asks the daemon for updates every
+10 seconds instead of every 1.5 seconds, to go easy on a small server.
+
 ## Files and logs
 
 4x4 keeps its files in the XDG directories (`$XDG_CONFIG_HOME` and `$XDG_STATE_HOME`, which default
@@ -76,9 +100,9 @@ missing key takes the default:
 url = "http://192.168.1.5:9091/transmission/rpc"
 ```
 
-4x4 reads it at startup, but the window does not connect with it yet. A file it cannot use is
-reported in the log and the defaults are used; the log never shows the URL, which may hold a
-password.
+4x4 reads it at startup and connects to that address. A file it cannot use is reported in the log
+and in the status bar ("Config file not used"; the tooltip says why, and "Dismiss" hides it), and
+the defaults are used; neither ever shows the URL, which may hold a password.
 
 4x4 writes `state.toml` atomically, so a crash cannot leave half a file. If the file cannot be
 parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
@@ -179,10 +203,11 @@ binary with the window and the Fluent messages that word everything it shows.
 All network traffic runs on one worker thread, `x4-service`, which `x4-core` starts. It polls the
 daemon on a schedule (faster while the window is visible), reconnects with a growing pause when the
 daemon stops answering, and carries out the actions the user asks for, one request at a time. The
-window (connected to it in the next stage) talks to it through two channels: commands go in, and
-snapshots of the state and the results of actions come out. Sending a command never blocks, the
-window awaits the events without blocking its thread, and closing it does not wait for the worker
-to finish its last request, so the window never waits on the network.
+window talks to it through two channels: commands go in, and snapshots of the state and the results
+of actions come out. Sending a command never blocks, the window awaits the events without blocking
+its thread, and closing it does not wait for the worker to finish its last request, so the window
+never waits on the network. When several snapshots queue up while the window is busy, it shows only
+the newest, and it redraws only when what it shows has changed, so an idle daemon costs no frames.
 
 ### Live tests
 

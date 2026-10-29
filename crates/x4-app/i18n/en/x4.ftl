@@ -91,6 +91,8 @@ subtitle-tracker-error-generic = Tracker error: no details from the server
 
 ## The connection to the server (the status bar shows only a dot when connected)
 
+# What the dot alone says: its accessible name and its tooltip.
+connection-connected = Connected
 connection-connecting = Connecting…
 # $attempt: failed tries in a row (a number); $reason: one of the connection-reason-* messages. The
 # status bar shows this next to the speeds, so the reasons are a few words each.
@@ -114,3 +116,36 @@ connection-unsupported-no-version = Transmission 4.1 or newer required (server d
 connection-unsupported-version = Transmission 4.1 or newer required (server RPC { $version })
 connection-service-stopped = Service stopped
 connection-service-failed = Service could not start
+
+## The status bar
+
+# $speed: the formatted total speed, such as "2.4 MiB/s".
+status-download = ↓ { $speed }
+status-upload = ↑ { $speed }
+# $size: the formatted free space where new torrents are saved, such as "22.9 GiB".
+status-free-space = { $size } free
+# Shown while the alternative speed limits apply; the detail is its tooltip.
+status-alt-speed = Alt speed
+status-alt-speed-detail = Alternative speed limits are on
+# Shown when config.toml cannot be used. $problem: what is wrong with it, from the app, in English.
+status-config-problem = Config file not used
+status-config-problem-detail = The defaults are used instead: { $problem }
+status-dismiss = Dismiss
+
+## The toolbar
+
+# The theme switch names the current choice; each click moves on: system, light, dark.
+theme-system = System theme
+theme-light = Light theme
+theme-dark = Dark theme
+theme-switch-tooltip = Switch between the system, light and dark themes
+
+## The torrent list
+
+# $count: the torrents shown (a number).
+torrent-count =
+    { $count ->
+        [one] { $count } torrent
+       *[other] { $count } torrents
+    }
+torrent-list-empty = No torrents
