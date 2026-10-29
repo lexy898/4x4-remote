@@ -15,6 +15,13 @@
 //! itself, its Escape, is taken over by `follow_table`, which tells it from the table echoing ours
 //! by comparing its row with the lead.
 //!
+//! A right-click selects as a file manager does (`right_click`): a row outside the selection
+//! becomes the only selected row, and one inside leaves the selection as it is. The context menu
+//! then opens for the selected rows (the `context_menu` module): the delegate builds it, enabled as
+//! they allow while the daemon is connected or not (`TorrentTable::set_connected`), and hands a
+//! choice to the handler set with `TorrentTable::on_menu`, with the rows the menu took when it
+//! opened.
+//!
 //! The table's own sorting and column selection are off. A click on a header goes to the handler
 //! set with [`TorrentTable::on_sort`], through which the main view, the owner of the sort order,
 //! sorts the rows and hands them back. The columns are the delegate's: the table reports a move
@@ -29,13 +36,14 @@ mod cells;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeToken};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    TestSupportExt as _, Window, div, px,
+    App, ClickEvent, Context, Div, FocusHandle, Focusable as _, InteractiveElement as _,
+    IntoElement, ParentElement as _, Pixels, ScrollStrategy, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, px,
 };
 use x4_core::{
     ColumnId, ColumnState, Edge, EmptyTable, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, Row, Selection,
@@ -43,6 +51,7 @@ use x4_core::{
     shown_columns,
 };
 
+use crate::context_menu::{MenuChoice, MenuHandler, torrent_menu};
 use crate::i18n::{column_name_text, empty_table_text};
 use crate::theme::row_opacity;
 
@@ -96,8 +105,14 @@ pub struct TorrentTable {
     empty: EmptyTable,
     /// Whether the rows are old data, which the daemon has not confirmed lately.
     stale: bool,
+    /// Whether the daemon is connected, which most items of the context menu need.
+    connected: bool,
+    /// The table's own focus handle, from which the context menu looks up the keys it shows.
+    focus: Option<FocusHandle>,
     /// Called with the column whose header is clicked.
     on_sort: Option<SortHandler>,
+    /// Called with the item chosen in the context menu.
+    on_menu: Option<MenuHandler>,
 }
 
 impl TorrentTable {
@@ -112,7 +127,10 @@ impl TorrentTable {
             sort,
             empty: EmptyTable::Waiting,
             stale: false,
+            connected: false,
+            focus: None,
             on_sort: None,
+            on_menu: None,
         }
     }
 
@@ -121,6 +139,17 @@ impl TorrentTable {
     #[must_use]
     pub fn on_sort(mut self, handler: impl Fn(ColumnId, &mut Window, &mut App) + 'static) -> Self {
         self.on_sort = Some(Rc::new(handler));
+        self
+    }
+
+    /// Calls `handler` with the item the user chooses in the context menu, and the rows the menu
+    /// took when it opened: the selected rows the list showed then, in the order shown.
+    #[must_use]
+    pub(crate) fn on_menu(
+        mut self,
+        handler: impl Fn(MenuChoice, &[Row], &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_menu = Some(Rc::new(handler));
         self
     }
 
@@ -222,6 +251,18 @@ impl TorrentTable {
         changed
     }
 
+    /// Takes whether the daemon is connected, for the context menus opened from now on.
+    pub(crate) fn set_connected(&mut self, connected: bool) {
+        self.connected = connected;
+    }
+
+    /// Whether the row at `row_ix` is selected.
+    fn is_selected(&self, row_ix: usize) -> bool {
+        self.rows
+            .get(row_ix)
+            .is_some_and(|row| self.selection.contains(&row.hash))
+    }
+
     /// The content of the cell at `row_ix` and `col_ix`, at the row's opacity. The opacity is on
     /// the content, not on the row, so that the background of a selected row keeps its full
     /// color.
@@ -279,11 +320,15 @@ pub(crate) fn new_table_state(
     window: &mut Window,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) -> TableState<TorrentTable> {
-    TableState::new(delegate, window, cx)
+    let mut table = TableState::new(delegate, window, cx)
         .col_selectable(false)
         .sortable(false)
         .loop_selection(false)
-        .select_on_modifier_click(false)
+        .select_on_modifier_click(false);
+    // The context menu is built while the table is borrowed, so it cannot ask the table then.
+    let focus = table.focus_handle(cx);
+    table.delegate_mut().focus = Some(focus);
+    table
 }
 
 /// The background of a selected row: the color gpui-component's table paints its own selected
@@ -364,6 +409,24 @@ pub(crate) fn follow_table(
     }
     let change = row.map_or(SelectionChange::Nothing, SelectionChange::Click);
     change_selection(table, change, cx);
+}
+
+/// Takes a right-click on the row at `row_ix`, before its context menu is built, as a file manager
+/// does: a row outside the selection becomes the only selected row (and the lead), as a click
+/// would make it; a row inside leaves the selection as it is, so that the menu acts on all of it.
+/// The table keeps marking the row as the right-clicked one, which its context menu opens for:
+/// moving its own row to the lead unmarks it.
+pub(crate) fn right_click(
+    table: &mut TableState<TorrentTable>,
+    row_ix: usize,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    if !table.delegate().is_selected(row_ix) {
+        change_selection(table, SelectionChange::Click(row_ix), cx);
+    }
+    if table.right_clicked_row() != Some(row_ix) {
+        table.set_right_clicked_row(Some(row_ix), cx);
+    }
 }
 
 /// Scrolls the lead into view when it is off screen. A lead on screen, even if partly, leaves the
@@ -513,6 +576,31 @@ impl TableDelegate for TorrentTable {
         cx: &mut Context<'_, TableState<Self>>,
     ) -> impl IntoElement {
         self.cell_element(row_ix, col_ix, cx.theme())
+    }
+
+    /// The menu of a right-click, built once as it opens, after `right_click` has selected the
+    /// row: it takes the selected rows the list shows now, and acts on them however the list
+    /// changes while it is open.
+    fn context_menu(
+        &mut self,
+        _: usize,
+        menu: PopupMenu,
+        _: &mut Window,
+        _: &mut Context<'_, TableState<Self>>,
+    ) -> PopupMenu {
+        let targets: Rc<[Row]> = self
+            .selection
+            .targets(&self.rows)
+            .into_iter()
+            .cloned()
+            .collect();
+        torrent_menu(
+            menu,
+            &targets,
+            self.connected,
+            self.focus.clone(),
+            self.on_menu.as_ref(),
+        )
     }
 
     fn cell_label(&self, row_ix: usize, col_ix: usize, _: &App) -> Option<SharedString> {

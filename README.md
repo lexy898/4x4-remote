@@ -122,7 +122,25 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Delete` asks whether to remove them from the list; their downloaded files stay on the server.
   "Remove from list…" in the toolbar's Remove menu (the trash can) does the same;
 - `Shift+Delete` asks whether to remove them and delete their files from the server; "Remove and
-  delete files…" in the Remove menu does the same.
+  delete files…" in the Remove menu does the same;
+- `Ctrl+C` copies their magnet links, one per line, in the order shown. The links come from the
+  daemon, so they are on the clipboard a moment later; a newer copy takes the place of one still
+  waiting for the daemon, so the clipboard gets what was asked for last;
+- `Ctrl+Shift+C` copies their info hashes, one per line, in the order shown, at once, also while
+  the daemon is not connected.
+
+Right-click a torrent for a menu of all of these: Start, Pause, Start now, Verify and Reannounce;
+Copy magnet link and Copy hash; "Remove from list…" and "Remove and delete files…". A right-click
+on a torrent outside the selection selects only that torrent, as a file manager does; a
+right-click inside the selection keeps it, so the menu acts on every selected torrent. The menu
+works on the torrents that were selected when it opened, even if the list changes while it is
+open. Each item shows its key, and an item that can do nothing is disabled. While the menu is
+open, the list's keys do nothing to the torrents (Delete removes nothing, and Home, End, Page Up
+and Page Down do not move the selection); Up, Down and Enter choose an item, and Escape closes the
+menu. Choosing an item gives the keys back to the table.
+
+On Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
+lost when 4x4 quits, unless a clipboard manager keeps it.
 
 Removing always asks first. The dialog names the first five torrents in full, a long name wrapped
 over several lines, says how many more there are, and says what becomes of the files: that they
@@ -144,14 +162,16 @@ again (Pause, Start and Pause again send all three, and the torrents end up paus
 
 An action is available only when it can do something to at least one of the torrents (Start needs
 a paused or failed one, Pause one that is not stopped, Start now a stopped or queued one, and asking
-for peers one that is downloading or seeding), and only while the daemon is connected. Otherwise
-its button is disabled and its key does nothing. The toolbar buttons' tooltips name their keys. An
-action shows nothing when it works: the list shows the change at the next update, in a second or
-two. When it fails, a notification at the top right says what failed, for how many torrents, and
-why; it stays until clicked. Each kind of action has its own notification: a newer failure of a
-pause replaces the older one, and leaves the one of a failed verify in place. If the daemon did not
-answer, the action may have happened all the same, and the notification says so: the list shows
-the result.
+for peers one that is downloading or seeding), and only while the daemon is connected; only copying
+the hashes works without it. Otherwise its button and its menu item are disabled and its key does
+nothing. The toolbar buttons' tooltips name their keys. An action shows nothing when it works: the
+list shows the change at the next update, in a second or two. When it fails, a notification at the
+top right says what failed, for how many torrents, and why; it stays until clicked. Each kind of
+action has its own notification: a newer failure of a pause replaces the older one, and leaves the
+one of a failed verify in place. If the daemon did not answer, the action may have happened all the
+same, and the notification says so: the list shows the result. Copying magnet links fails the same
+way, with a notification, when the daemon cannot send them or no longer has the torrents; the
+clipboard then keeps what it had.
 
 The sidebar on the left filters the list by state:
 
@@ -214,13 +234,17 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+R`                                            | in the table              | asks their trackers for more peers           |
 | `Delete`                                            | in the table              | asks whether to remove them from the list    |
 | `Shift+Delete`                                      | in the table              | asks whether to remove them with their files |
+| `Ctrl+C`                                            | in the table              | copies their magnet links                    |
+| `Ctrl+Shift+C`                                      | in the table              | copies their info hashes                     |
+| `Up`, `Down`, `Enter`                               | in the context menu       | move to an item and choose it                |
+| `Escape`                                            | in the context menu       | closes it                                    |
 | `Enter`, `Space`                                    | in a removal dialog       | press the button that has the focus          |
 | `Escape`                                            | in a removal dialog       | closes it and removes nothing                |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
-In the search box, `Ctrl+A` selects the text, not the torrents, `Space` types a space, and `Delete`
-deletes a character, never a torrent.
+In the search box, `Ctrl+A` selects the text, not the torrents, `Ctrl+C` copies the selected text,
+`Space` types a space, and `Delete` deletes a character, never a torrent.
 `Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
 place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
 `/`, which types a period. Verify is `Ctrl+Shift+R` rather than Transmission's `Ctrl+V`, which is

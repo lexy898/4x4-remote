@@ -270,6 +270,16 @@ impl Window {
         self.act(cx, |window, _| window.try_find(("row", row_ix)).is_some())
     }
 
+    /// The indices of the rows on screen.
+    fn rows_on_screen(&self, cx: &mut TestAppContext) -> Vec<usize> {
+        let count = self.read(cx, |table| table.rows().len());
+        self.act(cx, |window, _| {
+            (0..count)
+                .filter(|&row| window.try_find(("row", row)).is_some())
+                .collect()
+        })
+    }
+
     /// The commands the window has sent so far, other than the window's visibility.
     fn sent(&self) -> Vec<Command> {
         self.commands
@@ -474,7 +484,9 @@ fn home_end_and_page_keys_select_only_the_row_they_land_on(cx: &mut TestAppConte
     window.press("shift-down", cx);
     window.press("shift-down", cx);
     assert_eq!(window.selected_rows(cx), [last - 2, last - 1, last]);
+    assert_eq!(window.selected(cx), ["t057", "t058", "t059"]);
     assert_eq!(window.table_row(cx), Some(last));
+    assert_eq!(window.drawn_selected(cx), [last - 2, last - 1, last]);
     window.press("end", cx);
     window.assert_only(last, cx);
 
@@ -516,10 +528,39 @@ fn home_end_and_page_keys_select_only_the_row_they_land_on(cx: &mut TestAppConte
     window.click(3, cx);
     window.press("shift-home", cx);
     assert_eq!(window.selected_rows(cx), [0, 1, 2, 3]);
+    assert_eq!(window.selected(cx), ["t000", "t001", "t002", "t003"]);
     assert_eq!(window.table_row(cx), Some(0));
+    assert_eq!(window.drawn_selected(cx), [0, 1, 2, 3]);
     window.press("shift-end", cx);
     assert_eq!(window.selected_rows(cx), (3..=last).collect::<Vec<_>>());
+    let names: Vec<String> = (3..=last).map(|ix| format!("t{ix:03}")).collect();
+    assert_eq!(window.selected(cx), names);
     assert_eq!(window.table_row(cx), Some(last));
+    // The end is in view, and every row on screen is in the range and drawn selected.
+    let on_screen = window.rows_on_screen(cx);
+    assert!(on_screen.contains(&last), "{on_screen:?}");
+    assert!(on_screen.iter().all(|&row| row >= 3), "{on_screen:?}");
+    assert_eq!(window.drawn_selected(cx), on_screen);
+    assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn a_row_the_table_selects_by_itself_is_taken_as_a_click(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(named(&["a", "b", "c", "d"]), cx);
+    window.click(0, cx);
+    window.ctrl_click(2, cx);
+
+    // Not an echo of the lead: as the demo's `--select` does, a caller sets the table's own row.
+    let table = window.table(cx);
+    cx.update(|cx| table.update(cx, |table, cx| table.set_selected_row(3, cx)));
+    cx.run_until_parked();
+
+    window.assert_only(3, cx);
+    assert_eq!(window.selected(cx), ["d"]);
+    // It becomes the anchor, as a click does.
+    window.press("shift-up", cx);
+    assert_eq!(window.selected(cx), ["c", "d"]);
     assert_eq!(window.sent(), []);
 }
 

@@ -1,10 +1,12 @@
 //! The actions on the selected torrents, as the main view carries them out: from their keys (bound
-//! in [`keymap`](crate::keymap)) and from the toolbar's buttons alike.
+//! in [`keymap`](crate::keymap)), from the toolbar's buttons and from the list's context menu
+//! alike.
 //!
 //! A request takes its targets when the user acts: the selected rows the list shows then, in the
-//! order shown. It reads which actions they allow at that moment too, and sends nothing when its
-//! action is not among them, so a disabled action does nothing from any entry point. The service
-//! answers every action; a failure is shown as a notification and kept as [`MainView::last_failure`].
+//! order shown; the context menu's when it opened. It reads which actions they allow at that
+//! moment too, and sends nothing when its action is not among them, so a disabled action does
+//! nothing from any entry point. The service answers every action; a failure is shown as a
+//! notification and kept as [`MainView::last_failure`].
 //!
 //! One press of an action's key sends the action once: the repeats of a held key run nothing (see
 //! the `key_repeats` module), and neither does a request for an action that is already on its way
@@ -25,23 +27,24 @@ use std::rc::Rc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{
-    Action, App, Context, Div, Focusable as _, InteractiveElement as _, KeyUpEvent, Subscription,
-    Window,
+    Action, App, Context, Div, Focusable as _, InteractiveElement as _, KeyUpEvent, SharedString,
+    Subscription, Window,
 };
-use x4_core::{ActionError, ActionId, Availability, Command, availability, removal_summary};
+use x4_core::{ActionError, ActionId, Availability, Command, Row, availability, removal_summary};
 use x4_rpc::{HashString, RemoveData};
 
 use super::MainView;
 use crate::actions::{
-    ActionKind, PauseTorrents, ReannounceTorrents, RemoveTorrents, RemoveTorrentsWithData,
-    StartTorrents, StartTorrentsNow, ToggleTorrents, TorrentRequest, VerifyTorrents, decide,
+    ActionKind, CopyHashes, CopyMagnetLinks, PauseTorrents, ReannounceTorrents, RemoveTorrents,
+    RemoveTorrentsWithData, StartTorrents, StartTorrentsNow, ToggleTorrents, TorrentRequest,
+    VerifyTorrents, decide,
 };
 use crate::key_repeats::KeyRepeats;
 use crate::removal::{self, Removal};
 
 /// Marks the notification of a failed action, together with the kind of action: the next failure
 /// of the same kind replaces it, so that a burst of failures leaves one notification per kind, the
-/// newest of each.
+/// newest of each. A failed copy of magnet links is a kind of its own.
 struct ActionFailed;
 
 impl MainView {
@@ -87,18 +90,45 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let table = self.table.read(cx).delegate();
-        let targets = table.selection().targets(table.rows());
-        let allowed = availability(self.status.connected(), &targets);
-        let Some(kind) = decide(request, &targets, allowed) else {
+        let decided = {
+            let table = self.table.read(cx).delegate();
+            self.decide_on(request, &table.selection().targets(table.rows()))
+        };
+        if let Some((kind, hashes)) = decided {
+            self.send(kind, hashes, window, cx);
+        }
+    }
+
+    /// Carries out `request` on `targets`, rows taken earlier (when the context menu opened), if
+    /// they allow it now, with the daemon connected or not as it is now; otherwise sends nothing.
+    pub(crate) fn request_on(
+        &mut self,
+        request: TorrentRequest,
+        targets: &[&Row],
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some((kind, hashes)) = self.decide_on(request, targets) {
+            self.send(kind, hashes, window, cx);
+        }
+    }
+
+    /// The action that `request` becomes for `targets` now, with their hashes in order; `None`
+    /// (logged) when they do not allow it.
+    fn decide_on(
+        &self,
+        request: TorrentRequest,
+        targets: &[&Row],
+    ) -> Option<(ActionKind, Vec<HashString>)> {
+        let allowed = availability(self.status.connected(), targets);
+        let Some(kind) = decide(request, targets, allowed) else {
             tracing::debug!(
                 ?request,
                 "the selection does not allow this action; nothing sent"
             );
-            return;
+            return None;
         };
-        let hashes: Vec<_> = targets.iter().map(|row| row.hash.clone()).collect();
-        self.send(kind, hashes, window, cx);
+        Some((kind, targets.iter().map(|row| row.hash.clone()).collect()))
     }
 
     /// Sends the action `kind` on the torrents `hashes` and keeps it until it is answered, unless
@@ -145,19 +175,51 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        let hashes = {
+            let table = self.table.read(cx).delegate();
+            self.removable(data, &table.selection().targets(table.rows()))
+        };
+        if let Some(hashes) = hashes {
+            self.open_removal(data, hashes, window, cx);
+        }
+    }
+
+    /// [`MainView::ask_removal`] for `targets`, rows taken earlier (when the context menu opened),
+    /// if they can be removed now.
+    pub(crate) fn ask_removal_of(
+        &mut self,
+        data: RemoveData,
+        targets: &[&Row],
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(hashes) = self.removable(data, targets) {
+            self.open_removal(data, hashes, window, cx);
+        }
+    }
+
+    /// The hashes of `targets` in order, if they can be removed now; `None` (logged) otherwise.
+    fn removable(&self, data: RemoveData, targets: &[&Row]) -> Option<Vec<HashString>> {
+        if !availability(self.status.connected(), targets).remove {
+            tracing::debug!(?data, "the selection cannot be removed now; nothing asked");
+            return None;
+        }
+        Some(targets.iter().map(|row| row.hash.clone()).collect())
+    }
+
+    /// Opens the dialog that asks whether to remove the torrents `hashes`, unless another dialog
+    /// is open, with their summary of now.
+    fn open_removal(
+        &mut self,
+        data: RemoveData,
+        hashes: Vec<HashString>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         if window.has_active_dialog(cx) {
             tracing::debug!(?data, "a dialog is open already; no second one opens");
             return;
         }
-        let hashes: Vec<HashString> = {
-            let table = self.table.read(cx).delegate();
-            let targets = table.selection().targets(table.rows());
-            if !availability(self.status.connected(), &targets).remove {
-                tracing::debug!(?data, "the selection cannot be removed now; nothing asked");
-                return;
-            }
-            targets.iter().map(|row| row.hash.clone()).collect()
-        };
         let Some(snapshot) = &self.last_snapshot else {
             tracing::debug!(?data, "no list has come yet; nothing asked");
             return;
@@ -235,15 +297,28 @@ impl MainView {
             return;
         };
         let kind = failure.kind.map_or("other", ActionKind::name);
+        self.show_failure(kind, failure.text, window, cx);
+    }
+
+    /// Shows the failure `text` of a request of the kind `kind` (a short name, such as "pause") as
+    /// a notification, which stays until the user dismisses it with a click or a newer failure of
+    /// the same kind takes its place, and keeps it as the last failure.
+    pub(super) fn show_failure(
+        &mut self,
+        kind: &'static str,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         window.push_notification(
-            Notification::error(failure.text.clone())
+            Notification::error(text.clone())
                 .id1::<ActionFailed>(kind)
                 .autohide(false)
                 // A click anywhere on it dismisses it, not only on its close button.
                 .on_click(|_, _, _| {}),
             cx,
         );
-        self.last_failure = Some(failure.text);
+        self.last_failure = Some(text);
     }
 }
 
@@ -285,6 +360,12 @@ pub(super) fn on_torrent_actions(root: Div, cx: &Context<'_, MainView>) -> Div {
         cx,
         |view, window, cx| view.ask_removal(RemoveData::Delete, window, cx),
     ))
+    .on_action(once_per_press::<CopyHashes>(cx, |view, _, cx| {
+        view.copy_selected_hashes(cx);
+    }))
+    .on_action(once_per_press::<CopyMagnetLinks>(cx, |view, window, cx| {
+        view.copy_selected_magnet_links(window, cx);
+    }))
 }
 
 /// The handler of the action `A`, which asks the view of `cx` for `request`, unless the action

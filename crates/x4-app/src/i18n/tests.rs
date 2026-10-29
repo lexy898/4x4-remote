@@ -632,6 +632,46 @@ fn a_failed_action_of_an_unknown_kind_is_still_worded() {
     );
 }
 
+#[test]
+fn a_failed_copy_of_magnet_links_says_why_with_plurals() {
+    let copy = |count: usize, failure: MagnetFailure| magnet_failure_text(count, &failure);
+    assert_eq!(
+        copy(1, MagnetFailure::Gone),
+        "Could not copy the magnet link: the torrent is no longer on the server"
+    );
+    assert_eq!(
+        copy(3, MagnetFailure::Gone),
+        "Could not copy the magnet links of 3 torrents: they are no longer on the server"
+    );
+    assert_eq!(
+        copy(1, MagnetFailure::Error(ActionError::NotConnected)),
+        "Could not copy the magnet link: the server is not connected"
+    );
+    assert_eq!(
+        copy(2, MagnetFailure::Error(ActionError::NotConnected)),
+        "Could not copy the magnet links of 2 torrents: the server is not connected"
+    );
+    // A read that got no answer changed nothing: the timeout is only the reason.
+    assert_eq!(
+        copy(
+            2,
+            MagnetFailure::Error(ActionError::Rpc(ConnectionError::Timeout))
+        ),
+        "Could not copy the magnet links of 2 torrents: timed out"
+    );
+    assert_eq!(
+        copy(
+            1,
+            MagnetFailure::Error(ActionError::Rpc(ConnectionError::Server("busy".to_owned())))
+        ),
+        "Could not copy the magnet link: busy"
+    );
+    assert_eq!(
+        copy(1, MagnetFailure::Error(ActionError::EmptySelection)),
+        "Could not copy the magnet link: no torrent was selected"
+    );
+}
+
 fn summary(count: usize, downloaded: u64, names: &[&str]) -> RemovalSummary {
     RemovalSummary {
         count,

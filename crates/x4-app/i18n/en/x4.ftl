@@ -159,6 +159,15 @@ action-pause = Pause
 action-remove = Remove
 remove-from-list-menu = Remove from list…
 remove-with-data-menu = Remove and delete files…
+# The other items of the torrent list's context menu, besides action-start, action-pause and the
+# two of the Remove menu. Start now starts ahead of the download queue; Verify checks the downloaded
+# data; Reannounce asks the trackers for more peers now.
+action-start-now = Start now
+action-verify = Verify
+action-reannounce = Reannounce
+# Copy the magnet links or the info hashes of the selected torrents, one per line.
+action-copy-magnet = Copy magnet link
+action-copy-hash = Copy hash
 
 ## The dialogs that ask before torrents are removed
 
@@ -332,6 +341,29 @@ action-failed-other =
     }
 # The reason when an action named no torrent, so it was not sent.
 action-reason-nothing-selected = no torrent was selected
+# Copying magnet links failed: they are read from the server first. $count: the torrents whose
+# links were asked for (a number). $outcome is what is known:
+#   not-sent: the server is not connected, so nothing was asked;
+#   gone: the server answered, and has none of the torrents any more;
+#   failed: $reason says why, as for the actions above.
+copy-magnet-failed =
+    { $outcome ->
+        [not-sent]
+            { $count ->
+                [one] Could not copy the magnet link: the server is not connected
+               *[other] Could not copy the magnet links of { $count } torrents: the server is not connected
+            }
+        [gone]
+            { $count ->
+                [one] Could not copy the magnet link: the torrent is no longer on the server
+               *[other] Could not copy the magnet links of { $count } torrents: they are no longer on the server
+            }
+       *[failed]
+            { $count ->
+                [one] Could not copy the magnet link: { $reason }
+               *[other] Could not copy the magnet links of { $count } torrents: { $reason }
+            }
+    }
 
 ## The sidebar
 

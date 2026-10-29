@@ -13,16 +13,18 @@
 //! last snapshot and hands them to the table, without asking the daemon. It also keeps what the
 //! user does to the columns (shown, moved, resized) in the [`UiState`], and the toolbar's column
 //! menu shows and hides them. The selection of several torrents stays in the table, by hash; the
-//! view handles the selection keys of [`keymap`](crate::keymap) (Ctrl+A, Ctrl+Shift+A, Escape,
-//! the arrows, Home, End, Page Up and Page Down, with and without Shift) and hands them to it, and
-//! passes on what the table does to its own selected row. This stage reads nothing more for a
-//! selected torrent.
+//! view handles the selection keys of [`keymap`](crate::keymap) (the `selection_keys` module:
+//! Ctrl+A, Ctrl+Shift+A, Escape, the arrows, Home, End, Page Up and Page Down, with and without
+//! Shift) and hands them to it, and passes on what the table does to its own selected row and a
+//! right-click on a row. This stage reads nothing more for a selected torrent.
 //!
 //! The selected torrents can be started, paused, started now, verified and reannounced, from their
-//! keys and from the toolbar's Start and Pause (the `torrent_actions` module). Each action goes
-//! out as a command and is kept until the service answers it; a failure is shown as a notification.
-//! A held key sends its action once. Delete, Shift+Delete and the toolbar's Remove menu open a
-//! dialog that asks before the torrents are removed, with or without their files.
+//! keys, from the toolbar's Start and Pause and from the list's context menu (the
+//! `torrent_actions` module). Each action goes out as a command and is kept until the service
+//! answers it; a failure is shown as a notification. A held key sends its action once. Delete,
+//! Shift+Delete, the toolbar's Remove menu and the context menu open a dialog that asks before the
+//! torrents are removed, with or without their files. Their hashes and magnet links can be copied
+//! (the `copying` module).
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
@@ -31,8 +33,10 @@
 //! and the window size) is saved a second after the last change, and when the window closes or
 //! the app quits (the `persistence` module).
 
+mod copying;
 mod events;
 mod persistence;
+mod selection_keys;
 mod torrent_actions;
 
 use std::cell::RefCell;
@@ -51,20 +55,18 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    Availability, ColumnId, Command, Edge, Event, Filter, ServiceStatus, Snapshot, SortState,
+    Availability, ColumnId, Command, Event, Filter, ServiceStatus, Snapshot, SortState,
     StatusModel, TableModel, UiState, ViewState, Visibility, shown_columns, status_model,
     table_model, visibility,
 };
 
 use crate::actions::PendingActions;
 use crate::app::ConfigProblem;
+use crate::clipboard::MagnetCopy;
 use crate::i18n::{connection_text, torrent_count_text};
 use crate::key_repeats::KeyRepeats;
 use crate::keymap::{
-    ClearSearch, DeselectTorrents, ExtendSelectionDown, ExtendSelectionToFirst,
-    ExtendSelectionToLast, ExtendSelectionUp, FocusNext, FocusPrevious, FocusSearch, MAIN_CONTEXT,
-    MoveSelectionDown, MoveSelectionPageDown, MoveSelectionPageUp, MoveSelectionToFirst,
-    MoveSelectionToLast, MoveSelectionUp, SelectAllTorrents, TORRENT_LIST_CONTEXT,
+    ClearSearch, FocusNext, FocusPrevious, FocusSearch, MAIN_CONTEXT, TORRENT_LIST_CONTEXT,
 };
 use crate::search::{clear_search, focus_search, new_search_state};
 use crate::sidebar::filter_sidebar;
@@ -72,10 +74,10 @@ use crate::status_bar::status_bar;
 use crate::theme::{apply_theme, follow_appearance, next_theme};
 use crate::toolbar::{ToolbarState, toolbar};
 use crate::torrent_table::{
-    SelectionChange, TorrentTable, change_selection, follow_table, new_table_state, page_step,
-    show_column, show_rows,
+    TorrentTable, follow_table, new_table_state, right_click, show_column, show_rows,
 };
 use persistence::Saver;
+use selection_keys::on_selection_keys;
 use torrent_actions::{follow_key_repeats, on_torrent_actions};
 
 /// The height of a row of the table, for the two lines of the name cell.
@@ -112,8 +114,10 @@ pub struct MainView {
     /// Which actions the selected torrents allow, as the toolbar shows them; kept up to date with
     /// the table and the connection.
     availability: Availability,
-    /// The actions sent and not answered yet.
+    /// The actions sent and not answered yet, and the ids given out.
     pending: PendingActions,
+    /// The read of magnet links that waits for its answer, to copy them.
+    magnet: MagnetCopy,
     /// What the newest failure of an action said.
     last_failure: Option<SharedString>,
     /// The key held down now, so that its repeats do not run its action again; shared with the
@@ -209,6 +213,7 @@ impl MainView {
             last_visibility: None,
             availability: Availability::default(),
             pending: PendingActions::default(),
+            magnet: MagnetCopy::default(),
             last_failure: None,
             key_repeats,
             _events: pump,
@@ -351,7 +356,7 @@ impl MainView {
     }
 
     /// The table of the main window for the saved state `ui`, sorted as `view` says. A click on
-    /// a header sorts through the view.
+    /// a header sorts through the view, and an item of the context menu goes to the view.
     fn new_table(
         ui: &UiState,
         view: &ViewState,
@@ -359,10 +364,18 @@ impl MainView {
         cx: &mut Context<'_, Self>,
     ) -> Entity<TableState<TorrentTable>> {
         let this = cx.weak_entity();
+        let menu_view = cx.weak_entity();
         let delegate = TorrentTable::new(ui.columns.clone(), (view.sort_key, view.sort_direction))
             .on_sort(move |column, _, cx| {
                 if let Err(error) = this.update(cx, |view, cx| view.sort_by(column, cx)) {
                     tracing::debug!(%error, "a header was clicked after the window closed");
+                }
+            })
+            .on_menu(move |choice, targets, window, cx| {
+                if let Err(error) = menu_view.update(cx, |view, cx| {
+                    view.choose_from_menu(choice, targets, window, cx);
+                }) {
+                    tracing::debug!(%error, "a menu item was chosen after the window closed");
                 }
             });
         cx.new(|cx| new_table_state(delegate, window, cx))
@@ -378,8 +391,9 @@ impl MainView {
     }
 
     /// Follows what the user does in the table: what it does to its own selected row (taken over
-    /// by the selection, unless it only echoes the selection), and the columns moved or resized,
-    /// which are remembered.
+    /// by the selection, unless it only echoes the selection), a right-click on a row (which
+    /// selects it, before its context menu opens), and the columns moved or resized, which are
+    /// remembered.
     fn on_table_event(
         &mut self,
         table: &Entity<TableState<TorrentTable>>,
@@ -398,34 +412,20 @@ impl MainView {
             }
             // The delegate has moved the column already, before the table emits this.
             TableEvent::MoveColumn(..) => self.remember_columns(cx),
-            TableEvent::DoubleClickedRow(_)
+            // Emitted before the context menu is built, which then sees the new selection.
+            TableEvent::RightClickedRow(Some(row_ix)) => {
+                let row_ix = *row_ix;
+                table.update(cx, |table, cx| right_click(table, row_ix, cx));
+            }
+            // The table emits this whenever its own row moves, the mirror of the lead included,
+            // and not when a menu closes; the open menu holds its targets anyway.
+            TableEvent::RightClickedRow(None)
+            | TableEvent::DoubleClickedRow(_)
             | TableEvent::SelectColumn(_)
             | TableEvent::SelectCell(..)
             | TableEvent::DoubleClickedCell(..)
-            | TableEvent::RightClickedRow(_)
             | TableEvent::RightClickedCell(..) => {}
         }
-    }
-
-    /// Handles a selection key of the torrent list.
-    fn change_selection(&self, change: SelectionChange, cx: &mut Context<'_, Self>) {
-        self.table
-            .update(cx, |table, cx| change_selection(table, change, cx));
-    }
-
-    /// Handles Page Up (`pages` −1) or Page Down (1): selects only the row a page from the lead.
-    fn change_selection_by_page(&self, pages: isize, cx: &mut Context<'_, Self>) {
-        self.table.update(cx, |table, cx| {
-            let step = page_step(table).saturating_mul(pages);
-            change_selection(
-                table,
-                SelectionChange::Step {
-                    step,
-                    extend: false,
-                },
-                cx,
-            );
-        });
     }
 
     /// Copies the table's columns into the state to remember between runs.
@@ -444,7 +444,7 @@ impl MainView {
     /// Shows that the service could not be started, so no data will come.
     pub(crate) fn service_failed(&mut self, cx: &mut Context<'_, Self>) {
         self.status.service_failed();
-        self.show_stale(cx);
+        self.show_status(cx);
         self.refresh_availability(cx);
         cx.notify();
     }
@@ -467,18 +467,22 @@ impl MainView {
         let mut changed = self.update_table(cx);
         if status != self.status {
             self.status = status;
-            self.show_stale(cx);
+            self.show_status(cx);
             changed = true;
         }
         changed |= self.refresh_availability(cx);
         changed
     }
 
-    /// Tells the table whether its rows are stale data, which it draws at the stale opacity.
-    fn show_stale(&self, cx: &mut Context<'_, Self>) {
+    /// Tells the table whether its rows are stale data, which it draws at the stale opacity, and
+    /// whether the daemon is connected, which its context menu needs for most of its items.
+    fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
+        let connected = self.status.connected();
         self.table.update(cx, |table, cx| {
-            if table.delegate_mut().set_stale(stale) {
+            let delegate = table.delegate_mut();
+            delegate.set_connected(connected);
+            if delegate.set_stale(stale) {
                 cx.notify();
             }
         });
@@ -509,7 +513,7 @@ impl MainView {
             tracing::error!("the service stopped; the window shows the last data it sent");
         }
         self.status.service_stopped();
-        self.show_stale(cx);
+        self.show_status(cx);
         self.refresh_availability(cx);
         cx.notify();
     }
@@ -600,7 +604,7 @@ impl Render for MainView {
             theme,
             on_dismiss,
         );
-        let root = on_torrent_actions(v_flex(), cx);
+        let root = on_selection_keys(on_torrent_actions(v_flex(), cx), cx);
         root.key_context(MAIN_CONTEXT)
             .size_full()
             .bg(theme.background)
@@ -611,56 +615,10 @@ impl Render for MainView {
                 focus_search(&view.search, window, cx);
             }))
             .on_action(cx.listener(Self::on_clear_search))
-            .on_action(cx.listener(|view, _: &SelectAllTorrents, _, cx| {
-                view.change_selection(SelectionChange::All, cx);
-            }))
-            .on_action(cx.listener(|view, _: &DeselectTorrents, _, cx| {
-                view.change_selection(SelectionChange::Nothing, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveSelectionUp, _, cx| {
-                view.change_selection(step(-1, false), cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveSelectionDown, _, cx| {
-                view.change_selection(step(1, false), cx);
-            }))
-            .on_action(cx.listener(|view, _: &ExtendSelectionUp, _, cx| {
-                view.change_selection(step(-1, true), cx);
-            }))
-            .on_action(cx.listener(|view, _: &ExtendSelectionDown, _, cx| {
-                view.change_selection(step(1, true), cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveSelectionToFirst, _, cx| {
-                view.change_selection(to_edge(Edge::First, false), cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveSelectionToLast, _, cx| {
-                view.change_selection(to_edge(Edge::Last, false), cx);
-            }))
-            .on_action(cx.listener(|view, _: &ExtendSelectionToFirst, _, cx| {
-                view.change_selection(to_edge(Edge::First, true), cx);
-            }))
-            .on_action(cx.listener(|view, _: &ExtendSelectionToLast, _, cx| {
-                view.change_selection(to_edge(Edge::Last, true), cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveSelectionPageUp, _, cx| {
-                view.change_selection_by_page(-1, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveSelectionPageDown, _, cx| {
-                view.change_selection_by_page(1, cx);
-            }))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(table))
             .child(status_bar)
     }
-}
-
-/// A move of the lead by `step` rows (negative is up), extending the range or not.
-const fn step(step: isize, extend: bool) -> SelectionChange {
-    SelectionChange::Step { step, extend }
-}
-
-/// A move of the lead to an end of the list (Home, End), extending the range or not.
-const fn to_edge(edge: Edge, extend: bool) -> SelectionChange {
-    SelectionChange::ToEdge { edge, extend }
 }
 
 #[cfg(test)]

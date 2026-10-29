@@ -4,19 +4,23 @@
 //! A request (`TorrentRequest`) is what the user asked for; `decide` turns it into the kind of
 //! action to send (`ActionKind`), or into nothing when the selection does not allow it. Space is a
 //! request of its own, which becomes a start or a pause depending on the targets. Every entry point
-//! (a key, a toolbar button, later the context menu) goes through `decide`, so a disabled action
-//! does nothing from any of them.
+//! (a key, a toolbar button, an item of the list's context menu) goes through `decide`, so a
+//! disabled action does nothing from any of them.
 //!
 //! Removing is not a request: [`RemoveTorrents`] and [`RemoveTorrentsWithData`] only open a dialog
 //! that asks first (the `removal` module), and the dialog's own button sends the removal of the
-//! torrents it named when it opened.
+//! torrents it named when it opened. Copying is not one either: [`CopyHashes`] and
+//! [`CopyMagnetLinks`] write to the clipboard (the `clipboard` module) and change nothing on the
+//! server.
 //!
 //! Each action sent is kept (`PendingActions`) under its [`ActionId`], with its kind and the
 //! torrents it named, until the service says how it went. While the action sent last waits, the
 //! same action on the same torrents is not sent again: a second press of its key or a double click
 //! would only repeat it. An older one does not count: after Pause and then Start, Pause again is
 //! the user's newest choice and goes. A success shows nothing (the next snapshot shows the
-//! change); a failure is worded from the kind, the count and the error.
+//! change); a failure is worded from the kind, the count and the error. The reads of magnet links
+//! take their ids from the same counter, so that no id is ever given twice, but they are not
+//! actions: one read between two presses of Pause does not let the second pause go.
 
 use std::collections::HashMap;
 
@@ -47,6 +51,11 @@ actions!(
         /// Asks whether to remove the selected torrents and delete their files from the server;
         /// only the dialog's own danger button does that.
         RemoveTorrentsWithData,
+        /// Copies the magnet links of the selected torrents, one per line, once the daemon has
+        /// sent them.
+        CopyMagnetLinks,
+        /// Copies the info hashes of the selected torrents, one per line; it needs no daemon.
+        CopyHashes,
     ]
 );
 
@@ -173,15 +182,26 @@ struct Sent {
     targets: Vec<HashString>,
 }
 
-/// The actions sent and not answered yet, by id, and the next id to give out.
+/// The actions sent and not answered yet, by id, and the ids given out.
 #[derive(Debug, Default)]
 pub(crate) struct PendingActions {
-    /// The id of the previous action; the first is 1.
+    /// The id given out last, to an action or to a read of magnet links; the first is 1.
     last_id: u64,
+    /// The id of the action sent last, which a request for the same action is checked against.
+    /// Not `last_id`: that may be a read's.
+    newest_action: Option<ActionId>,
     pending: HashMap<ActionId, Sent>,
 }
 
 impl PendingActions {
+    /// A new id, never given before, for something sent to the service that is not an action,
+    /// such as a read of magnet links. The action sent last stays the one a repeat is checked
+    /// against.
+    pub(crate) fn next_id(&mut self) -> ActionId {
+        self.last_id = self.last_id.wrapping_add(1);
+        ActionId(self.last_id)
+    }
+
     /// Keeps the action `kind` on the torrents `hashes` until it is answered, under a new id,
     /// which it returns. Returns `None`, and keeps nothing, when the action sent last is the same
     /// action on the same torrents, in any order, and is still waiting for its answer. An older
@@ -191,14 +211,14 @@ impl PendingActions {
         let mut targets = hashes.to_vec();
         targets.sort_unstable();
         if self
-            .pending
-            .get(&ActionId(self.last_id))
+            .newest_action
+            .and_then(|newest| self.pending.get(&newest))
             .is_some_and(|last| last.action.kind == kind && last.targets == targets)
         {
             return None;
         }
-        self.last_id = self.last_id.wrapping_add(1);
-        let id = ActionId(self.last_id);
+        let id = self.next_id();
+        self.newest_action = Some(id);
         let action = PendingAction {
             kind,
             count: targets.len(),
@@ -417,6 +437,28 @@ mod tests {
             pending.start(ActionKind::Pause, &both).is_some(),
             "answered, it can go again"
         );
+    }
+
+    #[test]
+    fn an_id_for_a_read_is_new_and_leaves_the_repeat_check_alone() {
+        let mut pending = PendingActions::default();
+        let both = [hash("a"), hash("b")];
+        let Some(pause) = pending.start(ActionKind::Pause, &both) else {
+            panic!("the first pause goes");
+        };
+        let read = pending.next_id();
+        assert_ne!(read, pause);
+
+        assert_eq!(
+            pending.start(ActionKind::Pause, &both),
+            None,
+            "the pause sent last still waits"
+        );
+        let Some(start) = pending.start(ActionKind::Start, &both) else {
+            panic!("another action goes");
+        };
+        assert!(start != read && start != pause, "{start:?}");
+        assert_eq!(pending.len(), 2, "a read is not kept as an action");
     }
 
     #[test]

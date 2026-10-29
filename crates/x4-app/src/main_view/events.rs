@@ -4,8 +4,8 @@
 //! UI thread. Whatever has queued up while the thread was busy is taken in one go and reduced to
 //! the newest snapshot, so a slow frame never makes the window replay old states, and the view
 //! draws again only when what it shows has changed. The pump runs in the window
-//! (`spawn_in`), because the answer to an action may be a failure to show as a notification,
-//! which needs the window.
+//! (`spawn_in`), because the answer to an action or to a read of magnet links may be a failure to
+//! show as a notification, which needs the window.
 
 use gpui_kit::{AsyncWindowContext, Context, WeakEntity, Window};
 use x4_core::Event;
@@ -25,14 +25,9 @@ impl MainView {
                 Event::ActionFinished { id, result } => {
                     self.action_finished(id, &result, window, cx);
                 }
-                Event::MagnetLinks { id, result } => match result {
-                    Ok(links) => tracing::debug!(
-                        ?id,
-                        count = links.len(),
-                        "ignored magnet links: this window does not copy them yet"
-                    ),
-                    Err(error) => tracing::warn!(?id, %error, "reading magnet links failed"),
-                },
+                Event::MagnetLinks { id, result } => {
+                    self.magnet_links_read(id, result, window, cx);
+                }
             }
         }
         if changed {

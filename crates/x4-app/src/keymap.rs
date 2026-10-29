@@ -6,8 +6,9 @@
 //! Where a key works is its context:
 //!
 //! - the torrent actions, the selection keys among them, work in the torrent list (`TorrentList`)
-//!   while no menu of it is open (`!PopupMenu`). The search box lies outside the list, so Ctrl+A,
-//!   Delete or Space there edit its text and never reach the torrents;
+//!   while no menu of it is open (`!PopupMenu`): the context menu is drawn inside the list, and
+//!   Delete there must not act on the torrents behind it. The search box lies outside the list, so
+//!   Ctrl+A, Ctrl+C, Delete or Space there edit or copy its text and never reach the torrents;
 //! - the window's own keys (Ctrl+F, `/`) work in the whole main window (`MainWindow`);
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
@@ -21,15 +22,17 @@
 //! `DataTable`, inside the torrent list) binds Escape to clearing its own selected row and passes
 //! the key on when it has none; Escape in the list then clears the selection here. The table also
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
-//! again here in its context, later, so that ours win (see [`BINDINGS`]).
+//! again here in its context, later, so that ours win (see [`BINDINGS`]). While the context menu is
+//! open, its own Up, Down, Enter and Escape go first, and Home, End, Page Up and Page Down do
+//! nothing.
 
 use std::rc::Rc;
 
 use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, NoAction, actions};
 
 use crate::actions::{
-    PauseTorrents, ReannounceTorrents, RemoveTorrents, RemoveTorrentsWithData, StartTorrents,
-    StartTorrentsNow, ToggleTorrents, VerifyTorrents,
+    CopyHashes, CopyMagnetLinks, PauseTorrents, ReannounceTorrents, RemoveTorrents,
+    RemoveTorrentsWithData, StartTorrents, StartTorrentsNow, ToggleTorrents, VerifyTorrents,
 };
 
 actions!(
@@ -82,6 +85,11 @@ pub(crate) const SEARCH_CONTEXT: &str = "SearchBox";
 pub(crate) const TORRENT_LIST_CONTEXT: &str = "TorrentList";
 /// The key context of gpui-component's table.
 const TABLE_CONTEXT: &str = "DataTable";
+/// The table while no menu of it is open: the context menu is drawn inside the table, so without
+/// `!PopupMenu` its keys would move the selection behind the menu.
+const TABLE_NO_MENU: &str = "DataTable && !PopupMenu";
+/// An open menu of the table: its context menu.
+const TABLE_MENU: &str = "DataTable > PopupMenu";
 /// Where the torrent actions work: in the torrent list, while no menu of it is open. An open
 /// context menu is drawn inside the list, so without `!PopupMenu` Delete would act on the
 /// torrents behind it.
@@ -161,25 +169,48 @@ pub const BINDINGS: &[Binding] = &[
         action: || Box::new(MoveSelectionDown),
         context: Some(TABLE_CONTEXT),
     },
+    // Up and Down in an open menu move its highlight (the menu's own bindings are deeper). The
+    // menu has no Home, End, Page Up or Page Down: ours do not work behind it, and the table's own
+    // are bound to nothing in it, which is deeper than the table, so that they do nothing either.
+    Binding {
+        keys: "home",
+        action: || Box::new(NoAction),
+        context: Some(TABLE_MENU),
+    },
+    Binding {
+        keys: "end",
+        action: || Box::new(NoAction),
+        context: Some(TABLE_MENU),
+    },
+    Binding {
+        keys: "pageup",
+        action: || Box::new(NoAction),
+        context: Some(TABLE_MENU),
+    },
+    Binding {
+        keys: "pagedown",
+        action: || Box::new(NoAction),
+        context: Some(TABLE_MENU),
+    },
     Binding {
         keys: "home",
         action: || Box::new(MoveSelectionToFirst),
-        context: Some(TABLE_CONTEXT),
+        context: Some(TABLE_NO_MENU),
     },
     Binding {
         keys: "end",
         action: || Box::new(MoveSelectionToLast),
-        context: Some(TABLE_CONTEXT),
+        context: Some(TABLE_NO_MENU),
     },
     Binding {
         keys: "pageup",
         action: || Box::new(MoveSelectionPageUp),
-        context: Some(TABLE_CONTEXT),
+        context: Some(TABLE_NO_MENU),
     },
     Binding {
         keys: "pagedown",
         action: || Box::new(MoveSelectionPageDown),
-        context: Some(TABLE_CONTEXT),
+        context: Some(TABLE_NO_MENU),
     },
     Binding {
         keys: "ctrl-a",
@@ -260,6 +291,17 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "shift-delete",
         action: || Box::new(RemoveTorrentsWithData),
+        context: Some(TORRENTS),
+    },
+    // The search box lies outside the list and keeps its own Ctrl+C, which copies its text.
+    Binding {
+        keys: "ctrl-c",
+        action: || Box::new(CopyMagnetLinks),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "ctrl-shift-c",
+        action: || Box::new(CopyHashes),
         context: Some(TORRENTS),
     },
     // Deeper than the dialog's own Enter, which confirms the dialog whatever has the focus: bound

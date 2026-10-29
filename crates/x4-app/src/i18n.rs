@@ -28,6 +28,7 @@ use x4_rpc::RemoveData;
 
 use crate::actions::{ActionKind, PendingAction};
 use crate::app::ConfigProblem;
+use crate::clipboard::MagnetFailure;
 
 #[cfg(test)]
 mod parity;
@@ -432,11 +433,7 @@ pub(crate) fn action_failure_text(
         ActionError::Rpc(ConnectionError::Timeout | ConnectionError::Unreachable) => {
             ("no-answer", String::new())
         }
-        ActionError::Rpc(ConnectionError::Server(text)) if has_text(text) => {
-            ("failed", text.clone())
-        }
-        ActionError::Rpc(error) => ("failed", connection_reason_text(error).to_string()),
-        ActionError::EmptySelection => ("failed", t!("action-reason-nothing-selected")),
+        error => ("failed", failure_reason(error)),
     };
     let Some(PendingAction { kind, count }) = pending else {
         return t!("action-failed-other", outcome = outcome, reason = reason).into();
@@ -485,6 +482,36 @@ pub(crate) fn action_failure_text(
             reason = reason
         ),
     }
+    .into()
+}
+
+/// Why a request to the daemon failed, in a few words: the server's own text when it sent one, the
+/// short reason of the status bar otherwise. Nothing for a request that was not sent, which its
+/// message words as such.
+fn failure_reason(error: &ActionError) -> String {
+    match error {
+        ActionError::Rpc(ConnectionError::Server(text)) if has_text(text) => text.clone(),
+        ActionError::Rpc(error) => connection_reason_text(error).to_string(),
+        ActionError::EmptySelection => t!("action-reason-nothing-selected"),
+        ActionError::NotConnected => String::new(),
+    }
+}
+
+/// What a notification says when copying the magnet links of `count` torrents failed, for the
+/// reason `failure`. Unlike an action, a read that got no answer changed nothing, so a timeout is
+/// only a reason.
+pub(crate) fn magnet_failure_text(count: usize, failure: &MagnetFailure) -> SharedString {
+    let (outcome, reason) = match failure {
+        MagnetFailure::Gone => ("gone", String::new()),
+        MagnetFailure::Error(ActionError::NotConnected) => ("not-sent", String::new()),
+        MagnetFailure::Error(error) => ("failed", failure_reason(error)),
+    };
+    t!(
+        "copy-magnet-failed",
+        outcome = outcome,
+        count = count,
+        reason = reason
+    )
     .into()
 }
 

@@ -16,6 +16,8 @@
 //!   there, as a click would, for screenshots of a selected row.
 //! - `--extend K`, after `--select N`, then extends the selection `K` rows down, as Shift+Down
 //!   pressed `K` times would, for screenshots of several selected rows.
+//! - `--right-click`, after `--select N` (and `--extend K`), then right-clicks the row `N` with
+//!   the mouse, which opens its context menu, for screenshots of the menu.
 //! - `--press KEY`, which may be given several times, presses each key in turn once the list is
 //!   there (and selected), one every few seconds, as the user would on the keyboard: `ctrl-p`
 //!   pauses the selected torrents, `space` toggles them. The keys are in gpui's spelling, and each
@@ -32,7 +34,9 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    AnyWindowHandle, App, AsyncApp, Entity, InputEvent as _, KeyUpEvent, Keystroke, OperatingSystem,
+    AnyWindowHandle, App, AsyncApp, Entity, InputEvent as _, KeyUpEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point,
+    point, px,
 };
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
@@ -68,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         scroll = options.scroll,
         select = ?options.select,
         extend = options.extend,
+        right_click = options.right_click,
         press = ?options.press,
         "synthetic daemon"
     );
@@ -92,7 +97,8 @@ fn main() -> anyhow::Result<()> {
 
 /// Once the table of `view` in `window` has its rows: selects the row `options.select`, as a
 /// click on the row would, and extends the selection `options.extend` rows down, as Shift+Down
-/// would; then presses the keys of `options.press`, one every [`PRESS_INTERVAL`].
+/// would; right-clicks the row with `options.right_click`; then presses the keys of
+/// `options.press`, one every [`PRESS_INTERVAL`].
 fn drive_when_listed(
     window: AnyWindowHandle,
     view: Entity<MainView>,
@@ -124,6 +130,11 @@ fn drive_when_listed(
             tracing::info!(row, "row selected");
             extend_down(window, options.extend, cx);
         }
+        if options.right_click {
+            // A frame or two first, so that the table has laid its rows out where they are now.
+            cx.background_executor().timer(SELECT_POLL).await;
+            right_click(window, &view, row, cx);
+        }
         for keys in &options.press {
             cx.background_executor().timer(PRESS_INTERVAL).await;
             press(window, keys, cx);
@@ -147,6 +158,75 @@ fn press(window: AnyWindowHandle, keys: &str, cx: &mut AsyncApp) {
         Ok(()) => tracing::info!(keys, "key pressed"),
         Err(error) => tracing::error!(keys, %error, "the key could not be pressed"),
     }
+}
+
+/// Right-clicks the row `row` of the table of `view` in `window`, as the mouse would: the pointer
+/// moves there, and the right button goes down and up again.
+fn right_click(window: AnyWindowHandle, view: &Entity<MainView>, row: usize, cx: &mut AsyncApp) {
+    let clicked = cx.update(|cx| {
+        let Some(position) = row_position(view, row, cx) else {
+            return Err(anyhow::anyhow!("the row is not laid out"));
+        };
+        tracing::debug!(?position, "right-clicking a row");
+        window.update(cx, |_, window, cx| {
+            let modifiers = Modifiers::none();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Right,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Right,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+    });
+    match clicked {
+        Ok(()) => tracing::info!(row, "row right-clicked"),
+        Err(error) => tracing::error!(row, %error, "the row could not be right-clicked"),
+    }
+}
+
+/// A point in the row `row` of the table of `view`, in the window, near the left of the name: from
+/// where the table drew its rows last, how tall they all are and how far they are scrolled. `None`
+/// before the rows are drawn, or for a row index too large to place.
+fn row_position(view: &Entity<MainView>, row: usize, cx: &App) -> Option<Point<Pixels>> {
+    let table = view.read(cx).table().read(cx);
+    let rows = f32::from(u16::try_from(table.delegate().rows().len()).ok()?);
+    let row = f32::from(u16::try_from(row).ok()?);
+    let scroll = table.vertical_scroll_handle.0.borrow();
+    let bounds = scroll.base_handle.bounds();
+    let content_height = scroll.base_handle.max_offset().y + bounds.size.height;
+    if rows < 1. || content_height <= px(0.) {
+        return None;
+    }
+    let row_height = content_height / rows;
+    let offset = scroll.base_handle.offset();
+    Some(point(
+        bounds.origin.x + px(120.),
+        bounds.origin.y + offset.y + row_height * (row + 0.5),
+    ))
 }
 
 /// Presses Shift+Down `times` times in `window`: the action of the key goes to the focused
@@ -177,6 +257,8 @@ struct Options {
     select: Option<usize>,
     /// How many rows to extend the selection down by, after selecting `select`.
     extend: usize,
+    /// Whether to right-click the row `select` then.
+    right_click: bool,
     /// The keys to press in turn, in gpui's spelling.
     press: Vec<String>,
 }
@@ -190,6 +272,7 @@ impl Options {
             match arg.as_str() {
                 "--static" => options.activity = Activity::Static,
                 "--scroll" => options.scroll = true,
+                "--right-click" => options.right_click = true,
                 "--select" => {
                     let row = args
                         .next()
@@ -219,12 +302,15 @@ impl Options {
                 }
                 other => anyhow::bail!(
                     "unknown argument {other:?}; the options are --static, --scroll, --select N, \
-                     --extend K and --press KEY"
+                     --extend K, --right-click and --press KEY"
                 ),
             }
         }
         if options.extend > 0 && options.select.is_none() {
             anyhow::bail!("--extend extends the selection of --select N; give --select too");
+        }
+        if options.right_click && options.select.is_none() {
+            anyhow::bail!("--right-click right-clicks the row of --select N; give --select too");
         }
         Ok(options)
     }
@@ -247,6 +333,7 @@ mod tests {
                 scroll: false,
                 select: None,
                 extend: 0,
+                right_click: false,
                 press: Vec::new(),
             }
         );
@@ -261,6 +348,7 @@ mod tests {
                 scroll: true,
                 select: None,
                 extend: 0,
+                right_click: false,
                 press: Vec::new(),
             }
         );
@@ -289,6 +377,14 @@ mod tests {
         let invalid = parse(&["--select", "4", "--extend", "-1"]).expect_err("not a count");
         assert!(invalid.to_string().contains("\"-1\""), "{invalid}");
         let alone = parse(&["--extend", "2"]).expect_err("nothing to extend");
+        assert!(alone.to_string().contains("--select"), "{alone}");
+    }
+
+    #[test]
+    fn right_click_clicks_the_selected_row() {
+        let options = parse(&["--select", "3", "--right-click"]).expect("a right-click");
+        assert_eq!((options.select, options.right_click), (Some(3), true));
+        let alone = parse(&["--right-click"]).expect_err("no row to click");
         assert!(alone.to_string().contains("--select"), "{alone}");
     }
 
