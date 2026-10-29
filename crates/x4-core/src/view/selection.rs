@@ -93,12 +93,20 @@ impl Selection {
         }
     }
 
-    /// Ctrl+A: selects exactly `rows`. The anchor and the lead stay when they are among them.
+    /// Ctrl+A: selects exactly `rows`. The anchor and the lead stay when they are among them; a
+    /// missing one becomes the first (anchor) or the last (lead) of `rows`. So a Shift+arrow right
+    /// after Ctrl+A goes on from the whole selection instead of collapsing it to one row.
     pub fn select_all(&mut self, rows: &[Row]) {
         self.selected = rows.iter().map(|row| row.hash.clone()).collect();
         self.anchor
             .take_if(|anchor| !self.selected.contains(anchor));
         self.lead.take_if(|lead| !self.selected.contains(lead));
+        if self.anchor.is_none() {
+            self.anchor = rows.first().map(|row| row.hash.clone());
+        }
+        if self.lead.is_none() {
+            self.lead = rows.last().map(|row| row.hash.clone());
+        }
     }
 
     /// Selects nothing and forgets the anchor and the lead.
@@ -109,11 +117,25 @@ impl Selection {
     /// Drops what `rows` (the rows now shown) no longer holds: the selected hashes, and the
     /// anchor and the lead when their rows are gone. Called after the filter, the search or a
     /// refresh changes the rows, so that an action never reaches a row the user cannot see.
-    pub fn retain_visible(&mut self, rows: &[Row]) {
+    ///
+    /// Returns whether it changed anything, so that the caller redraws only then. With nothing
+    /// selected and no anchor or lead it returns at once, without looking at `rows`.
+    pub fn retain_visible(&mut self, rows: &[Row]) -> bool {
+        if self.selected.is_empty() && self.anchor.is_none() && self.lead.is_none() {
+            return false;
+        }
         let visible: HashSet<&HashString> = rows.iter().map(|row| &row.hash).collect();
+        let selected_before = self.selected.len();
         self.selected.retain(|hash| visible.contains(hash));
-        self.anchor.take_if(|anchor| !visible.contains(&*anchor));
-        self.lead.take_if(|lead| !visible.contains(&*lead));
+        let anchor_dropped = self
+            .anchor
+            .take_if(|anchor| !visible.contains(&*anchor))
+            .is_some();
+        let lead_dropped = self
+            .lead
+            .take_if(|lead| !visible.contains(&*lead))
+            .is_some();
+        self.selected.len() != selected_before || anchor_dropped || lead_dropped
     }
 
     /// Whether the row is selected.
@@ -128,13 +150,16 @@ impl Selection {
         self.lead.as_ref()
     }
 
-    /// How many rows are selected.
+    /// How many hashes are selected, including those of rows that are not shown (a filter or a
+    /// search can hide a selected row until [`retain_visible`](Self::retain_visible) drops it).
+    /// The count the user sees ("Remove N torrents") is `targets(rows).len()`, never this.
     #[must_use]
     pub fn len(&self) -> usize {
         self.selected.len()
     }
 
-    /// Whether no row is selected.
+    /// Whether no hash is selected. Like [`len`](Self::len) it also counts rows that are not
+    /// shown, so "nothing for an action to reach" is `targets(rows).is_empty()`.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.selected.is_empty()
@@ -225,6 +250,22 @@ mod tests {
         // The toggled row is the anchor of the next Shift+click.
         selection.extend_to(hash_of(&rows, 1), &rows);
         assert_eq!(selected_names(&selection, &rows), ["row 0", "row 1"]);
+    }
+
+    #[test]
+    fn toggle_makes_the_toggled_row_the_anchor() {
+        let rows = rows(5);
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 0));
+        selection.toggle(hash_of(&rows, 3));
+        assert_eq!(selection.anchor.as_ref(), Some(hash_of(&rows, 3)));
+
+        // The range runs from the toggled row, not from the row clicked before it, and replaces
+        // the earlier selection.
+        selection.extend_to(hash_of(&rows, 4), &rows);
+
+        assert_eq!(selected_names(&selection, &rows), ["row 3", "row 4"]);
+        assert_eq!(selection.anchor.as_ref(), Some(hash_of(&rows, 3)));
     }
 
     #[test]
@@ -406,20 +447,66 @@ mod tests {
         assert_eq!(selection.len(), 3);
         assert!(!selection.contains(hash_of(&all, 0)));
         assert!(!selection.contains(hash_of(&all, 4)));
+        // The anchor and the lead were row 0, which is not among the given rows: they are
+        // replaced by the first and the last of them, not kept.
+        assert_eq!(selection.anchor.as_ref(), Some(hash_of(&all, 1)));
+        assert_eq!(selection.lead(), Some(hash_of(&all, 3)));
+        // Shift+click goes on from that anchor and does not reach the stale row 0.
+        selection.extend_to(hash_of(&all, 3), &all);
         assert_eq!(
-            selection.lead(),
-            None,
-            "the lead was a row that is no longer selected"
+            selected_names(&selection, &all),
+            ["row 1", "row 2", "row 3"]
         );
 
-        // A lead that is still among the rows stays.
+        // An anchor and a lead that are still among the rows stay.
         selection.click(hash_of(&all, 2));
         selection.select_all(shown);
+        assert_eq!(selection.anchor.as_ref(), Some(hash_of(&all, 2)));
         assert_eq!(selection.lead(), Some(hash_of(&all, 2)));
         assert_eq!(selection.len(), 3);
 
         selection.select_all(&[]);
         assert!(selection.is_empty());
+        assert_eq!(selection, Selection::default());
+    }
+
+    #[test]
+    fn select_all_fills_in_only_the_anchor_or_lead_that_is_missing() {
+        let rows = rows(4);
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 1));
+        selection.extend_to(hash_of(&rows, 3), &rows);
+        // Row 3 is filtered away: the lead goes, the anchor stays.
+        let shown = &rows[..3];
+        selection.retain_visible(shown);
+        assert_eq!(selection.lead(), None);
+
+        selection.select_all(shown);
+
+        assert_eq!(selection.anchor.as_ref(), Some(hash_of(&rows, 1)));
+        assert_eq!(selection.lead(), Some(hash_of(&rows, 2)));
+    }
+
+    #[test]
+    fn shift_arrow_after_select_all_keeps_the_whole_selection() {
+        let rows = rows(4);
+        let mut selection = Selection::default();
+
+        selection.select_all(&rows);
+        selection.move_lead(1, &rows, true);
+
+        assert_eq!(
+            selected_names(&selection, &rows),
+            ["row 0", "row 1", "row 2", "row 3"],
+            "the lead is on the last row, so Shift+Down has nowhere to go"
+        );
+
+        // Shift+Up then shrinks the range from the end, like a file manager.
+        selection.move_lead(-1, &rows, true);
+        assert_eq!(
+            selected_names(&selection, &rows),
+            ["row 0", "row 1", "row 2"]
+        );
     }
 
     #[test]
@@ -453,16 +540,82 @@ mod tests {
         assert_eq!(selected_names(&selection, &all), ["row 2", "row 3"]);
         assert_eq!(selection.len(), 2);
         assert_eq!(selection.lead(), Some(hash_of(&all, 3)));
+        assert_eq!(selection.anchor, None);
         assert!(!selection.contains(hash_of(&all, 0)));
         assert!(!selection.contains(hash_of(&all, 1)));
-        // The anchor went with its row, so Shift+click starts afresh.
-        selection.extend_to(hash_of(&all, 4), shown);
+        // The anchor went with its row, so Shift+click starts afresh, also when the hidden row
+        // is shown again.
+        selection.extend_to(hash_of(&all, 4), &all);
         assert_eq!(selected_names(&selection, &all), ["row 4"]);
 
         // A lead that is hidden goes too.
         selection.retain_visible(&all[..2]);
         assert!(selection.is_empty());
         assert_eq!(selection.lead(), None);
+        assert_eq!(selection.anchor, None);
+    }
+
+    #[test]
+    fn retain_visible_says_whether_it_changed_anything() {
+        let rows = rows(4);
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 0));
+        selection.extend_to(hash_of(&rows, 2), &rows);
+
+        assert!(!selection.retain_visible(&rows), "every row is still shown");
+        assert!(
+            !selection.retain_visible(&rows[..3]),
+            "only a row that was never selected is gone"
+        );
+        assert!(
+            selection.retain_visible(&rows[1..]),
+            "the anchor and a selected row are gone"
+        );
+        assert!(
+            !selection.retain_visible(&rows[1..]),
+            "a second call has nothing left to drop"
+        );
+    }
+
+    #[test]
+    fn retain_visible_reports_a_dropped_selected_row_alone() {
+        let rows = rows(3);
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 0));
+        selection.toggle(hash_of(&rows, 1));
+        selection.toggle(hash_of(&rows, 2));
+        // The anchor and the lead are on row 2, which stays; only selected row 0 goes.
+        let shown = &rows[1..];
+
+        assert!(selection.retain_visible(shown));
+
+        assert_eq!(selected_names(&selection, &rows), ["row 1", "row 2"]);
+        assert_eq!(selection.lead(), Some(hash_of(&rows, 2)));
+        assert_eq!(selection.anchor.as_ref(), Some(hash_of(&rows, 2)));
+    }
+
+    #[test]
+    fn retain_visible_reports_a_dropped_anchor_and_lead_without_selected_rows() {
+        let rows = rows(2);
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 0));
+        selection.toggle(hash_of(&rows, 0));
+        assert!(selection.is_empty());
+
+        assert!(selection.retain_visible(&rows[1..]));
+
+        assert_eq!(selection, Selection::default());
+    }
+
+    #[test]
+    fn retain_visible_without_a_selection_changes_nothing() {
+        let rows = rows(2);
+        let mut selection = Selection::default();
+
+        assert!(!selection.retain_visible(&rows));
+        assert!(!selection.retain_visible(&[]));
+
+        assert_eq!(selection, Selection::default());
     }
 
     #[test]
