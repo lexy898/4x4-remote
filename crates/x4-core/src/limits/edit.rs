@@ -31,14 +31,16 @@ pub fn limit_prefill(limit: SpeedLimit) -> String {
 /// - Switched off: [`LimitEdit::Off`] if the limit is on now, else nothing; the text is not
 ///   read.
 /// - Switched on with the [prefill](limit_prefill) untouched (spaces aside): nothing if the
-///   limit is on now, else the stored value as it is, without a conversion or a range check.
+///   limit is on now, else the stored value as it is, without a conversion or a range check;
+///   but a stored 0 is never switched on.
 /// - Switched on with other text: what [`parse_limit`] reads. Empty text turns the limit off
 ///   (or leaves it off); a value is sent in kB/s, unless it is the value already set.
 ///
 /// # Errors
 ///
 /// The [`LimitError`] of [`parse_limit`] when the switch is on and the text was changed into
-/// something that is not a limit.
+/// something that is not a limit; [`LimitError::OutOfRange`] when an untouched stored 0 would be
+/// switched on.
 pub fn limit_edit(current: SpeedLimit, text: &str, enabled: bool) -> Result<LimitEdit, LimitError> {
     let off = if current.enabled {
         LimitEdit::Off
@@ -49,11 +51,14 @@ pub fn limit_edit(current: SpeedLimit, text: &str, enabled: bool) -> Result<Limi
         return Ok(off);
     }
     if text.trim() == limit_prefill(current) {
-        return Ok(if current.enabled {
-            LimitEdit::Unchanged
+        return if current.enabled {
+            Ok(LimitEdit::Unchanged)
+        } else if current.kbps == KbPerSecond(0) {
+            // A limit of 0 stops that direction; the user types a value, as for a typed "0".
+            Err(LimitError::OutOfRange)
         } else {
-            LimitEdit::Set(current.kbps)
-        });
+            Ok(LimitEdit::Set(current.kbps))
+        };
     }
     Ok(match parse_limit(text)? {
         None => off,
@@ -102,6 +107,24 @@ mod tests {
         assert_eq!(
             limit_edit(limit(21, false), "21", true),
             Ok(LimitEdit::Set(KbPerSecond(21)))
+        );
+    }
+
+    #[test]
+    fn re_enabling_a_stored_zero_limit_asks_for_a_value() {
+        assert_eq!(limit_prefill(limit(0, false)), "0");
+        // Untouched, the same as typing "0": a limit of 0 would stop that direction.
+        assert_eq!(
+            limit_edit(limit(0, false), "0", true),
+            Err(LimitError::OutOfRange)
+        );
+        assert_eq!(
+            limit_edit(limit(0, false), "0", true),
+            limit_edit(limit(0, false), " 00 ", true)
+        );
+        assert_eq!(
+            limit_edit(limit(0, false), "512", true),
+            Ok(LimitEdit::Set(KbPerSecond(524)))
         );
     }
 
