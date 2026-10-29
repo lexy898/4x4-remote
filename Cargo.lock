@@ -8772,6 +8772,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "base64 0.23.1",
  "crossbeam-channel",
  "directories",
  "fluent-syntax",

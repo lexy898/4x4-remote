@@ -23,11 +23,13 @@ required-features = ["synthetic"]
 
 [features]
 # The `x4-synthetic` demo and what only it needs. Off by default, so `4x4` is built without it.
-synthetic = ["dep:serde_json"]
+synthetic = ["dep:base64", "dep:serde_json"]
 
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
+# The synthetic daemon of the `x4-synthetic` demo writes the `pieces` bitfield as base64.
+base64 = { workspace = true, optional = true }
 crossbeam-channel.workspace = true
 directories.workspace = true
 gpui-kit.workspace = true

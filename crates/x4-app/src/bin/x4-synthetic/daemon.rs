@@ -11,19 +11,34 @@
 //! - `torrent_verify` checks a torrent for [`VERIFY_POLLS`] polls of the recently active torrents,
 //!   then puts it back as it was; `torrent_reannounce` changes nothing;
 //! - `torrent_remove` takes torrents out, and the next poll of the recently active torrents reports
-//!   them removed; `torrent_set` keeps the sequential download (the torrents have no files);
+//!   them removed;
+//! - `torrent_set` keeps the sequential download and the wanted switch and the priority of the
+//!   files, as Transmission 4.1 reads them: an empty list of file indices means every file, and an
+//!   index out of range fails the call with error 6 (`files`);
 //! - `session_set` keeps the speed settings, and `session_get` answers with them.
+//!
+//! Every torrent has files (most one, some a folder, a few dozens, one 2000, some with BEP 47
+//! padding files), and the pieces it has follow how much of it is downloaded, from the start when
+//! the download is sequential (`files`). A read that asks for them also gets the metainfo and the
+//! trackers (`metainfo`): the comment, the creator, the source tag, and a tracker that may fail.
+//! Those fields, being heavy, are sent only when `fields` names them.
 //!
 //! As a real daemon does, an action without `ids` reaches every torrent, an unknown torrent is
 //! skipped, and a torrent an action changed is among the recently active ones at the next poll.
 //! It adds no torrents: `torrent_add`, like any other method, is refused with a JSON-RPC error. It
 //! never touches the network or a file.
 
+mod files;
+mod metainfo;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
 use x4_rpc::{HttpRequest, HttpResponse, Transport, TransportError};
+
+use files::{FileOps, FileState, Plan};
+use metainfo::Trackers;
 
 /// The seed of the torrents, so that every run shows the same ones.
 const SEED: u64 = 0x0004_0004_0004_0004;
@@ -42,6 +57,13 @@ const MAX_RATE_UP: u32 = 2 * 1024 * 1024;
 /// The engine asks for the recently active torrents every 1.5 s while the window is visible;
 /// a download moves on by 1.5 s of its rate on each of those polls.
 const POLL_TENTHS_OF_A_SECOND: u32 = 15;
+/// A list of ids this long or shorter is looked up by scanning the torrents.
+const SHORT_LIST: usize = 8;
+/// One KiB, the unit of the torrents' sizes, in bytes.
+const KIB: u64 = 1024;
+/// The torrent with 2000 files is the first one that downloads and holds at least this much, in
+/// KiB (8 GiB), so that each of its files is a few MiB.
+const ALBUM_MIN_KIB: u32 = 8 * 1024 * 1024;
 /// The JSON-RPC error code of a method the daemon does not have.
 const METHOD_NOT_FOUND: i64 = -32601;
 /// The JSON-RPC error code of parameters the daemon cannot use.
@@ -70,9 +92,17 @@ impl SyntheticDaemon {
     /// states, that behave as `activity` says.
     pub(crate) fn new(count: u32, activity: Activity) -> Self {
         let mut random = Lcg(SEED);
-        let torrents = (1..=count)
+        let mut torrents: Vec<Torrent> = (1..=count)
             .map(|id| Torrent::new(id, activity, &mut random))
             .collect();
+        // One torrent with 2000 files, for the details of a big torrent: a download, so that its
+        // files and pieces move.
+        if let Some(album) = torrents
+            .iter_mut()
+            .find(|torrent| torrent.kind == Kind::Downloading && torrent.total_kib >= ALBUM_MIN_KIB)
+        {
+            album.plan = Plan::album();
+        }
         Self {
             state: Mutex::new(State {
                 torrents,
@@ -169,7 +199,7 @@ impl State {
             None => {
                 let torrents: Vec<Value> = self
                     .torrents
-                    .iter()
+                    .iter_mut()
                     .map(|torrent| torrent.record(&fields))
                     .collect();
                 Ok(json!({ "torrents": torrents }))
@@ -180,12 +210,12 @@ impl State {
                 Ok(json!({ "torrents": torrents, "removed": removed }))
             }
             Some(ids) => {
-                let torrents: Vec<Value> = self
-                    .listed(ids)?
-                    .into_iter()
-                    .filter_map(|index| self.torrents.get(index))
-                    .map(|torrent| torrent.record(&fields))
-                    .collect();
+                let mut torrents = Vec::new();
+                for index in self.listed(ids)? {
+                    if let Some(torrent) = self.torrents.get_mut(index) {
+                        torrents.push(torrent.record(&fields));
+                    }
+                }
                 Ok(json!({ "torrents": torrents }))
             }
         }
@@ -226,25 +256,37 @@ impl State {
         let ids = ids
             .as_array()
             .ok_or_else(|| Refusal::invalid("ids must be a list of ids or hashes"))?;
-        // Indexed first, so that a list of every torrent is not looked up one by one.
-        let by_id: HashMap<u64, usize> = self
-            .torrents
-            .iter()
-            .enumerate()
-            .map(|(index, torrent)| (u64::from(torrent.id), index))
-            .collect();
-        let by_hash: HashMap<&str, usize> = self
-            .torrents
-            .iter()
-            .enumerate()
-            .map(|(index, torrent)| (torrent.hash.as_str(), index))
-            .collect();
+        // A long list is indexed first, so that it is not looked up one by one; a short one, such
+        // as the read of one torrent's details, is scanned, as indexing 2000 torrents costs more.
+        let indexed = ids.len() > SHORT_LIST;
+        let by_id: HashMap<u64, usize> = if indexed {
+            (self.torrents.iter().enumerate())
+                .map(|(index, torrent)| (u64::from(torrent.id), index))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let by_hash: HashMap<&str, usize> = if indexed {
+            (self.torrents.iter().enumerate())
+                .map(|(index, torrent)| (torrent.hash.as_str(), index))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         ids.iter()
             .map(|id| match id {
-                Value::Number(number) => Ok(number
-                    .as_u64()
-                    .and_then(|number| by_id.get(&number).copied())),
-                Value::String(hash) => Ok(by_hash.get(hash.as_str()).copied()),
+                Value::Number(number) => Ok(number.as_u64().and_then(|number| {
+                    if indexed {
+                        by_id.get(&number).copied()
+                    } else {
+                        (self.torrents.iter()).position(|torrent| u64::from(torrent.id) == number)
+                    }
+                })),
+                Value::String(hash) => Ok(if indexed {
+                    by_hash.get(hash.as_str()).copied()
+                } else {
+                    (self.torrents.iter()).position(|torrent| torrent.hash == *hash)
+                }),
                 _ => Err(Refusal::invalid("an id is a number or a hash")),
             })
             .filter_map(Result::transpose)
@@ -282,21 +324,27 @@ impl State {
         Ok(json!({}))
     }
 
-    /// The answer to `torrent_set`: the sequential download is kept; the file lists are taken and
-    /// change nothing, as the torrents have no files.
+    /// The answer to `torrent_set`: the sequential download and the wanted switch and the priority
+    /// of the files are kept (see [`FileOps`]). A call that fails changes no torrent, not even
+    /// those before the one with the index out of range.
     fn torrent_set(&mut self, params: Option<&Value>) -> Result<Value, Refusal> {
         let sequential = match params.and_then(|params| params.get("sequential_download")) {
             None => None,
             Some(Value::Bool(sequential)) => Some(*sequential),
             Some(_) => return Err(Refusal::invalid("sequential_download must be a boolean")),
         };
+        let lists = FileOps::of(params)?;
         let targets = self.targets(params)?;
-        if let Some(sequential) = sequential {
-            for index in targets {
+        if !lists.is_empty() {
+            for &index in &targets {
                 if let Some(torrent) = self.torrents.get_mut(index) {
-                    torrent.sequential = sequential;
-                    torrent.touched = true;
+                    lists.check(torrent.files().file_count())?;
                 }
+            }
+        }
+        for index in targets {
+            if let Some(torrent) = self.torrents.get_mut(index) {
+                torrent.set(&lists, sequential);
             }
         }
         Ok(json!({}))
@@ -358,6 +406,19 @@ impl Fields {
         self.0
             .as_ref()
             .is_none_or(|fields| fields.iter().any(|wanted| wanted == field))
+    }
+
+    /// Whether the request names `field`. Unlike [`Fields::wants`], a request that names no fields
+    /// does not ask for it: the details are heavy, and only a details read wants them.
+    fn asks(&self, field: &str) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|asked| asked == field))
+    }
+
+    /// Whether the request names any of `names`.
+    fn asks_any(&self, names: &[&str]) -> bool {
+        names.iter().any(|name| self.asks(name))
     }
 }
 
@@ -559,6 +620,12 @@ struct Torrent {
     added_after: u32,
     recheck_thousandths: u32,
     sequential: bool,
+    /// What its files are, before their sizes.
+    plan: Plan,
+    /// The trackers it has and which of them fail.
+    trackers: Trackers,
+    /// Its files and pieces, made when a read or a `torrent_set` first needs them.
+    files: Option<FileState>,
     /// Whether an action changed it since the last poll of the recently active torrents.
     touched: bool,
     /// A verify the torrent is going through.
@@ -615,6 +682,11 @@ impl Torrent {
                 0
             },
             sequential: false,
+            // What a torrent holds is decided by streams of its own, so that the torrents and
+            // their numbers stay what they were before they had files.
+            plan: Plan::pick(&mut Lcg::stream(id, files::PLAN_STREAM)),
+            trackers: Trackers::of(kind, &mut Lcg::stream(id, metainfo::TRACKERS_STREAM)),
+            files: None,
             touched: false,
             verify: None,
         };
@@ -632,12 +704,7 @@ impl Torrent {
                 self.rate_up = random.below(MAX_RATE_UP / 4);
                 self.peers_sending_to_us = random.between(1, self.peers_connected);
                 self.peers_getting_from_us = random.below(self.peers_connected);
-                let done_kib = self.rate_down / 1024 * POLL_TENTHS_OF_A_SECOND / 10;
-                // A download comes close to the end and stays there, so that it keeps moving.
-                self.left_kib = self
-                    .left_kib
-                    .saturating_sub(done_kib)
-                    .max(self.total_kib / 100);
+                self.download(self.rate_down / 1024 * POLL_TENTHS_OF_A_SECOND / 10);
             }
             Kind::Uploading | Kind::TrackerWarning => {
                 self.rate_up = random.below(MAX_RATE_UP);
@@ -736,15 +803,25 @@ impl Torrent {
         )
     }
 
+    /// When the torrent was added, in Unix seconds.
+    fn added(&self) -> i64 {
+        FIRST_ADDED + i64::from(self.added_after)
+    }
+
     /// The torrent as `torrent_get` sends it: the `fields` asked for, among every field of the
-    /// app's list and the magnet link.
-    fn record(&self, fields: &Fields) -> Value {
+    /// app's list, the magnet link and the details.
+    fn record(&mut self, fields: &Fields) -> Value {
+        // The files settle what is left, which the list fields report, so they come first.
+        if Self::needs_files(fields) {
+            self.files();
+        }
         let mut record = self.list_record();
         if let Value::Object(record) = &mut record {
             record.retain(|field, _| fields.wants(field));
             if fields.wants("magnet_link") {
                 record.insert("magnet_link".to_owned(), self.magnet_link().into());
             }
+            self.add_details(fields, record);
         }
         record
     }
@@ -752,9 +829,10 @@ impl Torrent {
     /// The torrent with every field of the app's list.
     fn list_record(&self) -> Value {
         let (error, error_string) = self.kind.error();
-        let total = u64::from(self.total_kib) * 1024;
-        let left = u64::from(self.left_kib) * 1024;
-        let added = FIRST_ADDED + i64::from(self.added_after);
+        let total = u64::from(self.total_kib) * KIB;
+        let wanted_kib = self.size_when_done_kib();
+        let left = u64::from(self.left_kib) * KIB;
+        let added = self.added();
         let eta = if self.rate_down > 0 {
             i64::try_from(left / u64::from(self.rate_down)).unwrap_or(i64::MAX)
         } else {
@@ -777,13 +855,18 @@ impl Torrent {
             "peers_connected": self.peers_connected,
             "peers_getting_from_us": self.peers_getting_from_us,
             "peers_sending_to_us": self.peers_sending_to_us,
-            "percent_done": f64::from(self.total_kib - self.left_kib) / f64::from(self.total_kib),
+            // Nothing wanted is nothing left to do, so it is all done.
+            "percent_done": if wanted_kib == 0 {
+                1.0
+            } else {
+                f64::from(wanted_kib.saturating_sub(self.left_kib)) / f64::from(wanted_kib)
+            },
             "queue_position": self.id - 1,
             "rate_download": self.rate_down,
             "rate_upload": self.rate_up,
             "recheck_progress": f64::from(self.recheck_thousandths) / 1000.0,
             "sequential_download": self.sequential,
-            "size_when_done": total,
+            "size_when_done": u64::from(wanted_kib) * KIB,
             "status": self.kind.status(),
             "total_size": total,
             "upload_ratio": f64::from(self.ratio_thousandths) / 1000.0,
@@ -796,6 +879,17 @@ impl Torrent {
 struct Lcg(u64);
 
 impl Lcg {
+    /// A generator of its own for one thing (`stream`) about torrent `id`: deciding more about a
+    /// torrent never moves the numbers of the other torrents, or of its own other aspects.
+    fn stream(id: u32, stream: u8) -> Self {
+        let key = (u64::from(id) << 8) | u64::from(stream);
+        let mut random = Self(SEED ^ key.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        // The first numbers of generators whose seeds are alike are alike.
+        random.next();
+        random.next();
+        random
+    }
+
     fn next(&mut self) -> u32 {
         self.0 = self
             .0

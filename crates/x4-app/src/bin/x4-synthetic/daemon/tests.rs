@@ -17,6 +17,11 @@ use x4_rpc::{
 
 use super::*;
 
+mod details;
+mod file_set;
+mod pieces;
+mod support;
+
 const COUNT: u32 = 2000;
 
 fn client(activity: Activity) -> Client<SyntheticDaemon> {

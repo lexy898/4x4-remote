@@ -46,6 +46,11 @@ fn customized() -> UiState {
         },
         filter: Filter::Downloading,
         theme: ThemeChoice::Dark,
+        details: DetailsState {
+            open: false,
+            height: 333.3,
+            tab: DetailsTab::Files,
+        },
         ..UiState::default()
     }
 }
@@ -69,6 +74,14 @@ fn ui_state_default_is_the_first_run() {
     assert_eq!(state.sort.direction, SortDirection::Ascending);
     assert_eq!(state.filter, Filter::All);
     assert_eq!(state.theme, ThemeChoice::System);
+    assert_eq!(
+        state.details,
+        DetailsState {
+            open: true,
+            height: 240.0,
+            tab: DetailsTab::General
+        }
+    );
 }
 
 #[test]
@@ -168,6 +181,11 @@ width = 66.0
 [sort]
 key = "name"
 direction = "ascending"
+
+[details]
+open = true
+height = 240.0
+tab = "general"
 "#
     );
 }
@@ -190,6 +208,18 @@ fn ui_state_writes_every_enum_value_by_its_snake_case_name() {
     assert!(text.contains("direction = \"descending\""), "{text}");
     assert!(text.contains("filter = \"active\""), "{text}");
     assert!(text.contains("theme = \"light\""), "{text}");
+
+    let text = UiState {
+        details: DetailsState {
+            tab: DetailsTab::Files,
+            ..DetailsState::default()
+        },
+        ..UiState::default()
+    }
+    .to_toml()
+    .expect("the state can be written");
+
+    assert!(text.contains("tab = \"files\""), "{text}");
 }
 
 #[test]
@@ -839,4 +869,193 @@ fn logged_values_from_the_file_are_cut_short() {
     assert_eq!(shortened(&exactly), exactly);
     let long = "é".repeat(100);
     assert_eq!(shortened(&long), format!("{}…", "é".repeat(32)));
+}
+
+#[test]
+fn old_state_files_get_default_details() {
+    // A file written before the details panel existed has no `[details]` table.
+    let old = r#"
+        version = 1
+        filter = "downloading"
+        theme = "dark"
+
+        [window]
+        width = 900.0
+        height = 650.0
+        maximized = true
+
+        [sort]
+        key = "size"
+        direction = "descending"
+    "#;
+
+    let parsed = UiState::parse(old).expect("an old file is valid");
+
+    assert!(!parsed.newer);
+    assert_eq!(parsed.state.details, DetailsState::default());
+    assert_eq!(
+        parsed.state.details,
+        DetailsState {
+            open: true,
+            height: 240.0,
+            tab: DetailsTab::General
+        }
+    );
+    assert_eq!(parsed.state.filter, Filter::Downloading, "the rest is read");
+    assert_eq!(
+        UiState::parse("").expect("empty").state.details,
+        DetailsState::default()
+    );
+}
+
+#[test]
+fn details_state_round_trips() {
+    for details in [
+        DetailsState::default(),
+        DetailsState {
+            open: false,
+            height: 333.5,
+            tab: DetailsTab::Files,
+        },
+        DetailsState {
+            open: true,
+            height: MIN_DETAILS_HEIGHT,
+            tab: DetailsTab::General,
+        },
+        DetailsState {
+            open: false,
+            height: MAX_DETAILS_HEIGHT,
+            tab: DetailsTab::Files,
+        },
+    ] {
+        let state = UiState {
+            details,
+            ..UiState::default()
+        };
+        let text = state.to_toml().expect("the state can be written");
+
+        let parsed = UiState::parse(&text).expect("what was written can be read");
+
+        assert_eq!(parsed.state.details, details, "{text}");
+        assert_eq!(parsed.state, state, "{text}");
+    }
+    // The tabs are written by their snake_case names.
+    for (tab, name) in [
+        (DetailsTab::General, "general"),
+        (DetailsTab::Files, "files"),
+    ] {
+        let text = format!("[details]\ntab = \"{name}\"\n");
+        assert_eq!(load(&text).details.tab, tab, "{name}");
+    }
+}
+
+#[test]
+fn details_height_is_clamped() {
+    assert!((MIN_DETAILS_HEIGHT - 110.0).abs() < f32::EPSILON);
+    assert!((MAX_DETAILS_HEIGHT - 2000.0).abs() < f32::EPSILON);
+    for (given, expected) in [
+        (0.0, 110.0),
+        (-30.0, 110.0),
+        (100.0, 110.0),
+        (109.9, 110.0),
+        (110.0, 110.0),
+        (240.0, 240.0),
+        (1999.0, 1999.0),
+        (2000.0, 2000.0),
+        (2000.1, 2000.0),
+        (1.0e9, 2000.0),
+        (f32::INFINITY, 240.0),
+        (f32::NEG_INFINITY, 240.0),
+        (f32::NAN, 240.0),
+    ] {
+        let state = UiState {
+            details: DetailsState {
+                height: given,
+                ..DetailsState::default()
+            },
+            ..UiState::default()
+        };
+
+        let normalized = state.clone().normalized();
+
+        assert!(
+            (normalized.details.height - expected).abs() < f32::EPSILON,
+            "{given} became {}",
+            normalized.details.height
+        );
+        // Reading the written file repairs it the same way.
+        let text = state.to_toml().expect("non-finite numbers can be written");
+        let parsed = UiState::parse(&text).expect("and read").state;
+        assert_eq!(parsed.details, normalized.details, "{given}: {text}");
+    }
+    let hand_edited = load("[details]\nheight = 5\n");
+    assert!((hand_edited.details.height - 110.0).abs() < f32::EPSILON);
+    // The other settings of the panel stay as they were.
+    let kept = UiState {
+        details: DetailsState {
+            open: false,
+            height: 9000.0,
+            tab: DetailsTab::Files,
+        },
+        ..UiState::default()
+    }
+    .normalized();
+    assert_eq!(
+        kept.details,
+        DetailsState {
+            open: false,
+            height: 2000.0,
+            tab: DetailsTab::Files
+        }
+    );
+}
+
+#[test]
+fn an_unknown_details_tab_falls_back_to_the_default() {
+    let text = "[details]\nopen = false\nheight = 300.0\ntab = \"peers\"\n";
+
+    let state = UiState::parse(text)
+        .expect("an unknown tab does not fail the file")
+        .state;
+
+    assert_eq!(
+        state.details,
+        DetailsState {
+            open: false,
+            height: 300.0,
+            tab: DetailsTab::General
+        },
+        "the neighbors of the unknown tab stay"
+    );
+    // Missing keys take their defaults one by one.
+    assert_eq!(
+        load("[details]\nopen = false\n").details,
+        DetailsState {
+            open: false,
+            ..DetailsState::default()
+        }
+    );
+    assert_eq!(
+        load("[details]\ntab = \"files\"\nfuture = 1\n").details,
+        DetailsState {
+            tab: DetailsTab::Files,
+            ..DetailsState::default()
+        },
+        "unknown keys are ignored"
+    );
+}
+
+#[test]
+fn details_of_the_wrong_type_are_an_error() {
+    for text in [
+        "[details]\nopen = 1\n",
+        "[details]\nheight = \"tall\"\n",
+        "[details]\ntab = 3\n",
+        "details = \"open\"\n",
+    ] {
+        assert!(
+            matches!(UiState::parse(text), Err(UiStateError::Parse(_))),
+            "{text}"
+        );
+    }
 }
