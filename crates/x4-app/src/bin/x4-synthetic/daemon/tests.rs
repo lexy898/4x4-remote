@@ -243,6 +243,9 @@ fn the_service_connects_and_lists_every_torrent() {
             Ok(Event::ActionFinished { result, .. }) => {
                 assert!(result.is_ok(), "an action failed: {result:?}");
             }
+            Ok(Event::MagnetLinks { result, .. }) => {
+                assert!(result.is_ok(), "a magnet read failed: {result:?}");
+            }
             Ok(Event::Details(_)) => {}
             Err(error) => panic!("no connected snapshot with the whole list: {error}"),
         }

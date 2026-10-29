@@ -404,6 +404,14 @@ impl MainView {
                     Ok(()) => tracing::debug!(?id, "an action finished"),
                     Err(error) => tracing::warn!(?id, %error, "an action failed"),
                 },
+                Event::MagnetLinks { id, result } => match result {
+                    Ok(links) => tracing::debug!(
+                        ?id,
+                        count = links.len(),
+                        "ignored magnet links: this window does not copy them yet"
+                    ),
+                    Err(error) => tracing::warn!(?id, %error, "reading magnet links failed"),
+                },
             }
         }
         if changed {
@@ -726,6 +734,7 @@ mod tests {
             .map(|event| match event {
                 Event::Snapshot(snapshot) => format!("snapshot {}", snapshot.rate_down),
                 Event::ActionFinished { id, .. } => format!("action {}", id.0),
+                Event::MagnetLinks { id, .. } => format!("magnet links {}", id.0),
                 Event::Details(_) => "details".to_owned(),
             })
             .collect()

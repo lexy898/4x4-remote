@@ -8,12 +8,14 @@
 //!
 //! A [`Selection`] is the set of selected rows by hash, which clicks and arrow keys change and
 //! whose `targets` are the rows an action reaches. [`availability()`] tells which actions those
-//! targets allow, and [`toggle_kind`] what the Space key does to them.
+//! targets allow, and [`toggle_kind`] what the Space key does to them. [`removal_summary`] tells
+//! the removal dialog what it is about to remove.
 
 mod availability;
 mod columns;
 mod eta;
 mod percent;
+mod removal;
 mod row;
 mod selection;
 mod status;
@@ -22,6 +24,7 @@ mod subtitle;
 pub use availability::{Availability, ToggleKind, availability, toggle_kind};
 pub use columns::{ColumnId, ViewState};
 pub use eta::{CompactDuration, EtaView, TimeUnit};
+pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
 pub use selection::Selection;
 pub use status::{Indicator, ServiceStatus, StatusModel, status_model, visibility};

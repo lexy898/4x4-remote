@@ -15,6 +15,7 @@ use x4_rpc::{
 
 use super::*;
 
+use crate::action::Direction;
 use crate::model::Torrent;
 use crate::snapshot::ConnectionError;
 use crate::store::{SkipReason, SkippedRecord};
@@ -93,6 +94,9 @@ fn answer(request: &Request) -> Response {
             Response::Details(serde_json::from_value(fixture_result(TORRENT_GET_DETAILS)).unwrap())
         }
         Request::Action(..) => Response::Done,
+        Request::MagnetLinks(..) => Response::MagnetLinks(
+            serde_json::from_value(fixture_result(TORRENT_GET_DETAILS)).unwrap(),
+        ),
     }
 }
 
@@ -171,6 +175,22 @@ fn finished(id: u64, result: Result<(), ActionError>) -> Event {
 
 fn stop_first() -> Action {
     Action::Stop(vec![first()])
+}
+
+fn magnets(id: u64, result: Result<Vec<(HashString, String)>, ActionError>) -> Event {
+    Event::MagnetLinks {
+        id: ActionId(id),
+        result,
+    }
+}
+
+/// A record of a magnet-link answer: the hash as the daemon spells it, and the link if any.
+fn link_record(hash: &str, magnet_link: Option<&str>) -> TorrentRecord {
+    TorrentRecord {
+        hash_string: Some(hash.to_owned()),
+        magnet_link: magnet_link.map(str::to_owned),
+        ..TorrentRecord::default()
+    }
 }
 
 fn magnet() -> TorrentAdd {
@@ -736,13 +756,15 @@ fn is_current_follows_the_connection_and_the_selection() {
         Request::RecentlyActive,
     ];
     let action = Request::Action(ActionId(1), stop_first());
+    let read = Request::MagnetLinks(ActionId(2), vec![first()]);
     let details = Request::Details(first());
     let mut engine = Engine::new(EngineConfig::default(), base);
     command(&mut engine, base, Command::Select(Some(first())));
 
-    // Connecting: only the server check and actions.
+    // Connecting: only the server check, actions and magnet reads.
     assert!(engine.is_current(&Request::CheckServer));
     assert!(engine.is_current(&action));
+    assert!(engine.is_current(&read));
     for poll in polls.iter().chain([&details]) {
         assert!(!engine.is_current(poll), "{poll:?} while connecting");
     }
@@ -764,6 +786,7 @@ fn is_current_follows_the_connection_and_the_selection() {
     }
     assert!(engine.is_current(&Request::CheckServer));
     assert!(engine.is_current(&action));
+    assert!(engine.is_current(&read));
 }
 
 #[test]
@@ -902,24 +925,28 @@ fn add_and_remove_success_pull_tick_forward_too() {
 #[test]
 fn a_speed_action_reads_the_session_again() {
     let base = Instant::now();
-    let mut engine = loaded(base);
-    let now = base + ms(500);
-    command(
-        &mut engine,
-        now,
-        Command::Run(ActionId(11), Action::SetAltSpeed(true)),
-    );
+    let limit = |direction, kbps| Action::SetSpeedLimit { direction, kbps };
+    for action in [
+        Action::SetAltSpeed(true),
+        limit(Direction::Down, Some(100)),
+        limit(Direction::Up, None),
+    ] {
+        let mut engine = loaded(base);
+        let now = base + ms(500);
+        command(&mut engine, now, Command::Run(ActionId(11), action.clone()));
 
-    exchange(&mut engine, now);
+        exchange(&mut engine, now);
 
-    assert_eq!(
-        hand_out(&mut engine, now),
-        [
-            Request::SessionGet,
-            Request::RecentlyActive,
-            Request::SessionStats
-        ]
-    );
+        assert_eq!(
+            hand_out(&mut engine, now),
+            [
+                Request::SessionGet,
+                Request::RecentlyActive,
+                Request::SessionStats
+            ],
+            "{action:?}"
+        );
+    }
 }
 
 #[test]
@@ -967,6 +994,167 @@ fn an_action_that_gets_no_answer_reconnects() {
         )]
     );
     assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
+}
+
+#[test]
+fn magnet_links_are_read_once_and_ordered_by_request() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let third = HashString::parse(&"3".repeat(40)).unwrap();
+    let gone = HashString::parse(&"9".repeat(40)).unwrap();
+    let asked = vec![second(), gone, first(), third.clone()];
+    let now = base + ms(500);
+
+    assert_eq!(
+        command(
+            &mut engine,
+            now,
+            Command::ReadMagnetLinks(ActionId(20), asked.clone())
+        ),
+        []
+    );
+    assert_eq!(engine.next_wakeup(now), now);
+    let due = hand_out(&mut engine, now);
+    assert_eq!(due, [Request::MagnetLinks(ActionId(20), asked)]);
+
+    // In the daemon's own order, the hash in capitals, and one torrent without a link; the
+    // torrent removed meanwhile is not there at all.
+    let answer = TorrentGetResponse {
+        torrents: vec![
+            link_record(&FIRST.to_uppercase(), Some("magnet:?xt=urn:btih:1")),
+            link_record(third.as_str(), None),
+            link_record(SECOND, Some("magnet:?xt=urn:btih:2")),
+        ],
+        removed: Vec::new(),
+    };
+    let events = respond(&mut engine, now, &due[0], Ok(Response::MagnetLinks(answer)));
+
+    assert_eq!(
+        events,
+        [magnets(
+            20,
+            Ok(vec![
+                (second(), "magnet:?xt=urn:btih:2".to_owned()),
+                (first(), "magnet:?xt=urn:btih:1".to_owned()),
+            ])
+        )]
+    );
+    // Read once, and a read changes nothing: no tick and no session read are pulled forward.
+    assert_eq!(hand_out(&mut engine, now), []);
+    assert_eq!(
+        hand_out(&mut engine, base + ms(1500)),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
+    assert_eq!(engine.connection, ConnectionState::Connected);
+}
+
+#[test]
+fn magnet_read_is_refused_when_empty_or_disconnected() {
+    let base = Instant::now();
+    let read = |id, hashes| Command::ReadMagnetLinks(ActionId(id), hashes);
+
+    // Empty: the daemon would read every torrent.
+    let mut engine = loaded(base);
+    assert_eq!(
+        command(&mut engine, base, read(21, Vec::new())),
+        [magnets(21, Err(ActionError::EmptySelection))]
+    );
+    assert_eq!(hand_out(&mut engine, base), []);
+
+    // Not connected: refused at once, never queued; empty still says so.
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    assert_eq!(
+        command(&mut engine, base, read(22, vec![first()])),
+        [magnets(22, Err(ActionError::NotConnected))]
+    );
+    assert_eq!(
+        command(&mut engine, base, read(23, Vec::new())),
+        [magnets(23, Err(ActionError::EmptySelection))]
+    );
+    assert_eq!(hand_out(&mut engine, base), [Request::CheckServer]);
+
+    // Queued, then the connection drops: refused with the actions, in the order they came.
+    let mut engine = loaded(base);
+    assert_eq!(command(&mut engine, base, read(24, vec![first()])), []);
+    assert_eq!(
+        command(&mut engine, base, Command::Run(ActionId(25), stop_first())),
+        []
+    );
+    let events = respond(&mut engine, base, &Request::SessionStats, Err(timeout()));
+    assert_eq!(
+        events,
+        [
+            magnets(24, Err(ActionError::NotConnected)),
+            finished(25, Err(ActionError::NotConnected))
+        ]
+    );
+    assert_eq!(hand_out(&mut engine, base), []);
+}
+
+#[test]
+fn a_failed_magnet_read_reports_why_like_an_action() {
+    let base = Instant::now();
+    let refusal = RpcError::Server {
+        code: 1,
+        message: "system error".to_owned(),
+        detail: Some("busy".to_owned()),
+    };
+
+    let mut engine = loaded(base);
+    command(
+        &mut engine,
+        base,
+        Command::ReadMagnetLinks(ActionId(26), vec![first()]),
+    );
+    let due = hand_out(&mut engine, base);
+    let events = respond(&mut engine, base, &due[0], Err(refusal));
+    assert_eq!(
+        events,
+        [magnets(
+            26,
+            Err(ActionError::Rpc(ConnectionError::Server("busy".to_owned())))
+        )]
+    );
+    assert_eq!(engine.connection, ConnectionState::Connected);
+
+    // No answer: the daemon cannot be used, as after an action that gets none.
+    command(
+        &mut engine,
+        base,
+        Command::ReadMagnetLinks(ActionId(27), vec![first()]),
+    );
+    let due = hand_out(&mut engine, base);
+    let events = respond(&mut engine, base, &due[0], Err(timeout()));
+    assert_eq!(
+        events,
+        [magnets(27, Err(ActionError::Rpc(ConnectionError::Timeout)))]
+    );
+    assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
+}
+
+#[test]
+fn a_magnet_read_answered_with_something_else_is_a_protocol_error() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    command(
+        &mut engine,
+        base,
+        Command::ReadMagnetLinks(ActionId(28), vec![first()]),
+    );
+    let due = hand_out(&mut engine, base);
+
+    let events = respond(&mut engine, base, &due[0], Ok(Response::Done));
+
+    assert!(
+        matches!(
+            events.as_slice(),
+            [Event::MagnetLinks {
+                id: ActionId(28),
+                result: Err(ActionError::Rpc(ConnectionError::Protocol(_)))
+            }]
+        ),
+        "{events:?}"
+    );
 }
 
 #[test]

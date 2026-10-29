@@ -22,11 +22,14 @@ use x4_rpc::{
     TorrentField, TorrentSelection, TorrentSet, Transport,
 };
 
-use crate::action::Action;
+use crate::action::{Action, Direction};
 use crate::engine::{Command, Engine, EngineConfig, Event, Request, Response};
 
 /// The name of the service thread, as debuggers and system monitors show it.
 const THREAD_NAME: &str = "x4-service";
+
+/// What a read of magnet links asks for: just enough to match each link to its torrent.
+const MAGNET_FIELDS: &[TorrentField] = &[TorrentField::HashString, TorrentField::MagnetLink];
 
 /// The UI's end of the service thread: commands go in, events come out.
 ///
@@ -140,8 +143,9 @@ pub fn spawn<T: Transport + 'static>(
 ///
 /// # Errors
 ///
-/// The [`RpcError`] of the call; [`RpcError::Selection`] when an action names no torrent, in
-/// which case nothing is sent: the daemon would apply it to every torrent.
+/// The [`RpcError`] of the call; [`RpcError::Selection`] when an action or a read of magnet
+/// links names no torrent, in which case nothing is sent: the daemon would apply it to every
+/// torrent.
 pub(crate) fn execute<T: Transport>(
     client: &mut Client<T>,
     request: &Request,
@@ -164,6 +168,9 @@ pub(crate) fn execute<T: Transport>(
                 .map(Response::Details)
         }
         Request::Action(_, action) => perform(client, action).map(|()| Response::Done),
+        Request::MagnetLinks(_, hashes) => client
+            .torrent_get(&GetIds::Selection(selection(hashes)?), MAGNET_FIELDS)
+            .map(Response::MagnetLinks),
     }
 }
 
@@ -207,8 +214,8 @@ fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), 
             alt_speed_enabled: Some(*enabled),
             ..SessionSet::default()
         }),
-        Action::SetSpeedLimits { down_kbps, up_kbps } => {
-            client.session_set(&speed_limits(*down_kbps, *up_kbps))
+        Action::SetSpeedLimit { direction, kbps } => {
+            client.session_set(&speed_limit(*direction, *kbps))
         }
         Action::Add(add) => client.torrent_add(add).map(|outcome| {
             if let AddOutcome::Duplicate(_) = outcome {
@@ -270,14 +277,21 @@ fn wanted_set(files: &[usize], wanted: bool) -> TorrentSet {
     }
 }
 
-/// The normal speed limits in kB/s; a missing one is switched off and keeps its stored value.
-fn speed_limits(down_kbps: Option<u32>, up_kbps: Option<u32>) -> SessionSet {
-    SessionSet {
-        speed_limit_down_kbps: down_kbps,
-        speed_limit_down_enabled: Some(down_kbps.is_some()),
-        speed_limit_up_kbps: up_kbps,
-        speed_limit_up_enabled: Some(up_kbps.is_some()),
-        ..SessionSet::default()
+/// The normal speed limit of `direction` in kB/s, switched on; `None` only switches it off,
+/// which keeps its stored value. The other direction is left out.
+fn speed_limit(direction: Direction, kbps: Option<u32>) -> SessionSet {
+    let enabled = Some(kbps.is_some());
+    match direction {
+        Direction::Down => SessionSet {
+            speed_limit_down_kbps: kbps,
+            speed_limit_down_enabled: enabled,
+            ..SessionSet::default()
+        },
+        Direction::Up => SessionSet {
+            speed_limit_up_kbps: kbps,
+            speed_limit_up_enabled: enabled,
+            ..SessionSet::default()
+        },
     }
 }
 
@@ -455,7 +469,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::action::{Action, ActionId};
+    use crate::action::{Action, ActionId, Direction};
     use crate::test_support::{fixture_result, torrent};
 
     /// Answers like the recorded daemon: each read with its fixture, an add with a new torrent
@@ -571,6 +585,28 @@ mod tests {
             answer(Request::Details(hash("a"))),
             Response::Details(_)
         ));
+        assert!(matches!(
+            answer(Request::MagnetLinks(ActionId(1), vec![hash("a")])),
+            Response::MagnetLinks(_)
+        ));
+    }
+
+    #[test]
+    fn a_magnet_read_asks_only_for_the_hashes_and_their_links() {
+        let request = Request::MagnetLinks(ActionId(1), vec![hash("b"), hash("a")]);
+
+        let (result, sent) = execute_one(&request);
+
+        assert!(matches!(result, Ok(Response::MagnetLinks(_))), "{result:?}");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].method, "torrent_get");
+        assert_eq!(
+            sent[0].params,
+            json!({
+                "ids": [hash("b").as_str(), hash("a").as_str()],
+                "fields": ["hash_string", "magnet_link"],
+            })
+        );
     }
 
     #[test]
@@ -660,34 +696,26 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_speed_limit_turns_that_limit_off() {
+    fn set_speed_limit_sends_only_its_direction() {
+        let set = |direction, kbps| sent_for(Action::SetSpeedLimit { direction, kbps });
+        let session_set = |params: Value| ("session_set".to_owned(), params);
+
         assert_eq!(
-            sent_for(Action::SetSpeedLimits {
-                down_kbps: None,
-                up_kbps: Some(250),
-            }),
-            (
-                "session_set".to_owned(),
-                json!({
-                    "speed_limit_down_enabled": false,
-                    "speed_limit_up": 250,
-                    "speed_limit_up_enabled": true,
-                })
-            )
+            set(Direction::Down, Some(100)),
+            session_set(json!({ "speed_limit_down": 100, "speed_limit_down_enabled": true }))
+        );
+        // Off keeps the stored value: only the switch goes out.
+        assert_eq!(
+            set(Direction::Down, None),
+            session_set(json!({ "speed_limit_down_enabled": false }))
         );
         assert_eq!(
-            sent_for(Action::SetSpeedLimits {
-                down_kbps: Some(100),
-                up_kbps: None,
-            }),
-            (
-                "session_set".to_owned(),
-                json!({
-                    "speed_limit_down": 100,
-                    "speed_limit_down_enabled": true,
-                    "speed_limit_up_enabled": false,
-                })
-            )
+            set(Direction::Up, Some(250)),
+            session_set(json!({ "speed_limit_up": 250, "speed_limit_up_enabled": true }))
+        );
+        assert_eq!(
+            set(Direction::Up, None),
+            session_set(json!({ "speed_limit_up_enabled": false }))
         );
     }
 
@@ -764,6 +792,10 @@ mod tests {
             assert_eq!(result, refused);
             assert!(sent.is_empty(), "{sent:?}");
         }
+
+        let (result, sent) = execute_one(&Request::MagnetLinks(ActionId(1), Vec::new()));
+        assert_eq!(result, Err(RpcError::Selection(IdError::EmptySelection)));
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     #[test]

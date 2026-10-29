@@ -4,6 +4,15 @@ use x4_rpc::{FilePriority, HashString, RemoveData, TorrentAdd};
 
 use crate::snapshot::ConnectionError;
 
+/// Which way data flows; each of the normal speed limits applies to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Direction {
+    /// Downloading.
+    Down,
+    /// Uploading.
+    Up,
+}
+
 /// Names one [`Action`], so that its [`Event::ActionFinished`](crate::Event::ActionFinished) can
 /// be matched to it. The caller picks the numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,13 +69,16 @@ pub enum Action {
     },
     /// Switch the alternative speed limits on or off.
     SetAltSpeed(bool),
-    /// Set the normal speed limits in kB/s; `None` turns a limit off, as in
-    /// [`SessionSummary`](crate::SessionSummary).
-    SetSpeedLimits {
-        /// The download limit.
-        down_kbps: Option<u32>,
-        /// The upload limit.
-        up_kbps: Option<u32>,
+    /// Set the normal speed limit of one direction in kB/s, or turn it off.
+    ///
+    /// Only that direction's settings go out, so a value the UI read a while ago never
+    /// overwrites the other direction. Turning a limit off keeps its stored value, which
+    /// [`SpeedLimit`](crate::SpeedLimit) shows.
+    SetSpeedLimit {
+        /// The limit to change.
+        direction: Direction,
+        /// The limit in kB/s, switched on; `None` switches it off.
+        kbps: Option<u32>,
     },
     /// Add a torrent.
     Add(TorrentAdd),
@@ -104,7 +116,7 @@ impl Action {
             }
             Self::SetSequential { .. }
             | Self::SetAltSpeed(_)
-            | Self::SetSpeedLimits { .. }
+            | Self::SetSpeedLimit { .. }
             | Self::Add(_) => false,
         }
     }
@@ -112,7 +124,7 @@ impl Action {
     /// Whether the action changes the session settings, which are polled only once a minute.
     pub(crate) fn changes_session(&self) -> bool {
         match self {
-            Self::SetAltSpeed(_) | Self::SetSpeedLimits { .. } => true,
+            Self::SetAltSpeed(_) | Self::SetSpeedLimit { .. } => true,
             Self::Start(_)
             | Self::StartNow(_)
             | Self::Stop(_)
@@ -139,7 +151,7 @@ impl Action {
             Self::SetFilePriority { .. } => "set file priority",
             Self::SetFilesWanted { .. } => "set files wanted",
             Self::SetAltSpeed(_) => "set alternative speed",
-            Self::SetSpeedLimits { .. } => "set speed limits",
+            Self::SetSpeedLimit { .. } => "set speed limit",
             Self::Add(_) => "add",
         }
     }
@@ -216,9 +228,13 @@ mod tests {
                 enabled: true,
             },
             Action::SetAltSpeed(false),
-            Action::SetSpeedLimits {
-                down_kbps: None,
-                up_kbps: None,
+            Action::SetSpeedLimit {
+                direction: Direction::Down,
+                kbps: None,
+            },
+            Action::SetSpeedLimit {
+                direction: Direction::Up,
+                kbps: Some(100),
             },
             Action::Add(add()),
         ] {
@@ -229,13 +245,12 @@ mod tests {
     #[test]
     fn only_speed_actions_change_the_session() {
         assert!(Action::SetAltSpeed(true).changes_session());
-        assert!(
-            Action::SetSpeedLimits {
-                down_kbps: Some(100),
-                up_kbps: None,
+        for direction in [Direction::Down, Direction::Up] {
+            for kbps in [Some(100), None] {
+                let action = Action::SetSpeedLimit { direction, kbps };
+                assert!(action.changes_session(), "{action:?}");
             }
-            .changes_session()
-        );
+        }
         assert!(!Action::Stop(vec![torrent("a").hash]).changes_session());
         assert!(!Action::Add(add()).changes_session());
     }
