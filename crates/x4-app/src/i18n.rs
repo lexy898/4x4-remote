@@ -165,6 +165,20 @@ pub(crate) fn filter_count_text(count: usize) -> SharedString {
     t!("filter-count", count = count).into()
 }
 
+/// What a screen reader says for a filter in the sidebar: its name and the number of torrents it
+/// matches, such as "Seeding, 3 torrents", or the name alone while the number is not known.
+pub(crate) fn filter_label_text(filter: Filter, count: Option<usize>) -> SharedString {
+    match count {
+        Some(count) => t!(
+            "filter-label",
+            filter = filter_text(filter).to_string(),
+            count = count
+        )
+        .into(),
+        None => filter_text(filter),
+    }
+}
+
 /// What the empty search box says: "Search (Ctrl+F)".
 pub(crate) fn search_placeholder_text() -> SharedString {
     t!("search-placeholder").into()

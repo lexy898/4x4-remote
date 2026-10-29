@@ -315,6 +315,20 @@ fn filter_names_follow_the_sidebar() {
 }
 
 #[test]
+fn a_filter_is_named_with_its_count_once_it_is_known() {
+    assert_eq!(
+        filter_label_text(Filter::Seeding, Some(3)),
+        "Seeding, 3 torrents"
+    );
+    assert_eq!(
+        filter_label_text(Filter::Error, Some(1)),
+        "Error, 1 torrent"
+    );
+    assert_eq!(filter_label_text(Filter::All, Some(0)), "All, 0 torrents");
+    assert_eq!(filter_label_text(Filter::Paused, None), "Paused");
+}
+
+#[test]
 fn filter_counts_are_plain_numbers() {
     assert_eq!(filter_count_text(0), "0");
     assert_eq!(filter_count_text(7), "7");

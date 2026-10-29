@@ -102,8 +102,8 @@ The sidebar on the left filters the list by state:
 
 Each filter has an icon in the color of its state and the number of torrents it matches. The
 numbers count every torrent, whatever the filter and the search show, and appear once the daemon's
-list of torrents has come; the Error count turns red when any torrent has an error. Click a filter to show its torrents; the chosen one is highlighted.
-The filter is not remembered between runs yet.
+list of torrents has come; the Error count turns red when any torrent has an error. Click a filter
+to show its torrents; the chosen one is highlighted. The filter is not remembered between runs yet.
 
 The search box in the toolbar narrows the list, as you type, to the torrents whose names contain
 every word typed, in any order and ignoring case. It works together with the filter. `Ctrl+F` moves
@@ -120,10 +120,10 @@ The status bar at the bottom shows:
 - the free space where new torrents are saved;
 - the total download and upload speeds, ↓ and ↑.
 
-When the daemon stops answering, the last data stays on screen, with the list and the numbers in the
-status bar dimmed, until it answers again. If the part of 4x4 that talks to the daemon stops or
-cannot start, the status bar says "Service stopped" or "Service could not start", the data is
-dimmed for good, and the reason is in the log.
+When the daemon stops answering, the last data stays on screen, with the list, the counts in the
+sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
+talks to the daemon stops or cannot start, the status bar says "Service stopped" or "Service could
+not start", the data is dimmed for good, and the reason is in the log.
 
 The button in the toolbar switches the theme: the system's (light or dark, following the desktop),
 light, or dark. It is not remembered between runs yet.

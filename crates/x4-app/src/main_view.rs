@@ -529,6 +529,7 @@ impl Render for MainView {
         let counts = self.model.shown_counts();
         let sidebar = filter_sidebar(
             counts.as_ref(),
+            self.status.stale,
             self.view.filter,
             theme,
             move |filter, _, cx| {

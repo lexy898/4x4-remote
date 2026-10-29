@@ -7,6 +7,7 @@
 //! key presses and typed text, and read it through the accessible labels of its elements, the view
 //! model and the state of the table.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gpui_kit::component::table::TableState;
@@ -189,15 +190,20 @@ fn zoo() -> Vec<Torrent> {
             active: true,
             ..in_state("downloading", DisplayState::Downloading)
         },
-        in_state("queued", DisplayState::Queued(QueueKind::Download)),
+        in_state("queued one", DisplayState::Queued(QueueKind::Download)),
+        in_state("queued two", DisplayState::Queued(QueueKind::Download)),
         in_state("seeding one", DisplayState::Seeding),
         in_state("seeding two", DisplayState::Seeding),
         Torrent {
             active: true,
             ..in_state("seeding three", DisplayState::Seeding)
         },
+        in_state("seeding four", DisplayState::Seeding),
+        in_state("seeding five", DisplayState::Seeding),
         in_state("paused one", DisplayState::Paused),
         in_state("paused two", DisplayState::Paused),
+        in_state("paused three", DisplayState::Paused),
+        in_state("paused four", DisplayState::Paused),
         in_state("checking", DisplayState::Checking),
         Torrent {
             attention: Some(Attention::LocalError("disk full".to_owned())),
@@ -227,10 +233,14 @@ fn sidebar_counts_match_snapshot(cx: &mut TestAppContext) {
             "{filter:?}"
         );
     }
-    // Guards the comparison above against counts that are all alike.
+    // Every filter counts a different number, so a count shown next to the wrong filter fails
+    // the comparison above.
+    let numbers = Filter::ALL.map(|filter| expected.get(filter));
+    assert_eq!(numbers, [14, 3, 5, 4, 2, 1]);
     assert_eq!(
-        Filter::ALL.map(|filter| expected.get(filter)),
-        [9, 2, 3, 2, 2, 1]
+        numbers.into_iter().collect::<BTreeSet<_>>().len(),
+        Filter::ALL.len(),
+        "the counts are distinct"
     );
 
     // Neither the filter nor the search changes the counts.
@@ -279,13 +289,19 @@ fn the_sidebar_shows_no_counts_before_the_list_has_come(cx: &mut TestAppContext)
 fn clicking_a_filter_filters_rows(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(zoo(), cx);
-    assert_eq!(window.names(cx).len(), 9);
+    assert_eq!(window.names(cx).len(), 14);
 
     window.click_filter(Filter::Seeding, cx);
 
     assert_eq!(
         window.names(cx),
-        ["seeding one", "seeding three", "seeding two"]
+        [
+            "seeding five",
+            "seeding four",
+            "seeding one",
+            "seeding three",
+            "seeding two"
+        ]
     );
     assert_eq!(window.view_state(cx).filter, Filter::Seeding);
     let ui = cx.update(|cx| window.view.read(cx).ui_state().clone());
@@ -295,7 +311,7 @@ fn clicking_a_filter_filters_rows(cx: &mut TestAppContext) {
     assert_eq!(window.names(cx), ["broken"]);
 
     window.click_filter(Filter::All, cx);
-    assert_eq!(window.names(cx).len(), 9);
+    assert_eq!(window.names(cx).len(), 14);
     assert_eq!(
         cx.update(|cx| window.view.read(cx).ui_state().filter),
         Filter::All
@@ -394,7 +410,10 @@ fn an_empty_search_box_that_loses_the_focus_changes_nothing(cx: &mut TestAppCont
             ..ViewState::default()
         }
     );
-    assert_eq!(window.names(cx), ["paused one", "paused two"]);
+    assert_eq!(
+        window.names(cx),
+        ["paused four", "paused one", "paused three", "paused two"]
+    );
 }
 
 #[gpui_kit::test]

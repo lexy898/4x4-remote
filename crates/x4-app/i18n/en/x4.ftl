@@ -158,6 +158,13 @@ filter-active = Active
 filter-error = Error
 # The number next to a filter. $count: the torrents it matches (a number).
 filter-count = { $count }
+# What a screen reader says for a filter once its number is known.
+# $filter: one of the filter-* names; $count: the torrents it matches (a number).
+filter-label =
+    { $count ->
+        [one] { $filter }, { $count } torrent
+       *[other] { $filter }, { $count } torrents
+    }
 
 ## The search box
 
