@@ -171,8 +171,8 @@ action-failed-start =
             }
         [no-answer]
             { $count ->
-                [one] The server did not answer in time while starting the torrent. It may have started anyway; the list will show the result
-               *[other] The server did not answer in time while starting { $count } torrents. They may have started anyway; the list will show the result
+                [one] The server did not answer while starting the torrent; it may have started. The list will show the result
+               *[other] The server did not answer while starting { $count } torrents; they may have started. The list will show the result
             }
        *[failed]
             { $count ->
@@ -189,8 +189,8 @@ action-failed-pause =
             }
         [no-answer]
             { $count ->
-                [one] The server did not answer in time while pausing the torrent. It may have been paused anyway; the list will show the result
-               *[other] The server did not answer in time while pausing { $count } torrents. They may have been paused anyway; the list will show the result
+                [one] The server did not answer while pausing the torrent; it may have been paused. The list will show the result
+               *[other] The server did not answer while pausing { $count } torrents; they may have been paused. The list will show the result
             }
        *[failed]
             { $count ->
@@ -208,8 +208,8 @@ action-failed-start-now =
             }
         [no-answer]
             { $count ->
-                [one] The server did not answer in time while starting the torrent right away. It may have started anyway; the list will show the result
-               *[other] The server did not answer in time while starting { $count } torrents right away. They may have started anyway; the list will show the result
+                [one] The server did not answer while starting the torrent right away; it may have started. The list will show the result
+               *[other] The server did not answer while starting { $count } torrents right away; they may have started. The list will show the result
             }
        *[failed]
             { $count ->
@@ -227,8 +227,8 @@ action-failed-verify =
             }
         [no-answer]
             { $count ->
-                [one] The server did not answer in time while verifying the torrent. The check may have started anyway; the list will show the result
-               *[other] The server did not answer in time while verifying { $count } torrents. The checks may have started anyway; the list will show the result
+                [one] The server did not answer while verifying the torrent; the check may have started. The list will show the result
+               *[other] The server did not answer while verifying { $count } torrents; the checks may have started. The list will show the result
             }
        *[failed]
             { $count ->
@@ -246,8 +246,8 @@ action-failed-reannounce =
             }
         [no-answer]
             { $count ->
-                [one] The server did not answer in time while asking the trackers of the torrent for more peers. They may have been asked anyway; the list will show the result
-               *[other] The server did not answer in time while asking the trackers of { $count } torrents for more peers. They may have been asked anyway; the list will show the result
+                [one] The server did not answer while asking the trackers of the torrent for more peers; they may have been asked. The list will show the result
+               *[other] The server did not answer while asking the trackers of { $count } torrents for more peers; they may have been asked. The list will show the result
             }
        *[failed]
             { $count ->
@@ -259,7 +259,7 @@ action-failed-reannounce =
 action-failed-other =
     { $outcome ->
         [not-sent] An action could not be carried out: the server is not connected, so nothing was sent
-        [no-answer] The server did not answer an action in time. It may have been carried out anyway; the list will show the result
+        [no-answer] The server did not answer; the action may have happened. The list will show the result
        *[failed] An action failed: { $reason }
     }
 # The reason when an action named no torrent, so it was not sent.

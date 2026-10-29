@@ -31,7 +31,9 @@ mod frames;
 use std::env;
 use std::time::{Duration, Instant};
 
-use gpui_kit::{AnyWindowHandle, App, AsyncApp, Entity, Keystroke, OperatingSystem};
+use gpui_kit::{
+    AnyWindowHandle, App, AsyncApp, Entity, InputEvent as _, KeyUpEvent, Keystroke, OperatingSystem,
+};
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
@@ -131,12 +133,14 @@ fn drive_when_listed(
 }
 
 /// Presses `keys` in `window`, as the keyboard would: the keystroke goes through the key bindings
-/// to the focused table.
+/// to the focused table, and the key goes up again, or the window would take the next press of
+/// the same key for a repeat of a held one.
 fn press(window: AnyWindowHandle, keys: &str, cx: &mut AsyncApp) {
     let pressed = cx.update(|cx| {
         let keystroke = Keystroke::parse_with_os(keys, cx.platform_info().os)?;
         window.update(cx, |_, window, cx| {
-            window.dispatch_keystroke(keystroke, cx);
+            window.dispatch_keystroke(keystroke.clone(), cx);
+            window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
         })
     });
     match pressed {

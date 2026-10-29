@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Entity, KeyContext, Modifiers, OperatingSystem,
-    TestAppContext,
+    AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, KeyContext,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, OperatingSystem, TestAppContext,
 };
 use x4_app::actions::{PauseTorrents, StartTorrents};
 use x4_app::app;
@@ -149,9 +149,54 @@ impl Window {
         self.act(cx, |window, cx| window.press(key, cx));
     }
 
+    /// Sends a key-down of `key`; `held` marks a repeat of a held key, as Wayland sends it.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a key that does not parse fails the test"
+    )]
+    fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
+        let down = KeyDownEvent {
+            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            is_held: held,
+            prefer_character_input: false,
+        };
+        self.act(cx, |window, cx| {
+            window.dispatch_event(down.to_platform_input(), cx)
+        });
+    }
+
+    /// Sends the key-up of `key`.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a key that does not parse fails the test"
+    )]
+    fn key_up(&self, key: &str, cx: &mut TestAppContext) {
+        let up = KeyUpEvent {
+            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+        };
+        self.act(cx, |window, cx| {
+            window.dispatch_event(up.to_platform_input(), cx)
+        });
+    }
+
+    /// Holds `key` down until the system has repeated it `repeats` times, then lets it go.
+    fn hold(&self, key: &str, repeats: usize, cx: &mut TestAppContext) {
+        self.key_down(key, false, cx);
+        for _ in 0..repeats {
+            self.key_down(key, true, cx);
+        }
+        self.key_up(key, cx);
+    }
+
     /// Whether the toolbar button `id` is drawn disabled.
     fn disabled(&self, id: &'static str, cx: &mut TestAppContext) -> bool {
         self.act(cx, |window, _| window.find(id).disabled() == Some(true))
+    }
+
+    /// Whether the table has the keyboard focus, so that the list's keys reach it.
+    fn table_focused(&self, cx: &mut TestAppContext) -> bool {
+        let table = cx.update(|cx| self.view.read(cx).table().clone());
+        self.act(cx, |window, cx| table.focus_handle(cx).is_focused(window))
     }
 
     fn availability(&self, cx: &mut TestAppContext) -> Availability {
@@ -164,7 +209,12 @@ impl Window {
 
     /// Whether a notification is on screen.
     fn notified(&self, cx: &mut TestAppContext) -> bool {
-        self.act(cx, |window, _| window.try_find(NOTIFICATION).is_some())
+        self.notifications(cx) > 0
+    }
+
+    /// How many notifications are on screen.
+    fn notifications(&self, cx: &mut TestAppContext) -> usize {
+        self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
     }
 
     /// The commands the window has sent so far, other than the window's visibility.
@@ -350,6 +400,49 @@ fn toolbar_buttons_follow_availability(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_toolbar_button_hands_the_keys_back_to_the_list(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![downloading("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    // A click leaves the focus in the list.
+    window.click(PAUSE, cx);
+    let (id, action) = window.sent_action();
+    assert_eq!(action, Action::Stop(hashes(&["a"])));
+    assert!(window.table_focused(cx));
+    window.finish(id, Ok(()), cx);
+
+    // Pressed with the keyboard, the button gives the focus back to the list.
+    window.press("tab", cx);
+    window.press("tab", cx);
+    window.act(cx, |window, _| {
+        assert_eq!(
+            window.find(PAUSE).focused(),
+            Some(true),
+            "Tab reached Pause"
+        );
+    });
+    window.press("space", cx);
+    let (id, action) = window.sent_action();
+    assert_eq!(action, Action::Stop(hashes(&["a"])));
+    assert!(window.table_focused(cx), "the list has the focus again");
+    window.finish(id, Ok(()), cx);
+
+    // Space now reaches the list: with the torrent paused, it starts it.
+    window.send(vec![paused("a"), torrent("b")], cx);
+    assert!(window.disabled(PAUSE, cx));
+    window.press("space", cx);
+    assert_eq!(window.sent_action().1, Action::Start(hashes(&["a"])));
+
+    // A click on a disabled button does not take the keys either.
+    window.click(PAUSE, cx);
+    assert!(window.table_focused(cx));
+    window.press("down", cx);
+    window.press("ctrl-p", cx);
+    assert_eq!(window.sent_action().1, Action::Stop(hashes(&["b"])));
+}
+
+#[gpui_kit::test]
 fn toolbar_enables_start_when_a_paused_row_gets_selected(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a"), torrent("b"), torrent("c")], cx);
@@ -420,6 +513,136 @@ fn actions_do_nothing_while_disconnected(cx: &mut TestAppContext) {
     window.click(PAUSE, cx);
     assert_eq!(window.sent(), []);
     assert!(window.disabled(PAUSE, cx));
+}
+
+#[gpui_kit::test]
+fn holding_space_sends_one_command(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![downloading("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+
+    window.key_down("space", false, cx);
+    let (id, action) = window.sent_action();
+    assert_eq!(action, Action::Stop(hashes(&["a"])));
+    // The daemon answers before the key repeats, and the list still shows the torrent running,
+    // so each repeat would pause it again.
+    window.finish(id, Ok(()), cx);
+    for _ in 0..5 {
+        window.key_down("space", true, cx);
+    }
+    assert_eq!(window.sent(), [], "the repeats of a held key send nothing");
+    window.key_up("space", cx);
+
+    // Let go and pressed again, the key acts again.
+    window.press("space", cx);
+    let (id, action) = window.sent_action();
+    assert_eq!(action, Action::Stop(hashes(&["a"])));
+    window.finish(id, Ok(()), cx);
+
+    // X11 does not mark its repeats, but sends no key-up between them either.
+    window.key_down("ctrl-shift-r", false, cx);
+    let (id, action) = window.sent_action();
+    assert_eq!(action, Action::Verify(hashes(&["a"])));
+    window.finish(id, Ok(()), cx);
+    window.key_down("ctrl-shift-r", false, cx);
+    assert_eq!(
+        window.sent(),
+        [],
+        "every action key works so, not only Space"
+    );
+    window.key_up("ctrl-shift-r", cx);
+
+    // Keys that are not actions still repeat: a held Down moves on with every repeat.
+    window.send(
+        vec![downloading("a"), torrent("b"), torrent("c"), torrent("d")],
+        cx,
+    );
+    window.hold("down", 2, cx);
+    window.press("ctrl-r", cx);
+    assert_eq!(window.sent_action().1, Action::Reannounce(hashes(&["d"])));
+}
+
+#[gpui_kit::test]
+fn a_key_let_go_out_of_the_lists_sight_does_not_hold_the_next_press(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    // A test window opens inactive, and an inactive window has no focus to move.
+    cx.update_window(window.handle, |_, window, _| window.activate_window())
+        .expect("the window is open");
+    window.send(vec![downloading("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+    let pause_and_answer = |cx: &mut TestAppContext| {
+        window.key_down("space", false, cx);
+        let (id, action) = window.sent_action();
+        assert_eq!(action, Action::Stop(hashes(&["a"])));
+        window.finish(id, Ok(()), cx);
+    };
+
+    // Something outside the main view, such as a dialog, has the focus when the key goes up.
+    pause_and_answer(cx);
+    let elsewhere = cx.update(|cx| cx.focus_handle());
+    window.act(cx, |window, cx| window.focus(&elsewhere, cx));
+    window.key_up("space", cx);
+    let table = cx.update(|cx| window.view.read(cx).table().clone());
+    window.act(cx, |window, cx| window.focus(&table.focus_handle(cx), cx));
+    assert!(window.table_focused(cx), "back in the list");
+    pause_and_answer(cx);
+
+    // The key goes up in another window.
+    let other = cx.add_window(|_, _| gpui_kit::Empty);
+    cx.update_window(other.into(), |_, other, _| other.activate_window())
+        .expect("the other window is open");
+    cx.update_window(window.handle, |_, window, _| window.activate_window())
+        .expect("the window is open");
+    cx.run_until_parked();
+    pause_and_answer(cx);
+}
+
+#[gpui_kit::test]
+fn an_identical_pending_request_is_not_sent_again(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![downloading("a"), downloading("b"), paused("c")], cx);
+    window.click_row(0, cx);
+    window.ctrl_click_row(1, cx);
+    window.press("ctrl-p", cx);
+    let (first, action) = window.sent_action();
+    assert_eq!(action, Action::Stop(hashes(&["a", "b"])));
+
+    // Pressed again, or Pause clicked twice, before the daemon has answered: the same pause is on
+    // its way already.
+    window.press("ctrl-p", cx);
+    window.press("space", cx);
+    window.click(PAUSE, cx);
+    window.click(PAUSE, cx);
+    assert_eq!(window.sent(), []);
+
+    // Another action on the same torrents goes, and so does the same action on others.
+    window.press("ctrl-r", cx);
+    assert_eq!(
+        window.sent_action().1,
+        Action::Reannounce(hashes(&["a", "b"]))
+    );
+    window.click_row(0, cx);
+    window.press("ctrl-p", cx);
+    assert_eq!(window.sent_action().1, Action::Stop(hashes(&["a"])));
+
+    // Once the daemon has answered, the same pause can go again.
+    window.finish(first, Ok(()), cx);
+    window.ctrl_click_row(1, cx);
+    window.press("ctrl-p", cx);
+    assert_eq!(window.sent_action().1, Action::Stop(hashes(&["a", "b"])));
+}
+
+#[gpui_kit::test]
+fn a_selected_row_the_search_hides_is_not_acted_on(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![paused("alpha"), paused("beta")], cx);
+    window.press("ctrl-a", cx);
+
+    window.press("ctrl-f", cx);
+    window.act(cx, |window, cx| window.input("beta", cx));
+    window.click(START, cx);
+
+    assert_eq!(window.sent_action().1, Action::Start(hashes(&["beta"])));
 }
 
 #[gpui_kit::test]
@@ -501,9 +724,64 @@ fn a_timed_out_action_says_it_may_have_happened(cx: &mut TestAppContext) {
     assert_eq!(
         window.last_failure(cx).as_deref(),
         Some(
-            "The server did not answer in time while pausing 2 torrents. They may have been \
-             paused anyway; the list will show the result"
+            "The server did not answer while pausing 2 torrents; they may have been paused. The \
+             list will show the result"
         )
+    );
+    assert!(window.notified(cx));
+}
+
+#[gpui_kit::test]
+fn a_pause_failure_and_a_verify_failure_are_both_shown(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![downloading("a"), torrent("b")], cx);
+    window.click_row(0, cx);
+    window.press("ctrl-p", cx);
+    let (pause, _) = window.sent_action();
+    window.press("ctrl-shift-r", cx);
+    let (verify, _) = window.sent_action();
+
+    let busy = || Err(ActionError::Rpc(ConnectionError::Server("busy".to_owned())));
+    window.finish(pause, busy(), cx);
+    window.finish(verify, busy(), cx);
+
+    assert_eq!(window.notifications(cx), 2, "one for each kind of action");
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some("Could not verify the torrent: busy")
+    );
+
+    // A newer failure of a pause takes the place of the older one.
+    window.press("ctrl-p", cx);
+    let (pause, _) = window.sent_action();
+    window.finish(pause, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
+    assert_eq!(window.notifications(cx), 2);
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some(
+            "The server did not answer while pausing the torrent; it may have been paused. The \
+             list will show the result"
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn an_action_the_service_cannot_take_says_nothing_was_sent(cx: &mut TestAppContext) {
+    let mut window = Window::open(cx);
+    window.send(vec![downloading("a"), downloading("b")], cx);
+    window.press("ctrl-a", cx);
+    // The service's end of the commands is gone, while the window still thinks it connected.
+    drop(std::mem::replace(
+        &mut window.commands,
+        crossbeam_channel::never(),
+    ));
+    assert!(window.availability(cx).pause);
+
+    window.press("ctrl-p", cx);
+
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some("Could not pause 2 torrents: the server is not connected, so nothing was sent")
     );
     assert!(window.notified(cx));
 }

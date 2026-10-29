@@ -7,7 +7,8 @@
 //! filter sidebar (the `sidebar` module), the torrent table ([`torrent_table`]) and the status bar
 //! (the `status_bar` module); the `theme` module holds the light and dark theme and the colors of
 //! states, and the `icons` module the icons beyond gpui-component's own. [`actions`] holds what
-//! can be done to the selected torrents. [`paths`] finds the config, state and log locations,
+//! can be done to the selected torrents, and the `key_repeats` module tells a press of their keys
+//! from the repeats of a held key. [`paths`] finds the config, state and log locations,
 //! [`logging`] logs to stderr and a daily file there, and the `files` module reads `config.toml`
 //! and reads and writes `state.toml`; the `saving` module decides when the window's state is
 //! written, and the `window_state` module turns the window's bounds into the size to remember and
@@ -22,6 +23,7 @@ pub mod app;
 mod files;
 mod i18n;
 mod icons;
+mod key_repeats;
 pub mod keymap;
 pub mod logging;
 pub mod main_view;

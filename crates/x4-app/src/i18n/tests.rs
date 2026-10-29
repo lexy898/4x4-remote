@@ -569,13 +569,13 @@ fn an_unanswered_action_may_have_happened() {
         let error = ActionError::Rpc(error);
         assert_eq!(
             failed(ActionKind::Start, 1, &error),
-            "The server did not answer in time while starting the torrent. It may have started \
-             anyway; the list will show the result"
+            "The server did not answer while starting the torrent; it may have started. The list \
+             will show the result"
         );
         assert_eq!(
             failed(ActionKind::Pause, 2, &error),
-            "The server did not answer in time while pausing 2 torrents. They may have been \
-             paused anyway; the list will show the result"
+            "The server did not answer while pausing 2 torrents; they may have been paused. The \
+             list will show the result"
         );
         for kind in [
             ActionKind::StartNow,
@@ -585,6 +585,7 @@ fn an_unanswered_action_may_have_happened() {
             let text = failed(kind, 5, &error);
             assert!(text.contains("may have"), "{text}");
             assert!(text.contains("5 torrents"), "{text}");
+            assert!(!text.contains("in time"), "{text}");
         }
     }
 }
@@ -620,8 +621,7 @@ fn a_failed_action_of_an_unknown_kind_is_still_worded() {
     );
     assert_eq!(
         unknown(&ActionError::Rpc(ConnectionError::Timeout)),
-        "The server did not answer an action in time. It may have been carried out anyway; the \
-         list will show the result"
+        "The server did not answer; the action may have happened. The list will show the result"
     );
     assert_eq!(
         unknown(&ActionError::Rpc(ConnectionError::Server(

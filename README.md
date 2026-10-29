@@ -71,8 +71,7 @@ last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers
 
 The window has four parts: a toolbar along the top, with the search box and the Start and Pause
 buttons on the left and the theme button and the "Columns" menu on the right; the filter sidebar
-down the left side; the torrent
-table, which takes the rest; and the status bar along the bottom.
+down the left side; the torrent table, which takes the rest; and the status bar along the bottom.
 
 The table lists the torrents, sorted by name at first. Each row shows:
 
@@ -119,14 +118,20 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Ctrl+Shift+R` verifies their downloaded data, which reads all of it on the server;
 - `Ctrl+R` asks their trackers for more peers.
 
+Holding a key down sends its action once, not again with every repeat of the key. An action that is
+still waiting for the daemon's answer is not sent again for the same torrents, so a second press
+or a double click does nothing more.
+
 An action is available only when it can do something to at least one of the torrents (Start needs
 a paused or failed one, Pause one that is not stopped, Start now a stopped or queued one, and asking
 for peers one that is downloading or seeding), and only while the daemon is connected. Otherwise
 its button is disabled and its key does nothing. The toolbar buttons' tooltips name their keys. An
 action shows nothing when it works: the list shows the change at the next update, in a second or
 two. When it fails, a notification at the top right says what failed, for how many torrents, and
-why; it stays until clicked. If the daemon did not answer in time, the action may have been carried
-out anyway, and the notification says so: the list shows what happened.
+why; it stays until clicked. Each kind of action has its own notification: a newer failure of a
+pause replaces the older one, and leaves the one of a failed verify in place. If the daemon did not
+answer, the action may have happened all the same, and the notification says so: the list shows
+the result.
 
 The sidebar on the left filters the list by state:
 

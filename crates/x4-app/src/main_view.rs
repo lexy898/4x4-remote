@@ -21,6 +21,7 @@
 //! The selected torrents can be started, paused, started now, verified and reannounced, from their
 //! keys and from the toolbar's Start and Pause (the `torrent_actions` module). Each action goes
 //! out as a command and is kept until the service answers it; a failure is shown as a notification.
+//! A held key sends its action once.
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
@@ -33,7 +34,9 @@ mod events;
 mod persistence;
 mod torrent_actions;
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -55,6 +58,7 @@ use x4_core::{
 use crate::actions::PendingActions;
 use crate::app::ConfigProblem;
 use crate::i18n::{connection_text, torrent_count_text};
+use crate::key_repeats::KeyRepeats;
 use crate::keymap::{
     ClearSearch, DeselectTorrents, ExtendSelectionDown, ExtendSelectionToFirst,
     ExtendSelectionToLast, ExtendSelectionUp, FocusNext, FocusPrevious, FocusSearch, MAIN_CONTEXT,
@@ -71,7 +75,7 @@ use crate::torrent_table::{
     show_column, show_rows,
 };
 use persistence::Saver;
-use torrent_actions::on_torrent_actions;
+use torrent_actions::{follow_key_repeats, on_torrent_actions};
 
 /// The height of a row of the table, for the two lines of the name cell.
 const ROW_HEIGHT: f32 = 44.;
@@ -111,12 +115,16 @@ pub struct MainView {
     pending: PendingActions,
     /// What the newest failure of an action said.
     last_failure: Option<SharedString>,
+    /// The key held down now, so that its repeats do not run its action again; shared with the
+    /// app's keystroke interceptor, which sees the key-downs before the bindings do.
+    key_repeats: Rc<RefCell<KeyRepeats>>,
     /// The event pump; dropping the view drops it, which cancels it.
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
-    /// The table's and the search box's events, the table's changes, the window's activation,
-    /// visibility, appearance and bounds observers, and the save when the app quits.
+    /// The table's and the search box's events, the table's changes, the focus coming back to the
+    /// table, the window's activation, visibility, appearance and bounds observers, the save when
+    /// the app quits, and the keystroke interceptor.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -145,10 +153,16 @@ impl MainView {
         // The window's own bindings work only while something in it has the focus.
         window.focus(&table.focus_handle(cx), cx);
         let search = cx.new(|cx| new_search_state(window, cx));
-        let subscriptions = vec![
+        let key_repeats = Rc::new(RefCell::new(KeyRepeats::default()));
+        let mut subscriptions = vec![
             cx.subscribe_in(&table, window, Self::on_table_event),
             // The selection and the rows live in the table; the toolbar follows what they allow.
             cx.observe(&table, |view, _, cx| view.follow_table_change(cx)),
+            // A key let go while the focus was elsewhere, outside the view or in another window,
+            // sent the view no key-up: forget it when the list has the focus again.
+            cx.on_focus_in(&table.focus_handle(cx), window, |view, _, _| {
+                view.key_repeats.borrow_mut().release();
+            }),
             cx.subscribe_in(&search, window, Self::on_search_event),
             cx.observe_window_activation(window, |view, window, _| {
                 view.report_visibility(window);
@@ -168,6 +182,7 @@ impl MainView {
                 std::future::ready(())
             }),
         ];
+        subscriptions.push(follow_key_repeats(&key_repeats, window, cx));
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             if let Err(error) = this.update(cx, Self::save_before_close) {
@@ -194,6 +209,7 @@ impl MainView {
             availability: Availability::default(),
             pending: PendingActions::default(),
             last_failure: None,
+            key_repeats,
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,

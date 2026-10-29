@@ -118,7 +118,9 @@ fn action_button(button: ActionButton<'_>, cx: &Context<'_, MainView>) -> Button
         .accessibility_label(button.name.clone())
         .tooltip_with_action(button.name, button.action, Some(TORRENT_LIST_CONTEXT))
         .disabled(!button.enabled)
-        .on_click(cx.listener(move |view, _, window, cx| view.request(request, window, cx)))
+        .on_click(cx.listener(move |view, _, window, cx| {
+            view.press_button(request, window, cx);
+        }))
 }
 
 /// The toolbar button whose menu shows and hides the columns, with a check on each shown one
