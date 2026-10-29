@@ -38,6 +38,30 @@ pub struct TableModel {
     pub counts: FilterCounts,
 }
 
+/// Why the table has no rows, which its placeholder tells the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyTable {
+    /// There is no torrent at all, or none has arrived from the daemon yet.
+    #[default]
+    NoTorrents,
+    /// There are torrents, but the filter and the search hide every one of them.
+    NoMatches,
+}
+
+impl TableModel {
+    /// Why the table is empty, or `None` when it has rows.
+    #[must_use]
+    pub fn empty(&self) -> Option<EmptyTable> {
+        if !self.rows.is_empty() {
+            None
+        } else if self.counts.all == 0 {
+            Some(EmptyTable::NoTorrents)
+        } else {
+            Some(EmptyTable::NoMatches)
+        }
+    }
+}
+
 /// The table for `snapshot` as the user's `view` asks for it.
 #[must_use]
 pub fn table_model(snapshot: &Snapshot, view: &ViewState) -> TableModel {
@@ -187,5 +211,34 @@ mod tests {
 
         assert_eq!(names(&model), Vec::<&str>::new());
         assert_eq!(model.counts, FilterCounts::default());
+        assert_eq!(model.empty(), Some(EmptyTable::NoTorrents));
+        assert_eq!(
+            TableModel::default().empty(),
+            Some(EmptyTable::NoTorrents),
+            "nothing has arrived yet"
+        );
+    }
+
+    #[test]
+    fn a_table_that_hides_every_torrent_says_nothing_matches() {
+        let snapshot = snapshot(vec![named("Alpha", DisplayState::Seeding)]);
+
+        let hidden = |view: ViewState| table_model(&snapshot, &view).empty();
+
+        assert_eq!(hidden(ViewState::default()), None);
+        assert_eq!(
+            hidden(ViewState {
+                filter: Filter::Paused,
+                ..ViewState::default()
+            }),
+            Some(EmptyTable::NoMatches)
+        );
+        assert_eq!(
+            hidden(ViewState {
+                search: "beta".to_owned(),
+                ..ViewState::default()
+            }),
+            Some(EmptyTable::NoMatches)
+        );
     }
 }

@@ -7,6 +7,12 @@
 //! into the [`TableModel`] and the [`StatusModel`]; the view redraws only when one of them changed,
 //! so an idle daemon costs no frames.
 //!
+//! The torrent table ([`TorrentTable`]) shows the rows; the view owns what they are: a click on a
+//! header sorts through [`ViewState::toggle_sort`], and the view recomputes the rows from the last
+//! snapshot and hands them to the table. It also keeps what the user does to the columns (shown,
+//! moved, resized) in the [`UiState`], and the toolbar's column menu shows and hides them. The
+//! selection stays in the table: this stage reads nothing more for a selected torrent.
+//!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
 
@@ -14,26 +20,35 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::table::{DataTable, TableEvent, TableState};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AsyncApp, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TestSupportExt as _, WeakEntity, Window, div, px,
+    Anchor, App, AppContext as _, AsyncApp, Context, Entity, Focusable as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, TestSupportExt as _,
+    WeakEntity, Window, div, px,
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    Command, Event, ServiceStatus, Snapshot, SortState, StatusModel, TableModel, ThemeChoice,
-    UiState, ViewState, Visibility, status_model, table_model, visibility,
+    ColumnId, Command, Event, ServiceStatus, Snapshot, SortState, StatusModel, TableModel,
+    ThemeChoice, UiState, ViewState, Visibility, shown_columns, status_model, table_model,
+    visibility,
 };
 
-use crate::app::ConfigProblem;
-use crate::i18n::{connection_text, t, torrent_count_text};
+use crate::app::{ConfigProblem, FocusNext, FocusPrevious};
+use crate::i18n::{column_name_text, connection_text, t, torrent_count_text};
 use crate::status_bar::status_bar;
 use crate::theme::{STALE_OPACITY, apply_theme, follow_appearance, next_theme};
+use crate::torrent_table::{TorrentTable, new_table_state, show_column, show_rows};
 
 /// The width of the sidebar.
 const SIDEBAR_WIDTH: f32 = 200.;
+/// The height of a row of the table, for the two lines of the name cell.
+const ROW_HEIGHT: f32 = 44.;
+/// The height of the table's header.
+const HEADER_HEIGHT: f32 = 32.;
 
 /// The main window's content.
 pub struct MainView {
@@ -43,6 +58,9 @@ pub struct MainView {
     view: ViewState,
     /// The rows of the table and the counts of the sidebar.
     model: TableModel,
+    /// The torrent table, whose delegate holds the rows of `model`, the columns and the
+    /// selection.
+    table: Entity<TableState<TorrentTable>>,
     /// The newest snapshot, so that a change of `view` shows at once, without waiting for the
     /// next one.
     last_snapshot: Option<Arc<Snapshot>>,
@@ -58,14 +76,15 @@ pub struct MainView {
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
-    /// The window's activation, visibility and appearance observers.
+    /// The table's events and the window's activation, visibility and appearance observers.
     _subscriptions: Vec<Subscription>,
 }
 
 impl MainView {
     /// The view of the service whose channels are `events` and `commands`, starting from the
-    /// saved state `ui` (the filter, the sort order and the theme). The theme itself is applied
-    /// by whoever opens the window, before the first frame.
+    /// saved state `ui` (the columns, the filter, the sort order and the theme). The theme itself
+    /// is applied by whoever opens the window, before the first frame. The table has the focus
+    /// from the start.
     ///
     /// `service` is the handle of the thread behind the channels: the view keeps it, so that
     /// closing the window stops the thread. Without one (in tests), the channels are all there is.
@@ -77,7 +96,12 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let view_state = ui.view_state();
+        let table = Self::new_table(&ui, &view_state, window, cx);
+        // The window's own bindings work only while something in it has the focus.
+        window.focus(&table.focus_handle(cx), cx);
         let subscriptions = vec![
+            cx.subscribe_in(&table, window, Self::on_table_event),
             cx.observe_window_activation(window, |view, window, _| {
                 view.report_visibility(window);
             }),
@@ -91,8 +115,9 @@ impl MainView {
         let pump = cx.spawn(async move |view, cx| pump(events, view, cx).await);
         let mut view = Self {
             status: StatusModel::default(),
-            view: ui.view_state(),
+            view: view_state,
             model: TableModel::default(),
+            table,
             last_snapshot: None,
             ui,
             config_problem: None,
@@ -105,6 +130,13 @@ impl MainView {
         // The service starts out assuming a visible window; tell it how the window opened.
         view.report_visibility(window);
         view
+    }
+
+    /// The table of the main window, with its rows, columns and selection: the delegate
+    /// ([`TorrentTable`]) and the state of gpui-component's table around it.
+    #[must_use]
+    pub fn table(&self) -> &Entity<TableState<TorrentTable>> {
+        &self.table
     }
 
     /// What the status bar shows: the speeds, the free space, the connection and whether the
@@ -145,9 +177,100 @@ impl MainView {
             key: view.sort_key,
             direction: view.sort_direction,
         };
+        let sort = (view.sort_key, view.sort_direction);
         self.view = view;
-        self.update_table();
+        // The header marks the order even when the rows stay as they were.
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().set_sort(sort);
+            cx.notify();
+        });
+        self.update_table(cx);
         cx.notify();
+    }
+
+    /// Shows or hides `column` in the table, and remembers it. The name column stays.
+    pub(crate) fn toggle_column(&mut self, column: ColumnId, cx: &mut Context<'_, Self>) {
+        let changed = self.table.update(cx, |table, cx| {
+            let shown = shown_columns(table.delegate().columns()).any(|shown| shown.id == column);
+            show_column(table, column, !shown, cx)
+        });
+        if changed {
+            tracing::debug!(?column, "column shown or hidden");
+            self.remember_columns(cx);
+            cx.notify();
+        }
+    }
+
+    /// The table of the main window for the saved state `ui`, sorted as `view` says. A click on
+    /// a header sorts through the view.
+    fn new_table(
+        ui: &UiState,
+        view: &ViewState,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Entity<TableState<TorrentTable>> {
+        let this = cx.weak_entity();
+        let delegate = TorrentTable::new(ui.columns.clone(), (view.sort_key, view.sort_direction))
+            .on_sort(move |column, _, cx| {
+                if let Err(error) = this.update(cx, |view, cx| view.sort_by(column, cx)) {
+                    tracing::debug!(%error, "a header was clicked after the window closed");
+                }
+            });
+        cx.new(|cx| new_table_state(delegate, window, cx))
+    }
+
+    /// Handles a click on the header of `column`: sorts by it, or flips the direction if the
+    /// list is sorted by it already.
+    fn sort_by(&mut self, column: ColumnId, cx: &mut Context<'_, Self>) {
+        let mut view = self.view.clone();
+        view.toggle_sort(column);
+        tracing::debug!(key = ?view.sort_key, direction = ?view.sort_direction, "sorted by a column");
+        self.set_view(view, cx);
+    }
+
+    /// Follows what the user does in the table: the selected torrent, and the columns moved or
+    /// resized, which are remembered.
+    fn on_table_event(
+        &mut self,
+        table: &Entity<TableState<TorrentTable>>,
+        event: &TableEvent,
+        _: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match event {
+            TableEvent::SelectRow(row_ix) => {
+                let row_ix = *row_ix;
+                table.update(cx, |table, _| table.delegate_mut().select_row(row_ix));
+            }
+            TableEvent::ClearSelection => {
+                table.update(cx, |table, _| table.delegate_mut().clear_selected());
+            }
+            TableEvent::ColumnWidthsChanged(widths) => {
+                if table.update(cx, |table, _| table.delegate_mut().set_widths(widths)) {
+                    self.remember_columns(cx);
+                }
+            }
+            // The delegate has moved the column already, before the table emits this.
+            TableEvent::MoveColumn(..) => self.remember_columns(cx),
+            TableEvent::DoubleClickedRow(_)
+            | TableEvent::SelectColumn(_)
+            | TableEvent::SelectCell(..)
+            | TableEvent::DoubleClickedCell(..)
+            | TableEvent::RightClickedRow(_)
+            | TableEvent::RightClickedCell(..) => {}
+        }
+    }
+
+    /// Copies the table's columns into the state to remember between runs.
+    fn remember_columns(&mut self, cx: &App) {
+        self.ui.columns = self.table.read(cx).delegate().columns().to_vec();
+    }
+
+    /// Whether each column is shown, in the order of [`ColumnId::ALL`], as the column menu lists
+    /// them.
+    fn column_choices(&self, cx: &App) -> [(ColumnId, bool); ColumnId::ALL.len()] {
+        let columns = self.table.read(cx).delegate().columns();
+        ColumnId::ALL.map(|id| (id, shown_columns(columns).any(|column| column.id == id)))
     }
 
     /// Shows that the service could not be started, so no data will come.
@@ -171,7 +294,7 @@ impl MainView {
         let mut changed = false;
         for event in events {
             match event {
-                Event::Snapshot(snapshot) => changed |= self.show(snapshot),
+                Event::Snapshot(snapshot) => changed |= self.show(snapshot, cx),
                 Event::Details(_) => {
                     tracing::debug!("ignored torrent details: this window shows none yet");
                 }
@@ -188,10 +311,10 @@ impl MainView {
 
     /// Recomputes the table and the status bar for `snapshot` and keeps it; returns whether
     /// either changed.
-    fn show(&mut self, snapshot: Arc<Snapshot>) -> bool {
+    fn show(&mut self, snapshot: Arc<Snapshot>, cx: &mut Context<'_, Self>) -> bool {
         let status = status_model(&snapshot);
         self.last_snapshot = Some(snapshot);
-        let mut changed = self.update_table();
+        let mut changed = self.update_table(cx);
         if status != self.status {
             self.status = status;
             changed = true;
@@ -199,9 +322,9 @@ impl MainView {
         changed
     }
 
-    /// Recomputes the table from the last snapshot for the current view; returns whether it
-    /// changed.
-    fn update_table(&mut self) -> bool {
+    /// Recomputes the table from the last snapshot for the current view and hands the rows to
+    /// the table; returns whether they changed.
+    fn update_table(&mut self, cx: &mut Context<'_, Self>) -> bool {
         let Some(snapshot) = &self.last_snapshot else {
             return false;
         };
@@ -210,6 +333,9 @@ impl MainView {
             return false;
         }
         self.model = model;
+        let model = &self.model;
+        self.table
+            .update(cx, |table, cx| show_rows(table, model, cx));
         true
     }
 
@@ -279,27 +405,55 @@ impl MainView {
                     .tooltip(t!("theme-switch-tooltip"))
                     .on_click(cx.listener(|view, _, window, cx| view.switch_theme(window, cx))),
             )
-            // The column menu goes here.
-            .child(div().id("column-menu-slot"))
+            .child(self.column_menu(cx))
     }
 
-    fn table(&self, cx: &Context<'_, Self>) -> impl IntoElement + use<> {
-        let text = if self.model.rows.is_empty() {
-            SharedString::from(t!("torrent-list-empty"))
-        } else {
-            torrent_count_text(self.model.rows.len())
-        };
+    /// The toolbar button whose menu shows and hides the columns, with a check on each shown
+    /// one. The name column's entry cannot be unchecked.
+    fn column_menu(&self, cx: &Context<'_, Self>) -> impl IntoElement + use<> {
+        let choices = self.column_choices(cx);
+        let this = cx.weak_entity();
+        Button::new("column-menu")
+            .ghost()
+            .small()
+            .label(t!("column-menu"))
+            .tooltip(t!("column-menu-tooltip"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                choices.into_iter().fold(menu, |menu, (column, shown)| {
+                    let this = this.clone();
+                    menu.item(
+                        PopupMenuItem::new(column_name_text(column))
+                            .checked(shown)
+                            .disabled(!column.can_hide())
+                            .on_click(move |_, _, cx| {
+                                if let Err(error) =
+                                    this.update(cx, |view, cx| view.toggle_column(column, cx))
+                                {
+                                    tracing::debug!(%error, "a column was toggled after the window closed");
+                                }
+                            }),
+                    )
+                })
+            })
+    }
+
+    /// The torrent table, dimmed while the data is stale. Its accessible name says how many
+    /// torrents it shows.
+    fn torrent_list(&self) -> impl IntoElement + use<> {
         div()
-            .id("table")
+            .id("torrent-list")
             .flex_1()
+            .min_w_0()
             .h_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .when(self.status.stale, |table| table.opacity(STALE_OPACITY))
-            .child(text.clone())
-            .aria_label(text)
+            .text_sm()
+            .when(self.status.stale, |list| list.opacity(STALE_OPACITY))
+            .child(
+                DataTable::new(&self.table)
+                    .with_size(Size::Size(px(ROW_HEIGHT)))
+                    .header_row_height(px(HEADER_HEIGHT))
+                    .bordered(false),
+            )
+            .aria_label(torrent_count_text(self.model.rows.len()))
             .test_support()
     }
 }
@@ -307,7 +461,7 @@ impl MainView {
 impl Render for MainView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let toolbar = self.toolbar(cx);
-        let table = self.table(cx);
+        let table = self.torrent_list();
         let theme = cx.theme();
         let sidebar = v_flex()
             .id("sidebar")
@@ -323,6 +477,8 @@ impl Render for MainView {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
+            .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(table))
             .child(status_bar)

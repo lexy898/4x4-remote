@@ -8,8 +8,10 @@
 //! and the caller then moves the file aside and starts from the defaults.
 //!
 //! Reading and writing the file is the app's job; this module only turns its text into a
-//! [`UiState`] and back.
+//! [`UiState`] and back, and applies the changes the user makes to the table's columns (the
+//! `columns` module).
 
+mod columns;
 mod wire;
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,8 @@ use crate::filter::Filter;
 use crate::sort::{SortDirection, SortKey};
 use crate::toml_error::describe;
 use crate::view::{ColumnId, ViewState};
+
+pub use columns::{move_shown_column, set_column_shown, set_shown_widths, shown_columns};
 
 /// The version of the state file this build writes. A file with a higher version was written by a
 /// newer build and is left alone.
@@ -32,9 +36,10 @@ const MIN_WINDOW_HEIGHT: f32 = 300.0;
 /// Above this size in either direction the window is not real: no screen is that large, and the
 /// graphics stack fails on textures beyond it.
 const MAX_WINDOW_SIZE: f32 = 16384.0;
-/// The range a column width is clamped to, so a column can neither vanish nor fill the screen.
-const MIN_COLUMN_WIDTH: f32 = 40.0;
-const MAX_COLUMN_WIDTH: f32 = 1200.0;
+/// The narrowest a column can be, in logical pixels, so that it never vanishes.
+pub const MIN_COLUMN_WIDTH: f32 = 40.0;
+/// The widest a column can be, in logical pixels, so that it never fills the screen.
+pub const MAX_COLUMN_WIDTH: f32 = 1200.0;
 
 /// Everything stored in `state.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -290,8 +295,7 @@ impl UiState {
             } else {
                 default_width(column.id)
             };
-            // Without it there would be nothing to tell a row by.
-            column.visible |= column.id == ColumnId::Name;
+            column.visible |= !column.id.can_hide();
         }
         self.columns = columns;
         self

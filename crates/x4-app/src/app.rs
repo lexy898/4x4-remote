@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, KeyBinding, QuitMode, TitlebarOptions,
-    WindowBounds, WindowOptions, actions, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, KeyBinding, NoAction, QuitMode,
+    TitlebarOptions, WindowBounds, WindowOptions, actions, px, size,
 };
 use x4_core::service::{self, ServiceHandle};
 use x4_core::{Command, Config, ConfigError, EngineConfig, Event, UiState};
@@ -33,8 +33,15 @@ actions!(
     [
         /// Quits the application.
         Quit,
+        /// Moves the focus to the next control, out of the torrent table.
+        FocusNext,
+        /// Moves the focus to the previous control, out of the torrent table.
+        FocusPrevious,
     ]
 );
+
+/// The key context of gpui-component's table.
+const TABLE_CONTEXT: &str = "DataTable";
 
 /// Identifies the application to the desktop environment (the Wayland `app_id`).
 const APP_ID: &str = "io.github.lexy898.FourByFour";
@@ -228,11 +235,22 @@ fn launch(startup: Startup, cx: &mut App) -> anyhow::Result<(AnyWindowHandle, En
 }
 
 /// Initializes the UI libraries and registers the application-wide actions and key bindings.
+///
+/// This is the one table of key bindings. They come after the libraries' own, so that ours win
+/// where both bind a key in the same context.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
     cx.set_quit_mode(QuitMode::LastWindowClosed);
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-q", Quit, None),
+        // The table binds Tab and the side arrows to moving between its columns. A list of
+        // torrents has rows only: Tab leaves it, and the side arrows do nothing.
+        KeyBinding::new("tab", FocusNext, Some(TABLE_CONTEXT)),
+        KeyBinding::new("shift-tab", FocusPrevious, Some(TABLE_CONTEXT)),
+        KeyBinding::new("left", NoAction, Some(TABLE_CONTEXT)),
+        KeyBinding::new("right", NoAction, Some(TABLE_CONTEXT)),
+    ]);
 }
 
 /// Opens the main window, centered, in the theme `ui` asks for, with a [`MainView`] of the

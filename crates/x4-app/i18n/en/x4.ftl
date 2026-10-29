@@ -149,10 +149,34 @@ theme-switch-tooltip = Switch between the system, light and dark themes
 
 ## The torrent list
 
-# $count: the torrents shown (a number).
+# $count: the torrents shown (a number); the accessible name of the list.
 torrent-count =
     { $count ->
         [one] { $count } torrent
        *[other] { $count } torrents
     }
+# What the empty list says: there is no torrent at all, or the filter and the search hide them all.
 torrent-list-empty = No torrents
+torrent-list-no-matches = No torrents match
+
+# The column headers. The speed columns are narrow, so their headers are only arrows; the -long names
+# are for the column menu and screen readers.
+column-name = Name
+column-size = Size
+column-progress = Progress
+column-state = State
+column-down = ↓
+column-down-long = Download speed
+column-up = ↑
+column-up-long = Upload speed
+column-eta = ETA
+column-ratio = Ratio
+column-peers = Peers
+# The mark after the header of the column the list is sorted by.
+sort-ascending = ▲
+sort-descending = ▼
+# The toolbar button that opens the list of columns to show or hide, and its tooltip.
+column-menu = Columns
+column-menu-tooltip = Show or hide columns
+# The peers column. $count: the connected peers (a number).
+peer-count = { $count }

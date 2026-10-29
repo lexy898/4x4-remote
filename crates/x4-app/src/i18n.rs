@@ -20,8 +20,8 @@ use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
-    ConnectionError, DisplayState, EtaView, HumanSize, HumanSpeed, Indicator, QueueKind, Ratio,
-    SizeUnit, SpeedUnit, Subtitle, TimeUnit, UnsupportedReason,
+    ColumnId, ConnectionError, DisplayState, EmptyTable, EtaView, HumanSize, HumanSpeed, Indicator,
+    QueueKind, Ratio, SizeUnit, SortDirection, SpeedUnit, Subtitle, TimeUnit, UnsupportedReason,
 };
 
 use crate::app::ConfigProblem;
@@ -80,10 +80,6 @@ fn with_separator(value: f64, fraction_digits: usize, separator: &str) -> String
 }
 
 /// A size such as "22.9 GiB".
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the torrent table in Task 6")
-)]
 pub(crate) fn size_text(size: HumanSize) -> SharedString {
     size_string(size).into()
 }
@@ -104,10 +100,6 @@ fn size_string(size: HumanSize) -> String {
 }
 
 /// A transfer rate such as "180 KiB/s".
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the torrent table in Task 6")
-)]
 pub(crate) fn speed_text(speed: HumanSpeed) -> SharedString {
     speed_string(speed).into()
 }
@@ -159,14 +151,63 @@ pub(crate) fn torrent_count_text(count: usize) -> SharedString {
     t!("torrent-count", count = count).into()
 }
 
+/// What the empty list says: "No torrents", or "No torrents match" when the filter and the search
+/// hide them all.
+pub(crate) fn empty_table_text(empty: EmptyTable) -> SharedString {
+    match empty {
+        EmptyTable::NoTorrents => t!("torrent-list-empty"),
+        EmptyTable::NoMatches => t!("torrent-list-no-matches"),
+    }
+    .into()
+}
+
+/// The header of a column, such as "Size"; the speed columns have only an arrow.
+pub(crate) fn column_title_text(column: ColumnId) -> SharedString {
+    match column {
+        ColumnId::Name => t!("column-name"),
+        ColumnId::Size => t!("column-size"),
+        ColumnId::Progress => t!("column-progress"),
+        ColumnId::State => t!("column-state"),
+        ColumnId::Down => t!("column-down"),
+        ColumnId::Up => t!("column-up"),
+        ColumnId::Eta => t!("column-eta"),
+        ColumnId::Ratio => t!("column-ratio"),
+        ColumnId::Peers => t!("column-peers"),
+    }
+    .into()
+}
+
+/// The full name of a column, for the column menu and screen readers: the header, or the name a
+/// header of only an arrow stands for, such as "Download speed".
+pub(crate) fn column_name_text(column: ColumnId) -> SharedString {
+    match column {
+        ColumnId::Down => t!("column-down-long").into(),
+        ColumnId::Up => t!("column-up-long").into(),
+        ColumnId::Name
+        | ColumnId::Size
+        | ColumnId::Progress
+        | ColumnId::State
+        | ColumnId::Eta
+        | ColumnId::Ratio
+        | ColumnId::Peers => column_title_text(column),
+    }
+}
+
+/// The mark after the header of the sorted column: "▲" from the smallest, "▼" from the largest.
+pub(crate) fn sort_mark_text(direction: SortDirection) -> SharedString {
+    match direction {
+        SortDirection::Ascending => t!("sort-ascending"),
+        SortDirection::Descending => t!("sort-descending"),
+    }
+    .into()
+}
+
+/// The peers column: the number of connected peers.
+pub(crate) fn peer_count_text(count: u32) -> SharedString {
+    t!("peer-count", count = count).into()
+}
+
 /// The caption of a progress bar, such as "63% of 22.9 GiB".
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn progress_text(percent: u8, size: HumanSize) -> SharedString {
     t!("progress-of", percent = percent, size = size_string(size)).into()
 }
@@ -181,13 +222,6 @@ fn time_unit_text(unit: TimeUnit) -> String {
 }
 
 /// The ETA column: "1 d 2 h", "5 m", "∞" when the server cannot tell and "—" when there is none.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn eta_text(eta: &EtaView) -> SharedString {
     match eta {
         EtaView::None => t!("eta-none"),
@@ -211,13 +245,6 @@ pub(crate) fn eta_text(eta: &EtaView) -> SharedString {
 }
 
 /// The ratio column: two decimals, "∞" for infinity and "—" when there is no ratio yet.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn ratio_text(ratio: Ratio) -> SharedString {
     match ratio {
         Ratio::NotAvailable => t!("ratio-none"),
@@ -231,13 +258,6 @@ pub(crate) fn ratio_text(ratio: Ratio) -> SharedString {
 ///
 /// The text of an error or a warning is the server's own and is shown as sent. When the server
 /// sent none, a generic message stands in, so the line never ends in a bare "Error:".
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn subtitle_text(subtitle: &Subtitle) -> SharedString {
     match subtitle {
         Subtitle::Downloading {
@@ -275,13 +295,6 @@ fn has_text(text: &str) -> bool {
 }
 
 /// The name of a torrent's state, as the state column shows it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the table and the status bar in the next tasks"
-    )
-)]
 pub(crate) fn state_text(state: DisplayState) -> SharedString {
     match state {
         DisplayState::Downloading => t!("state-downloading"),

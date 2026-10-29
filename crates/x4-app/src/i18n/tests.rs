@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
-    CompactDuration, ConnectionError, DisplayState, EtaView, HumanSize, QueueKind, Ratio, SizeUnit,
-    Subtitle, TimeUnit, UnsupportedReason, human_size, human_speed,
+    ColumnId, CompactDuration, ConnectionError, DisplayState, EmptyTable, EtaView, HumanSize,
+    QueueKind, Ratio, SizeUnit, SortDirection, Subtitle, TimeUnit, UnsupportedReason, human_size,
+    human_speed,
 };
 
 use super::*;
@@ -242,6 +243,51 @@ fn status_bar_texts() {
     assert_eq!(download_rate_text(human_speed(0)), "↓ 0 B/s");
     assert_eq!(free_space_text(human_size(24_592_841_836)), "22.9 GiB free");
     assert_eq!(free_space_text(human_size(0)), "0 B free");
+}
+
+#[test]
+fn column_headers_and_names() {
+    let titles = ColumnId::ALL.map(column_title_text);
+    assert_eq!(
+        titles.each_ref().map(SharedString::as_ref),
+        [
+            "Name", "Size", "Progress", "State", "↓", "↑", "ETA", "Ratio", "Peers"
+        ]
+    );
+    let names = ColumnId::ALL.map(column_name_text);
+    assert_eq!(
+        names.each_ref().map(SharedString::as_ref),
+        [
+            "Name",
+            "Size",
+            "Progress",
+            "State",
+            "Download speed",
+            "Upload speed",
+            "ETA",
+            "Ratio",
+            "Peers"
+        ]
+    );
+}
+
+#[test]
+fn sort_marks_point_up_from_the_smallest() {
+    assert_eq!(sort_mark_text(SortDirection::Ascending), "▲");
+    assert_eq!(sort_mark_text(SortDirection::Descending), "▼");
+}
+
+#[test]
+fn the_empty_list_says_why() {
+    assert_eq!(empty_table_text(EmptyTable::NoTorrents), "No torrents");
+    assert_eq!(empty_table_text(EmptyTable::NoMatches), "No torrents match");
+}
+
+#[test]
+fn peer_counts_are_plain_numbers() {
+    assert_eq!(peer_count_text(0), "0");
+    assert_eq!(peer_count_text(12), "12");
+    assert_eq!(peer_count_text(4000), "4000");
 }
 
 #[test]

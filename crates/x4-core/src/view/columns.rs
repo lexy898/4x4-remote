@@ -64,6 +64,13 @@ impl ColumnId {
         Self::ALL.into_iter().find(|column| column.key() == key)
     }
 
+    /// Whether the user may hide the column. The name column always stays, as without it there
+    /// would be nothing to tell a row by.
+    #[must_use]
+    pub fn can_hide(self) -> bool {
+        self != Self::Name
+    }
+
     /// The key a click on this column's header sorts the list by.
     #[must_use]
     pub fn sort_key(self) -> SortKey {
@@ -246,6 +253,13 @@ mod tests {
         assert_eq!(ColumnId::from_key("Name"), None);
         assert_eq!(ColumnId::from_key("namex"), None);
         assert_eq!(ColumnId::from_key(""), None);
+    }
+
+    #[test]
+    fn only_the_name_column_cannot_be_hidden() {
+        for column in ColumnId::ALL {
+            assert_eq!(column.can_hide(), column != ColumnId::Name, "{column:?}");
+        }
     }
 
     #[test]

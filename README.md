@@ -5,9 +5,10 @@ A native desktop client for a remote [Transmission](https://transmissionbt.com/)
 ## Status
 
 Early development — stage 2 (the main window, read-only), in progress. The window connects to the
-daemon set in `config.toml` and shows the total download and upload speeds, the free space and the
-state of the connection in its status bar, and how many torrents there are. The torrent table, the
-filters and the search come next. 4x4 only reads from the daemon so far; it changes nothing there.
+daemon set in `config.toml` and shows every torrent in a table, with its state, progress and
+speeds, and the total download and upload speeds, the free space and the state of the connection in
+its status bar. The filters and the search come next. 4x4 only reads from the daemon so far; it
+changes nothing there.
 
 ## What it will do
 
@@ -61,7 +62,34 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 ## The main window
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing
-in the window ever waits for the network. The status bar at the bottom shows:
+in the window ever waits for the network.
+
+The table lists the torrents, sorted by name at first. Each row shows:
+
+- a colored dot for the state (blue downloading, green seeding, yellow queued or checking, red
+  error, grey paused), the name, and under it what the torrent is doing, such as "Seeding · 3 peers
+  downloading from you"; an error or a tracker problem is written in red or yellow;
+- a progress bar in the state's color, with "63% of 22.9 GiB" under it;
+- the size, the state, the download (↓) and upload (↑) speeds, the time left, the share ratio and
+  the connected peers. A speed is in the state's color and bold while data moves that way, and
+  muted otherwise.
+
+Rows where nothing happens (an idle seeder, a paused or queued torrent) are dimmed, so the active
+ones stand out; an error is never dimmed. When there is nothing to show, the table says "No
+torrents", or "No torrents match" when the filter hides every torrent.
+
+Click a column header to sort by it; click it again to reverse the order. ▲ or ▼ after the header
+shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;
+names sort from A to Z, the time left soonest first, and the state with errors first and paused
+torrents last. Drag a header to move the column, and drag the edge of a header to resize it.
+"Columns" in the toolbar shows and hides columns; the name column always stays.
+
+Click a row or use the Up and Down keys, Page Up, Page Down, Home and End to select a torrent;
+Escape clears the selection. The selection stays on the same torrent when the list is re-sorted or
+updated, and an update never scrolls the list. Tab moves on from the table to the buttons. The
+table has the keyboard focus when the window opens.
+
+The status bar at the bottom shows:
 
 - a dot for the connection: green when connected, grey while connecting, yellow while
   reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or newer). Next to

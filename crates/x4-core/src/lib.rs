@@ -16,17 +16,19 @@
 //! its start while it downloads.
 //!
 //! What the main window shows is decided here as well: [`table_model`] turns a [`Snapshot`] and
-//! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts, [`status_model`]
-//! builds the status bar, whose [`Indicator`] says which of the [`ServiceStatus`] and the
-//! [`ConnectionState`] the connection dot shows, and [`visibility`] tells whether the user can see
-//! the window.
+//! the user's [`ViewState`] into the [`Row`]s of the table and the sidebar counts (and, for an
+//! empty table, the [`EmptyTable`] reason it gives), [`status_model`] builds the status bar,
+//! whose [`Indicator`] says which of the [`ServiceStatus`] and the [`ConnectionState`] the
+//! connection dot shows, and [`visibility`] tells whether the user can see the window.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
-//! [`UiState::parse`] (see also [`UiState::normalized`]), and [`Config`] is the owner's
-//! `config.toml`, which the app only reads. Both turn text into values and back; reading and
-//! writing the files is left to the app. A [`ConfigError`] names the [`TextPosition`] of a
-//! parse error as numbers, so the app can word it.
+//! [`UiState::parse`] (see also [`UiState::normalized`]); [`set_column_shown`],
+//! [`move_shown_column`] and [`set_shown_widths`] apply what the user does to its columns, which
+//! the table counts by [`shown_columns`]. [`Config`] is the owner's `config.toml`, which the app
+//! only reads. Both turn text into values and back; reading and writing the files is left to the
+//! app. A [`ConfigError`] names the [`TextPosition`] of a parse error as numbers, so the app can
+//! word it.
 //!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
@@ -87,12 +89,13 @@ pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_acti
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
 pub use toml_error::TextPosition;
 pub use ui_state::{
-    ColumnState, ParsedUiState, SortState, ThemeChoice, UI_STATE_VERSION, UiState, UiStateError,
-    WindowState, default_columns,
+    ColumnState, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ParsedUiState, SortState, ThemeChoice,
+    UI_STATE_VERSION, UiState, UiStateError, WindowState, default_columns, move_shown_column,
+    set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
-    ColumnId, CompactDuration, EtaView, Indicator, Row, ServiceStatus, StatusModel, Subtitle,
-    TableModel, TimeUnit, ViewState, status_model, table_model, visibility,
+    ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, Row, ServiceStatus, StatusModel,
+    Subtitle, TableModel, TimeUnit, ViewState, status_model, table_model, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

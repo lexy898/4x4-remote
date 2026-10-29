@@ -9,18 +9,22 @@ use std::sync::Arc;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFeatures, Hsla, Window, WindowAppearance};
-use x4_core::{DisplayState, Indicator, ThemeChoice};
+use x4_core::{DisplayState, Indicator, Subtitle, ThemeChoice};
 
 /// How visible old data stays: the table and the status bar's numbers are dimmed while the
 /// daemon does not answer, but stay readable.
 pub(crate) const STALE_OPACITY: f32 = 0.5;
 
+/// How visible an idle row of the table is: it recedes behind the rows where something happens,
+/// and stays readable. The stale dimming applies on top.
+pub(crate) const DIMMED_OPACITY: f32 = 0.55;
+
+/// How strong the track of a progress bar is, as a fraction of the bar's color, so that the
+/// track is a pale shade of the state.
+pub(crate) const PROGRESS_TRACK_OPACITY: f32 = 0.22;
+
 /// The color of a torrent state: blue while downloading, green while seeding, the warning color
 /// while queued or checking, the danger color for an error, and muted while paused.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the torrent table colors its rows in Task 6")
-)]
 pub(crate) fn state_color(state: DisplayState, theme: &Theme) -> Hsla {
     match state {
         DisplayState::Downloading => theme.blue,
@@ -28,6 +32,31 @@ pub(crate) fn state_color(state: DisplayState, theme: &Theme) -> Hsla {
         DisplayState::Checking | DisplayState::Queued(_) => theme.warning,
         DisplayState::Error => theme.danger,
         DisplayState::Paused => theme.muted_foreground,
+    }
+}
+
+/// The color of the line under a torrent's name: the danger color for an error of the torrent or
+/// its tracker, the warning color for a tracker warning, and muted otherwise.
+pub(crate) fn subtitle_color(subtitle: &Subtitle, theme: &Theme) -> Hsla {
+    match subtitle {
+        Subtitle::Error(_) | Subtitle::TrackerError(_) => theme.danger,
+        Subtitle::TrackerWarning(_) => theme.warning,
+        Subtitle::Downloading { .. }
+        | Subtitle::Seeding { .. }
+        | Subtitle::Paused
+        | Subtitle::Queued(_)
+        | Subtitle::Checking { .. }
+        | Subtitle::FetchingMetadata { .. } => theme.muted_foreground,
+    }
+}
+
+/// The color of a download or upload rate in the table: the color of the torrent's state while
+/// data moves that way, so that what is active stands out, and muted otherwise.
+pub(crate) fn rate_color(state: DisplayState, active: bool, theme: &Theme) -> Hsla {
+    if active {
+        state_color(state, theme)
+    } else {
+        theme.muted_foreground
     }
 }
 
@@ -150,6 +179,46 @@ mod tests {
             state_color(DisplayState::Paused, &dark),
             dark.muted_foreground
         );
+    }
+
+    #[gpui_kit::test]
+    fn subtitles_of_errors_stand_out(cx: &mut TestAppContext) {
+        let theme = theme(ThemeMode::Dark, cx);
+        let color = |subtitle: Subtitle| subtitle_color(&subtitle, &theme);
+
+        assert_eq!(color(Subtitle::Error("disk full".to_owned())), theme.danger);
+        assert_eq!(color(Subtitle::TrackerError(String::new())), theme.danger);
+        assert_eq!(
+            color(Subtitle::TrackerWarning(String::new())),
+            theme.warning
+        );
+        for quiet in [
+            Subtitle::Downloading {
+                from_peers: 1,
+                connected: 2,
+            },
+            Subtitle::Seeding { to_peers: 3 },
+            Subtitle::Paused,
+            Subtitle::Queued(QueueKind::Seed),
+            Subtitle::Checking { percent: 5 },
+            Subtitle::FetchingMetadata { percent: 6 },
+        ] {
+            assert_eq!(color(quiet), theme.muted_foreground);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn rates_take_the_state_color_only_while_moving(cx: &mut TestAppContext) {
+        let theme = theme(ThemeMode::Light, cx);
+
+        assert_eq!(rate_color(DisplayState::Seeding, true, &theme), theme.green);
+        assert_eq!(
+            rate_color(DisplayState::Downloading, true, &theme),
+            theme.blue
+        );
+        for state in [DisplayState::Seeding, DisplayState::Downloading] {
+            assert_eq!(rate_color(state, false, &theme), theme.muted_foreground);
+        }
     }
 
     #[gpui_kit::test]
