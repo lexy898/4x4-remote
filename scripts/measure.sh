@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Startup time and memory of the release build. Run by `just measure`.
 #
-# Usage: scripts/measure.sh [--example <name>] [--cpu <seconds>] [-- <arg>...]
-#     --example <name>  measure the release build of that example of x4-app (for instance
-#                       `synthetic`) instead of the app
+# Usage: scripts/measure.sh [--synthetic] [--cpu <seconds>] [-- <arg>...]
+#     --synthetic       measure the release build of the synthetic demo (the `x4-synthetic` binary
+#                       of the `synthetic` feature, over 2000 made-up torrents) instead of the app
 #     --cpu <seconds>   also measure the CPU the process takes over that many seconds, after the
 #                       memory figures, and print it on a second line
-#     -- <arg>...       arguments for the app or the example
+#     -- <arg>...       arguments for the app or the demo
 #
 # Builds the release binary, starts it with only the 4x4 lifecycle log enabled, waits for the UI
 # to settle, then prints one line:
@@ -41,19 +41,18 @@ set -euo pipefail
 settle_seconds=${X4_MEASURE_SETTLE_SECONDS:-5}
 
 usage() {
-    echo "usage: scripts/measure.sh [--example <name>] [--cpu <seconds>] [-- <arg>...]" >&2
+    echo "usage: scripts/measure.sh [--synthetic] [--cpu <seconds>] [-- <arg>...]" >&2
     exit 2
 }
 
-example=
+synthetic=no
 cpu_seconds=
 args=()
 while (($# > 0)); do
     case $1 in
-        --example)
-            [[ $# -ge 2 && -n $2 ]] || usage
-            example=$2
-            shift 2
+        --synthetic)
+            synthetic=yes
+            shift
             ;;
         --cpu)
             [[ $# -ge 2 && $2 =~ ^[1-9][0-9]*$ ]] || usage
@@ -71,9 +70,9 @@ done
 
 cd "$(dirname "$0")/.."
 source scripts/measure-lib.sh
-if [[ -n $example ]]; then
-    cargo build -p x4-app --release --locked --example "$example" >&2
-    binary=${CARGO_TARGET_DIR:-target}/release/examples/$example
+if [[ $synthetic == yes ]]; then
+    cargo build -p x4-app --release --locked --features synthetic --bin x4-synthetic >&2
+    binary=${CARGO_TARGET_DIR:-target}/release/x4-synthetic
 else
     just release >&2
     binary=${CARGO_TARGET_DIR:-target}/release/4x4

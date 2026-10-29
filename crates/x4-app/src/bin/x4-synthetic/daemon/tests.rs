@@ -1,8 +1,13 @@
 //! The synthetic daemon, through the real client: what it answers and what it refuses.
 
 use std::collections::HashSet;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use x4_core::{Attention, DisplayState, QueueKind, Torrent as ShownTorrent};
+use x4_core::{
+    Attention, ConnectionState, DisplayState, EngineConfig, Event, QueueKind,
+    Torrent as ShownTorrent, service,
+};
 use x4_rpc::{Client, GetIds, TorrentField, TorrentGetResponse, TorrentId, TorrentRecord};
 
 use super::*;
@@ -191,4 +196,62 @@ fn the_generator_stays_in_its_bounds() {
     assert_eq!(random.below(0), 0);
     assert_eq!(random.between(5, 5), 5);
     assert_eq!(random.between(5, 3), 5);
+}
+
+/// How long the service may take to connect and list the torrents.
+const SERVICE_WAIT: Duration = Duration::from_secs(10);
+
+/// The engine runs over the daemon as the demo runs it: every request it sends in this stage
+/// gets an answer, so it connects, lists all the torrents and reports no error. The method list
+/// of the daemon is hand-picked; this catches a request the engine sends that is not on it.
+#[test]
+fn the_service_connects_and_lists_every_torrent() {
+    let service = service::spawn(client(Activity::Ticking), EngineConfig::default())
+        .expect("the service thread starts");
+    // The events channel is async; a thread hands its events over to one with a timeout, and
+    // ends when the service closes the channel.
+    let (events, received) = crossbeam_channel::unbounded();
+    let source = service.events().clone();
+    let forward = thread::spawn(move || {
+        while let Ok(event) = source.recv_blocking() {
+            if events.send(event).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + SERVICE_WAIT;
+    let snapshot = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match received.recv_timeout(left) {
+            Ok(Event::Snapshot(snapshot)) => {
+                assert!(
+                    matches!(
+                        snapshot.connection,
+                        ConnectionState::Connecting | ConnectionState::Connected
+                    ),
+                    "{:?}",
+                    snapshot.connection
+                );
+                if snapshot.listed
+                    && snapshot.session.is_some()
+                    && snapshot.free_space_bytes.is_some()
+                {
+                    break snapshot;
+                }
+            }
+            Ok(Event::ActionFinished { result, .. }) => {
+                assert!(result.is_ok(), "an action failed: {result:?}");
+            }
+            Ok(Event::Details(_)) => {}
+            Err(error) => panic!("no connected snapshot with the whole list: {error}"),
+        }
+    };
+    service.shutdown();
+    forward.join().expect("the forwarding thread ends");
+
+    assert_eq!(snapshot.connection, ConnectionState::Connected);
+    assert!(!snapshot.stale);
+    assert_eq!(snapshot.torrents.len(), 2000);
+    assert!(snapshot.rate_down > 0 && snapshot.rate_up > 0);
 }

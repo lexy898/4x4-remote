@@ -738,20 +738,20 @@ test_measure_cpu_line_rejects_an_unreadable_stat() {
 }
 
 # A fake build for scripts/measure.sh: `just` and `cargo` that record their arguments, and in
-# <dir>/target the binaries of the app and of the example `synthetic`, which record theirs and
+# <dir>/target the binaries of the app and of the synthetic demo, which record theirs and
 # their XDG_STATE_HOME, write a state file and a log there as the app does, log their first frame
 # like the app and then sleep until the script stops them.
 new_measure_env() {
     local dir name
     dir=$(mktemp -d "$tmp_root/measure.XXXXXX")
-    mkdir -p "$dir/bin" "$dir/target/release/examples" "$dir/home" "$dir/tmp"
+    mkdir -p "$dir/bin" "$dir/target/release" "$dir/home" "$dir/tmp"
     for name in just cargo; do
         printf '#!/usr/bin/env bash\necho "$*" >>%q\n' "$dir/$name.txt" >"$dir/bin/$name"
         chmod +x "$dir/bin/$name"
     done
-    for name in 4x4 examples/synthetic; do
+    for name in 4x4 x4-synthetic; do
         printf '#!/usr/bin/env bash\necho "$*" >%q\necho "${XDG_STATE_HOME-unset}" >%q\nmkdir -p "$XDG_STATE_HOME/4x4" && touch "$XDG_STATE_HOME/4x4/state.toml" "$XDG_STATE_HOME/4x4/4x4.log"\necho "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2\nexec sleep 30\n' \
-            "$dir/args-${name##*/}.txt" "$dir/state-${name##*/}.txt" >"$dir/target/release/$name"
+            "$dir/args-$name.txt" "$dir/state-$name.txt" >"$dir/target/release/$name"
         chmod +x "$dir/target/release/$name"
     done
     echo "$dir"
@@ -764,19 +764,21 @@ run_measure_script() { # <dir> <arg...>
         HOME="$dir/home" TMPDIR="$dir/tmp" X4_MEASURE_SETTLE_SECONDS=1 "$BASH" "$measure" "$@"
 }
 
-test_measure_measures_an_example_with_its_arguments_and_cpu() {
+test_measure_measures_the_synthetic_demo_with_its_arguments_and_cpu() {
     local dir
     dir=$(new_measure_env)
-    run_measure_script "$dir" --example synthetic --cpu 1 -- --static 'two words'
+    run_measure_script "$dir" --synthetic --cpu 1 -- --static 'two words'
     expect_status 0
     [[ $(wc -l <<<"$stdout") -eq 2 ]] || fail "expected the report and the CPU line, got: $stdout"
     [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ .*binary_mib= ]] || fail "unexpected report: $stdout"
     [[ $stdout =~ $'\n'cpu_percent=[0-9]+\.[0-9]{2}\ window_s=1\.[0-9]$ ]] || fail "unexpected CPU line: $stdout"
-    [[ $(<"$dir/cargo.txt") == "build -p x4-app --release --locked --example synthetic" ]] ||
+    [[ $(<"$dir/cargo.txt") == "build -p x4-app --release --locked --features synthetic --bin x4-synthetic" ]] ||
         fail "unexpected build: $(<"$dir/cargo.txt")"
     [[ ! -e $dir/just.txt ]] || fail "the app was built too: $(<"$dir/just.txt")"
-    [[ $(<"$dir/args-synthetic.txt") == "--static two words" ]] ||
-        fail "unexpected arguments: $(<"$dir/args-synthetic.txt")"
+    [[ $(<"$dir/args-x4-synthetic.txt") == "--static two words" ]] ||
+        fail "unexpected arguments: $(<"$dir/args-x4-synthetic.txt")"
+    [[ $(<"$dir/state-x4-synthetic.txt") == "$dir/tmp/"* ]] ||
+        fail "the demo did not get a temp state dir: $(<"$dir/state-x4-synthetic.txt")"
 }
 
 test_measure_measures_the_app_by_default() {
@@ -805,7 +807,7 @@ test_measure_gives_the_app_a_temp_state_dir() {
 test_measure_rejects_unknown_options() {
     local dir option
     dir=$(new_measure_env)
-    for option in --bogus "--cpu x" "--cpu" "--example"; do
+    for option in --bogus "--cpu x" "--cpu" "--example synthetic"; do
         # Unquoted on purpose: "--cpu x" is an option and its value.
         run_measure_script "$dir" $option
         expect_status 2
@@ -1083,7 +1085,7 @@ cases=(
     measure_cpu_line_counts_user_and_system_time_over_the_window
     measure_cpu_line_rejects_an_unreadable_stat
     measure_elapsed_seconds_reads_either_decimal_separator
-    measure_measures_an_example_with_its_arguments_and_cpu
+    measure_measures_the_synthetic_demo_with_its_arguments_and_cpu
     measure_measures_the_app_by_default
     measure_gives_the_app_a_temp_state_dir
     measure_rejects_unknown_options

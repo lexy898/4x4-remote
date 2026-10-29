@@ -245,9 +245,9 @@ size. It adds a `WARN:` line on stderr when a figure is above one of its own ref
 the OpenGL stack is mapped, which it should not be where a Vulkan driver is installed. The exit
 code stays 0 unless the measurement itself failed. `--cpu <seconds>` adds a second line, the CPU
 time of all its threads over that many seconds after the memory figures, as a percentage of one
-core (`cpu_percent`); `--example synthetic` measures the [synthetic demo](#synthetic-demo) instead
-of the app, and arguments after `--` go to the program, as in
-`just measure --example synthetic --cpu 30 -- --static`.
+core (`cpu_percent`); `--synthetic` measures the release build of the
+[synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to the program, as
+in `just measure --synthetic --cpu 30 -- --static`.
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS. RSS
 counts every resident page the app maps, including shared driver libraries (`libLLVM`, `libgallium`)
@@ -312,7 +312,7 @@ three runs, except the owner's daemon, run once to keep its load low:
 
 The owner's daemon had 6 torrents, all seeding without traffic (`just virtual just measure --cpu
 30`). The 2000 torrents are the [synthetic demo](#synthetic-demo), measured after a 10 second settle
-(`X4_MEASURE_SETTLE_SECONDS=10 just virtual just measure --example synthetic --cpu 30`, with
+(`X4_MEASURE_SETTLE_SECONDS=10 just virtual just measure --synthetic --cpu 30`, with
 `-- --static` for idle); while busy, 513 of them change their rates or progress on every poll. The
 synthetic daemon runs inside the measured process, so its own work, making up the answers, counts
 in those two columns.
@@ -329,7 +329,7 @@ in those two columns.
   0.10 % with the owner's, which is asked for news every 1.5 seconds. It redraws only when
   something it shows has changed.
 - Scrolling 2000 torrents by one row per frame for 10 seconds (`--scroll` of the release build,
-  `cargo run --release -p x4-app --example synthetic -- --scroll`, six runs, idle and busy; a debug
+  `cargo run --release -p x4-app --features synthetic --bin x4-synthetic -- --scroll`, six runs, idle and busy; a debug
   build takes about 115 ms per frame) gave 3602 frame intervals with a median of 16.68 ms and a
   longest of 22.3 ms; none was over 33 ms, so no frame was missed. Many intervals (45 %) are just
   over 16.7 ms only because a 60 Hz pace jitters around 16.67 ms. GPUI's own timing of each frame's
@@ -376,8 +376,10 @@ nowhere else.
 state, made up in memory: nothing goes over the network, and none of 4x4's files is read or written
 (the log goes to stderr only). The rates of the active torrents change on every poll. `--static`
 keeps every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10
-seconds, logs the intervals between the frames and quits. For example,
-`just virtual just demo-synthetic --scroll` runs it off screen.
+seconds, logs the intervals between the frames and quits; `--select N` selects the row at index `N`
+(from 0) once the list is there. For example, `just virtual just demo-synthetic --scroll` runs it
+off screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
+does not contain it.
 
 ### Live tests
 

@@ -1,7 +1,8 @@
 //! Logging: to stderr always, and to a daily log file in the app's state directory.
 //!
 //! The file is written on a thread of its own, so logging never waits on the disk. If the file
-//! cannot be opened the app logs to stderr only and says so; it still starts.
+//! cannot be opened the app logs to stderr only and says so; it still starts. A caller that wants
+//! no file at all (the synthetic demo) logs to stderr only, and nothing warns about it.
 
 use std::env::{self, VarError};
 use std::io::{self, IsTerminal as _};
@@ -39,8 +40,35 @@ const LOG_BUFFER_LINES: usize = 1024;
 /// An error if `RUST_LOG` is not a valid filter, or a logger is already installed. A problem with
 /// the log file is not an error.
 pub fn init_logging(log_dir: Option<&Path>) -> anyhow::Result<Option<WorkerGuard>> {
+    install(log_dir.map_or(LogFile::DirUnknown, LogFile::In))
+}
+
+/// Starts logging to stderr only, with the level from `RUST_LOG` as [`init_logging`] takes it.
+/// For a program that writes no files on purpose, so it does not warn that there is no log file.
+///
+/// # Errors
+///
+/// An error if `RUST_LOG` is not a valid filter, or a logger is already installed.
+pub fn init_stderr_logging() -> anyhow::Result<()> {
+    install(LogFile::NotWanted)?;
+    Ok(())
+}
+
+/// Where the log goes besides stderr.
+#[derive(Debug, Clone, Copy)]
+enum LogFile<'a> {
+    /// Daily files in this directory.
+    In(&'a Path),
+    /// No file, because the app does not know its state directory: a problem to report.
+    DirUnknown,
+    /// No file, as the caller asked.
+    NotWanted,
+}
+
+/// Installs the logger, and warns if there is no log file for a reason the user should know.
+fn install(log_file: LogFile<'_>) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = parse_filter(env::var(EnvFilter::DEFAULT_ENV))?;
-    let (subscriber, guard, problem) = build(filter, log_dir, io::stderr().is_terminal());
+    let (subscriber, guard, problem) = build(filter, log_file, io::stderr().is_terminal());
     subscriber
         .try_init()
         .context("cannot install the log subscriber")?;
@@ -60,24 +88,27 @@ fn parse_filter(value: Result<String, VarError>) -> anyhow::Result<EnvFilter> {
     }
 }
 
-/// The subscriber, the guard of the file writer, and why there is no file (if there is none).
+/// The subscriber, the guard of the file writer, and why there is no file if that is a problem.
 /// Nothing is installed, so tests can use the subscriber on its own.
 fn build(
     filter: EnvFilter,
-    log_dir: Option<&Path>,
+    log_file: LogFile<'_>,
     stderr_ansi: bool,
 ) -> (
     impl Subscriber + Send + Sync + 'static,
     Option<WorkerGuard>,
     Option<String>,
 ) {
-    let (file_writer, guard, problem) = match log_dir.map(open_log_file) {
-        Some(Ok(appender)) => {
-            let (writer, guard) = file_writer_builder().finish(appender);
-            (Some(writer), Some(guard), None)
-        }
-        Some(Err(error)) => (None, None, Some(error)),
-        None => (None, None, Some("the log directory is unknown".to_owned())),
+    let (file_writer, guard, problem) = match log_file {
+        LogFile::In(dir) => match open_log_file(dir) {
+            Ok(appender) => {
+                let (writer, guard) = file_writer_builder().finish(appender);
+                (Some(writer), Some(guard), None)
+            }
+            Err(error) => (None, None, Some(error)),
+        },
+        LogFile::DirUnknown => (None, None, Some("the log directory is unknown".to_owned())),
+        LogFile::NotWanted => (None, None, None),
     };
     let subscriber = tracing_subscriber::registry()
         .with(filter)
@@ -148,7 +179,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temporary directory");
         // Not yet there: the logger creates the directory.
         let log_dir = dir.path().join("state").join("4x4");
-        let (subscriber, guard, problem) = build(EnvFilter::new("info"), Some(&log_dir), false);
+        let (subscriber, guard, problem) =
+            build(EnvFilter::new("info"), LogFile::In(&log_dir), false);
 
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(torrent = "abc", "marker event");
@@ -192,7 +224,8 @@ mod tests {
         }
         fs::write(dir.path().join("state.toml"), "x").expect("written");
 
-        let (_subscriber, guard, problem) = build(EnvFilter::new("info"), Some(dir.path()), false);
+        let (_subscriber, guard, problem) =
+            build(EnvFilter::new("info"), LogFile::In(dir.path()), false);
 
         assert_eq!(problem, None);
         assert_eq!(log_files(dir.path()).len(), 7);
@@ -207,7 +240,8 @@ mod tests {
         fs::write(&file, "x").expect("written");
         let log_dir = file.join("logs"); // A directory cannot be made inside a file.
 
-        let (subscriber, guard, problem) = build(EnvFilter::new("info"), Some(&log_dir), false);
+        let (subscriber, guard, problem) =
+            build(EnvFilter::new("info"), LogFile::In(&log_dir), false);
 
         assert!(guard.is_none());
         let problem = problem.expect("the problem is reported");
@@ -218,10 +252,20 @@ mod tests {
 
     #[test]
     fn missing_log_dir_falls_back_to_stderr_only() {
-        let (subscriber, guard, problem) = build(EnvFilter::new("info"), None, false);
+        let (subscriber, guard, problem) =
+            build(EnvFilter::new("info"), LogFile::DirUnknown, false);
 
         assert!(guard.is_none());
         assert!(problem.is_some());
+        tracing::subscriber::with_default(subscriber, || tracing::info!("still logging"));
+    }
+
+    #[test]
+    fn stderr_only_by_choice_is_no_problem() {
+        let (subscriber, guard, problem) = build(EnvFilter::new("info"), LogFile::NotWanted, false);
+
+        assert!(guard.is_none());
+        assert_eq!(problem, None, "nothing to warn about");
         tracing::subscriber::with_default(subscriber, || tracing::info!("still logging"));
     }
 
@@ -269,7 +313,8 @@ mod tests {
             return;
         };
 
-        let (subscriber, guard, problem) = build(EnvFilter::new("info"), Some(&log_dir), false);
+        let (subscriber, guard, problem) =
+            build(EnvFilter::new("info"), LogFile::In(&log_dir), false);
 
         assert!(guard.is_none());
         let problem = problem.expect("the problem is reported");
