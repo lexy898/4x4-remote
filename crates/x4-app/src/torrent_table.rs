@@ -20,7 +20,8 @@
 //! then opens for the selected rows (the `context_menu` module): the delegate builds it, enabled as
 //! they allow while the daemon is connected or not (`TorrentTable::set_connected`), and hands a
 //! choice to the handler set with `TorrentTable::on_menu`, with the rows the menu took when it
-//! opened.
+//! opened. A right-click that lands on no row opens no visible menu, but gpui-component's empty
+//! one takes the keyboard focus; `watch_right_click` gives it back to where it was.
 //!
 //! The table's own sorting and column selection are off. A click on a header goes to the handler
 //! set with [`TorrentTable::on_sort`], through which the main view, the owner of the sort order,
@@ -41,9 +42,10 @@ use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeToken};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, ClickEvent, Context, Div, FocusHandle, Focusable as _, InteractiveElement as _,
-    IntoElement, ParentElement as _, Pixels, ScrollStrategy, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, px,
+    App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, ScrollStrategy,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
+    Window, div, px,
 };
 use x4_core::{
     ColumnId, ColumnState, Edge, EmptyTable, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, Row, Selection,
@@ -90,6 +92,21 @@ pub(crate) enum SelectionChange {
     Nothing,
 }
 
+/// How far a right-click on the list has come, from the press to the context menu it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RightClick {
+    /// No right-click is under way, or its menu has been built.
+    Idle,
+    /// The press has come (`watch_right_click`), and it has not landed on a row. The table goes on
+    /// marking the row it last right-clicked, so the context menu may still be asked for that old
+    /// row; it must not open that row's menu. If no menu is built for a row, gpui-component's
+    /// empty menu, which it never draws, has taken the keyboard focus, and `watch_right_click`
+    /// gives it back.
+    Pressed,
+    /// The press has landed on a row (`right_click`), and the menu built next is that row's.
+    OnRow,
+}
+
 /// The delegate of the torrent table: the rows to show, the columns, the sort order the header
 /// marks and the selection.
 pub struct TorrentTable {
@@ -109,10 +126,9 @@ pub struct TorrentTable {
     connected: bool,
     /// The table's own focus handle, from which the context menu looks up the keys it shows.
     focus: Option<FocusHandle>,
-    /// Whether a right-click on a row has come and its context menu is not built yet. The table
-    /// goes on marking the row it last right-clicked, so a right-click below the rows would
-    /// otherwise open the menu of that old row.
-    menu_armed: bool,
+    /// How far the right-click now under way has come, which tells a context menu built for a row
+    /// from the empty one that no row gets.
+    right_click: RightClick,
     /// Called with the column whose header is clicked.
     on_sort: Option<SortHandler>,
     /// Called with the item chosen in the context menu.
@@ -133,7 +149,7 @@ impl TorrentTable {
             stale: false,
             connected: false,
             focus: None,
-            menu_armed: false,
+            right_click: RightClick::Idle,
             on_sort: None,
             on_menu: None,
         }
@@ -427,13 +443,54 @@ pub(crate) fn right_click(
     row_ix: usize,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
-    table.delegate_mut().menu_armed = true;
+    table.delegate_mut().right_click = RightClick::OnRow;
     if !table.delegate().is_selected(row_ix) {
         change_selection(table, SelectionChange::Click(row_ix), cx);
     }
     if table.right_clicked_row() != Some(row_ix) {
         table.set_right_clicked_row(Some(row_ix), cx);
     }
+}
+
+/// Watches a mouse press on the list, which must be handed to it in the capture phase: the context
+/// menu stops the press in the bubble phase. A right-click that lands on no row (below the rows, on
+/// the header) opens an empty menu that gpui-component does not draw but gives the keyboard focus,
+/// and the list's keys would be dead until the user clicked again. So the focus is noted before the
+/// press does anything, and given back after the menu has had its turn, unless a menu was built.
+///
+/// The focus goes back from two deferred calls in a row: the context menu builds itself in a
+/// deferred call of its own, queued after ours, and deferred calls run in the order they were
+/// queued, so a call queued by ours runs after it.
+pub(crate) fn watch_right_click(
+    table: &Entity<TableState<TorrentTable>>,
+    event: &MouseDownEvent,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if event.button != MouseButton::Right {
+        return;
+    }
+    let before = window.focused(cx);
+    table.update(cx, |table, _| {
+        table.delegate_mut().right_click = RightClick::Pressed;
+    });
+    let table = table.clone();
+    window.defer(cx, move |window, cx| {
+        window.defer(cx, move |window, cx| {
+            let unanswered = table.update(cx, |table, _| {
+                let delegate = table.delegate_mut();
+                let unanswered = delegate.right_click == RightClick::Pressed;
+                if unanswered {
+                    delegate.right_click = RightClick::Idle;
+                }
+                unanswered
+            });
+            if unanswered {
+                let focus = before.unwrap_or_else(|| table.focus_handle(cx));
+                window.focus(&focus, cx);
+            }
+        });
+    });
 }
 
 /// Scrolls the lead into view when it is off screen. A lead on screen, even if partly, leaves the
@@ -588,21 +645,19 @@ impl TableDelegate for TorrentTable {
     /// The menu of a right-click, built once as it opens, after `right_click` has selected the
     /// row: it takes the selected rows the list shows now, and acts on them however the list
     /// changes while it is open. A right-click that did not land on a row (below the rows, on the
-    /// header) gets an empty menu, which gpui-component does not show; it still gives the empty
-    /// menu the focus, so the focus goes back to the table right after.
+    /// header) gets an empty menu, which gpui-component does not show; `watch_right_click` gives
+    /// the focus back, because this menu is no menu to wait for.
     fn context_menu(
         &mut self,
         _: usize,
         menu: PopupMenu,
-        window: &mut Window,
-        cx: &mut Context<'_, TableState<Self>>,
+        _: &mut Window,
+        _: &mut Context<'_, TableState<Self>>,
     ) -> PopupMenu {
-        if !std::mem::take(&mut self.menu_armed) {
-            if let Some(focus) = self.focus.clone() {
-                window.defer(cx, move |window, cx| window.focus(&focus, cx));
-            }
+        if self.right_click != RightClick::OnRow {
             return menu;
         }
+        self.right_click = RightClick::Idle;
         let targets: Rc<[Row]> = self
             .selection
             .targets(&self.rows)

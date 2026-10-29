@@ -10,7 +10,8 @@
 //!
 //! On Wayland only the window in focus may set the clipboard, and gpui drops the text silently
 //! otherwise. The links arrive a moment after the key press, so if 4x4 is no longer the active
-//! window by then, nothing is written and a notice asks for Ctrl+C again.
+//! window by then, nothing is written and a notice asks for Ctrl+C again. A later copy that
+//! succeeds in full takes down that notice, and the ones about missing links and failed reads.
 
 use gpui_kit::{App, ClipboardItem, Context, Window};
 use x4_core::{ActionError, ActionId, Command, Row, availability};
@@ -132,8 +133,11 @@ impl MainView {
                 partial,
             } => {
                 write_to_clipboard(text, count, "magnet links", cx);
-                if let Some(partial) = partial {
-                    self.show_warning(COPY_MAGNET_LINKS, partial, window, cx);
+                match partial {
+                    Some(partial) => self.show_warning(COPY_MAGNET_LINKS, partial, window, cx),
+                    // Whatever an earlier copy said ("press Ctrl+C again", "Copied 2 of 3") no
+                    // longer holds, and the notice would otherwise stay until dismissed.
+                    None => Self::hide_notice(COPY_MAGNET_LINKS, window, cx),
                 }
             }
             MagnetAnswer::Failed(text) => self.show_failure(COPY_MAGNET_LINKS, text, window, cx),

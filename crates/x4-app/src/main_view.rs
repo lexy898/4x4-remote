@@ -51,8 +51,8 @@ use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, TestSupportExt as _, Window, div, px,
+    MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, TestSupportExt as _, Window, div, px,
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
@@ -76,6 +76,7 @@ use crate::theme::{apply_theme, follow_appearance, next_theme};
 use crate::toolbar::{ToolbarState, toolbar};
 use crate::torrent_table::{
     TorrentTable, follow_table, new_table_state, right_click, show_column, show_rows,
+    watch_right_click,
 };
 use persistence::Saver;
 use selection_keys::on_selection_keys;
@@ -553,9 +554,14 @@ impl MainView {
     /// The torrent table, whose rows are dimmed while the data is stale (the table does that, so
     /// that a row is never dimmed twice). Its accessible name says how many torrents it shows.
     fn torrent_list(&self) -> impl IntoElement + use<> {
+        let table = self.table.clone();
         div()
             .id("torrent-list")
             .key_context(TORRENT_LIST_CONTEXT)
+            // In the capture phase, before the context menu stops the press (`watch_right_click`).
+            .capture_any_mouse_down(move |event: &MouseDownEvent, window, cx| {
+                watch_right_click(&table, event, window, cx);
+            })
             .flex_1()
             .min_w_0()
             .h_full()

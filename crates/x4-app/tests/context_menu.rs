@@ -11,6 +11,7 @@
 //! that arrive while 4x4 is not in focus are not written.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui_kit::component::table::TableState;
 use gpui_kit::test::ClickOptions;
@@ -202,6 +203,30 @@ impl Window {
         });
     }
 
+    /// Right-clicks the table's header, 10 pixels below its top edge.
+    fn right_click_header(&self, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
+            window.click_with_options(
+                TABLE,
+                ClickOptions::new()
+                    .with_button(MouseButton::Right)
+                    .with_offset(point(px(100.), px(10.))),
+                cx,
+            );
+        });
+    }
+
+    /// Makes the window the active one again, as when the user switches back to 4x4.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a closed window fails the test"
+    )]
+    fn activate(&self, cx: &mut TestAppContext) {
+        cx.update_window(self.handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
+        cx.run_until_parked();
+    }
+
     /// Makes another app's window the active one, as when the user switches away from 4x4.
     fn deactivate(&self, cx: &mut TestAppContext) {
         VisualTestContext::from_window(self.handle, cx).deactivate_window();
@@ -304,6 +329,14 @@ impl Window {
     /// How many notifications are on screen.
     fn notifications(&self, cx: &mut TestAppContext) -> usize {
         self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
+    }
+
+    /// How many notifications are on screen once the ones that were closed have finished leaving:
+    /// a closed notification fades out first, and counts until it is gone.
+    fn notifications_left(&self, cx: &mut TestAppContext) -> usize {
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        self.notifications(cx)
     }
 
     fn last_failure(&self, cx: &mut TestAppContext) -> Option<String> {
@@ -760,6 +793,31 @@ fn a_right_click_below_the_rows_opens_no_menu(cx: &mut TestAppContext) {
         "the keys still reach the list"
     );
 
+    // The common case: after a left click the table has forgotten the row it was right-clicked
+    // on, and the empty menu that gpui-component opens must not keep the keys.
+    window.click_row(0, cx);
+    window.right_click_below_the_rows(cx);
+    assert!(!window.menu_open(cx));
+    assert!(window.table_focused(cx), "the list keeps the keys");
+    window.press("ctrl-p", cx);
+    assert_eq!(
+        window.sent_action().1,
+        Action::Stop(hashes(&["a"])),
+        "the keys still reach the list"
+    );
+
+    // The header is no row either.
+    window.right_click_header(cx);
+    assert!(!window.menu_open(cx));
+    assert!(window.table_focused(cx), "the list keeps the keys");
+
+    // Where the focus was stays where it was: the search box keeps it.
+    window.press("ctrl-f", cx);
+    assert!(window.focused(SEARCH, cx));
+    window.right_click_below_the_rows(cx);
+    assert!(!window.menu_open(cx));
+    assert!(window.focused(SEARCH, cx), "the search box keeps the keys");
+
     // A row still opens it.
     window.right_click_row(1, cx);
     assert!(window.menu_open(cx));
@@ -775,6 +833,7 @@ fn an_item_disabled_when_the_menu_opened_does_nothing_on_enter(cx: &mut TestAppC
 
     // The daemon is back while the menu is open; Pause was drawn disabled.
     window.send(downloading_all(&["a"]), cx);
+    assert!(window.menu_open(cx));
     window.point_at(PAUSE, cx);
     window.press("enter", cx);
 
@@ -937,6 +996,59 @@ fn links_that_arrive_while_4x4_is_not_in_focus_ask_for_another_press(cx: &mut Te
         Some("The magnet links are ready, but 4x4 was not in focus — press Ctrl+C again")
     );
     assert_eq!(window.notifications(cx), 1);
+}
+
+#[gpui_kit::test]
+fn a_magnet_copy_that_succeeds_removes_the_notices_of_the_ones_that_did_not(
+    cx: &mut TestAppContext,
+) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a", "b", "c"]), cx);
+    window.press("ctrl-a", cx);
+
+    // "Copied 2 of 3" stays until a copy of all of them replaces it.
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+    window.answer(id, Ok(links(&["a", "c"])), cx);
+    assert_eq!(window.notifications(cx), 1);
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+    window.answer(id, Ok(links(&["a", "b", "c"])), cx);
+    assert_eq!(
+        window.notifications_left(cx),
+        0,
+        "the partial copy is old news"
+    );
+    assert_eq!(
+        clipboard(cx).as_deref(),
+        Some(magnet_lines(&["a", "b", "c"]).as_str())
+    );
+
+    // "Press Ctrl+C again" goes once the user has.
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+    window.deactivate(cx);
+    window.answer(id, Ok(links(&["a", "b", "c"])), cx);
+    assert_eq!(window.notifications(cx), 1);
+    window.activate(cx);
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+    window.answer(id, Ok(links(&["a", "b", "c"])), cx);
+    assert_eq!(
+        window.notifications_left(cx),
+        0,
+        "the user pressed it again"
+    );
+
+    // A failed read goes the same way.
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+    window.answer(id, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
+    assert_eq!(window.notifications(cx), 1);
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+    window.answer(id, Ok(links(&["a", "b", "c"])), cx);
+    assert_eq!(window.notifications_left(cx), 0, "the failure is old news");
 }
 
 #[gpui_kit::test]

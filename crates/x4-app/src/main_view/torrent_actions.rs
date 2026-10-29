@@ -326,6 +326,12 @@ impl MainView {
         self.notify(kind, Notification::warning(text.clone()), text, window, cx);
     }
 
+    /// Takes down the notification shown under `kind`, if there is one: what it reported is
+    /// settled, as when the same request has gone through since. The last failure stays.
+    pub(super) fn hide_notice(kind: &'static str, window: &mut Window, cx: &mut App) {
+        window.remove_notification1::<ActionFailed>(kind, cx);
+    }
+
     /// Pushes `notification`, which says `text`, under `kind`, and keeps `text` as the last failure.
     fn notify(
         &mut self,
