@@ -30,7 +30,35 @@ height=${X4_VIRTUAL_HEIGHT:-900}
 owner_config=${XDG_CONFIG_HOME:-$HOME/.config}
 
 root=$(mktemp -d "${TMPDIR:-/tmp}/x4-virtual.XXXXXX")
+
+# Stops every process that still runs with the session's XDG dirs. The services the session's
+# D-Bus starts (xdg-desktop-portal-kde, ksecretd) outlive their bus and their compositor and keep
+# writing to the session's dirs; the session's path in the environment marks them, and nothing
+# else has it.
+stop_leftovers() {
+    local environ pid pids=() alive=() _
+    for environ in /proc/[0-9]*/environ; do
+        pid=${environ#/proc/}
+        pid=${pid%/environ}
+        if [[ $pid != "$$" ]] && grep -qzxF -- "XDG_DATA_HOME=$root/data" "$environ" 2>/dev/null; then
+            pids+=("$pid")
+        fi
+    done
+    ((${#pids[@]} > 0)) || return 0
+    kill "${pids[@]}" 2>/dev/null || true
+    for _ in {1..20}; do
+        alive=()
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then alive+=("$pid"); fi
+        done
+        ((${#alive[@]} > 0)) || return 0
+        sleep 0.1
+    done
+    kill -KILL "${alive[@]}" 2>/dev/null || true
+}
+
 cleanup() {
+    stop_leftovers
     if [[ ${X4_VIRTUAL_KEEP:-} == 1 ]]; then
         echo "virtual-session: kept $root" >&2
     else

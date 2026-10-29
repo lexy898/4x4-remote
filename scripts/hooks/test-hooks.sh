@@ -911,6 +911,30 @@ test_virtual_session_keeps_its_dir_on_request() {
     expect_contains "kwin noise" "$(<"$kept/kwin.log")" "kwin.log"
 }
 
+# Services the session's D-Bus starts (the desktop portal, ksecretd) outlive KWin and write to the
+# session's dirs; the fake KWin leaves such a process behind, with the session's environment.
+test_virtual_session_stops_what_the_session_left_running() {
+    local leftover
+    new_virtual_env
+    cat >"$virtual_dir/bin/kwin_wayland" <<EOF
+#!/usr/bin/env bash
+sleep 300 </dev/null >/dev/null 2>&1 &
+echo \$! >"$virtual_dir/leftover.pid"
+while ((\$#)); do
+    if [[ \$1 == --exit-with-session ]]; then "\$2"; exit 0; fi
+    shift
+done
+EOF
+    run_virtual true
+    expect_status 0
+    leftover=$(<"$virtual_dir/leftover.pid")
+    if kill -0 "$leftover" 2>/dev/null; then
+        kill "$leftover"
+        fail "the process the session left running is still there"
+    fi
+    [[ -z $(ls -A "$virtual_dir/tmp") ]] || fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
+}
+
 test_virtual_session_reports_a_session_that_never_ran() {
     new_virtual_env
     printf '#!/usr/bin/env bash\necho "cannot open the virtual output"\nexit 1\n' >"$virtual_dir/bin/kwin_wayland"
@@ -983,6 +1007,7 @@ cases=(
     virtual_session_keeps_arguments_with_spaces
     virtual_session_names_a_missing_tool
     virtual_session_keeps_its_dir_on_request
+    virtual_session_stops_what_the_session_left_running
     virtual_session_reports_a_session_that_never_ran
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
