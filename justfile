@@ -78,12 +78,17 @@ run *args:
 release:
     cargo build -p x4-app --release --locked
 
-# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build.
-measure:
-    scripts/measure.sh
+# The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit).
+demo-synthetic *args:
+    RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,synthetic=info}" \
+        cargo run -p x4-app --example synthetic --locked -- {{args}}
 
-# Run a command in a headless KWin, off the real screens (KDE only): `just virtual just run`.
-# X4_VIRTUAL_KEEP=1 keeps the session's temp dir.
+# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--example synthetic`, `--cpu <s>`, `-- <args>`.
+[positional-arguments]
+measure *args:
+    scripts/measure.sh "$@"
+
+# Run a command in a headless KWin, off the real screens (KDE only): `just virtual just run`; X4_VIRTUAL_KEEP=1 keeps its temp dir.
 [positional-arguments]
 virtual +cmd:
     scripts/virtual-session.sh "$@"

@@ -4,8 +4,8 @@
 //! [`run`] is the front door the `4x4` binary uses: it reads the files and starts the service
 //! against the configured daemon. [`run_with`] takes a [`Startup`] built by its caller instead,
 //! so that a demo or a measurement can run the window against a service of its own, and
-//! [`launch`] opens the window of a [`Startup`] in an application that runs already, such as a
-//! test's.
+//! [`run_driven`] also hands it the open window to drive. [`launch`] opens the window of a
+//! [`Startup`] in an application that runs already, such as a test's.
 
 use std::cell::RefCell;
 use std::env;
@@ -206,6 +206,20 @@ pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
 ///
 /// Returns an error if the main window cannot be opened.
 pub fn run_with(started: Instant, startup: Startup) -> anyhow::Result<()> {
+    run_driven(started, startup, |_, _, _| {})
+}
+
+/// [`run_with`], which also hands the main window and its view to `drive` once the window is
+/// open, before its first frame, so that a demo or a measurement can drive the real window.
+///
+/// # Errors
+///
+/// Returns an error if the main window cannot be opened.
+pub fn run_driven(
+    started: Instant,
+    startup: Startup,
+    drive: impl FnOnce(AnyWindowHandle, Entity<MainView>, &mut App) + 'static,
+) -> anyhow::Result<()> {
     let launch_error = Rc::new(RefCell::new(None));
     let launch_error_slot = Rc::clone(&launch_error);
     // The component icons (the sidebar's, the search box's, the menus' checks); no others.
@@ -213,8 +227,11 @@ pub fn run_with(started: Instant, startup: Startup) -> anyhow::Result<()> {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             init(cx);
-            let opened =
-                launch(startup, cx).and_then(|(window, _)| log_first_frame(window, started, cx));
+            let opened = launch(startup, cx).and_then(|(window, view)| {
+                log_first_frame(window, started, cx)?;
+                drive(window, view, cx);
+                Ok(())
+            });
             if let Err(error) = opened {
                 launch_error_slot.replace(Some(error));
                 // A quit requested during launch is lost: the event loop clears its stop signal

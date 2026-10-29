@@ -96,3 +96,41 @@ report_warnings() {
         echo "WARN: gl_stack_mapped=yes: Mesa's OpenGL stack (libgallium, libEGL_mesa or libGLX_mesa) is loaded, which a Vulkan-only process should not need" >&2
     fi
 }
+
+# cpu_ticks <stat>: utime + stime, in clock ticks, from a copy of /proc/<pid>/stat: the CPU time
+# of every thread of the process so far. The fields are counted after the last ")", because the
+# command name before it may hold spaces and parentheses.
+cpu_ticks() {
+    local line rest fields
+    line=$(<"$1") || {
+        echo "cannot read $1" >&2
+        return 1
+    }
+    rest=${line##*) }
+    # rest starts at field 3 (state); utime and stime are fields 14 and 15.
+    read -r -a fields <<<"$rest"
+    if [[ ! ${fields[11]:-} =~ ^[0-9]+$ || ! ${fields[12]:-} =~ ^[0-9]+$ ]]; then
+        echo "no utime and stime in $1" >&2
+        return 1
+    fi
+    echo $((fields[11] + fields[12]))
+}
+
+# cpu_line <stat-before> <stat-after> <seconds> <ticks-per-second>: the CPU line of the report,
+# the process's CPU time between the two copies of /proc/<pid>/stat, taken <seconds> apart, as a
+# percentage of one core.
+cpu_line() {
+    local before after
+    before=$(cpu_ticks "$1") || return 1
+    after=$(cpu_ticks "$2") || return 1
+    awk -v ticks=$((after - before)) -v seconds="$3" -v hz="$4" 'BEGIN {
+        printf "cpu_percent=%.2f window_s=%.1f\n", ticks / hz / seconds * 100, seconds
+    }'
+}
+
+# elapsed_seconds <from> <to>: the seconds between two values of $EPOCHREALTIME. Bash writes them
+# with the decimal separator of the locale (a comma in Russian, for instance) and awk reads only
+# a dot, so a comma is turned into a dot first.
+elapsed_seconds() {
+    awk -v from="${1/,/.}" -v to="${2/,/.}" 'BEGIN { print to - from }'
+}

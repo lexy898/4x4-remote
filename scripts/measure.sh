@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 # Startup time and memory of the release build. Run by `just measure`.
 #
+# Usage: scripts/measure.sh [--example <name>] [--cpu <seconds>] [-- <arg>...]
+#     --example <name>  measure the release build of that example of x4-app (for instance
+#                       `synthetic`) instead of the app
+#     --cpu <seconds>   also measure the CPU the process takes over that many seconds, after the
+#                       memory figures, and print it on a second line
+#     -- <arg>...       arguments for the app or the example
+#
 # Builds the release binary, starts it with only the 4x4 lifecycle log enabled, waits for the UI
 # to settle, then prints one line:
 #     first_frame_ms=<n> pss_mib=<n> uss_mib=<n> rss_anon_mib=<n> rss_mib=<n> threads=<n>
 #     gl_stack_mapped=yes|no binary_mib=<n>
+# and, with --cpu, a second one:
+#     cpu_percent=<n> window_s=<n>
 # pss_mib is the proportional set size (Pss in /proc/<pid>/smaps_rollup): every shared page counts
 # divided by the number of processes that map it, so it is the app's fair share.
 # uss_mib is the unique set size (Private_Clean + Private_Dirty): what exiting the app frees.
@@ -13,25 +22,61 @@
 # rss_mib is the whole resident set (VmRSS), shared libraries included. It is a reference only.
 # gl_stack_mapped says whether Mesa's OpenGL stack (libgallium, libEGL_mesa or libGLX_mesa) is
 # mapped, found in /proc/<pid>/maps; a Vulkan-only process does not map it.
+# cpu_percent is the user and system time of all the process's threads (utime + stime in
+# /proc/<pid>/stat) over the window_s seconds that followed, as a percentage of one core.
 #
 # The reference limits checked in scripts/measure-lib.sh are rss_anon_mib <= 16, pss_mib <= 55,
 # rss_mib <= 120 and gl_stack_mapped=no; they are not the targets in README.md (rss_mib <= 120 is
 # looser than its 100 MiB target). A breach prints a "WARN: ..." line on stderr and does not
 # change the exit code, which is non-zero only if the measurement itself failed: the app did not
-# start, did not log its first frame, or its /proc files could not be read. The first-frame
-# target (<= 500 ms) is reported in README.md, not checked here.
+# start, did not log its first frame, or its /proc files could not be read (2 for a bad command
+# line). The first-frame target (<= 500 ms) is reported in README.md, not checked here.
 #
 # Env: X4_MEASURE_SETTLE_SECONDS (default: 5), CARGO_TARGET_DIR (default: target). The app is
 # started with X4_DEVEL=1 (the development app id) and also writes its log file under
-# ~/.local/state/4x4/.
+# ~/.local/state/4x4/ ($XDG_STATE_HOME/4x4/ when that is set).
 set -euo pipefail
 
 settle_seconds=${X4_MEASURE_SETTLE_SECONDS:-5}
 
+usage() {
+    echo "usage: scripts/measure.sh [--example <name>] [--cpu <seconds>] [-- <arg>...]" >&2
+    exit 2
+}
+
+example=
+cpu_seconds=
+args=()
+while (($# > 0)); do
+    case $1 in
+        --example)
+            [[ $# -ge 2 && -n $2 ]] || usage
+            example=$2
+            shift 2
+            ;;
+        --cpu)
+            [[ $# -ge 2 && $2 =~ ^[1-9][0-9]*$ ]] || usage
+            cpu_seconds=$2
+            shift 2
+            ;;
+        --)
+            shift
+            args=("$@")
+            break
+            ;;
+        *) usage ;;
+    esac
+done
+
 cd "$(dirname "$0")/.."
 source scripts/measure-lib.sh
-just release >&2
-binary=${CARGO_TARGET_DIR:-target}/release/4x4
+if [[ -n $example ]]; then
+    cargo build -p x4-app --release --locked --example "$example" >&2
+    binary=${CARGO_TARGET_DIR:-target}/release/examples/$example
+else
+    just release >&2
+    binary=${CARGO_TARGET_DIR:-target}/release/4x4
+fi
 
 log=$(mktemp)
 snapshot=$(mktemp -d)
@@ -56,7 +101,7 @@ fail() {
 
 # X4_DEVEL=1 gives the window the development app id, as in a debug build, so the measurement
 # window is not mistaken for the owner's own (the window rule for test windows matches that id).
-X4_DEVEL=1 RUST_LOG=x4_app=info "$binary" 2>"$log" &
+X4_DEVEL=1 RUST_LOG=x4_app=info "$binary" "${args[@]}" 2>"$log" &
 app_pid=$!
 sleep "$settle_seconds"
 
@@ -79,3 +124,13 @@ report_line "$first_frame_ms" "$snapshot/smaps_rollup" "$snapshot/status" "$snap
     fail "could not read the memory figures of pid $app_pid"
 report_warnings "$snapshot/smaps_rollup" "$snapshot/status" "$snapshot/maps" ||
     fail "could not read the memory figures of pid $app_pid"
+
+if [[ -n $cpu_seconds ]]; then
+    started=$EPOCHREALTIME
+    cat "/proc/$app_pid/stat" >"$snapshot/stat-before" || fail "could not read /proc/$app_pid/stat"
+    sleep "$cpu_seconds"
+    cat "/proc/$app_pid/stat" >"$snapshot/stat-after" || fail "could not read /proc/$app_pid/stat"
+    window_s=$(elapsed_seconds "$started" "$EPOCHREALTIME")
+    cpu_line "$snapshot/stat-before" "$snapshot/stat-after" "$window_s" "$(getconf CLK_TCK)" ||
+        fail "could not read the CPU time of pid $app_pid"
+fi

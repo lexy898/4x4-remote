@@ -8779,6 +8779,7 @@ dependencies = [
  "i18n-embed",
  "i18n-embed-fl",
  "rust-embed",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",

@@ -12,6 +12,7 @@ guard_hook=$root/scripts/hooks/guard-bash.sh
 check_tools=$root/scripts/check-tools.sh
 lint_policy=$root/scripts/lint-policy.sh
 measure_lib=$root/scripts/measure-lib.sh
+measure=$root/scripts/measure.sh
 virtual_session=$root/scripts/virtual-session.sh
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
@@ -696,6 +697,109 @@ test_measure_warnings_fail_only_when_a_metric_is_unreadable() {
     expect_contains "RssAnon:" "$stderr" stderr
 }
 
+# write_stat <file> <utime> <stime>: a copy of /proc/<pid>/stat whose command name holds spaces
+# and parentheses, as a thread name may; utime and stime are fields 14 and 15.
+write_stat() {
+    printf '4242 (4x4 (x) y) S 1 4242 4242 0 -1 4194304 9000 0 12 0 %d %d 0 0 20 0 26 0 100\n' \
+        "$2" "$3" >"$1"
+}
+
+test_measure_cpu_line_counts_user_and_system_time_over_the_window() {
+    local dir
+    dir=$(mktemp -d "$tmp_root/stat.XXXXXX")
+    write_stat "$dir/before" 100 50
+    write_stat "$dir/after" 130 56
+    # 36 ticks at 100 per second are 0.36 s of CPU in 30 s: 1.2 % of one core.
+    run_measure cpu_line "$dir/before" "$dir/after" 30 100
+    expect_status 0
+    [[ $stdout == 'cpu_percent=1.20 window_s=30.0' ]] || fail "unexpected CPU line: $stdout"
+    run_measure cpu_line "$dir/before" "$dir/before" 30.04 100
+    [[ $stdout == 'cpu_percent=0.00 window_s=30.0' ]] || fail "unexpected idle CPU line: $stdout"
+}
+
+test_measure_elapsed_seconds_reads_either_decimal_separator() {
+    run_measure elapsed_seconds 1793246118,250000 1793246148,750000
+    [[ $stdout == 30.5 ]] || fail "unexpected seconds with commas: $stdout"
+    run_measure elapsed_seconds 1793246118.250000 1793246119.000000
+    [[ $stdout == 0.75 ]] || fail "unexpected seconds with dots: $stdout"
+}
+
+test_measure_cpu_line_rejects_an_unreadable_stat() {
+    local dir
+    dir=$(mktemp -d "$tmp_root/stat.XXXXXX")
+    write_stat "$dir/before" 100 50
+    run_measure cpu_line "$dir/before" "$dir/missing" 30 100
+    expect_status 1
+    printf '4242 (4x4) S 1 4242\n' >"$dir/short"
+    run_measure cpu_line "$dir/before" "$dir/short" 30 100
+    expect_status 1
+    expect_contains "no utime and stime" "$stderr" stderr
+    [[ -z $stdout ]] || fail "expected no CPU line, got: $stdout"
+}
+
+# A fake build for scripts/measure.sh: `just` and `cargo` that record their arguments, and in
+# <dir>/target the binaries of the app and of the example `synthetic`, which record theirs, log
+# their first frame like the app and then sleep until the script stops them.
+new_measure_env() {
+    local dir name
+    dir=$(mktemp -d "$tmp_root/measure.XXXXXX")
+    mkdir -p "$dir/bin" "$dir/target/release/examples"
+    for name in just cargo; do
+        printf '#!/usr/bin/env bash\necho "$*" >>%q\n' "$dir/$name.txt" >"$dir/bin/$name"
+        chmod +x "$dir/bin/$name"
+    done
+    for name in 4x4 examples/synthetic; do
+        printf '#!/usr/bin/env bash\necho "$*" >%q\necho "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2\nexec sleep 30\n' \
+            "$dir/args-${name##*/}.txt" >"$dir/target/release/$name"
+        chmod +x "$dir/target/release/$name"
+    done
+    echo "$dir"
+}
+
+run_measure_script() { # <dir> <arg...>
+    local dir=$1
+    shift
+    run_with_input '' env PATH="$dir/bin:$PATH" CARGO_TARGET_DIR="$dir/target" \
+        X4_MEASURE_SETTLE_SECONDS=1 "$BASH" "$measure" "$@"
+}
+
+test_measure_measures_an_example_with_its_arguments_and_cpu() {
+    local dir
+    dir=$(new_measure_env)
+    run_measure_script "$dir" --example synthetic --cpu 1 -- --static 'two words'
+    expect_status 0
+    [[ $(wc -l <<<"$stdout") -eq 2 ]] || fail "expected the report and the CPU line, got: $stdout"
+    [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ .*binary_mib= ]] || fail "unexpected report: $stdout"
+    [[ $stdout =~ $'\n'cpu_percent=[0-9]+\.[0-9]{2}\ window_s=1\.[0-9]$ ]] || fail "unexpected CPU line: $stdout"
+    [[ $(<"$dir/cargo.txt") == "build -p x4-app --release --locked --example synthetic" ]] ||
+        fail "unexpected build: $(<"$dir/cargo.txt")"
+    [[ ! -e $dir/just.txt ]] || fail "the app was built too: $(<"$dir/just.txt")"
+    [[ $(<"$dir/args-synthetic.txt") == "--static two words" ]] ||
+        fail "unexpected arguments: $(<"$dir/args-synthetic.txt")"
+}
+
+test_measure_measures_the_app_by_default() {
+    local dir
+    dir=$(new_measure_env)
+    run_measure_script "$dir"
+    expect_status 0
+    [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ [^$'\n']*$ ]] || fail "expected one report line, got: $stdout"
+    [[ $(<"$dir/just.txt") == release ]] || fail "unexpected build: $(<"$dir/just.txt")"
+    [[ -e $dir/args-4x4.txt ]] || fail "the app did not run"
+}
+
+test_measure_rejects_unknown_options() {
+    local dir option
+    dir=$(new_measure_env)
+    for option in --bogus "--cpu x" "--cpu" "--example"; do
+        # Unquoted on purpose: "--cpu x" is an option and its value.
+        run_measure_script "$dir" $option
+        expect_status 2
+        expect_contains "usage: scripts/measure.sh" "$stderr" "stderr for $option"
+    done
+    [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "a bad command line built something"
+}
+
 # A directory with a fake `dbus-run-session`, which runs its command, and a fake `kwin_wayland`,
 # which runs its --exit-with-session script as KWin does once the virtual screen is up and prints
 # some noise of its own. Each writes its arguments and the XDG dirs it sees to <dir>/<tool>.txt.
@@ -868,6 +972,12 @@ cases=(
     measure_warnings_name_every_breach_on_stderr_and_keep_exit_zero
     measure_warnings_report_one_breach_alone
     measure_warnings_fail_only_when_a_metric_is_unreadable
+    measure_cpu_line_counts_user_and_system_time_over_the_window
+    measure_cpu_line_rejects_an_unreadable_stat
+    measure_elapsed_seconds_reads_either_decimal_separator
+    measure_measures_an_example_with_its_arguments_and_cpu
+    measure_measures_the_app_by_default
+    measure_rejects_unknown_options
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
     virtual_session_keeps_arguments_with_spaces

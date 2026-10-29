@@ -220,7 +220,11 @@ anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the thread count, whet
 stack is loaded (`gl_stack_mapped`) and the binary size. It adds a `WARN:` line on stderr when a figure
 is above one of its own reference limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when
 the OpenGL stack is mapped, which it should not be where a Vulkan driver is installed. The exit
-code stays 0 unless the measurement itself failed.
+code stays 0 unless the measurement itself failed. `--cpu <seconds>` adds a second line, the CPU
+time of all its threads over that many seconds after the memory figures, as a percentage of one
+core (`cpu_percent`); `--example synthetic` measures the [synthetic demo](#synthetic-demo) instead
+of the app, and arguments after `--` go to the program, as in
+`just measure --example synthetic --cpu 30 -- --static`.
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS. RSS
 counts every resident page the app maps, including shared driver libraries (`libLLVM`, `libgallium`)
@@ -290,6 +294,15 @@ directories of its own, so the windows it opens show on no monitor, take no focu
 desktop's settings alone; `spectacle -b -n -f -o shot.png` inside it captures the virtual screen.
 For example, `just virtual just measure` measures the app without a window on your screens. It
 needs KDE Plasma (`kwin_wayland` and `dbus-run-session`) and works nowhere else.
+
+### Synthetic demo
+
+`just demo-synthetic` opens the main window over a synthetic daemon of 2000 torrents in every
+state, made up in memory: nothing goes over the network, and none of 4x4's files is read or written
+(the log goes to stderr only). The rates of the active torrents change on every poll. `--static`
+keeps every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10
+seconds, logs the intervals between the frames and quits. For example,
+`just virtual just demo-synthetic --scroll` runs it off screen.
 
 ### Live tests
 

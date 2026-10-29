@@ -11,6 +11,12 @@ publish.workspace = true
 name = "4x4"
 path = "src/main.rs"
 
+# The main window over a synthetic daemon of 2000 torrents (`just demo-synthetic`). `test`: its
+# unit tests (the synthetic daemon, the frame statistics) run with `just test`.
+[[example]]
+name = "synthetic"
+test = true
+
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
@@ -31,6 +37,8 @@ x4-rpc.workspace = true
 [dev-dependencies]
 fluent-syntax.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
+# The synthetic daemon of the `synthetic` example reads the requests and writes the answers.
+serde_json.workspace = true
 # `x4_core::test_support::torrent` builds the torrents of the snapshots the window tests send.
 x4-core = { workspace = true, features = ["test-support"] }
 
