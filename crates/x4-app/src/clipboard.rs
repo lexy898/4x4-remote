@@ -138,8 +138,10 @@ impl MagnetCopy {
                 );
                 MagnetFailure::Gone
             }
+            // The engine has logged the failure at error, with its details; the user is told in a
+            // notification.
             Err(error) => {
-                tracing::error!(asked, %error, "copying magnet links failed");
+                tracing::debug!(asked, %error, "copying magnet links failed");
                 MagnetFailure::Error(error)
             }
         };
@@ -266,6 +268,29 @@ mod tests {
                 Err(ActionError::Rpc(ConnectionError::Forbidden))
             ),
             MagnetAnswer::Failed("Could not copy the magnet link: access denied".into())
+        );
+    }
+
+    /// The engine logs a failed read at error, with its details, and the user sees it in a
+    /// notification: one error line is enough.
+    #[test]
+    fn a_failed_read_adds_no_second_error_line_to_the_log() {
+        let mut copy = MagnetCopy::default();
+        copy.start(&[hash("a")], || ActionId(1));
+
+        let events = crate::test_log::events_of(|| {
+            copy.finish(
+                ActionId(1),
+                Err(ActionError::Rpc(ConnectionError::Forbidden)),
+            );
+        });
+
+        assert_eq!(
+            events,
+            [(
+                tracing::Level::DEBUG,
+                "copying magnet links failed".to_owned()
+            )]
         );
     }
 }

@@ -42,6 +42,8 @@ mod speed_limits;
 mod status_bar;
 #[cfg(test)]
 mod test_dirs;
+#[cfg(test)]
+mod test_log;
 mod theme;
 mod toolbar;
 pub mod torrent_table;

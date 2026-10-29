@@ -291,8 +291,10 @@ impl PendingActions {
                 tracing::debug!(?id, action, count, "the daemon accepted an action");
                 None
             }
+            // The engine has logged the failure at error, with its details; the user is told in a
+            // notification.
             Err(error) => {
-                tracing::error!(?id, action, count, %error, "an action failed");
+                tracing::debug!(?id, action, count, %error, "an action failed");
                 Some(Failure {
                     kind,
                     text: action_failure_text(pending, error),
@@ -581,6 +583,25 @@ mod tests {
                 kind: None,
                 text: "An action failed: access denied".into(),
             })
+        );
+    }
+
+    /// The engine logs a failed action at error, with its details, and the user sees it in a
+    /// notification: one error line is enough.
+    #[test]
+    fn a_failed_action_adds_no_second_error_line_to_the_log() {
+        let mut pending = PendingActions::default();
+        let Some(id) = pending.start(ActionKind::Pause, &[hash("a")]) else {
+            panic!("the first pause goes");
+        };
+
+        let events = crate::test_log::events_of(|| {
+            pending.finish(id, &Err(ActionError::Rpc(ConnectionError::Forbidden)));
+        });
+
+        assert_eq!(
+            events,
+            [(tracing::Level::DEBUG, "an action failed".to_owned())]
         );
     }
 }
