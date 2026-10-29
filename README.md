@@ -534,9 +534,11 @@ does not contain it.
 daemon; `just test` and `just check` skip them. They never touch existing torrents or the daemon's
 settings. One test only reads the server version. Each of the others writes a random 3 MiB file
 into a test directory, adds it as a trackerless torrent, works only on that torrent (stop, start,
-verify, reannounce, sequential download, file priority, adding it twice), and removes it together
-with its file. Every test checks that every other torrent kept its status, sequential mode, file
-priorities and wanted files. The torrent and the file are removed even when a test fails.
+start now, verify, reannounce, sequential download, file priority, adding it twice), and removes it
+together with its file. One removes it from the list only, checks that the daemon kept the file,
+and then deletes the file itself. Every test checks that every other torrent kept its status,
+sequential mode, file priorities and wanted files. The torrent and the file are removed even when a
+test fails.
 
 An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and
 the file of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with
