@@ -26,7 +26,7 @@ pub use columns::{ColumnId, ViewState};
 pub use eta::{CompactDuration, EtaView, TimeUnit};
 pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
-pub use selection::Selection;
+pub use selection::{Edge, Selection};
 pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
 

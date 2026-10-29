@@ -112,8 +112,8 @@ pub use ui_state::{
     default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
-    Availability, ColumnId, CompactDuration, EmptyTable, EtaView, Indicator, RemovalSummary, Row,
-    Selection, ServiceStatus, SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit,
+    Availability, ColumnId, CompactDuration, Edge, EmptyTable, EtaView, Indicator, RemovalSummary,
+    Row, Selection, ServiceStatus, SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit,
     ToggleKind, ViewState, availability, removal_summary, status_model, table_model, toggle_kind,
     visibility,
 };

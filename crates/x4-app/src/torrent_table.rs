@@ -38,7 +38,7 @@ use gpui_kit::{
     TestSupportExt as _, Window, div, px,
 };
 use x4_core::{
-    ColumnId, ColumnState, EmptyTable, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, Row, Selection,
+    ColumnId, ColumnState, Edge, EmptyTable, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, Row, Selection,
     SortDirection, SortKey, TableModel, move_shown_column, set_column_shown, set_shown_widths,
     shown_columns,
 };
@@ -60,10 +60,18 @@ pub(crate) enum SelectionChange {
     ExtendTo(usize),
     /// A moving key, `step` rows from the lead (negative is up): only the row it lands on, or with
     /// `extend` (Shift) the range from the anchor to it. Up and Down are one row, Page Up and Page
-    /// Down a page, Home and End `isize::MAX` rows.
+    /// Down a page.
     Step {
         /// How many rows, and which way.
         step: isize,
+        /// Whether the range from the anchor follows the lead.
+        extend: bool,
+    },
+    /// Home or End: only the first or the last row, or with `extend` (Shift) the range from the
+    /// anchor to it. Unlike a step, it reaches its end also when nothing is selected.
+    ToEdge {
+        /// Which end.
+        edge: Edge,
         /// Whether the range from the anchor follows the lead.
         extend: bool,
     },
@@ -194,6 +202,7 @@ impl TorrentTable {
                 }
             }
             SelectionChange::Step { step, extend } => selection.move_lead(step, rows, extend),
+            SelectionChange::ToEdge { edge, extend } => selection.move_lead_to(edge, rows, extend),
             SelectionChange::All => selection.select_all(rows),
             SelectionChange::Nothing => selection.clear(),
         }
@@ -319,7 +328,10 @@ pub(crate) fn change_selection(
 ) {
     let changed = table.delegate_mut().change_selection(change);
     mirror_lead(table, change != SelectionChange::All, cx);
-    if matches!(change, SelectionChange::Step { .. }) {
+    if matches!(
+        change,
+        SelectionChange::Step { .. } | SelectionChange::ToEdge { .. }
+    ) {
         reveal_lead(table, cx);
     }
     if changed {

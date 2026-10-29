@@ -43,9 +43,9 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    ColumnId, Command, Event, Filter, ServiceStatus, Snapshot, SortState, StatusModel, TableModel,
-    ThemeChoice, UiState, ViewState, Visibility, shown_columns, status_model, table_model,
-    visibility,
+    ColumnId, Command, Edge, Event, Filter, ServiceStatus, Snapshot, SortState, StatusModel,
+    TableModel, ThemeChoice, UiState, ViewState, Visibility, shown_columns, status_model,
+    table_model, visibility,
 };
 
 use crate::app::ConfigProblem;
@@ -666,16 +666,16 @@ impl Render for MainView {
                 view.change_selection(step(1, true), cx);
             }))
             .on_action(cx.listener(|view, _: &MoveSelectionToFirst, _, cx| {
-                view.change_selection(step(-isize::MAX, false), cx);
+                view.change_selection(to_edge(Edge::First, false), cx);
             }))
             .on_action(cx.listener(|view, _: &MoveSelectionToLast, _, cx| {
-                view.change_selection(step(isize::MAX, false), cx);
+                view.change_selection(to_edge(Edge::Last, false), cx);
             }))
             .on_action(cx.listener(|view, _: &ExtendSelectionToFirst, _, cx| {
-                view.change_selection(step(-isize::MAX, true), cx);
+                view.change_selection(to_edge(Edge::First, true), cx);
             }))
             .on_action(cx.listener(|view, _: &ExtendSelectionToLast, _, cx| {
-                view.change_selection(step(isize::MAX, true), cx);
+                view.change_selection(to_edge(Edge::Last, true), cx);
             }))
             .on_action(cx.listener(|view, _: &MoveSelectionPageUp, _, cx| {
                 view.change_selection_by_page(-1, cx);
@@ -692,6 +692,11 @@ impl Render for MainView {
 /// A move of the lead by `step` rows (negative is up), extending the range or not.
 const fn step(step: isize, extend: bool) -> SelectionChange {
     SelectionChange::Step { step, extend }
+}
+
+/// A move of the lead to an end of the list (Home, End), extending the range or not.
+const fn to_edge(edge: Edge, extend: bool) -> SelectionChange {
+    SelectionChange::ToEdge { edge, extend }
 }
 
 /// Feeds the view the events of the service until the view is gone or the channel closes.

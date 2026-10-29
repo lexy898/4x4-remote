@@ -6,6 +6,15 @@ use x4_rpc::HashString;
 
 use super::row::Row;
 
+/// An end of the list, which Home and End move the lead to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    /// The first row (Home).
+    First,
+    /// The last row (End).
+    Last,
+}
+
 /// The rows the user has selected, by hash, with the two rows that keyboard and mouse work from.
 ///
 /// Rows are identified by their [`HashString`], so a refresh that renumbers or reorders the
@@ -91,6 +100,29 @@ impl Selection {
             return;
         };
         if extend {
+            self.extend_to(&row.hash, rows);
+        } else {
+            self.click(&row.hash);
+        }
+    }
+
+    /// Home or End: moves the lead to the first or the last of `rows`, whether there is a lead or
+    /// not. Without `extend` the row is selected alone, like a click; with it (Shift) the range
+    /// from the anchor runs to it, unless there is no lead among `rows`, when it too is selected
+    /// alone. An empty `rows` changes nothing.
+    pub fn move_lead_to(&mut self, edge: Edge, rows: &[Row], extend: bool) {
+        let row = match edge {
+            Edge::First => rows.first(),
+            Edge::Last => rows.last(),
+        };
+        let Some(row) = row else {
+            return;
+        };
+        let has_lead = self
+            .lead
+            .as_ref()
+            .is_some_and(|lead| position(rows, lead).is_some());
+        if extend && has_lead {
             self.extend_to(&row.hash, rows);
         } else {
             self.click(&row.hash);
@@ -417,6 +449,60 @@ mod tests {
             selection.move_lead(1, &rows, true);
             assert_eq!(selected_names(&selection, &rows), ["row 0", "row 1"]);
         }
+    }
+
+    #[test]
+    fn end_with_nothing_selected_selects_the_last_row() {
+        let rows = rows(4);
+        for extend in [false, true] {
+            let mut selection = Selection::default();
+
+            selection.move_lead_to(Edge::Last, &rows, extend);
+
+            assert_eq!(selected_names(&selection, &rows), ["row 3"], "{extend}");
+            assert_eq!(selection.lead(), Some(hash_of(&rows, 3)));
+        }
+
+        let mut selection = Selection::default();
+        selection.move_lead_to(Edge::First, &rows, false);
+        assert_eq!(selected_names(&selection, &rows), ["row 0"]);
+    }
+
+    #[test]
+    fn home_and_end_move_the_lead_to_either_end() {
+        let rows = rows(5);
+        let mut selection = Selection::default();
+        selection.click(hash_of(&rows, 2));
+        selection.toggle(hash_of(&rows, 4));
+
+        selection.move_lead_to(Edge::First, &rows, false);
+        assert_eq!(selected_names(&selection, &rows), ["row 0"]);
+        assert_eq!(selection.lead(), Some(hash_of(&rows, 0)));
+        selection.move_lead_to(Edge::Last, &rows, false);
+        assert_eq!(selected_names(&selection, &rows), ["row 4"]);
+
+        // With Shift the range runs from the anchor, the last click, to the end.
+        selection.click(hash_of(&rows, 2));
+        selection.move_lead_to(Edge::Last, &rows, true);
+        assert_eq!(
+            selected_names(&selection, &rows),
+            ["row 2", "row 3", "row 4"]
+        );
+        assert_eq!(selection.lead(), Some(hash_of(&rows, 4)));
+        selection.move_lead_to(Edge::First, &rows, true);
+        assert_eq!(
+            selected_names(&selection, &rows),
+            ["row 0", "row 1", "row 2"]
+        );
+
+        // A lead that left the rows extends nothing: the end is selected alone.
+        let shown = &rows[..2];
+        selection.click(hash_of(&rows, 4));
+        selection.move_lead_to(Edge::Last, shown, true);
+        assert_eq!(selected_names(&selection, shown), ["row 1"]);
+
+        selection.move_lead_to(Edge::First, &[], true);
+        assert_eq!(selected_names(&selection, shown), ["row 1"], "no rows");
     }
 
     #[test]

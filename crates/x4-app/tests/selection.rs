@@ -541,6 +541,23 @@ fn up_with_nothing_selected_selects_the_first_row(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn end_with_nothing_selected_selects_the_last_row(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(named(&["a", "b", "c"]), cx);
+
+    window.press("end", cx);
+    window.assert_only(2, cx);
+
+    window.press("escape", cx);
+    window.press("shift-end", cx);
+    window.assert_only(2, cx);
+
+    window.press("ctrl-shift-a", cx);
+    window.press("home", cx);
+    window.assert_only(0, cx);
+}
+
+#[gpui_kit::test]
 fn selection_keys_that_change_nothing_do_not_redraw(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(named(&["a", "b", "c"]), cx);
