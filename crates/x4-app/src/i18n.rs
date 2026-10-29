@@ -515,6 +515,19 @@ pub(crate) fn magnet_failure_text(count: usize, failure: &MagnetFailure) -> Shar
     .into()
 }
 
+/// What a notification says when only `copied` of the `asked` magnet links were copied, because
+/// the daemon no longer has the other torrents.
+pub(crate) fn magnet_partial_text(copied: usize, asked: usize) -> SharedString {
+    let missing = asked.saturating_sub(copied);
+    t!(
+        "copy-magnet-partial",
+        copied = copied,
+        asked = asked,
+        missing = missing
+    )
+    .into()
+}
+
 /// The title of a removal dialog, which counts the torrents of `summary`: "Remove 3 torrents from
 /// the list?" when the files stay (`data`), "Delete 3 torrents and their files?" when they go.
 pub(crate) fn removal_title_text(data: RemoveData, summary: &RemovalSummary) -> SharedString {

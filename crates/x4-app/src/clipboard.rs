@@ -10,7 +10,7 @@
 //! last, whichever answer comes first. A copy of the same torrents, in the same order, while their
 //! read waits reads nothing more: the answer on its way writes the same text. An answer without a
 //! single link (the daemon no longer has any of the torrents) is a failure to show, not an empty
-//! clipboard.
+//! clipboard; an answer with some of them is copied, and a notice says how many are missing.
 //!
 //! On Wayland the copied text stays in 4x4, which hands it to the app that pastes it: it is lost
 //! when 4x4 quits, unless a clipboard manager keeps it.
@@ -19,7 +19,7 @@ use gpui_kit::SharedString;
 use x4_core::{ActionError, ActionId, Row};
 use x4_rpc::HashString;
 
-use crate::i18n::magnet_failure_text;
+use crate::i18n::{magnet_failure_text, magnet_partial_text};
 
 /// The text that copying the hashes of `targets` writes: their hashes, one per line, in order.
 pub(crate) fn hashes_text(targets: &[&Row]) -> String {
@@ -49,6 +49,9 @@ pub(crate) enum MagnetAnswer {
         text: String,
         /// How many links it has.
         count: usize,
+        /// What a notice says when the daemon no longer has some of the torrents, so that their
+        /// links are missing; `None` when every link came.
+        partial: Option<SharedString>,
     },
     /// The copy failed; what the notification says.
     Failed(SharedString),
@@ -99,7 +102,8 @@ impl MagnetCopy {
     /// nothing when it is not the read that waits.
     ///
     /// Links come in the order they were asked for, without the torrents the daemon no longer has;
-    /// the ones that came are copied. None at all is a failure.
+    /// the ones that came are copied, with a notice of how many are missing. None at all is a
+    /// failure.
     pub(crate) fn finish(
         &mut self,
         id: ActionId,
@@ -112,16 +116,19 @@ impl MagnetCopy {
         let asked = pending.hashes.len();
         let failure = match result {
             Ok(links) if !links.is_empty() => {
-                if links.len() < asked {
-                    tracing::debug!(
+                let count = links.len();
+                let partial = (count < asked).then(|| {
+                    tracing::warn!(
                         asked,
-                        read = links.len(),
+                        read = count,
                         "the daemon no longer has some of the torrents; their links are not copied"
                     );
-                }
+                    magnet_partial_text(count, asked)
+                });
                 return MagnetAnswer::Copy {
                     text: lines(links.iter().map(|(_, link)| link.as_str())),
-                    count: links.len(),
+                    count,
+                    partial,
                 };
             }
             Ok(_) => {
@@ -181,6 +188,9 @@ mod tests {
             MagnetAnswer::Copy {
                 text: format!("{}\n{}", link("b").1, link("a").1),
                 count: 2,
+                partial: Some(
+                    "Copied 2 of 3 magnet links; 1 torrent is no longer on the server".into()
+                ),
             }
         );
         assert_eq!(
@@ -208,7 +218,11 @@ mod tests {
         );
         assert!(matches!(
             copy.finish(ActionId(2), Ok(vec![link("b")])),
-            MagnetAnswer::Copy { count: 1, .. }
+            MagnetAnswer::Copy {
+                count: 1,
+                partial: None,
+                ..
+            }
         ));
     }
 

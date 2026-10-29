@@ -7,16 +7,18 @@
 //! Each test builds the two channels of a service itself and opens the window with no service
 //! behind them, so nothing touches the network: the test reads the commands the window sends and
 //! answers them with the events a service would send. The clipboard is the test platform's own,
-//! in memory.
+//! in memory. The window is made active, as the user's window is when they press a key: links
+//! that arrive while 4x4 is not in focus are not written.
 
 use std::sync::Arc;
 
 use gpui_kit::component::table::TableState;
+use gpui_kit::test::ClickOptions;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, ClipboardItem, Entity, Focusable as _, InputEvent as _,
-    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, OperatingSystem, TestAppContext,
-    VisualTestContext,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, OperatingSystem, TestAppContext,
+    VisualTestContext, point, px,
 };
 use x4_app::app;
 use x4_app::main_view::MainView;
@@ -51,6 +53,8 @@ const DIALOG: &str = "dialog";
 const NOTIFICATION: &str = "notification";
 /// The id of the search box.
 const SEARCH: &str = "search";
+/// The id of gpui-component's table, the header and the rows.
+const TABLE: &str = "table-inner";
 /// The id of what marks a selected row that the table does not mark itself.
 const ROW_SELECTION: &str = "row-selection";
 
@@ -78,6 +82,8 @@ impl Window {
                 app::open_main_window(events_rx, commands_tx, None, &UiState::default(), cx)
             })
             .expect("the main window opens");
+        cx.update_window(handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
         cx.run_until_parked();
         Self {
             handle,
@@ -180,6 +186,26 @@ impl Window {
     /// Right-clicks the row `row`, which opens the context menu on the next frame.
     fn right_click_row(&self, row: usize, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| window.right_click(("row", row), cx));
+    }
+
+    /// Right-clicks the table below its rows, 40 pixels above its bottom edge.
+    fn right_click_below_the_rows(&self, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
+            let height = window.find(TABLE).bounds().size.height;
+            window.click_with_options(
+                TABLE,
+                ClickOptions::new()
+                    .with_button(MouseButton::Right)
+                    .with_offset(point(px(100.), height - px(40.))),
+                cx,
+            );
+        });
+    }
+
+    /// Makes another app's window the active one, as when the user switches away from 4x4.
+    fn deactivate(&self, cx: &mut TestAppContext) {
+        VisualTestContext::from_window(self.handle, cx).deactivate_window();
+        cx.run_until_parked();
     }
 
     fn press(&self, key: &str, cx: &mut TestAppContext) {
@@ -682,6 +708,80 @@ fn page_keys_with_the_menu_open_do_not_move_the_selection(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn focus_keys_with_the_menu_open_do_nothing(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a", "b"]), cx);
+    window.click_row(0, cx);
+    window.right_click_row(0, cx);
+
+    for key in ["tab", "shift-tab", "ctrl-f", "/"] {
+        window.press(key, cx);
+        assert!(window.menu_open(cx), "{key}");
+        assert!(
+            !window.table_focused(cx),
+            "{key}: the keys stay in the menu"
+        );
+        assert!(!window.focused(SEARCH, cx), "{key}");
+    }
+    window.press("space", cx);
+    window.press("ctrl-p", cx);
+    assert_eq!(window.sent(), [], "nothing acts behind the menu");
+
+    window.press("escape", cx);
+    assert!(window.table_focused(cx));
+    window.press("ctrl-f", cx);
+    assert!(
+        window.focused(SEARCH, cx),
+        "closed, the menu lets Ctrl+F work again"
+    );
+}
+
+#[gpui_kit::test]
+fn a_right_click_below_the_rows_opens_no_menu(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a", "b"]), cx);
+
+    window.right_click_below_the_rows(cx);
+    assert!(!window.menu_open(cx));
+
+    // Also after a right-click on a row, which the table goes on marking.
+    window.right_click_row(0, cx);
+    assert!(window.menu_open(cx));
+    window.press("escape", cx);
+    window.press("ctrl-a", cx);
+    window.right_click_below_the_rows(cx);
+    assert!(!window.menu_open(cx));
+    assert_eq!(window.selected(cx), ["a", "b"]);
+    assert!(window.table_focused(cx), "the list keeps the keys");
+    window.press("ctrl-p", cx);
+    assert_eq!(
+        window.sent_action().1,
+        Action::Stop(hashes(&["a", "b"])),
+        "the keys still reach the list"
+    );
+
+    // A row still opens it.
+    window.right_click_row(1, cx);
+    assert!(window.menu_open(cx));
+}
+
+#[gpui_kit::test]
+fn an_item_disabled_when_the_menu_opened_does_nothing_on_enter(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a"]), cx);
+    window.click_row(0, cx);
+    window.send_with(downloading_all(&["a"]), reconnecting(), cx);
+    window.right_click_row(0, cx);
+
+    // The daemon is back while the menu is open; Pause was drawn disabled.
+    window.send(downloading_all(&["a"]), cx);
+    window.point_at(PAUSE, cx);
+    window.press("enter", cx);
+
+    assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
 fn a_snapshot_while_the_menu_is_open_does_not_change_what_it_acts_on(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(downloading_all(&["a", "b", "c"]), cx);
@@ -793,6 +893,50 @@ fn copy_magnet_writes_the_links_when_they_arrive(cx: &mut TestAppContext) {
     window.send_with(downloading_all(&["a", "b", "c"]), reconnecting(), cx);
     window.press("ctrl-c", cx);
     assert_eq!(window.sent(), []);
+}
+
+#[gpui_kit::test]
+fn a_partial_magnet_answer_copies_what_came_and_says_so(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a", "b", "c"]), cx);
+    window.press("ctrl-a", cx);
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+
+    // b is gone from the daemon.
+    window.answer(id, Ok(links(&["a", "c"])), cx);
+
+    assert_eq!(
+        clipboard(cx).as_deref(),
+        Some(magnet_lines(&["a", "c"]).as_str())
+    );
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some("Copied 2 of 3 magnet links; 1 torrent is no longer on the server")
+    );
+    assert_eq!(window.notifications(cx), 1);
+}
+
+#[gpui_kit::test]
+fn links_that_arrive_while_4x4_is_not_in_focus_ask_for_another_press(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(downloading_all(&["a", "b"]), cx);
+    window.click_row(0, cx);
+    window.press("ctrl-c", cx);
+    let (id, _) = window.sent_read();
+
+    // The user switched to another app before the daemon answered: on Wayland only the window in
+    // focus may set the clipboard.
+    window.deactivate(cx);
+    put_on_clipboard("other", cx);
+    window.answer(id, Ok(links(&["a"])), cx);
+
+    assert_eq!(clipboard(cx).as_deref(), Some("other"));
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some("The magnet links are ready, but 4x4 was not in focus — press Ctrl+C again")
+    );
+    assert_eq!(window.notifications(cx), 1);
 }
 
 #[gpui_kit::test]

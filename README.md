@@ -124,8 +124,11 @@ torrent the filter or the search hides is never touched. With the table focused:
 - `Shift+Delete` asks whether to remove them and delete their files from the server; "Remove and
   delete files…" in the Remove menu does the same;
 - `Ctrl+C` copies their magnet links, one per line, in the order shown. The links come from the
-  daemon, so they are on the clipboard a moment later; a newer copy takes the place of one still
-  waiting for the daemon, so the clipboard gets what was asked for last;
+  daemon, so they are on the clipboard a moment later, and only if 4x4 still has the focus then;
+  otherwise a notification asks for `Ctrl+C` again. A newer copy takes the place of one still
+  waiting for the daemon, so the clipboard gets what was asked for last. If the daemon no longer
+  has some of the torrents, the other links are copied and a notification says how many are
+  missing;
 - `Ctrl+Shift+C` copies their info hashes, one per line, in the order shown, at once, also while
   the daemon is not connected.
 
@@ -134,10 +137,11 @@ Copy magnet link and Copy hash; "Remove from list…" and "Remove and delete fil
 on a torrent outside the selection selects only that torrent, as a file manager does; a
 right-click inside the selection keeps it, so the menu acts on every selected torrent. The menu
 works on the torrents that were selected when it opened, even if the list changes while it is
-open. Each item shows its key, and an item that can do nothing is disabled. While the menu is
-open, the list's keys do nothing to the torrents (Delete removes nothing, and Home, End, Page Up
-and Page Down do not move the selection); Up, Down and Enter choose an item, and Escape closes the
-menu. Choosing an item gives the keys back to the table.
+open. Each item shows its key, and an item that can do nothing is disabled. A right-click below
+the rows opens no menu. While the menu is open, it keeps the keys: the list's keys do nothing to
+the torrents (Delete removes nothing, and Home, End, Page Up and Page Down do not move the
+selection), and Tab, Shift+Tab, `Ctrl+F` and `/` do not leave it; Up, Down and Enter choose an
+item, and Escape closes the menu. Choosing an item gives the keys back to the table.
 
 On Wayland 4x4 itself holds the copied text and hands it to the app that pastes it: the text is
 lost when 4x4 quits, unless a clipboard manager keeps it.

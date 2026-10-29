@@ -24,7 +24,7 @@
 //! answers it; a failure is shown as a notification. A held key sends its action once. Delete,
 //! Shift+Delete, the toolbar's Remove menu and the context menu open a dialog that asks before the
 //! torrents are removed, with or without their files. Their hashes and magnet links can be copied
-//! (the `copying` module).
+//! (the `copying` module). The `menu` module carries out the items of the context menu.
 //!
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
@@ -35,6 +35,7 @@
 
 mod copying;
 mod events;
+mod menu;
 mod persistence;
 mod selection_keys;
 mod torrent_actions;

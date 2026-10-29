@@ -44,7 +44,8 @@ use crate::removal::{self, Removal};
 
 /// Marks the notification of a failed action, together with the kind of action: the next failure
 /// of the same kind replaces it, so that a burst of failures leaves one notification per kind, the
-/// newest of each. A failed copy of magnet links is a kind of its own.
+/// newest of each. A copy of magnet links that failed, or copied only some of them, is a kind of
+/// its own.
 struct ActionFailed;
 
 impl MainView {
@@ -56,7 +57,8 @@ impl MainView {
     }
 
     /// What the newest failure of an action said, as its notification says it; `None` until an
-    /// action fails.
+    /// action fails. A copy of magnet links that failed in part, or came while 4x4 was not in
+    /// focus, counts too.
     #[must_use]
     pub fn last_failure(&self) -> Option<&str> {
         self.last_failure.as_deref()
@@ -301,8 +303,8 @@ impl MainView {
     }
 
     /// Shows the failure `text` of a request of the kind `kind` (a short name, such as "pause") as
-    /// a notification, which stays until the user dismisses it with a click or a newer failure of
-    /// the same kind takes its place, and keeps it as the last failure.
+    /// an error notification, which stays until the user dismisses it with a click or a newer
+    /// notification of the same kind takes its place, and keeps it as the last failure.
     pub(super) fn show_failure(
         &mut self,
         kind: &'static str,
@@ -310,8 +312,31 @@ impl MainView {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.notify(kind, Notification::error(text.clone()), text, window, cx);
+    }
+
+    /// [`MainView::show_failure`] as a warning: the request was done in part, or must be repeated.
+    pub(super) fn show_warning(
+        &mut self,
+        kind: &'static str,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.notify(kind, Notification::warning(text.clone()), text, window, cx);
+    }
+
+    /// Pushes `notification`, which says `text`, under `kind`, and keeps `text` as the last failure.
+    fn notify(
+        &mut self,
+        kind: &'static str,
+        notification: Notification,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         window.push_notification(
-            Notification::error(text.clone())
+            notification
                 .id1::<ActionFailed>(kind)
                 .autohide(false)
                 // A click anywhere on it dismisses it, not only on its close button.

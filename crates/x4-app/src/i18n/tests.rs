@@ -672,6 +672,18 @@ fn a_failed_copy_of_magnet_links_says_why_with_plurals() {
     );
 }
 
+#[test]
+fn a_partial_copy_of_magnet_links_counts_what_is_missing() {
+    assert_eq!(
+        magnet_partial_text(2, 3),
+        "Copied 2 of 3 magnet links; 1 torrent is no longer on the server"
+    );
+    assert_eq!(
+        magnet_partial_text(1, 4),
+        "Copied 1 of 4 magnet links; 3 torrents are no longer on the server"
+    );
+}
+
 fn summary(count: usize, downloaded: u64, names: &[&str]) -> RemovalSummary {
     RemovalSummary {
         count,

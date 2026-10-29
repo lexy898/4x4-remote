@@ -1,27 +1,26 @@
-//! Copying the selected torrents, as the main view carries it out, and the items of the torrent
-//! list's context menu.
+//! Copying the selected torrents to the clipboard, as the main view carries it out, from the keys
+//! and from the list's context menu (the `menu` module).
 //!
 //! Ctrl+Shift+C and Copy hash write the hashes of the targets at once, from the list, also while
 //! the daemon is not connected. Ctrl+C and Copy magnet link ask the daemon for the magnet links of
 //! the targets (`Command::ReadMagnetLinks`) and write them when they arrive; the `clipboard`
 //! module keeps the read that waits, so that only the newest copy writes. A failed read is shown
-//! as a failed action is. A held key copies once.
+//! as a failed action is, and so is an answer that lacks some of the links (the ones that came are
+//! copied). A held key copies once.
 //!
-//! An item of the context menu acts on the rows the menu took when it opened, through the same
-//! paths as the keys: an action through [`MainView::request_on`], which reads the availability
-//! again, a removal through the dialog that asks first. Then the keys go back to the table, as
-//! after a toolbar button.
+//! On Wayland only the window in focus may set the clipboard, and gpui drops the text silently
+//! otherwise. The links arrive a moment after the key press, so if 4x4 is no longer the active
+//! window by then, nothing is written and a notice asks for Ctrl+C again.
 
-use gpui_kit::{App, ClipboardItem, Context, Focusable as _, Window};
+use gpui_kit::{App, ClipboardItem, Context, Window};
 use x4_core::{ActionError, ActionId, Command, Row, availability};
 use x4_rpc::HashString;
 
 use super::MainView;
 use crate::clipboard::{MagnetAnswer, hashes_text};
-use crate::context_menu::MenuChoice;
+use crate::i18n::t;
 
-/// The name of copying magnet links in logs and for its failure notification, which a newer
-/// failure of a copy replaces.
+/// The name of copying magnet links for its notifications: a newer one replaces the older.
 const COPY_MAGNET_LINKS: &str = "copy magnet links";
 
 impl MainView {
@@ -52,47 +51,9 @@ impl MainView {
         }
     }
 
-    /// Takes the item `choice` of the list's context menu, for `targets`, the rows the menu took
-    /// when it opened. The keys go back to the table first: a removal dialog then gives them back
-    /// to it when it closes, and the menu, seeing the focus gone elsewhere, does not take them back
-    /// to where they were before it opened.
-    pub(crate) fn choose_from_menu(
-        &mut self,
-        choice: MenuChoice,
-        targets: &[Row],
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        window.focus(&self.table.focus_handle(cx), cx);
-        let targets: Vec<&Row> = targets.iter().collect();
-        tracing::debug!(?choice, count = targets.len(), "chosen in the context menu");
-        match choice {
-            MenuChoice::CopyHashes => {
-                if let Some((text, count)) = self.hashes_to_copy(&targets) {
-                    write_to_clipboard(text, count, "hashes", cx);
-                }
-            }
-            MenuChoice::CopyMagnetLinks => {
-                if let Some(hashes) = self.links_to_read(&targets) {
-                    self.read_magnet_links(hashes, window, cx);
-                }
-            }
-            MenuChoice::Remove(data) => self.ask_removal_of(data, &targets, window, cx),
-            MenuChoice::Start
-            | MenuChoice::Pause
-            | MenuChoice::StartNow
-            | MenuChoice::Verify
-            | MenuChoice::Reannounce => {
-                if let Some(request) = choice.request() {
-                    self.request_on(request, &targets, window, cx);
-                }
-            }
-        }
-    }
-
     /// The text that copies the hashes of `targets`, and how many there are; `None` (logged) when
     /// they do not allow it.
-    fn hashes_to_copy(&self, targets: &[&Row]) -> Option<(String, usize)> {
+    pub(super) fn hashes_to_copy(&self, targets: &[&Row]) -> Option<(String, usize)> {
         if !availability(self.status.connected(), targets).copy_hash {
             tracing::debug!("no torrent to copy the hash of");
             return None;
@@ -102,7 +63,7 @@ impl MainView {
 
     /// The hashes whose magnet links to read for `targets`, in order; `None` (logged) when they
     /// do not allow it.
-    fn links_to_read(&self, targets: &[&Row]) -> Option<Vec<HashString>> {
+    pub(super) fn links_to_read(&self, targets: &[&Row]) -> Option<Vec<HashString>> {
         if !availability(self.status.connected(), targets).copy_magnet {
             tracing::debug!(
                 count = targets.len(),
@@ -115,7 +76,7 @@ impl MainView {
 
     /// Asks the daemon for the magnet links of `hashes`, which then take the place of any read
     /// that waits, unless that read is of the same torrents.
-    fn read_magnet_links(
+    pub(super) fn read_magnet_links(
         &mut self,
         hashes: Vec<HashString>,
         window: &mut Window,
@@ -141,8 +102,10 @@ impl MainView {
         }
     }
 
-    /// Takes the answer to the read of magnet links `id`: copies the links, shows the failure, or
-    /// does nothing when a newer copy has taken the read's place.
+    /// Takes the answer to the read of magnet links `id`: copies the links (with a notice when
+    /// some are missing), shows the failure, or does nothing when a newer copy has taken the read's
+    /// place. Links that arrive while 4x4 is not the active window are not copied; a notice asks
+    /// for the key again.
     pub(super) fn magnet_links_read(
         &mut self,
         id: ActionId,
@@ -151,8 +114,27 @@ impl MainView {
         cx: &mut App,
     ) {
         match self.magnet.finish(id, result) {
-            MagnetAnswer::Copy { text, count } => {
+            MagnetAnswer::Copy { count, .. } if !window.is_window_active() => {
+                tracing::warn!(
+                    count,
+                    "the magnet links came while 4x4 was not in focus; they were not copied"
+                );
+                self.show_warning(
+                    COPY_MAGNET_LINKS,
+                    t!("copy-magnet-not-in-focus").into(),
+                    window,
+                    cx,
+                );
+            }
+            MagnetAnswer::Copy {
+                text,
+                count,
+                partial,
+            } => {
                 write_to_clipboard(text, count, "magnet links", cx);
+                if let Some(partial) = partial {
+                    self.show_warning(COPY_MAGNET_LINKS, partial, window, cx);
+                }
             }
             MagnetAnswer::Failed(text) => self.show_failure(COPY_MAGNET_LINKS, text, window, cx),
             MagnetAnswer::Outdated => {}
@@ -165,7 +147,7 @@ impl MainView {
 ///
 /// gpui says nothing when the system does not take it: on Wayland only a window with the keyboard
 /// focus may set the clipboard.
-fn write_to_clipboard(text: String, count: usize, what: &'static str, cx: &mut App) {
+pub(super) fn write_to_clipboard(text: String, count: usize, what: &'static str, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
     tracing::info!(count, what, "copied to the clipboard");
 }

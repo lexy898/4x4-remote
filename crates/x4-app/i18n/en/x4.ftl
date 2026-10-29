@@ -364,6 +364,17 @@ copy-magnet-failed =
                *[other] Could not copy the magnet links of { $count } torrents: { $reason }
             }
     }
+# Some of the magnet links were copied: the server no longer has the other torrents.
+# $copied: the links copied; $asked: the torrents whose links were asked for; $missing: the
+# torrents left out (numbers).
+copy-magnet-partial =
+    Copied { $copied } of { $asked } magnet links; { $missing ->
+        [one] { $missing } torrent is
+       *[other] { $missing } torrents are
+    } no longer on the server
+# The magnet links came from the server while another window had the focus, so they were not
+# copied: on Wayland only the window in focus may set the clipboard.
+copy-magnet-not-in-focus = The magnet links are ready, but 4x4 was not in focus — press Ctrl+C again
 
 ## The sidebar
 

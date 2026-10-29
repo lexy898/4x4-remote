@@ -109,6 +109,10 @@ pub struct TorrentTable {
     connected: bool,
     /// The table's own focus handle, from which the context menu looks up the keys it shows.
     focus: Option<FocusHandle>,
+    /// Whether a right-click on a row has come and its context menu is not built yet. The table
+    /// goes on marking the row it last right-clicked, so a right-click below the rows would
+    /// otherwise open the menu of that old row.
+    menu_armed: bool,
     /// Called with the column whose header is clicked.
     on_sort: Option<SortHandler>,
     /// Called with the item chosen in the context menu.
@@ -129,6 +133,7 @@ impl TorrentTable {
             stale: false,
             connected: false,
             focus: None,
+            menu_armed: false,
             on_sort: None,
             on_menu: None,
         }
@@ -415,12 +420,14 @@ pub(crate) fn follow_table(
 /// does: a row outside the selection becomes the only selected row (and the lead), as a click
 /// would make it; a row inside leaves the selection as it is, so that the menu acts on all of it.
 /// The table keeps marking the row as the right-clicked one, which its context menu opens for:
-/// moving its own row to the lead unmarks it.
+/// moving its own row to the lead unmarks it. The menu that the right-click opens next is the
+/// row's.
 pub(crate) fn right_click(
     table: &mut TableState<TorrentTable>,
     row_ix: usize,
     cx: &mut Context<'_, TableState<TorrentTable>>,
 ) {
+    table.delegate_mut().menu_armed = true;
     if !table.delegate().is_selected(row_ix) {
         change_selection(table, SelectionChange::Click(row_ix), cx);
     }
@@ -580,14 +587,22 @@ impl TableDelegate for TorrentTable {
 
     /// The menu of a right-click, built once as it opens, after `right_click` has selected the
     /// row: it takes the selected rows the list shows now, and acts on them however the list
-    /// changes while it is open.
+    /// changes while it is open. A right-click that did not land on a row (below the rows, on the
+    /// header) gets an empty menu, which gpui-component does not show; it still gives the empty
+    /// menu the focus, so the focus goes back to the table right after.
     fn context_menu(
         &mut self,
         _: usize,
         menu: PopupMenu,
-        _: &mut Window,
-        _: &mut Context<'_, TableState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<Self>>,
     ) -> PopupMenu {
+        if !std::mem::take(&mut self.menu_armed) {
+            if let Some(focus) = self.focus.clone() {
+                window.defer(cx, move |window, cx| window.focus(&focus, cx));
+            }
+            return menu;
+        }
         let targets: Rc<[Row]> = self
             .selection
             .targets(&self.rows)

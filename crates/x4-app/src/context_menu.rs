@@ -8,7 +8,8 @@
 //! the targets' [`Availability`] says and shows the key of its action, which it looks up in the
 //! torrent list (the menu's action context is the table). A click, or Enter on a highlighted item,
 //! goes to the [`MenuHandler`], which asks the main view: the view reads the availability again
-//! then, so a disabled item does nothing even when gpui-component lets Enter reach it.
+//! then. gpui-component lets Enter reach a disabled item that the pointer highlights, so an item
+//! disabled when the menu opened does nothing at all, even if the daemon is back by then.
 //!
 //! What the menu offers is decided here and unit-tested ([`ITEMS`], [`MenuChoice::enabled`]); the
 //! table's delegate builds it ([`torrent_menu`]).
@@ -147,12 +148,17 @@ pub(crate) fn torrent_menu(
         };
         let targets = Rc::clone(targets);
         let on_choice = on_choice.cloned();
+        let enabled = choice.enabled(&refs, allowed);
         menu.item(
             PopupMenuItem::new(choice.label())
                 // The action only shows its key; the click goes to the handler.
                 .action(choice.action())
-                .disabled(!choice.enabled(&refs, allowed))
+                .disabled(!enabled)
                 .on_click(move |_, window, cx| {
+                    if !enabled {
+                        tracing::debug!(?choice, "a disabled menu item was chosen; nothing done");
+                        return;
+                    }
                     if let Some(on_choice) = &on_choice {
                         on_choice(choice, &targets, window, cx);
                     }
