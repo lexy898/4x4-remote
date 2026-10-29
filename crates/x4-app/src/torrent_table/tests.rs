@@ -1,7 +1,7 @@
 use gpui_kit::TestAppContext;
 use gpui_kit::px;
-use x4_core::default_columns;
 use x4_core::test_support::torrent;
+use x4_core::{DisplayState, Torrent, default_columns};
 
 use super::*;
 
@@ -88,7 +88,7 @@ fn columns_carry_the_stored_widths(cx: &mut TestAppContext) {
     cx.update(|cx| {
         assert_eq!(table.column(0, cx).width, px(300.));
         assert_eq!(table.column(1, cx).width, px(120.));
-        assert_eq!(table.column(2, cx).width, px(160.), "the default");
+        assert_eq!(table.column(2, cx).width, px(140.), "the default");
         let size = table.column(1, cx);
         assert_eq!(size.min_width, px(MIN_COLUMN_WIDTH));
         assert_eq!(size.max_width, px(MAX_COLUMN_WIDTH));
@@ -136,4 +136,31 @@ fn cell_labels_name_the_row_and_column(cx: &mut TestAppContext) {
         assert_eq!(table.cell_label(2, 0, cx), None, "past the rows");
         assert_eq!(table.cell_label(0, 9, cx), None, "past the columns");
     });
+}
+
+#[gpui_kit::test]
+fn idle_rows_are_dimmed_and_active_rows_are_not(cx: &mut TestAppContext) {
+    let mut table = table();
+    let downloading = Torrent {
+        state: DisplayState::Downloading,
+        ..torrent("active")
+    };
+    // A seeder with nobody downloading from it is idle.
+    table.set_rows([Row::from(&torrent("idle")), Row::from(&downloading)].into());
+    cx.update(gpui_kit::init);
+    let window = cx.add_window(|window, cx| new_table_state(table, window, cx));
+
+    let opacities = window
+        .update(cx, |state, window, cx| {
+            [0, 1].map(|ix| {
+                state
+                    .delegate_mut()
+                    .render_tr(ix, window, cx)
+                    .style()
+                    .opacity
+            })
+        })
+        .expect("the window is open");
+
+    assert_eq!(opacities, [Some(DIMMED_OPACITY), None]);
 }

@@ -59,8 +59,8 @@ fn ui_state_default_is_the_first_run() {
     assert_eq!(
         state.window,
         WindowState {
-            width: 1100.0,
-            height: 700.0,
+            width: 1200.0,
+            height: 720.0,
             maximized: false
         }
     );
@@ -74,15 +74,15 @@ fn ui_state_default_is_the_first_run() {
 #[test]
 fn default_columns_show_everything_at_their_widths() {
     let expected = [
-        (ColumnId::Name, 360.0),
-        (ColumnId::Size, 90.0),
-        (ColumnId::Progress, 160.0),
-        (ColumnId::State, 110.0),
-        (ColumnId::Down, 90.0),
-        (ColumnId::Up, 90.0),
-        (ColumnId::Eta, 80.0),
-        (ColumnId::Ratio, 70.0),
-        (ColumnId::Peers, 60.0),
+        (ColumnId::Name, 300.0),
+        (ColumnId::Size, 80.0),
+        (ColumnId::Progress, 140.0),
+        (ColumnId::State, 90.0),
+        (ColumnId::Down, 85.0),
+        (ColumnId::Up, 85.0),
+        (ColumnId::Eta, 65.0),
+        (ColumnId::Ratio, 60.0),
+        (ColumnId::Peers, 55.0),
     ]
     .map(|(id, width)| column(id, true, width));
 
@@ -114,54 +114,54 @@ filter = "all"
 theme = "system"
 
 [window]
-width = 1100.0
-height = 700.0
+width = 1200.0
+height = 720.0
 maximized = false
 
 [[columns]]
 id = "name"
 visible = true
-width = 360.0
+width = 300.0
 
 [[columns]]
 id = "size"
 visible = true
-width = 90.0
+width = 80.0
 
 [[columns]]
 id = "progress"
 visible = true
-width = 160.0
+width = 140.0
 
 [[columns]]
 id = "state"
 visible = true
-width = 110.0
+width = 90.0
 
 [[columns]]
 id = "down"
 visible = true
-width = 90.0
+width = 85.0
 
 [[columns]]
 id = "up"
 visible = true
-width = 90.0
+width = 85.0
 
 [[columns]]
 id = "eta"
 visible = true
-width = 80.0
+width = 65.0
 
 [[columns]]
 id = "ratio"
 visible = true
-width = 70.0
+width = 60.0
 
 [[columns]]
 id = "peers"
 visible = true
-width = 60.0
+width = 55.0
 
 [sort]
 key = "name"
@@ -385,7 +385,7 @@ fn ui_state_a_column_without_visible_or_width_takes_the_defaults() {
     // The second entry names no column, so it goes.
     assert_eq!(
         state.columns,
-        completed(&[column(ColumnId::Ratio, true, 70.0)])
+        completed(&[column(ColumnId::Ratio, true, 60.0)])
     );
 }
 
@@ -431,13 +431,13 @@ fn ui_state_normalizes_columns() {
         [
             column(ColumnId::Peers, true, 40.0),
             column(ColumnId::Name, true, 1200.0),
-            column(ColumnId::Size, true, 90.0),
-            column(ColumnId::Progress, true, 160.0),
-            column(ColumnId::State, true, 110.0),
-            column(ColumnId::Down, true, 90.0),
-            column(ColumnId::Up, true, 90.0),
-            column(ColumnId::Eta, true, 80.0),
-            column(ColumnId::Ratio, true, 70.0),
+            column(ColumnId::Size, true, 80.0),
+            column(ColumnId::Progress, true, 140.0),
+            column(ColumnId::State, true, 90.0),
+            column(ColumnId::Down, true, 85.0),
+            column(ColumnId::Up, true, 85.0),
+            column(ColumnId::Eta, true, 65.0),
+            column(ColumnId::Ratio, true, 60.0),
         ]
     );
 }
@@ -577,13 +577,13 @@ fn ui_state_parse_returns_a_normalized_state() {
         [
             column(ColumnId::Peers, true, 1200.0),
             column(ColumnId::Name, true, 360.0),
-            column(ColumnId::Eta, true, 80.0),
-            column(ColumnId::Size, true, 90.0),
-            column(ColumnId::Progress, true, 160.0),
-            column(ColumnId::State, true, 110.0),
-            column(ColumnId::Down, true, 90.0),
-            column(ColumnId::Up, true, 90.0),
-            column(ColumnId::Ratio, true, 70.0),
+            column(ColumnId::Eta, true, 65.0),
+            column(ColumnId::Size, true, 80.0),
+            column(ColumnId::Progress, true, 140.0),
+            column(ColumnId::State, true, 90.0),
+            column(ColumnId::Down, true, 85.0),
+            column(ColumnId::Up, true, 85.0),
+            column(ColumnId::Ratio, true, 60.0),
         ]
     );
     assert_eq!(parsed.state.clone().normalized(), parsed.state);

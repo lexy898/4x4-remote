@@ -34,7 +34,7 @@ use x4_core::{
 };
 use x4_rpc::HashString;
 
-use crate::i18n::{column_name_text, empty_table_text, sort_mark_text};
+use crate::i18n::{column_name_text, empty_table_text};
 use crate::theme::DIMMED_OPACITY;
 
 /// What a click on a column header does, given the column.
@@ -67,7 +67,7 @@ impl TorrentTable {
             columns,
             selected: None,
             sort,
-            empty: EmptyTable::NoTorrents,
+            empty: EmptyTable::Waiting,
             on_sort: None,
         }
     }
@@ -177,7 +177,9 @@ pub(crate) fn show_rows(
 ) {
     let delegate = table.delegate_mut();
     delegate.set_rows(Arc::clone(&model.rows));
-    delegate.empty = model.empty().unwrap_or(EmptyTable::NoTorrents);
+    if let Some(empty) = model.empty() {
+        delegate.empty = empty;
+    }
     let selected = table.delegate().selected_index();
     if selected != table.selected_row() {
         match selected {
@@ -254,9 +256,9 @@ impl TableDelegate for TorrentTable {
             return div().into_any_element();
         };
         let (key, direction) = self.sort;
-        let mark = (column.sort_key() == key).then(|| sort_mark_text(direction));
+        let sorted = (column.sort_key() == key).then_some(direction);
         let on_sort = self.on_sort.clone();
-        cells::header(column, mark, move |window, cx| {
+        cells::header(column, sorted, move |window, cx| {
             if let Some(on_sort) = &on_sort {
                 on_sort(column, window, cx);
             }
@@ -304,10 +306,10 @@ impl TableDelegate for TorrentTable {
         _: &mut Context<'_, TableState<Self>>,
     ) {
         if !move_shown_column(&mut self.columns, col_ix, to_ix) {
-            tracing::debug!(
+            tracing::warn!(
                 col_ix,
                 to_ix,
-                "the table moved a column the delegate does not have"
+                "the table moved a column the delegate does not have; their columns differ"
             );
         }
     }
@@ -317,7 +319,6 @@ impl TableDelegate for TorrentTable {
         _: &mut Window,
         cx: &mut Context<'_, TableState<Self>>,
     ) -> impl IntoElement {
-        let text = empty_table_text(self.empty);
         div()
             .id("table-empty")
             .size_full()
@@ -325,8 +326,9 @@ impl TableDelegate for TorrentTable {
             .items_center()
             .justify_center()
             .text_color(cx.theme().muted_foreground)
-            .child(text.clone())
-            .aria_label(text)
+            .when_some(empty_table_text(self.empty), |empty, text| {
+                empty.child(text.clone()).aria_label(text)
+            })
             .test_support()
     }
 }

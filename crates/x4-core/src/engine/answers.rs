@@ -111,6 +111,11 @@ impl Engine {
             self.store = store;
             self.snapshot_changed = true;
         }
+        // Also for an empty list: from now on, no torrents means the daemon has none.
+        if !self.listed {
+            self.listed = true;
+            self.snapshot_changed = true;
+        }
     }
 
     fn apply_recent(&mut self, torrents: Vec<Torrent>, removed: &[TorrentId]) {

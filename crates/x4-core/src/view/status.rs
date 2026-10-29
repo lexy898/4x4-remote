@@ -154,6 +154,7 @@ mod tests {
     fn snapshot() -> Snapshot {
         Snapshot {
             torrents: Vec::new(),
+            listed: true,
             session: None,
             free_space_bytes: None,
             rate_down: 0,

@@ -172,9 +172,11 @@ column-up-long = Upload speed
 column-eta = ETA
 column-ratio = Ratio
 column-peers = Peers
-# The mark after the header of the column the list is sorted by.
+# The mark after the header of the column the list is sorted by, and what it means to a screen reader.
 sort-ascending = ▲
 sort-descending = ▼
+sort-ascending-label = sorted ascending
+sort-descending-label = sorted descending
 # The toolbar button that opens the list of columns to show or hide, and its tooltip.
 column-menu = Columns
 column-menu-tooltip = Show or hide columns

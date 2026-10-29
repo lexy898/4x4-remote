@@ -203,7 +203,7 @@ mod tests {
 
         // Name, Progress, State, Down: Size is hidden and keeps its width.
         assert!(set_shown_widths(&mut columns, &[300.0, 150.0, 110.0, 95.5]));
-        expected.splice(0..5, [300.0, 90.0, 150.0, 110.0, 95.5]);
+        expected.splice(0..5, [300.0, 80.0, 150.0, 110.0, 95.5]);
         assert_eq!(widths(&columns), expected);
 
         assert!(!set_shown_widths(&mut columns, &[300.0]), "nothing changed");

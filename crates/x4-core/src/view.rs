@@ -36,28 +36,35 @@ pub struct TableModel {
     /// How many torrents each filter matches, over all torrents: neither the filter nor the
     /// search changes them.
     pub counts: FilterCounts,
+    /// Whether the daemon's list of torrents has arrived ([`Snapshot::listed`]); `false` before
+    /// the first snapshot.
+    pub listed: bool,
 }
 
 /// Why the table has no rows, which its placeholder tells the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmptyTable {
-    /// There is no torrent at all, or none has arrived from the daemon yet.
-    #[default]
+    /// The daemon's list of torrents has not arrived yet: nothing is known, so nothing is said.
+    Waiting,
+    /// The daemon has no torrents.
     NoTorrents,
     /// There are torrents, but the filter and the search hide every one of them.
     NoMatches,
 }
 
 impl TableModel {
-    /// Why the table is empty, or `None` when it has rows.
+    /// Why the table is empty, or `None` when it has rows. It never says that there are no
+    /// torrents before the daemon's list has arrived.
     #[must_use]
     pub fn empty(&self) -> Option<EmptyTable> {
         if !self.rows.is_empty() {
             None
-        } else if self.counts.all == 0 {
+        } else if self.counts.all > 0 {
+            Some(EmptyTable::NoMatches)
+        } else if self.listed {
             Some(EmptyTable::NoTorrents)
         } else {
-            Some(EmptyTable::NoMatches)
+            Some(EmptyTable::Waiting)
         }
     }
 }
@@ -79,6 +86,7 @@ pub fn table_model(snapshot: &Snapshot, view: &ViewState) -> TableModel {
     TableModel {
         rows: rows.into(),
         counts: counts(&snapshot.torrents),
+        listed: snapshot.listed,
     }
 }
 
@@ -94,6 +102,7 @@ mod tests {
     fn snapshot(torrents: Vec<Torrent>) -> Snapshot {
         Snapshot {
             torrents,
+            listed: true,
             session: None,
             free_space_bytes: None,
             rate_down: 0,
@@ -212,11 +221,55 @@ mod tests {
         assert_eq!(names(&model), Vec::<&str>::new());
         assert_eq!(model.counts, FilterCounts::default());
         assert_eq!(model.empty(), Some(EmptyTable::NoTorrents));
+        assert!(model.listed);
+    }
+
+    #[test]
+    fn no_torrents_is_said_only_once_the_list_has_come() {
         assert_eq!(
             TableModel::default().empty(),
-            Some(EmptyTable::NoTorrents),
-            "nothing has arrived yet"
+            Some(EmptyTable::Waiting),
+            "before the first snapshot"
         );
+        for connection in [
+            ConnectionState::Connecting,
+            ConnectionState::Connected,
+            ConnectionState::Reconnecting {
+                attempt: 3,
+                last_error: crate::snapshot::ConnectionError::Unreachable,
+            },
+        ] {
+            let waiting = Snapshot {
+                listed: false,
+                connection: connection.clone(),
+                ..snapshot(Vec::new())
+            };
+            assert_eq!(
+                table_model(&waiting, &ViewState::default()).empty(),
+                Some(EmptyTable::Waiting),
+                "{connection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn torrents_that_came_before_the_whole_list_are_shown_as_such() {
+        let partial = Snapshot {
+            listed: false,
+            ..snapshot(vec![named("Alpha", DisplayState::Seeding)])
+        };
+
+        let shown = table_model(&partial, &ViewState::default());
+        let hidden = table_model(
+            &partial,
+            &ViewState {
+                filter: Filter::Paused,
+                ..ViewState::default()
+            },
+        );
+
+        assert_eq!(shown.empty(), None);
+        assert_eq!(hidden.empty(), Some(EmptyTable::NoMatches));
     }
 
     #[test]

@@ -62,7 +62,8 @@ the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 ## The main window
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing
-in the window ever waits for the network.
+in the window ever waits for the network. The first time it opens at 1200 by 720 pixels, where
+every column fits.
 
 The table lists the torrents, sorted by name at first. Each row shows:
 
@@ -75,8 +76,9 @@ The table lists the torrents, sorted by name at first. Each row shows:
   muted otherwise.
 
 Rows where nothing happens (an idle seeder, a paused or queued torrent) are dimmed, so the active
-ones stand out; an error is never dimmed. When there is nothing to show, the table says "No
-torrents", or "No torrents match" when the filter hides every torrent.
+ones stand out; an error is never dimmed. Until the daemon's list of torrents has come, the table
+stays blank; after that, when there is nothing to show, it says "No torrents", or "No torrents
+match" when the filter hides every torrent.
 
 Click a column header to sort by it; click it again to reverse the order. ▲ or ▼ after the header
 shows the order. Size, progress, speeds, ratio and peers sort largest first at the first click;

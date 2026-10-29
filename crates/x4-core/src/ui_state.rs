@@ -28,8 +28,8 @@ pub use columns::{move_shown_column, set_column_shown, set_shown_widths, shown_c
 pub const UI_STATE_VERSION: u32 = 1;
 
 /// The window size when there is none to restore, or the one restored is unusable.
-const DEFAULT_WINDOW_WIDTH: f32 = 1100.0;
-const DEFAULT_WINDOW_HEIGHT: f32 = 700.0;
+const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
 /// Below this size the window cannot be used.
 const MIN_WINDOW_WIDTH: f32 = 400.0;
 const MIN_WINDOW_HEIGHT: f32 = 300.0;
@@ -92,7 +92,7 @@ pub struct WindowState {
 }
 
 impl Default for WindowState {
-    /// 1100 by 700, not maximized.
+    /// 1200 by 720, not maximized.
     fn default() -> Self {
         Self {
             width: DEFAULT_WINDOW_WIDTH,
@@ -204,13 +204,14 @@ fn default_column(id: ColumnId) -> ColumnState {
 /// How wide a column is before the user resizes it.
 fn default_width(id: ColumnId) -> f32 {
     match id {
-        ColumnId::Name => 360.0,
-        ColumnId::Size | ColumnId::Down | ColumnId::Up => 90.0,
-        ColumnId::Progress => 160.0,
-        ColumnId::State => 110.0,
-        ColumnId::Eta => 80.0,
-        ColumnId::Ratio => 70.0,
-        ColumnId::Peers => 60.0,
+        ColumnId::Name => 300.0,
+        ColumnId::Size => 80.0,
+        ColumnId::Progress => 140.0,
+        ColumnId::State => 90.0,
+        ColumnId::Down | ColumnId::Up => 85.0,
+        ColumnId::Eta => 65.0,
+        ColumnId::Ratio => 60.0,
+        ColumnId::Peers => 55.0,
     }
 }
 

@@ -275,12 +275,27 @@ fn column_headers_and_names() {
 fn sort_marks_point_up_from_the_smallest() {
     assert_eq!(sort_mark_text(SortDirection::Ascending), "▲");
     assert_eq!(sort_mark_text(SortDirection::Descending), "▼");
+    assert_eq!(
+        sort_mark_label(SortDirection::Ascending),
+        "sorted ascending"
+    );
+    assert_eq!(
+        sort_mark_label(SortDirection::Descending),
+        "sorted descending"
+    );
 }
 
 #[test]
 fn the_empty_list_says_why() {
-    assert_eq!(empty_table_text(EmptyTable::NoTorrents), "No torrents");
-    assert_eq!(empty_table_text(EmptyTable::NoMatches), "No torrents match");
+    assert_eq!(empty_table_text(EmptyTable::Waiting), None);
+    assert_eq!(
+        empty_table_text(EmptyTable::NoTorrents).as_deref(),
+        Some("No torrents")
+    );
+    assert_eq!(
+        empty_table_text(EmptyTable::NoMatches).as_deref(),
+        Some("No torrents match")
+    );
 }
 
 #[test]

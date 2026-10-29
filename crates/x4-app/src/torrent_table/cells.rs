@@ -10,11 +10,11 @@ use gpui_kit::{
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled,
     TestSupportExt as _, Window, div, px, relative,
 };
-use x4_core::{ColumnId, HumanSpeed, Row};
+use x4_core::{ColumnId, HumanSpeed, Row, SortDirection};
 
 use crate::i18n::{
-    column_title_text, eta_text, peer_count_text, progress_text, ratio_text, size_text, speed_text,
-    state_text, subtitle_text,
+    column_title_text, eta_text, peer_count_text, progress_text, ratio_text, size_text,
+    sort_mark_label, sort_mark_text, speed_text, state_text, subtitle_text,
 };
 use crate::theme::{
     PROGRESS_TRACK_OPACITY, rate_color, state_color, subtitle_color, tabular_digits,
@@ -162,11 +162,12 @@ fn bar_fraction(progress: f64) -> f32 {
     progress as f32
 }
 
-/// The header of `column`: its title, followed by `mark` on the column the list is sorted by.
-/// A click calls `on_click`; dragging the header moves the column, which the table handles.
+/// The header of `column`: its title, followed by a mark for `sorted` on the column the list is
+/// sorted by. A click calls `on_click`; dragging the header moves the column, which the table
+/// handles.
 pub(super) fn header(
     column: ColumnId,
-    mark: Option<SharedString>,
+    sorted: Option<SortDirection>,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     h_flex()
@@ -177,18 +178,24 @@ pub(super) fn header(
         .cursor_pointer()
         .when(is_numeric(column), Styled::justify_end)
         .child(div().truncate().child(column_title_text(column)))
-        .when_some(mark, |header, mark| {
+        .when_some(sorted, |header, direction| {
             header.child(
                 div()
                     .id("sort-mark")
                     .flex_none()
                     .text_xs()
-                    .child(mark.clone())
-                    .aria_label(mark)
+                    .child(sort_mark_text(direction))
+                    .aria_label(sort_mark_label(direction))
                     .test_support(),
             )
         })
-        .on_click(move |_, window, cx| on_click(window, cx))
+        .on_click(move |_, window, cx| {
+            // A short flick on a header starts moving the column, and the release still lands
+            // on the header it started on; that is a move, not a click.
+            if !cx.has_active_drag() {
+                on_click(window, cx);
+            }
+        })
 }
 
 #[cfg(test)]

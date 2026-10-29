@@ -268,7 +268,7 @@ pub fn open_main_window(
     ui: &UiState,
     cx: &mut App,
 ) -> anyhow::Result<(AnyWindowHandle, Entity<MainView>)> {
-    let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
+    let bounds = Bounds::centered(None, size(px(ui.window.width), px(ui.window.height)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -502,6 +502,7 @@ mod tests {
                         ..torrent("paused")
                     },
                 ],
+                listed: true,
                 session: None,
                 free_space_bytes: None,
                 rate_down: 0,

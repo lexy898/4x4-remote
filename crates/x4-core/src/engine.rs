@@ -202,6 +202,9 @@ pub struct Engine {
     /// The batch each action that has no answer yet went out in.
     action_batches: HashMap<ActionId, u64>,
     store: Store,
+    /// Whether a whole list of torrents has been read since the start; until then an empty
+    /// store means nothing has arrived, not that the daemon has no torrents.
+    listed: bool,
     session: Option<SessionSummary>,
     /// The directory whose free space is read; known once this connection read the session.
     download_dir: Option<String>,
@@ -239,6 +242,7 @@ impl Engine {
             tick_batch: None,
             action_batches: HashMap::new(),
             store: Store::new(),
+            listed: false,
             session: None,
             download_dir: None,
             free_space_bytes: None,
@@ -375,6 +379,7 @@ impl Engine {
         self.snapshot_changed = false;
         Some(Arc::new(Snapshot {
             torrents: self.store.torrents().cloned().collect(),
+            listed: self.listed,
             session: self.session.clone(),
             free_space_bytes: self.free_space_bytes,
             rate_down: self.rate_down,

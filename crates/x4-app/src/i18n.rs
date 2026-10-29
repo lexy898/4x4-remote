@@ -152,13 +152,14 @@ pub(crate) fn torrent_count_text(count: usize) -> SharedString {
 }
 
 /// What the empty list says: "No torrents", or "No torrents match" when the filter and the search
-/// hide them all.
-pub(crate) fn empty_table_text(empty: EmptyTable) -> SharedString {
+/// hide them all. Before the daemon's list has arrived it says nothing; the status bar tells how
+/// the connection is doing.
+pub(crate) fn empty_table_text(empty: EmptyTable) -> Option<SharedString> {
     match empty {
-        EmptyTable::NoTorrents => t!("torrent-list-empty"),
-        EmptyTable::NoMatches => t!("torrent-list-no-matches"),
+        EmptyTable::Waiting => None,
+        EmptyTable::NoTorrents => Some(t!("torrent-list-empty").into()),
+        EmptyTable::NoMatches => Some(t!("torrent-list-no-matches").into()),
     }
-    .into()
 }
 
 /// The header of a column, such as "Size"; the speed columns have only an arrow.
@@ -198,6 +199,15 @@ pub(crate) fn sort_mark_text(direction: SortDirection) -> SharedString {
     match direction {
         SortDirection::Ascending => t!("sort-ascending"),
         SortDirection::Descending => t!("sort-descending"),
+    }
+    .into()
+}
+
+/// What the sort mark means, for screen readers: "sorted ascending" or "sorted descending".
+pub(crate) fn sort_mark_label(direction: SortDirection) -> SharedString {
+    match direction {
+        SortDirection::Ascending => t!("sort-ascending-label"),
+        SortDirection::Descending => t!("sort-descending-label"),
     }
     .into()
 }

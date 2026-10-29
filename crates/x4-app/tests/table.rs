@@ -4,15 +4,16 @@
 //!
 //! Each test builds the two channels of a service itself and opens the window with no service
 //! behind them, so nothing touches the network. The tests drive the table through real pointer,
-//! wheel and key events and read it through the accessible labels of its cells and the state of
-//! its delegate; pixels and opacity cannot be read.
+//! wheel and key events and read it through the accessible labels and bounds of its elements and
+//! the state of its delegate.
 
 use std::sync::Arc;
 
 use gpui_kit::component::table::{TableDelegate, TableState};
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt};
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, Pixels, Role, ScrollDelta,
+    AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Role, ScrollDelta,
     TestAppContext, point, px,
 };
 use x4_app::app;
@@ -63,15 +64,37 @@ impl Window {
     }
 
     /// Sends a snapshot of `torrents` as the service would and lets the window take it.
+    fn send(&self, torrents: Vec<Torrent>, cx: &mut TestAppContext) {
+        self.send_snapshot(snapshot(torrents), cx);
+    }
+
+    /// Sends `snapshot` as the service would and lets the window take it.
     #[expect(
         clippy::expect_used,
         reason = "a test helper: a window that stopped listening fails the test"
     )]
-    fn send(&self, torrents: Vec<Torrent>, cx: &mut TestAppContext) {
+    fn send_snapshot(&self, snapshot: Snapshot, cx: &mut TestAppContext) {
         self.events
-            .send_blocking(Event::Snapshot(Arc::new(snapshot(torrents))))
+            .send_blocking(Event::Snapshot(Arc::new(snapshot)))
             .expect("the window listens");
         cx.run_until_parked();
+    }
+
+    /// Shows the torrents that pass `filter`, largest first.
+    fn filter(&self, filter: Filter, cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            self.view.update(cx, |view, cx| {
+                view.set_view(
+                    ViewState {
+                        filter,
+                        sort_key: SortKey::Size,
+                        sort_direction: SortDirection::Descending,
+                        ..ViewState::default()
+                    },
+                    cx,
+                );
+            });
+        });
     }
 
     fn table(&self, cx: &mut TestAppContext) -> Entity<TableState<TorrentTable>> {
@@ -151,6 +174,7 @@ impl Window {
 fn snapshot(torrents: Vec<Torrent>) -> Snapshot {
     Snapshot {
         torrents,
+        listed: true,
         session: None,
         free_space_bytes: None,
         rate_down: 0,
@@ -264,22 +288,28 @@ fn rows_render_with_labels(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_empty_table_says_why(cx: &mut TestAppContext) {
     let window = Window::open(cx);
-    window.act(cx, |window, _| {
-        assert_eq!(window.find("table-empty").label(), Some("No torrents"));
-    });
+    let empty_label = |cx: &mut TestAppContext| {
+        window.act(cx, |window, _| {
+            window.find("table-empty").label().map(str::to_owned)
+        })
+    };
+    assert_eq!(empty_label(cx), None, "nothing has come yet");
+
+    // Connected, but the daemon's list of torrents has not come yet.
+    window.send_snapshot(
+        Snapshot {
+            listed: false,
+            ..snapshot(Vec::new())
+        },
+        cx,
+    );
+    assert_eq!(empty_label(cx), None, "the list has not come yet");
+
+    window.send(Vec::new(), cx);
+    assert_eq!(empty_label(cx).as_deref(), Some("No torrents"));
 
     window.send(named(&["Alpha"]), cx);
-    cx.update(|cx| {
-        window.view.update(cx, |view, cx| {
-            view.set_view(
-                ViewState {
-                    filter: Filter::Paused,
-                    ..ViewState::default()
-                },
-                cx,
-            );
-        });
-    });
+    window.filter(Filter::Paused, cx);
 
     window.act(cx, |window, _| {
         assert_eq!(
@@ -313,7 +343,7 @@ fn header_click_sorts(cx: &mut TestAppContext) {
     );
     window.act(cx, |window, _| {
         let mark = window.within(("col-header", SIZE)).find("sort-mark");
-        assert_eq!(mark.label(), Some("▼"));
+        assert_eq!(mark.label(), Some("sorted descending"));
         assert!(
             window
                 .within(("col-header", NAME))
@@ -328,7 +358,7 @@ fn header_click_sorts(cx: &mut TestAppContext) {
     assert_eq!(window.names(cx), ["small", "a", "b", "big"]);
     window.act(cx, |window, _| {
         let mark = window.within(("col-header", SIZE)).find("sort-mark");
-        assert_eq!(mark.label(), Some("▲"));
+        assert_eq!(mark.label(), Some("sorted ascending"));
     });
 
     let (sort, delegate_sort) = (
@@ -351,6 +381,86 @@ fn header_click_sorts(cx: &mut TestAppContext) {
             .all(|command| matches!(command, Command::SetVisibility(_))),
         "sorting sends nothing to the daemon"
     );
+}
+
+#[gpui_kit::test]
+fn a_quick_flick_on_a_header_does_not_sort(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(
+        vec![sized("b", 10), sized("small", 1), sized("big", 500)],
+        cx,
+    );
+
+    // A press, a move of 15 px and a release, faster than a frame: the move starts dragging the
+    // column, so the release is no click.
+    window.act(cx, |window, cx| {
+        let from = window.find(("col-header", SIZE)).bounds().center();
+        let to = point(from.x + px(15.), from.y);
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: from,
+                pressed_button: None,
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: from,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: to,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: to,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(window.names(cx), ["b", "big", "small"]);
+    assert_eq!(
+        cx.update(|cx| window.view.read(cx).ui_state().sort),
+        SortState::default()
+    );
+}
+
+#[gpui_kit::test]
+fn default_columns_fit_the_default_window(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(named(&["a"]), cx);
+
+    window.act(cx, |window, _| {
+        let list = window.find("torrent-list").bounds();
+        let peers = window.find(("col-header", PEERS)).bounds();
+        assert!(
+            peers.right() <= list.right(),
+            "the last column ends at {:?}, past the list's edge at {:?}",
+            peers.right(),
+            list.right()
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -389,6 +499,32 @@ fn selection_follows_the_hash_after_resort(cx: &mut TestAppContext) {
     // The keyboard moves the selection on from there.
     window.act(cx, |window, cx| window.press("up", cx));
     assert_eq!(window.selected_name(cx).as_deref(), Some("b"));
+
+    // A filter that the selected torrent still passes keeps it selected.
+    window.send(
+        vec![
+            sized("0 new", 4),
+            sized("a", 1),
+            Torrent {
+                state: DisplayState::Paused,
+                ..sized("b", 2)
+            },
+            Torrent {
+                state: DisplayState::Paused,
+                ..sized("c", 3)
+            },
+        ],
+        cx,
+    );
+    window.filter(Filter::Paused, cx);
+    assert_eq!(window.names(cx), ["c", "b"]);
+    assert_eq!(window.selected_name(cx).as_deref(), Some("b"));
+    assert_eq!(cx.update(|cx| table.read(cx).selected_row()), Some(1));
+
+    // One that filters it out clears the selection.
+    window.filter(Filter::Downloading, cx);
+    assert_eq!(window.read(cx, |table, _| table.selected().cloned()), None);
+    assert_eq!(cx.update(|cx| table.read(cx).selected_row()), None);
 }
 
 #[gpui_kit::test]
@@ -523,23 +659,30 @@ fn widths_survive_refresh(cx: &mut TestAppContext) {
                 .map(|column| px(column.width))
         })
     };
+    let remembered = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            window
+                .view
+                .read(cx)
+                .ui_state()
+                .columns
+                .iter()
+                .find(|column| column.id == ColumnId::Size)
+                .map(|column| px(column.width))
+        })
+    };
     assert_eq!(stored(cx), resized, "the delegate keeps the new width");
+    assert_eq!(
+        remembered(cx),
+        resized,
+        "the width is remembered between runs"
+    );
 
     window.click_in_column_menu(PEERS, cx);
 
     assert_eq!(cx.update(|cx| table.read(cx).col_width(SIZE)), resized);
     assert_eq!(stored(cx), resized);
-    let remembered = cx.update(|cx| {
-        window
-            .view
-            .read(cx)
-            .ui_state()
-            .columns
-            .iter()
-            .find(|column| column.id == ColumnId::Size)
-            .map(|column| px(column.width))
-    });
-    assert_eq!(remembered, resized, "the width is remembered between runs");
+    assert_eq!(remembered(cx), resized);
 }
 
 #[gpui_kit::test]

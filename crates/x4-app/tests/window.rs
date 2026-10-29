@@ -101,6 +101,7 @@ impl Window {
 fn snapshot(torrents: &[&str]) -> Snapshot {
     Snapshot {
         torrents: torrents.iter().map(|name| torrent(name)).collect(),
+        listed: true,
         session: None,
         free_space_bytes: Some(24_592_841_836),
         rate_down: 2_516_582,
