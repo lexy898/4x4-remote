@@ -218,10 +218,11 @@ kB/s, 1000 bytes per second; 4x4 converts them). Each field starts with the daem
 while that limit is off. Typing a speed into a field switches its limit on, and clearing the field
 switches it off. `Enter` in a field, or Apply, sends the limits that changed, and only those, and
 closes the popover; `Escape`, a click beside it, or moving the focus out of it (`Tab` past Apply,
-`Shift+Tab`, `Ctrl+F`) closes it and changes nothing. A limit is a whole number from 1 to 1,000,000
-KiB/s: anything else is refused with a note under its field, and nothing is sent; a limit switched
-on with an empty field asks for a speed. A key held down to open the popover does not type into it
-or apply it. While the context menu is open, `Ctrl+T` and `Ctrl+L` do nothing. The turtle
+`Shift+Tab`, `Ctrl+F`) closes it and changes nothing. Switching to another app leaves it open, with
+what was typed, until you come back. A click on blank space in the popover leaves the cursor in the
+field. A limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note
+under its field, and nothing is sent; a limit switched on with an empty field asks for a speed. A
+key held down to open the popover does not type into it or apply it. While the context menu is open, `Ctrl+T` and `Ctrl+L` do nothing. The turtle
 and the limits are disabled until the daemon has sent its settings, and while it is not connected;
 an open popover then keeps what was typed, and Apply waits for the connection. A change that fails
 shows a notification, as an action does, one for the turtle and one for each limit.

@@ -11,7 +11,8 @@
 //! The popover is filled when it opens, from the daemon's limits then. Apply sends each limit
 //! whose edit changes something, then closes the popover; Escape and a click beside it close it
 //! and send nothing. Either way the keys go back to the list. When the focus leaves the popover
-//! (Tab, Shift+Tab, Ctrl+F), it closes too, sends nothing, and the focus stays where it went.
+//! (Tab, Shift+Tab, Ctrl+F), it closes too, sends nothing, and the focus stays where it went. A
+//! switch to another app takes the window's focus away too, but the popover stays open as it is.
 
 use gpui_kit::{Context, Div, Entity, Focusable as _, InteractiveElement as _, Window};
 use x4_core::Direction;

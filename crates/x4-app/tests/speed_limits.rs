@@ -11,7 +11,8 @@ use std::sync::Arc;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, KeyContext,
-    KeyDownEvent, KeyUpEvent, Keystroke, OperatingSystem, TestAppContext, px,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, OperatingSystem, TestAppContext, VisualTestContext, point, px,
 };
 use x4_app::app;
 use x4_app::keymap::{EditSpeedLimits, ToggleAltSpeed};
@@ -175,6 +176,65 @@ impl Window {
 
     fn click(&self, id: &'static str, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| window.click(id, cx));
+    }
+
+    /// Clicks the blank space between the elements `left` and `right`, at the height of `right`.
+    #[track_caller]
+    fn click_between(&self, left: &'static str, right: &'static str, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
+            let left = window.find(left).bounds();
+            let right = window.find(right).bounds();
+            assert!(left.right() < right.left(), "{left:?} {right:?}: no gap");
+            let position = point((left.right() + right.left()) / 2., right.center().y);
+            let modifiers = Modifiers::default();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Makes another app's window the active one, as when the user switches away from 4x4.
+    fn deactivate(&self, cx: &mut TestAppContext) {
+        VisualTestContext::from_window(self.handle, cx).deactivate_window();
+        cx.run_until_parked();
+    }
+
+    /// Makes the window the active one again, as when the user switches back to 4x4.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a closed window fails the test"
+    )]
+    fn activate(&self, cx: &mut TestAppContext) {
+        cx.update_window(self.handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
+        cx.run_until_parked();
     }
 
     /// Sends a key-down of `key` that types its text when nothing takes the key, as a repeat of
@@ -914,4 +974,60 @@ fn an_edit_left_without_applying_is_forgotten(cx: &mut TestAppContext) {
         assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false), "{close_by}");
         window.press("escape", cx);
     }
+}
+
+#[gpui_kit::test]
+fn a_click_on_blank_space_in_the_popover_keeps_the_field_focused(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(off(), off(), false, cx);
+
+    // The gap between a switch and its field belongs to the form, which must not take the focus
+    // from the field: what is typed still goes into it, and so does Enter.
+    window.press("ctrl-l", cx);
+    assert!(window.focused(DOWN, cx));
+    window.click_between(DOWN_SWITCH, DOWN, cx);
+    assert!(window.limits_open(cx));
+    assert!(window.focused(DOWN, cx), "the field keeps the focus");
+    window.type_text("5", cx);
+    window.press("enter", cx);
+    assert_eq!(window.sent_actions(), [set_limit(Direction::Down, Some(5))]);
+    assert!(!window.limits_open(cx));
+
+    // The same in the upload row.
+    window.press("ctrl-l", cx);
+    window.click(UP, cx);
+    window.click_between(UP_SWITCH, UP, cx);
+    assert!(window.focused(UP, cx), "the field keeps the focus");
+    window.press("ctrl-a", cx);
+    window.type_text("7", cx);
+    window.press("enter", cx);
+    assert_eq!(window.sent_actions(), [set_limit(Direction::Up, Some(7))]);
+}
+
+#[gpui_kit::test]
+fn the_popover_survives_a_switch_to_another_app(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(off(), off(), false, cx);
+    window.press("ctrl-l", cx);
+    window.type_text("512", cx);
+
+    // The focus leaves the window with the activation, which is no reason to close the popover.
+    window.deactivate(cx);
+    assert!(
+        window.limits_open(cx),
+        "the popover stays while 4x4 is behind"
+    );
+    window.activate(cx);
+    assert!(window.limits_open(cx));
+    assert_eq!(window.value(DOWN, cx).as_deref(), Some("512"));
+    assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true));
+    assert!(window.focused(DOWN, cx), "the field is ready to type again");
+    assert_eq!(window.sent(), []);
+
+    // The user goes on where they left off.
+    window.press("enter", cx);
+    assert_eq!(
+        window.sent_actions(),
+        [set_limit(Direction::Down, Some(524))]
+    );
 }

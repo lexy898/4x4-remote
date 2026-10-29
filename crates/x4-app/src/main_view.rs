@@ -186,9 +186,13 @@ impl MainView {
             }),
             cx.subscribe_in(&search, window, Self::on_search_event),
             cx.subscribe_in(&speed_limits, window, Self::on_limits_applied),
-            // Tab, Shift+Tab and Ctrl+F take the focus out of the popover, which then closes.
-            cx.on_focus_out(&limits_focus, window, |view, _, _, cx| {
-                view.limits_lost_focus(cx);
+            // Tab, Shift+Tab and Ctrl+F take the focus out of the popover, which then closes. An
+            // inactive window has no focus either, so a switch to another app is no reason to
+            // close it: what was typed is still there when the user comes back.
+            cx.on_focus_out(&limits_focus, window, |view, _, window, cx| {
+                if window.is_window_active() {
+                    view.limits_lost_focus(cx);
+                }
             }),
             cx.observe_window_activation(window, |view, window, _| {
                 view.report_visibility(window);

@@ -19,7 +19,8 @@
 //! While the daemon is not connected, or its settings are not known, Apply is disabled and Enter
 //! applies nothing; the popover stays open as it is. The main view closes the popover when the
 //! focus leaves the form, as Tab, Shift+Tab or Ctrl+F take it out: the list's keys must not act
-//! behind a popover that looks active.
+//! behind a popover that looks active. A switch to another app does not close it: the window's
+//! focus goes away and comes back, and what was typed is still there.
 //!
 //! Like the other keys, the key that opened the popover acts only when it is pressed, not when it
 //! repeats while held. An Enter held on the limits button opens the popover, and its repeats must
@@ -39,9 +40,9 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
-    TestSupportExt as _, Window, div, px,
+    InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, TestSupportExt as _, Window, div, px,
 };
 use x4_core::{
     Direction, LimitEdit, LimitError, SpeedControls, SpeedLimit, limit_edit, limit_needs_value,
@@ -269,7 +270,8 @@ impl SpeedLimits {
     }
 
     /// Holds back a key-down in the form that repeats the key which opened the popover, before
-    /// anything in the form sees it: no field types it, and no binding runs.
+    /// the fields' capture listeners see it, so that no field types it. The key bindings are not
+    /// held back: gpui runs them before the capture listeners.
     fn hold_back_opener(
         &mut self,
         event: &KeyDownEvent,
@@ -388,6 +390,9 @@ impl Render for SpeedLimits {
         v_flex()
             .id("speed-limits-form")
             .track_focus(&self.focus)
+            // A press on blank space would otherwise move the focus from the field to the form,
+            // where typing and Enter do nothing.
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             // In the capture phase, before the fields: the key-down of a held key repeats before
             // any key-up, and any key-up ends the hold.
             .capture_key_down(cx.listener(Self::hold_back_opener))
