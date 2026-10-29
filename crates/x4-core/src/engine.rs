@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use x4_rpc::{
-    FreeSpace, HashString, RpcError, ServerVersion, SessionInfo, SessionStats, TorrentGetResponse,
-    UnsupportedReason,
+    FreeSpace, HashString, RpcError, ServerVersion, SessionInfo, SessionStats, TorrentField,
+    TorrentGetResponse, UnsupportedReason,
 };
 
 use crate::action::{Action, ActionError, ActionId};
@@ -155,6 +155,22 @@ pub enum DetailsRead {
     /// Only what changes while the torrent downloads: each file's bytes, priority and wanted
     /// switch, the pieces and the totals. It is merged into the last full read.
     Progress,
+    /// The progress and the trackers' state. The trackers change slowly, so only the progress read
+    /// that goes out with a whole list asks for them, about once a minute, and not the one every
+    /// few seconds; the answer's trackers replace the last ones.
+    ProgressAndTrackers,
+}
+
+impl DetailsRead {
+    /// The fields this read asks the daemon for.
+    #[must_use]
+    pub fn fields(self) -> &'static [TorrentField] {
+        match self {
+            Self::Full => TorrentField::DETAILS_FULL,
+            Self::Progress => TorrentField::DETAILS_PROGRESS,
+            Self::ProgressAndTrackers => TorrentField::DETAILS_PROGRESS_TRACKERS,
+        }
+    }
 }
 
 /// The daemon's answer to a [`Request`].
@@ -331,7 +347,7 @@ impl Engine {
                 self.tick_timer.force();
                 // Due only once the download directory is known.
                 self.free_space_timer.force();
-                self.details_refresh();
+                self.details_refresh(now);
                 Vec::new()
             }
             Command::Refresh | Command::Reconnect => self.restart(now),
@@ -766,6 +782,10 @@ impl Request {
                 kind: DetailsRead::Progress,
                 ..
             } => "details progress",
+            Self::Details {
+                kind: DetailsRead::ProgressAndTrackers,
+                ..
+            } => "details progress and trackers",
             Self::Action(..) => "action",
             Self::MagnetLinks(..) => "magnet links",
         }

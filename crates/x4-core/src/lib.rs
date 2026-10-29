@@ -55,9 +55,9 @@
 //! and hands out a new [`Snapshot`] only when something changed. It carries out [`Action`]s
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
 //! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
-//! their progress ([`DetailsRead`]), and nothing while the window is hidden. A speed limit is set one
-//! [`Direction`] at a time. Magnet links are read once, on [`Command::ReadMagnetLinks`], under
-//! the same rules as an action.
+//! their progress and, once a minute, their trackers ([`DetailsRead`]), and nothing while the
+//! window is hidden. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
+//! on [`Command::ReadMagnetLinks`], under the same rules as an action.
 //!
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends

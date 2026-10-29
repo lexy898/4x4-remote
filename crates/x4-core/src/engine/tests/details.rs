@@ -2,7 +2,7 @@
 //! their progress, and what the answers change. Time is virtual and every answer comes at once,
 //! which makes the request counts an upper bound.
 
-use x4_rpc::Status;
+use x4_rpc::{Status, TorrentField};
 
 use super::*;
 
@@ -19,6 +19,22 @@ fn progress(hash: HashString) -> Request {
     Request::Details {
         hash,
         kind: DetailsRead::Progress,
+    }
+}
+
+/// A progress read of `hash` that also reads the trackers.
+fn progress_and_trackers(hash: HashString) -> Request {
+    Request::Details {
+        hash,
+        kind: DetailsRead::ProgressAndTrackers,
+    }
+}
+
+/// Whether the details read `request` asks for the trackers.
+fn asks_for_trackers(request: &Request) -> bool {
+    match request {
+        Request::Details { kind, .. } => kind.fields().contains(&TorrentField::TrackerStats),
+        _ => false,
     }
 }
 
@@ -197,7 +213,7 @@ fn a_seeding_selection_is_read_with_the_full_list_only() {
     );
     let with_the_lists: Vec<(Instant, Request)> = full_lists
         .iter()
-        .map(|&at| (at, progress(first())))
+        .map(|&at| (at, progress_and_trackers(first())))
         .collect();
     assert_eq!(details_reads(&sent), with_the_lists);
 }
@@ -365,6 +381,41 @@ fn a_successful_file_action_on_the_selected_torrent_reads_progress_soon() {
 }
 
 #[test]
+fn a_failed_action_on_the_selected_torrent_reads_no_details() {
+    let base = Instant::now();
+    let (mut engine, _) = settled(base, Status::Seeding);
+    let now = base + ms(1000);
+    let unwant = Action::SetFilesWanted {
+        hash: first(),
+        files: vec![1],
+        wanted: false,
+    };
+    command(&mut engine, now, Command::Run(ActionId(30), unwant.clone()));
+    let due = hand_out(&mut engine, now);
+    assert_eq!(due, [Request::Action(ActionId(30), unwant)]);
+    let refusal = RpcError::Server {
+        code: 1,
+        message: "system error".to_owned(),
+        detail: Some("torrent is busy".to_owned()),
+    };
+
+    let events = respond(&mut engine, now, &due[0], Err(refusal));
+
+    assert_eq!(
+        events,
+        [finished(
+            30,
+            Err(ActionError::Rpc(ConnectionError::Server(
+                "torrent is busy".to_owned()
+            )))
+        )]
+    );
+    // The action changed nothing, so neither the tick nor the details are read early.
+    assert_eq!(hand_out(&mut engine, now), []);
+    assert!(engine.next_wakeup(now) > now);
+}
+
+#[test]
 fn becoming_visible_again_reads_progress_once() {
     let base = Instant::now();
     let (mut engine, read_at) = settled(base, Status::Seeding);
@@ -485,6 +536,175 @@ fn a_progress_answer_for_another_hash_is_ignored() {
     assert_eq!(engine.details, shown);
 }
 
+#[test]
+fn the_progress_read_with_the_full_list_also_reads_trackers() {
+    // A seeding torrent is read with the full list only. A downloading one is read every 3 s,
+    // and the read joins the batch of the full list, so that its trackers are read too.
+    for status in [Status::Seeding, Status::Downloading] {
+        let base = Instant::now();
+        let (mut engine, read_at) = settled(base, status);
+        let whole = engine.details.clone().unwrap();
+        assert_eq!(whole.trackers.len(), 1, "{status:?}");
+        let listed = base + secs(60);
+        run(&mut engine, read_at, listed, status);
+
+        let due = hand_out(&mut engine, listed);
+
+        assert!(due.contains(&Request::FullList), "{status:?}: {due:?}");
+        let reads: Vec<Request> = due.into_iter().filter(is_details).collect();
+        assert_eq!(reads, [progress_and_trackers(first())], "{status:?}");
+        assert!(asks_for_trackers(&reads[0]), "{status:?}");
+        // The trackers of the answer replace the last ones.
+        let mut answer = progress_and_trackers_details();
+        let trackers = answer.torrents[0].tracker_stats.as_mut().unwrap();
+        trackers[0].seeder_count = Some(77);
+        let mut backup = trackers[0].clone();
+        backup.host = "backup.example:80".to_owned();
+        trackers.push(backup);
+
+        let events = respond(
+            &mut engine,
+            listed,
+            &reads[0],
+            Ok(Response::Details(answer)),
+        );
+
+        let [merged] = details_events(&events).try_into().unwrap();
+        assert_eq!(merged.trackers.len(), 2, "{status:?}");
+        assert_eq!(merged.trackers[0].seeders, Some(77), "{status:?}");
+        assert_eq!(merged.trackers[1].host, "backup.example:80", "{status:?}");
+        assert_ne!(merged.trackers, whole.trackers, "{status:?}");
+        // The rest is merged as with any progress.
+        assert_eq!(merged.files, whole.files, "{status:?}");
+        assert_eq!(merged.comment, whole.comment, "{status:?}");
+        assert_eq!(engine.details.as_deref(), Some(merged.as_ref()));
+    }
+}
+
+#[test]
+fn the_3s_progress_read_does_not_read_trackers() {
+    let base = Instant::now();
+    let (mut engine, read_at) = settled(base, Status::Downloading);
+
+    let sent = run(&mut engine, read_at, base + secs(30), Status::Downloading);
+
+    let reads = details_reads(&sent);
+    assert_eq!(reads.len(), 9);
+    for (at, request) in &reads {
+        assert_eq!(request, &progress(first()), "at {at:?}");
+        assert!(!asks_for_trackers(request), "at {at:?}");
+    }
+    // Nor does the read after an action, which goes out without a whole list.
+    let (mut engine, _) = settled(base, Status::Seeding);
+    let now = base + ms(1000);
+    let raise = Action::SetFilePriority {
+        hash: first(),
+        files: vec![2],
+        priority: FilePriority::High,
+    };
+    command(&mut engine, now, Command::Run(ActionId(40), raise));
+    exchange(&mut engine, now);
+    let reads: Vec<Request> = hand_out(&mut engine, now)
+        .into_iter()
+        .filter(is_details)
+        .collect();
+    assert_eq!(reads, [progress(first())]);
+    assert!(!asks_for_trackers(&reads[0]));
+}
+
+#[test]
+fn a_progress_answer_without_trackers_keeps_the_last_trackers() {
+    let base = Instant::now();
+    // A progress read that asked for no trackers, and one that asked but was answered without.
+    for (status, at) in [
+        (Status::Downloading, base + ms(3250)),
+        (Status::Seeding, base + secs(60)),
+    ] {
+        let (mut engine, read_at) = settled(base, status);
+        let whole = engine.details.clone().unwrap();
+        assert_eq!(whole.trackers.len(), 1, "{status:?}");
+        run(&mut engine, read_at, at, status);
+        let reads: Vec<Request> = hand_out(&mut engine, at)
+            .into_iter()
+            .filter(is_details)
+            .collect();
+        let [read] = <[Request; 1]>::try_from(reads).unwrap();
+        let mut answer = progress_details();
+        assert_eq!(answer.torrents[0].tracker_stats, None);
+        answer.torrents[0].downloaded_ever = Some(whole.downloaded_ever + 1);
+
+        let events = respond(&mut engine, at, &read, Ok(Response::Details(answer)));
+
+        let [merged] = details_events(&events).try_into().unwrap();
+        assert_eq!(merged.downloaded_ever, whole.downloaded_ever + 1);
+        assert_eq!(merged.trackers, whole.trackers, "{status:?}");
+    }
+}
+
+#[test]
+fn refresh_reads_full_details() {
+    let base = Instant::now();
+    let (mut engine, _) = settled(base, Status::Seeding);
+    let now = base + ms(1000);
+
+    command(&mut engine, now, Command::Refresh);
+
+    assert_eq!(engine.next_wakeup(now), now);
+    let due = hand_out(&mut engine, now);
+    assert!(due.contains(&Request::FullList), "{due:?}");
+    // One read of the one selected torrent, and in full.
+    let reads: Vec<Request> = due.into_iter().filter(is_details).collect();
+    assert_eq!(reads, [full(first())]);
+    // It is read once, not again with the next tick.
+    assert_eq!(hand_out(&mut engine, now), []);
+    let sent = run(&mut engine, now, now + secs(10), Status::Seeding);
+    assert_eq!(details_reads(&sent), []);
+}
+
+#[test]
+fn refresh_reads_no_details_without_a_selection_while_hidden_or_before_the_selection_settles() {
+    let base = Instant::now();
+
+    // Nothing is selected.
+    let mut engine = loaded(base);
+    command(&mut engine, base + ms(1000), Command::Refresh);
+    let due = hand_out(&mut engine, base + ms(1000));
+    assert!(!due.iter().any(is_details), "{due:?}");
+
+    // The window is hidden: the full read waits until it shows.
+    let (mut engine, _) = settled(base, Status::Seeding);
+    command(
+        &mut engine,
+        base + ms(1000),
+        Command::SetVisibility(Visibility::Hidden),
+    );
+    command(&mut engine, base + ms(1100), Command::Refresh);
+    let due = hand_out(&mut engine, base + ms(1100));
+    assert!(!due.iter().any(is_details), "{due:?}");
+    command(
+        &mut engine,
+        base + ms(1200),
+        Command::SetVisibility(Visibility::Visible),
+    );
+    let reads: Vec<Request> = hand_out(&mut engine, base + ms(1200))
+        .into_iter()
+        .filter(is_details)
+        .collect();
+    assert_eq!(reads, [full(first())]);
+
+    // The selection has not settled: moving through the list reads nothing, a refresh or not.
+    let mut engine = loaded(base);
+    command(&mut engine, base + ms(100), Command::Select(Some(first())));
+    command(&mut engine, base + ms(150), Command::Refresh);
+    let due = hand_out(&mut engine, base + ms(150));
+    assert!(!due.iter().any(is_details), "{due:?}");
+    let reads: Vec<Request> = hand_out(&mut engine, base + ms(350))
+        .into_iter()
+        .filter(is_details)
+        .collect();
+    assert_eq!(reads, [full(first())]);
+}
+
 /// Every request of ten minutes of virtual time with the window visible and the first torrent,
 /// in `status`, selected from the start; the server check before is left out.
 fn ten_minutes_selected(status: Status) -> Vec<(Instant, Request)> {
@@ -517,6 +737,12 @@ fn request_rate_with_a_downloading_selection_is_at_most_1_75_per_second() {
     assert_eq!(fulls, 1);
     // The progress really is read all along: every 3 s.
     assert!(reads.len() >= 199, "{} details reads", reads.len());
+    // The trackers are read with the nine whole lists that follow the first one, and only then.
+    let with_trackers = reads
+        .iter()
+        .filter(|(_, request)| *request == progress_and_trackers(first()))
+        .count();
+    assert_eq!(with_trackers, 9);
 }
 
 #[test]
@@ -529,8 +755,14 @@ fn request_rate_with_a_seeding_selection_is_at_most_1_45_per_second() {
         "{} requests: {rate:.3} per second",
         sent.len()
     );
-    // The full read, then the progress with each of the nine whole lists that follow.
-    assert_eq!(details_reads(&sent).len(), 10);
+    // The full read, then the progress, and the trackers with it, with each of the nine whole
+    // lists that follow.
+    let reads = details_reads(&sent);
+    let with_trackers = reads
+        .iter()
+        .filter(|(_, request)| *request == progress_and_trackers(first()))
+        .count();
+    assert_eq!((reads.len(), with_trackers), (10, 9));
 }
 
 #[test]

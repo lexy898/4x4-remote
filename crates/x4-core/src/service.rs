@@ -23,7 +23,7 @@ use x4_rpc::{
 };
 
 use crate::action::{Action, Direction};
-use crate::engine::{Command, DetailsRead, Engine, EngineConfig, Event, Request, Response};
+use crate::engine::{Command, Engine, EngineConfig, Event, Request, Response};
 use crate::limits::KbPerSecond;
 
 /// The name of the service thread, as debuggers and system monitors show it.
@@ -165,11 +165,9 @@ pub(crate) fn execute<T: Transport>(
         Request::Details { hash, kind } => {
             // Always one named torrent: omitted ids would read every torrent's files.
             let ids = GetIds::Selection(selection(slice::from_ref(hash))?);
-            let fields = match kind {
-                DetailsRead::Full => TorrentField::DETAILS_FULL,
-                DetailsRead::Progress => TorrentField::DETAILS_PROGRESS,
-            };
-            client.torrent_get(&ids, fields).map(Response::Details)
+            client
+                .torrent_get(&ids, kind.fields())
+                .map(Response::Details)
         }
         Request::Action(_, action) => perform(client, action).map(|()| Response::Done),
         Request::MagnetLinks(_, hashes) => client
@@ -475,6 +473,7 @@ mod tests {
 
     use super::*;
     use crate::action::{Action, ActionId, Direction};
+    use crate::engine::DetailsRead;
     use crate::test_support::{fixture_result, torrent};
 
     /// Answers like the recorded daemon: each read with its fixture, an add with a new torrent
@@ -575,6 +574,17 @@ mod tests {
                     "fields": fields(TorrentField::DETAILS_PROGRESS),
                 }),
             ),
+            (
+                Request::Details {
+                    hash: selected.clone(),
+                    kind: DetailsRead::ProgressAndTrackers,
+                },
+                "torrent_get",
+                json!({
+                    "ids": [selected.as_str()],
+                    "fields": fields(TorrentField::DETAILS_PROGRESS_TRACKERS),
+                }),
+            ),
         ];
 
         for (request, method, params) in cases {
@@ -603,7 +613,11 @@ mod tests {
             answer(Request::RecentlyActive),
             Response::Torrents(_)
         ));
-        for kind in [DetailsRead::Full, DetailsRead::Progress] {
+        for kind in [
+            DetailsRead::Full,
+            DetailsRead::Progress,
+            DetailsRead::ProgressAndTrackers,
+        ] {
             assert!(matches!(
                 answer(Request::Details {
                     hash: hash("a"),

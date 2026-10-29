@@ -164,7 +164,8 @@ impl TorrentField {
 
     /// The fields of the details of one torrent that change while it downloads: the per-file
     /// arrays, the pieces and the totals. The file names, the metainfo and the trackers are left
-    /// out; `file_count` tells when the files themselves changed.
+    /// out (the trackers come with [`TorrentField::DETAILS_PROGRESS_TRACKERS`]); `file_count`
+    /// tells when the files themselves changed.
     pub const DETAILS_PROGRESS: &'static [TorrentField] = &[
         Self::Id,
         Self::HashString,
@@ -175,6 +176,24 @@ impl TorrentField {
         Self::Pieces,
         Self::DownloadedEver,
         Self::UploadedEver,
+    ];
+
+    /// [`TorrentField::DETAILS_PROGRESS`] and the trackers' state.
+    ///
+    /// The trackers change on a minute's scale (an announce every half hour or so, a scrape, a
+    /// seeder count), not by the second, so only the progress read that goes out with the whole
+    /// list asks for them; the one every few seconds does not.
+    pub const DETAILS_PROGRESS_TRACKERS: &'static [TorrentField] = &[
+        Self::Id,
+        Self::HashString,
+        Self::FileCount,
+        Self::BytesCompleted,
+        Self::Priorities,
+        Self::Wanted,
+        Self::Pieces,
+        Self::DownloadedEver,
+        Self::UploadedEver,
+        Self::TrackerStats,
     ];
 }
 
@@ -671,11 +690,41 @@ mod tests {
                 "uploaded_ever",
             ])
         );
+        assert_eq!(
+            serde_json::to_value(TorrentField::DETAILS_PROGRESS_TRACKERS).unwrap(),
+            json!([
+                "id",
+                "hash_string",
+                "file_count",
+                "bytes_completed",
+                "priorities",
+                "wanted",
+                "pieces",
+                "downloaded_ever",
+                "uploaded_ever",
+                "tracker_stats",
+            ])
+        );
+    }
+
+    #[test]
+    fn the_progress_read_with_trackers_is_the_progress_read_and_the_trackers() {
+        let expected: Vec<TorrentField> = TorrentField::DETAILS_PROGRESS
+            .iter()
+            .copied()
+            .chain([TorrentField::TrackerStats])
+            .collect();
+
+        assert_eq!(TorrentField::DETAILS_PROGRESS_TRACKERS, expected);
     }
 
     #[test]
     fn details_fields_no_longer_include_magnet_link_or_total_size() {
-        for fields in [TorrentField::DETAILS_FULL, TorrentField::DETAILS_PROGRESS] {
+        for fields in [
+            TorrentField::DETAILS_FULL,
+            TorrentField::DETAILS_PROGRESS,
+            TorrentField::DETAILS_PROGRESS_TRACKERS,
+        ] {
             for dropped in [
                 TorrentField::MagnetLink,
                 TorrentField::TotalSize,

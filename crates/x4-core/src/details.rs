@@ -3,10 +3,12 @@
 //! They are read in two ways. A full read ([`TorrentField::DETAILS_FULL`]) brings everything and
 //! is [built](build) into [`TorrentDetails`]; a progress read
 //! ([`TorrentField::DETAILS_PROGRESS`]) brings only what changes while the torrent downloads and
-//! is [merged](merge_progress) into the last full details.
+//! is [merged](merge_progress) into the last full details. A progress read that also asks for the
+//! trackers ([`TorrentField::DETAILS_PROGRESS_TRACKERS`]) replaces them in the merge.
 //!
 //! [`TorrentField::DETAILS_FULL`]: x4_rpc::TorrentField::DETAILS_FULL
 //! [`TorrentField::DETAILS_PROGRESS`]: x4_rpc::TorrentField::DETAILS_PROGRESS
+//! [`TorrentField::DETAILS_PROGRESS_TRACKERS`]: x4_rpc::TorrentField::DETAILS_PROGRESS_TRACKERS
 
 use std::time::SystemTime;
 
@@ -139,7 +141,8 @@ pub struct TorrentDetails {
     pub downloaded_ever: u64,
     /// Bytes uploaded over the torrent's life.
     pub uploaded_ever: u64,
-    /// The trackers, as of the last full read.
+    /// The trackers, as of the last read that brought them: the full read, or a progress read
+    /// with the trackers.
     pub trackers: Vec<TrackerStat>,
 }
 
@@ -274,14 +277,16 @@ pub(crate) fn build(hash: HashString, record: TorrentRecord) -> Built {
 }
 
 /// The details `last` with the progress of `record` merged in; `record` was requested with
-/// [`TorrentField::DETAILS_PROGRESS`](x4_rpc::TorrentField::DETAILS_PROGRESS) for the same
-/// torrent, whose files have not changed since `last` was read.
+/// [`TorrentField::DETAILS_PROGRESS`](x4_rpc::TorrentField::DETAILS_PROGRESS), or with
+/// [`TorrentField::DETAILS_PROGRESS_TRACKERS`](x4_rpc::TorrentField::DETAILS_PROGRESS_TRACKERS),
+/// for the same torrent, whose files have not changed since `last` was read.
 ///
 /// Each file takes its bytes, priority and wanted switch from the arrays of the same names, and
 /// its playable prefix from the new pieces. An array that is missing or does not hold one entry
 /// per file is left out, so the files keep their last values of it, and is reported; the totals
-/// keep their last values when the answer lacks them. The names, the metainfo and the trackers
-/// stay as `last` has them.
+/// keep their last values when the answer lacks them. The names and the metainfo stay as `last`
+/// has them, and so do the trackers, unless the answer holds
+/// [`tracker_stats`](x4_rpc::TorrentField::TrackerStats), when those replace them.
 pub(crate) fn merge_progress(last: &TorrentDetails, record: TorrentRecord) -> Built {
     let mut issues = Vec::new();
     let mut details = last.clone();
@@ -318,6 +323,9 @@ pub(crate) fn merge_progress(last: &TorrentDetails, record: TorrentRecord) -> Bu
     }
     if let Some(uploaded) = record.uploaded_ever {
         details.uploaded_ever = uploaded;
+    }
+    if let Some(trackers) = record.tracker_stats {
+        details.trackers = trackers.into_iter().map(TrackerStat::from).collect();
     }
     Built { details, issues }
 }
@@ -811,6 +819,49 @@ mod tests {
             (merged.details.downloaded_ever, merged.details.uploaded_ever),
             (8, 3)
         );
+    }
+
+    #[test]
+    fn progress_with_trackers_replaces_them_and_one_without_keeps_them() {
+        let mut full = two_files();
+        full.tracker_stats = Some(vec![tracker("a.example:80", 3, 4)]);
+        let last = build(hash(), full).details;
+        assert_eq!(last.trackers.len(), 1);
+
+        let without = merge_progress(&last, two_files_progress());
+        let replaced = merge_progress(
+            &last,
+            TorrentRecord {
+                tracker_stats: Some(vec![
+                    tracker("b.example:443", 7, 8),
+                    tracker("c.example:80", 9, 1),
+                ]),
+                ..two_files_progress()
+            },
+        );
+        // A torrent whose trackers were all removed has none left.
+        let emptied = merge_progress(
+            &last,
+            TorrentRecord {
+                tracker_stats: Some(Vec::new()),
+                ..two_files_progress()
+            },
+        );
+
+        assert_eq!(without.details.trackers, last.trackers);
+        let hosts = |built: &Built| -> Vec<String> {
+            built
+                .details
+                .trackers
+                .iter()
+                .map(|tracker| tracker.host.clone())
+                .collect()
+        };
+        assert_eq!(hosts(&replaced), ["b.example:443", "c.example:80"]);
+        assert_eq!(replaced.details.trackers[0].seeders, Some(7));
+        assert_eq!(replaced.details.files, without.details.files);
+        assert_eq!(emptied.details.trackers, []);
+        assert_eq!(emptied.issues, []);
     }
 
     #[test]

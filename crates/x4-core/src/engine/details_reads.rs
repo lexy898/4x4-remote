@@ -6,8 +6,10 @@
 //! when the torrent's files changed, as when a magnet link got its metadata. A progress read goes
 //! out every [`EngineConfig::details_interval`](super::EngineConfig::details_interval) while the
 //! torrent downloads or verifies, and otherwise with each whole list; also at once after an
-//! action on the torrent and when the window shows again. Nothing is read while the window is
-//! hidden or nothing is selected.
+//! action on the torrent and when the window shows again. The progress read that goes out with a
+//! whole list, about once a minute, also reads the trackers, which change too slowly for the
+//! reads every few seconds; a downloading torrent's read joins that batch for it. Nothing is read
+//! while the window is hidden or nothing is selected.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -77,10 +79,12 @@ impl Engine {
         }
     }
 
-    /// The user asked for everything to be read again now.
-    pub(super) fn details_refresh(&mut self) {
+    /// The user asked at `now` for everything to be read again: the selected torrent's details
+    /// are read in full, as the metainfo and the files may have changed too. A selection that has
+    /// not settled yet keeps waiting.
+    pub(super) fn details_refresh(&mut self, now: Instant) {
         if self.selected.is_some() {
-            self.details_reads.progress_now = true;
+            self.details_reads.full_at.get_or_insert(now);
         }
     }
 
@@ -114,7 +118,8 @@ impl Engine {
         Some(Request::Details { hash, kind })
     }
 
-    /// Which details read is due at `now`, if any.
+    /// Which details read is due at `now`, if any; `full_list` tells whether a whole list goes out
+    /// in the same batch.
     fn details_read_due(&self, now: Instant, full_list: bool) -> Option<DetailsRead> {
         let hash = self.selected.as_ref()?;
         if self.visibility != Visibility::Visible {
@@ -125,18 +130,20 @@ impl Engine {
             // A selection that has not settled yet waits, whatever else asks for a read.
             return (at <= now).then_some(DetailsRead::Full);
         }
+        // A whole list catches what another client changed in the files, and a downloading
+        // torrent's read joins it, so that the trackers are read once a minute whatever the
+        // torrent does. The read replaces the next one on the 3 s timer, which is measured
+        // from it.
         let wanted = reads.progress_now
-            || if self.changing(hash) {
-                reads.timer.is_due(now, self.config.details_interval)
-            } else {
-                // A whole list catches what another client changed in the files.
-                full_list
-            };
+            || full_list
+            || (self.changing(hash) && reads.timer.is_due(now, self.config.details_interval));
         // Progress is merged into the last full read; without one, it is read in full again.
-        wanted.then_some(if self.details.is_some() {
-            DetailsRead::Progress
-        } else {
+        wanted.then_some(if self.details.is_none() {
             DetailsRead::Full
+        } else if full_list {
+            DetailsRead::ProgressAndTrackers
+        } else {
+            DetailsRead::Progress
         })
     }
 
@@ -194,7 +201,7 @@ impl Engine {
                 self.details_reads.file_count = details::file_count(&record);
                 details::build(hash.clone(), record)
             }
-            DetailsRead::Progress => {
+            DetailsRead::Progress | DetailsRead::ProgressAndTrackers => {
                 let Some(last) = self.details.as_deref() else {
                     tracing::debug!(
                         "ignored a details progress with no full details to merge into"

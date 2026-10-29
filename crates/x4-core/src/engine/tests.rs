@@ -101,6 +101,10 @@ fn answer(request: &Request) -> Response {
             kind: DetailsRead::Progress,
             ..
         } => Response::Details(progress_details()),
+        Request::Details {
+            kind: DetailsRead::ProgressAndTrackers,
+            ..
+        } => Response::Details(progress_and_trackers_details()),
         Request::Action(..) => Response::Done,
         Request::MagnetLinks(_, hashes) => Response::MagnetLinks(TorrentGetResponse {
             torrents: hashes
@@ -144,6 +148,16 @@ fn progress_details() -> TorrentGetResponse {
         torrents,
         removed: Vec::new(),
     }
+}
+
+/// A progress read of the first torrent that also read the trackers, which are those of the
+/// details fixture.
+fn progress_and_trackers_details() -> TorrentGetResponse {
+    let mut answer = progress_details();
+    for (record, full) in answer.torrents.iter_mut().zip(full_details().torrents) {
+        record.tracker_stats = full.tracker_stats;
+    }
+    answer
 }
 
 /// Hands out what is due at `now` without answering it.
