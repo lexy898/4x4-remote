@@ -25,6 +25,14 @@
 //! [`availability()`] and [`toggle_kind`] tell which actions those rows allow.
 //! [`removal_summary`] gives the [`RemovalSummary`] the removal dialog shows.
 //!
+//! The details panel under the table is decided here as well. [`details_target`] says which
+//! torrent it is about (a [`DetailsTarget`]), and [`general_model`] gives the values of its
+//! General tab, with the [`TrackerSummary`] of [`tracker_summary`]. A [`FileTree`] turns the files
+//! of the [`TorrentDetails`] into folders and files with their sums; a [`FileTreeView`] keeps
+//! which folders are open and where the cursor is and lists the [`FileRow`]s to draw; and
+//! [`FileTree::indices`] gives the files an action on a row reaches, as [`NonEmptyIndices`], which
+//! cannot be empty because the daemon reads an empty list as all files.
+//!
 //! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
 //! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
 //! and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
@@ -72,6 +80,7 @@ mod action;
 mod config;
 mod details;
 mod engine;
+mod files;
 mod filter;
 mod format;
 mod limits;
@@ -94,6 +103,10 @@ pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, Trac
 pub use engine::{
     Command, DetailsRead, Engine, EngineConfig, Event, Request, Response, Visibility,
 };
+pub use files::{
+    FileRow, FileTree, FileTreeView, NodeKey, NonEmptyIndices, PriorityView, RowKind, WantedState,
+    next_priority,
+};
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,
@@ -104,7 +117,7 @@ pub use limits::{
     kib_to_kbps, limit_edit, limit_needs_value, limit_prefill, parse_limit,
 };
 pub use model::{Eta, ModelError, Ratio, Torrent};
-pub use playable::{file_offsets, playable_prefix};
+pub use playable::{Playable, file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
@@ -116,10 +129,11 @@ pub use ui_state::{
     default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
-    Availability, ColumnId, CompactDuration, Edge, EmptyTable, EtaView, Indicator, RemovalSummary,
-    Row, Selection, ServiceStatus, SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit,
-    ToggleKind, ViewState, availability, removal_summary, status_model, table_model, toggle_kind,
-    visibility,
+    Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,
+    GeneralModel, Indicator, PiecesView, RemovalSummary, Row, Selection, ServiceStatus,
+    SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit, ToggleKind, TrackerProblem,
+    TrackerProblemKind, TrackerSummary, ViewState, availability, details_target, general_model,
+    removal_summary, status_model, table_model, toggle_kind, tracker_summary, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

@@ -1,12 +1,13 @@
-//! Builders for tests (feature `test-support`): a complete [`Torrent`] and the `result` of a
-//! recorded fixture.
+//! Builders for tests (feature `test-support`): a complete [`Torrent`], the details of one with
+//! the files given, and the `result` of a recorded fixture.
 //!
 //! The unit tests of this crate use them, and so can the tests of dependent crates, which enable
 //! the feature as a dev-dependency. The feature also turns on `x4-rpc`'s `test-support`, so
 //! `x4_rpc::testing::fixtures` is there to feed [`fixture_result`]. Not for production code.
 
-use x4_rpc::{HashString, TorrentId};
+use x4_rpc::{FilePriority, HashString, TorrentId};
 
+use crate::details::{FileEntry, TorrentDetails};
 use crate::model::{Eta, Ratio, Torrent};
 use crate::state::DisplayState;
 
@@ -66,6 +67,46 @@ pub fn torrent(name: &str) -> Torrent {
     }
 }
 
+/// The details of the torrent `hash` with these files, in order: each one is its path inside the
+/// torrent, its length, the bytes downloaded, whether it is wanted and its priority.
+///
+/// Everything else is neutral: no metainfo, no trackers, no pieces, and nothing playable. Set
+/// `playable_from_start` or any other field on the result when a test needs it.
+#[must_use]
+pub fn details(
+    hash: &HashString,
+    files: &[(&str, u64, u64, bool, FilePriority)],
+) -> TorrentDetails {
+    TorrentDetails {
+        hash: hash.clone(),
+        comment: String::new(),
+        creator: String::new(),
+        date_created: None,
+        source: None,
+        is_private: false,
+        piece_count: 0,
+        piece_size: 0,
+        files: files
+            .iter()
+            .enumerate()
+            .map(
+                |(index, &(name, length, bytes_completed, wanted, priority))| FileEntry {
+                    index,
+                    name: name.to_owned(),
+                    length,
+                    bytes_completed,
+                    wanted,
+                    priority,
+                    playable_from_start: 0,
+                },
+            )
+            .collect(),
+        downloaded_ever: 0,
+        uploaded_ever: 0,
+        trackers: Vec::new(),
+    }
+}
+
 /// A valid 40-digit hash made of two FNV-1a digests of the name and its length.
 ///
 /// FNV is spelled out here, rather than taken from `DefaultHasher`, because the standard hasher
@@ -91,6 +132,34 @@ fn hash_for(name: &str) -> HashString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn details_hold_the_files_in_order_with_their_indices() {
+        let hash = torrent("a").hash;
+
+        let details = details(
+            &hash,
+            &[
+                ("t/a", 10, 4, true, FilePriority::High),
+                ("t/b", 0, 0, false, FilePriority::Low),
+            ],
+        );
+
+        assert_eq!(details.hash, hash);
+        let files: Vec<_> = details
+            .files
+            .iter()
+            .map(|file| (file.index, file.name.as_str(), file.wanted, file.priority))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                (0, "t/a", true, FilePriority::High),
+                (1, "t/b", false, FilePriority::Low)
+            ]
+        );
+        assert_eq!(details.files[0].bytes_completed, 4);
+    }
 
     #[test]
     fn the_hash_follows_the_name() {

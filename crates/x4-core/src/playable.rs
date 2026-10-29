@@ -2,6 +2,35 @@
 
 use x4_rpc::{FileRecord, Pieces};
 
+use crate::format::{HumanSize, human_size};
+use crate::view::percent::{fraction_of, percent};
+
+/// How much of a file that is still downloading can be played from its start, as the details
+/// panel shows it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Playable {
+    /// The bytes at the start of the file that are downloaded without a gap
+    /// ([`playable_prefix`]), never more than the file's length.
+    pub bytes: u64,
+    /// `bytes` scaled for display.
+    pub size: HumanSize,
+    /// `bytes` as a share of the file's length in whole percent; 100 only when all of the file
+    /// can be played.
+    pub percent: u8,
+}
+
+impl Playable {
+    /// The playable `bytes` at the start of a file of `file_length` bytes.
+    pub(crate) fn of(bytes: u64, file_length: u64) -> Self {
+        let bytes = bytes.min(file_length);
+        Self {
+            bytes,
+            size: human_size(bytes),
+            percent: percent(fraction_of(bytes, file_length)),
+        }
+    }
+}
+
 /// The bytes at the start of a file that are already downloaded without a gap.
 ///
 /// The file occupies `file_length` bytes from `file_offset` in the torrent's data, which is cut
@@ -69,6 +98,25 @@ mod tests {
             bitfield[usize::try_from(index / 8).unwrap()] |= 0x80 >> (index % 8);
         }
         Pieces::from_bytes(bitfield)
+    }
+
+    #[test]
+    fn playable_is_a_share_of_the_file() {
+        let playable = Playable::of(512, 2048);
+
+        assert_eq!(playable.bytes, 512);
+        assert_eq!(playable.size, human_size(512));
+        assert_eq!(playable.percent, 25);
+    }
+
+    #[test]
+    fn playable_never_says_100_percent_before_the_whole_file_plays() {
+        assert_eq!(Playable::of(999, 1000).percent, 99);
+        assert_eq!(Playable::of(1000, 1000).percent, 100);
+        // The prefix is limited to the file, so bad data cannot overflow the bar.
+        let over = Playable::of(5000, 1000);
+        assert_eq!((over.bytes, over.percent), (1000, 100));
+        assert_eq!(Playable::of(0, 1000).percent, 0);
     }
 
     fn file(length: u64) -> FileRecord {
