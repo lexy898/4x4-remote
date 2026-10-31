@@ -450,11 +450,12 @@ impl Window {
         })
     }
 
-    /// The commands the window has sent so far, other than the window's visibility.
+    /// The commands the window has sent so far, other than the window's visibility and the
+    /// torrent whose details to read, which the `details` tests cover.
     fn sent(&self) -> Vec<Command> {
         self.commands
             .try_iter()
-            .filter(|command| !matches!(command, Command::SetVisibility(_)))
+            .filter(|command| !matches!(command, Command::SetVisibility(_) | Command::Select(_)))
             .collect()
     }
 

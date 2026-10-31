@@ -8773,6 +8773,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "base64 0.23.1",
+ "chrono",
  "crossbeam-channel",
  "directories",
  "fluent-syntax",

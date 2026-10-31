@@ -9,9 +9,10 @@
 //!   while no menu of it is open (`!PopupMenu`): the context menu is drawn inside the list, and
 //!   Delete there must not act on the torrents behind it. The search box lies outside the list, so
 //!   Ctrl+A, Ctrl+C, Delete or Space there edit or copy its text and never reach the torrents;
-//! - the window's own keys (Ctrl+F, `/`, and Ctrl+T and Ctrl+L for the turtle and the speed
-//!   limits) work in the whole main window (`MainWindow`), the search box and the popover of the
-//!   limits included: their text fields bind neither Ctrl+T nor Ctrl+L;
+//! - the window's own keys (Ctrl+F, `/`, Ctrl+T and Ctrl+L for the turtle and the speed limits,
+//!   and Alt+Enter, Alt+1 and Alt+2 for the details panel and its tabs) work in the whole main
+//!   window (`MainWindow`), the search box and the popover of the limits included: their text
+//!   fields bind none of these keys;
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
@@ -26,8 +27,8 @@
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
 //! again here in its context, later, so that ours win (see [`BINDINGS`]). While a menu is open (the
 //! context menu, or a menu of the toolbar), its own Up, Down, Enter and Escape go first, and Tab,
-//! Shift+Tab, Ctrl+F, `/`, Ctrl+L and Ctrl+T do nothing, nor do Home, End, Page Up and Page Down
-//! in the context menu: the menu keeps the keys until it closes.
+//! Shift+Tab, Ctrl+F, `/`, Ctrl+L, Ctrl+T, Alt+Enter, Alt+1 and Alt+2 do nothing, nor do Home,
+//! End, Page Up and Page Down in the context menu: the menu keeps the keys until it closes.
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +83,12 @@ actions!(
         ToggleAltSpeed,
         /// Opens the popover of the normal speed limits.
         EditSpeedLimits,
+        /// Shows or hides the details panel under the table.
+        ToggleDetails,
+        /// Shows the General tab of the details panel.
+        ShowGeneralTab,
+        /// Shows the Files tab of the details panel.
+        ShowFilesTab,
     ]
 );
 
@@ -148,6 +155,23 @@ pub const BINDINGS: &[Binding] = &[
         action: || Box::new(EditSpeedLimits),
         context: Some(MAIN_CONTEXT),
     },
+    // Alt+Enter is Transmission's key for a torrent's properties. Enter alone is a different key:
+    // a binding of Enter never runs for Alt+Enter, nor the reverse.
+    Binding {
+        keys: "alt-enter",
+        action: || Box::new(ToggleDetails),
+        context: Some(MAIN_CONTEXT),
+    },
+    Binding {
+        keys: "alt-1",
+        action: || Box::new(ShowGeneralTab),
+        context: Some(MAIN_CONTEXT),
+    },
+    Binding {
+        keys: "alt-2",
+        action: || Box::new(ShowFilesTab),
+        context: Some(MAIN_CONTEXT),
+    },
     // Shallower than the text field's own Escape, which goes first: it closes the field's menu or
     // drops extra cursors, and passes the key on when there is nothing of that kind.
     Binding {
@@ -194,8 +218,9 @@ pub const BINDINGS: &[Binding] = &[
     // A menu is modal. Up and Down in it move its highlight (the menu's own bindings are deeper).
     // Neither Tab, Shift+Tab, Ctrl+F, `/` nor Ctrl+L (which opens the speed limits) may take the
     // focus out of an open menu, which does not close when it loses the focus: the keys of the
-    // list or the search box would then act behind it. Ctrl+T does nothing behind it either. A
-    // test holds every key bound outside a menu to this, unless its context leaves menus out.
+    // list or the search box would then act behind it. Ctrl+T, Alt+Enter, Alt+1 and Alt+2 do
+    // nothing behind it either. A test holds every key bound outside a menu to this, unless its
+    // context leaves menus out.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
@@ -223,6 +248,21 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         keys: "ctrl-t",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "alt-enter",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "alt-1",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "alt-2",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },

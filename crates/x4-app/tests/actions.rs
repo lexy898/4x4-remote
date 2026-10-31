@@ -217,11 +217,12 @@ impl Window {
         self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
     }
 
-    /// The commands the window has sent so far, other than the window's visibility.
+    /// The commands the window has sent so far, other than the window's visibility and the
+    /// torrent whose details to read, which the `details` tests cover.
     fn sent(&self) -> Vec<Command> {
         self.commands
             .try_iter()
-            .filter(|command| !matches!(command, Command::SetVisibility(_)))
+            .filter(|command| !matches!(command, Command::SetVisibility(_) | Command::Select(_)))
             .collect()
     }
 
@@ -412,9 +413,11 @@ fn a_toolbar_button_hands_the_keys_back_to_the_list(cx: &mut TestAppContext) {
     assert!(window.table_focused(cx));
     window.finish(id, Ok(()), cx);
 
-    // Pressed with the keyboard, the button gives the focus back to the list.
-    window.press("tab", cx);
-    window.press("tab", cx);
+    // Pressed with the keyboard, the button gives the focus back to the list. From the list, Tab
+    // passes the two copy buttons of the details panel and the search box.
+    for _ in 0..4 {
+        window.press("tab", cx);
+    }
     window.act(cx, |window, _| {
         assert_eq!(
             window.find(PAUSE).focused(),

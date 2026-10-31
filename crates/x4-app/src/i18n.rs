@@ -11,10 +11,15 @@
 //! Fluent does not format numbers by the rules of a language, so sizes, speeds and ratios are
 //! formatted here ([`decimal`]) and passed as strings, with the decimal separator taken from the
 //! message `number-decimal-separator`. Counts go in as numbers, so that the plural rules of the
-//! language pick the wording.
+//! language pick the wording. Nor does it format dates: [`date_time_text`] writes the parts of a
+//! moment in the local time zone, and the message `date-time` orders them.
+//!
+//! The `details` module holds the texts of the details panel that carry values.
 
 use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Datelike as _, TimeZone, Timelike as _};
 use gpui_kit::SharedString;
 use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
@@ -32,6 +37,12 @@ use crate::app::ConfigProblem;
 use crate::clipboard::MagnetFailure;
 use crate::speed_limits::LimitFeedback;
 
+pub(crate) use details::{
+    created_text, details_placeholder_text, error_texts, pieces_text, size_with_wanted_text,
+    tracker_problem_text, trackers_text,
+};
+
+mod details;
 #[cfg(test)]
 mod parity;
 #[cfg(test)]
@@ -102,6 +113,35 @@ fn with_groups(value: u32, separator: &str) -> String {
         grouped.push(digit);
     }
     grouped
+}
+
+/// A moment in the local time zone, such as "2026-10-29 14:05"; "—" for one that cannot be a
+/// date the daemon meant, before 1970 or hundreds of millennia ahead.
+pub(crate) fn date_time_text(time: SystemTime) -> SharedString {
+    date_time_in(time, &chrono::Local)
+}
+
+/// [`date_time_text`] in the time zone `zone`. Fluent cannot format dates, so the parts are
+/// written here, with their leading zeros, and the message only orders them.
+fn date_time_in<Zone: TimeZone>(time: SystemTime, zone: &Zone) -> SharedString {
+    let Some(moment) = time
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|since| i64::try_from(since.as_secs()).ok())
+        .and_then(|seconds| DateTime::from_timestamp(seconds, 0))
+    else {
+        return t!("general-none").into();
+    };
+    let local = moment.with_timezone(zone);
+    t!(
+        "date-time",
+        year = format!("{:04}", local.year()),
+        month = format!("{:02}", local.month()),
+        day = format!("{:02}", local.day()),
+        hour = format!("{:02}", local.hour()),
+        minute = format!("{:02}", local.minute())
+    )
+    .into()
 }
 
 /// A size such as "22.9 GiB".

@@ -51,6 +51,16 @@ impl DetailsState {
         };
         Self { height, ..self }
     }
+
+    /// How high to draw the panel when `room` pixels are free for it under the table: the
+    /// remembered height, lowered to fit, and never below [`MIN_DETAILS_HEIGHT`]. The remembered
+    /// height itself stays, so that the panel grows back when the window does.
+    #[must_use]
+    pub fn fitted_height(self, room: f32) -> f32 {
+        // `max` takes the minimum for a room that is not a number.
+        let room = room.max(MIN_DETAILS_HEIGHT);
+        self.height.min(room).max(MIN_DETAILS_HEIGHT)
+    }
 }
 
 /// A tab of the details panel.

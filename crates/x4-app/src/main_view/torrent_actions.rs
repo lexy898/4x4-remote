@@ -77,11 +77,12 @@ impl MainView {
     }
 
     /// Follows a change of the table, which may be a change of the selection or of the rows: draws
-    /// the toolbar again if the actions it allows changed.
+    /// the toolbar again if the actions it allows changed, and hands the details panel its torrent.
     pub(super) fn follow_table_change(&mut self, cx: &mut Context<'_, Self>) {
         if self.refresh_availability(cx) {
             cx.notify();
         }
+        self.follow_details(cx);
     }
 
     /// Carries out `request` on the selected torrents that the list shows now, if they allow it;

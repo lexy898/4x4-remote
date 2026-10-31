@@ -1059,3 +1059,28 @@ fn details_of_the_wrong_type_are_an_error() {
         );
     }
 }
+
+#[test]
+fn the_panel_fits_the_room_the_window_leaves_it() {
+    let at = |height: f32| DetailsState {
+        height,
+        ..DetailsState::default()
+    };
+    let fitted = |state: DetailsState, room: f32| state.fitted_height(room);
+
+    // It fits: the remembered height.
+    assert!((fitted(at(240.0), 500.0) - 240.0).abs() < f32::EPSILON);
+    assert!((fitted(at(240.0), 240.0) - 240.0).abs() < f32::EPSILON);
+    // Too high for the room: as high as the room.
+    assert!((fitted(at(2000.0), 500.0) - 500.0).abs() < f32::EPSILON);
+    assert!((fitted(at(240.0), 150.5) - 150.5).abs() < f32::EPSILON);
+    // Less room than the minimum, or none, or a room that is not a number: the minimum.
+    for room in [109.0, 0.0, -50.0, f32::NAN] {
+        assert!(
+            (fitted(at(240.0), room) - MIN_DETAILS_HEIGHT).abs() < f32::EPSILON,
+            "{room}"
+        );
+    }
+    // Infinite room: the remembered height.
+    assert!((fitted(at(333.0), f32::INFINITY) - 333.0).abs() < f32::EPSILON);
+}

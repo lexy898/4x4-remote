@@ -133,7 +133,7 @@ status-config-problem = Config file not used
 status-dismiss = Dismiss
 # Shown while state.toml cannot be written, until a save works again; the detail is its tooltip.
 status-state-not-saved = Layout not saved
-status-state-not-saved-detail = The columns, sorting, filter, theme and window size cannot be saved to state.toml; the log says why
+status-state-not-saved-detail = The columns, sorting, filter, theme, window size and details panel cannot be saved to state.toml; the log says why
 
 ## The turtle and the speed limits, in the status bar
 
@@ -504,3 +504,89 @@ column-menu = Columns
 column-menu-tooltip = Show or hide columns
 # The peers column. $count: the connected peers (a number).
 peer-count = { $count }
+
+## Dates
+
+# A date and time in the local time zone, such as 2026-10-29 14:05. Each part comes as digits
+# with its leading zeros: $year has four, $month, $day, $hour (0 to 23) and $minute two each.
+date-time = { $year }-{ $month }-{ $day } { $hour }:{ $minute }
+
+## The details panel under the table
+
+# The tabs of the panel, which Alt+1 and Alt+2 choose too.
+details-tab-general = General
+details-tab-files = Files
+# What the panel says when it shows no torrent: none is selected, or several are.
+# $count: the torrents selected (a number, 2 or more).
+details-none = Select a torrent
+details-many =
+    { $count ->
+        [one] { $count } torrent selected
+       *[other] { $count } torrents selected
+    }
+# What a value says while it is read from the server and has not come yet.
+details-pending = —
+
+# The labels of the General tab.
+general-path = Path
+general-size = Size
+general-hash = Hash
+general-pieces = Pieces
+general-downloaded = Downloaded
+general-uploaded = Uploaded
+general-ratio = Ratio
+general-added = Added
+general-done = Completed
+general-created = Created
+general-source = Source
+general-comment = Comment
+general-private = Private
+general-trackers = Trackers
+# The label of the problem the server reports for the torrent: a local error, such as a full disk,
+# or what the tracker said.
+general-error-local = Error
+general-error-tracker = Tracker error
+general-warning-tracker = Tracker warning
+# The value of the problem when the server sent no text for it.
+general-error-no-text = no details from the server
+# The buttons next to the path and the hash: their names for screen readers and their tooltips.
+general-copy-path = Copy path
+general-copy-hash = Copy hash
+
+# The values of the General tab.
+# A value the torrent does not have, such as an empty comment or an unknown date.
+general-none = —
+# The torrent has not finished downloading.
+general-not-done = not yet
+general-yes = Yes
+general-no = No
+# The size when only some of the files are wanted. $size: the size of all files; $wanted: the
+# size of the wanted ones, both formatted, such as "22.9 GiB".
+general-size-wanted = { $size } ({ $wanted } wanted)
+# $count: the pieces (a number), for the plural; $pieces: the same number with its digits grouped,
+# such as "1,500"; $size: the size of one piece, such as "4.0 MiB".
+general-pieces-value =
+    { $count ->
+        [one] { $pieces } piece of { $size }
+       *[other] { $pieces } pieces of { $size }
+    }
+# Who made the metainfo and when. $creator: the program's name, as the metainfo says it; $date: a
+# date-time. When only the date is known, the value is the date alone.
+general-created-by-on = by { $creator } on { $date }
+general-created-by = by { $creator }
+# How many trackers answered their last announce. $working and $total: numbers.
+general-trackers-value =
+    { $total ->
+        [0] none
+       *[other] { $working } of { $total } working
+    }
+# The worst problem among the trackers, under the line above. $host: the tracker's host name;
+# $text: the server's own text, shown as sent, or general-error-no-text when it sent none.
+# A failed announce: the tracker could not be reached, or refused, as $text says.
+tracker-problem-announce-failed = Tracker { $host }: { $text }
+# The tracker did not answer the announce in time.
+tracker-problem-announce-timed-out = Tracker { $host }: connection timed out
+# A failed scrape: the tracker sends no counts of seeders and leechers, as many trackers never
+# do.
+tracker-problem-scrape-failed = Tracker { $host } sends no peer counts: { $text }
+tracker-problem-scrape-timed-out = Tracker { $host } sends no peer counts: connection timed out

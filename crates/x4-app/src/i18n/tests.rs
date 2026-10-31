@@ -873,3 +873,40 @@ fn a_limit_that_cannot_be_applied_says_why() {
         "Enter a speed to turn the limit on"
     );
 }
+
+/// The zone `hours` east of UTC.
+fn east(hours: i32) -> chrono::FixedOffset {
+    chrono::FixedOffset::east_opt(hours * 3600).expect("an offset within a day")
+}
+
+#[test]
+fn a_date_is_written_in_the_zone_with_leading_zeros() {
+    // 2023-11-14 22:13:20 UTC.
+    let moment = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+    assert_eq!(date_time_in(moment, &east(0)), "2023-11-14 22:13");
+    // Three hours east it is the next day already.
+    assert_eq!(date_time_in(moment, &east(3)), "2023-11-15 01:13");
+    assert_eq!(date_time_in(moment, &east(-5)), "2023-11-14 17:13");
+    // 2001-02-03 04:05:06 UTC: every part keeps its leading zero, and the seconds are left out.
+    let early = UNIX_EPOCH + Duration::from_secs(981_173_106);
+    assert_eq!(date_time_in(early, &east(0)), "2001-02-03 04:05");
+    assert_eq!(date_time_in(UNIX_EPOCH, &east(0)), "1970-01-01 00:00");
+}
+
+#[test]
+fn a_date_out_of_range_says_none() {
+    let before = UNIX_EPOCH - Duration::from_secs(1);
+    assert_eq!(date_time_in(before, &east(0)), "—");
+    // Some 31 million years ahead, past what a date can hold.
+    let far = UNIX_EPOCH + Duration::from_secs(1_000_000_000_000_000);
+    assert_eq!(date_time_in(far, &east(0)), "—");
+}
+
+#[test]
+fn a_local_date_has_the_same_shape() {
+    let moment = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let text = date_time_text(moment);
+    assert_eq!(text.len(), "2023-11-14 22:13".len(), "{text}");
+    assert_eq!(text, date_time_in(moment, &chrono::Local));
+}

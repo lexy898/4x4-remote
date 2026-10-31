@@ -17,6 +17,8 @@ anyhow = "1.0.104"
 # The worker thread sends events to the UI, which awaits them on its executor.
 async-channel = "2.5.0"
 base64 = "0.23.1"
+# The dates of the details panel in the local time zone. gpui already pulls it in, with the clock.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # The UI sends commands to the worker thread, which waits on them until its next wakeup.
 crossbeam-channel = "0.5.17"
 # Where the config, the UI state and the logs live (XDG directories on Linux).

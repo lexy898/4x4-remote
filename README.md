@@ -72,10 +72,10 @@ every column fits at its first width, which leaves room for its usual text: "Dow
 left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
 last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
-The window has four parts: a toolbar along the top, with the search box, the Start and Pause
+The window has five parts: a toolbar along the top, with the search box, the Start and Pause
 buttons and the Remove menu on the left and the theme button and the "Columns" menu on the right;
-the filter sidebar down the left side; the torrent table, which takes the rest; and the status bar
-along the bottom.
+the filter sidebar down the left side; the torrent table, which takes the rest; the details panel
+under the table; and the status bar along the bottom.
 
 The table lists the torrents, sorted by name at first. Each row shows:
 
@@ -112,9 +112,10 @@ under the pointer before the button comes up, and on nothing if that torrent has
 then. A selected torrent that the filter or the search hides, or that is gone from the daemon,
 leaves the selection, and it is not selected again when it shows again. With no row to start from
 (nothing clicked yet, or the selection cleared with Escape), Up, Down, Page Up, Page Down and Home
-select the first torrent, and End the last. Tab moves on from the table to the turtle and the speed
-limits in the status bar, then to the search box and the toolbar's buttons; a disabled button is
-passed over. The table has the keyboard focus when the window opens.
+select the first torrent, and End the last. Tab moves on from the table to the copy buttons of the
+details panel, the turtle and the speed limits in the status bar, then to the search box and the
+toolbar's buttons; a disabled button is passed over. The table has the keyboard focus when the
+window opens.
 
 The selected torrents that the list shows are what an action works on, in the order shown; a
 torrent the filter or the search hides is never touched. With the table focused:
@@ -195,6 +196,31 @@ one of a failed verify in place. If the daemon did not answer, the action may ha
 same, and the notification says so: the list shows the result. Copying magnet links fails the same
 way, with a notification, when the daemon cannot send them or no longer has the torrents; the
 clipboard then keeps what it had.
+
+The details panel under the table shows the selected torrent. With none selected it says "Select
+a torrent", and with several, how many are selected; it shows a torrent only when exactly one of
+the torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from
+anywhere in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2`
+open; the Files tab is empty for now. While a menu is open, these three keys do nothing. Drag the
+line between the table and the panel to change its height. The panel keeps that height when it is
+hidden and between runs; when the window is too low for it and the table's header and two rows, it
+is drawn lower, and it grows back with the window.
+
+The General tab shows, from the daemon's list:
+
+- the path of the data on the server (the download directory and the torrent's name), the size
+  (with how much of it is wanted, when only some files are), the info hash, the share ratio, and
+  when the torrent was added and completed ("not yet" while it downloads);
+- an error or a tracker problem the daemon reports for the torrent, first, in red or yellow.
+
+The rest comes from the torrent's details, which 4x4 reads only while the panel is open on one
+torrent, and says "—" until they have come: how many pieces there are and their size, the data
+downloaded and uploaded over the torrent's life, who created the torrent and when, its source (a
+private tracker's tag, shown only when there is one), its comment, whether it is private, and how
+many of its trackers work, with the worst problem among them in plain words, such as "Tracker
+tracker.example.org: connection timed out". Dates are in the local time zone, such as
+"2026-10-29 14:05". The buttons next to the path and the hash copy them at once, also while the
+daemon is not connected, and give the keys back to the table.
 
 The sidebar on the left filters the list by state:
 
@@ -287,6 +313,8 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Escape`                                            | in a removal dialog       | closes it and removes nothing                |
 | `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
 | `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
+| `Alt+Enter`                                         | anywhere in the window    | shows or hides the details panel             |
+| `Alt+1`, `Alt+2`                                    | anywhere in the window    | show the panel's General or Files tab        |
 | `Enter`                                             | in the speed limits       | applies them                                 |
 | `Escape`                                            | in the speed limits       | closes them and changes nothing              |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
@@ -308,7 +336,8 @@ Between runs 4x4 remembers, in `state.toml`:
 - the filter chosen in the sidebar;
 - the theme chosen with the toolbar button (system, light or dark);
 - the size of the window and whether it is maximized. Not its position: on Wayland the desktop
-  places windows, and an app can neither read nor set where its window is.
+  places windows, and an app can neither read nor set where its window is;
+- the details panel: whether it is shown, its height and the tab open in it.
 
 The search text, the selected torrent and the scroll position are not remembered.
 
