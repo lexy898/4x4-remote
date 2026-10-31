@@ -172,3 +172,64 @@ fn a_download_stops_short_of_the_end_and_keeps_going() {
     assert!(last.percent_done > 0.98 && last.percent_done < 1.0);
     assert_eq!(last.present_bytes(), last.total - last.left);
 }
+
+/// The first tracks of the album that a small choice of files wants.
+const WANTED_TRACKS: usize = 10;
+
+/// The bytes the first `WANTED_TRACKS` files of `view` still lack.
+fn tracks_missing(view: &View) -> u64 {
+    view.files
+        .iter()
+        .take(WANTED_TRACKS)
+        .map(|file| file.length - file.bytes_completed)
+        .sum()
+}
+
+#[test]
+fn wanting_one_part_of_the_album_still_downloads() {
+    let mut client = client(Activity::Ticking);
+    let album = pick(&mut client, |status, files| {
+        status == Status::Downloading && files == 2000
+    });
+    let wanted: Vec<usize> = (0..WANTED_TRACKS).collect();
+    set_raw(
+        &mut client,
+        &[&album],
+        json!({ "files_unwanted": [], "files_wanted": wanted }),
+    )
+    .expect("only the first tracks are wanted");
+
+    // The wanted tracks are a small part of the pieces: less than the last percent that a
+    // download used to stay short of, counted over all the pieces.
+    let first = View::of(&mut client, &album);
+    let wanted_pieces = first
+        .files
+        .get(WANTED_TRACKS - 1)
+        .map(|file| usize::try_from(file.end_piece).expect("fits"))
+        .expect("the last wanted track");
+    assert!(
+        wanted_pieces <= first.have.len() / 100,
+        "{wanted_pieces} of {} pieces are wanted",
+        first.have.len()
+    );
+    let mut missing = tracks_missing(&first);
+    assert!(
+        missing > first.piece_size,
+        "the wanted tracks lack {missing} bytes, so there is something to download"
+    );
+
+    // Each few polls bring more of them, until what is left is the one piece that the download
+    // stays short of.
+    let mut rounds = 0;
+    while missing > first.piece_size {
+        rounds += 1;
+        assert!(rounds <= 60, "{missing} bytes are still missing");
+        poll(&mut client, 5);
+        let now = tracks_missing(&View::of(&mut client, &album));
+        assert!(
+            now < missing,
+            "{missing} bytes were missing and {now} are after {rounds} rounds of polls"
+        );
+        missing = now;
+    }
+}

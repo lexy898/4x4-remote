@@ -115,6 +115,80 @@ fn heavy_fields_are_sent_only_when_asked_for() {
 }
 
 #[test]
+fn a_list_read_does_not_build_metainfo() {
+    let mut client = client(Activity::Ticking);
+    let hash = pick(&mut client, |_, files| (3..=12).contains(&files));
+    let start = metainfo::built();
+
+    // None of these asks for a field of the metainfo, so none builds one, for any torrent, and
+    // the records carry none of its keys.
+    list(&mut client, &GetIds::All);
+    recently_active(&mut client);
+    let without = [
+        TorrentField::FileCount,
+        TorrentField::TrackerStats,
+        TorrentField::DownloadedEver,
+        TorrentField::UploadedEver,
+    ];
+    let records = client
+        .torrent_get(&GetIds::All, &without)
+        .expect("parsed")
+        .torrents;
+    assert_eq!(records.len(), usize::try_from(COUNT).expect("fits"));
+    let files = [
+        TorrentField::Files,
+        TorrentField::Pieces,
+        TorrentField::Wanted,
+    ];
+    read(&mut client, &hash, &files);
+    let raw = client
+        .call_raw(
+            "torrent_get",
+            Some(json!({
+                "ids": [hash.to_string()],
+                "fields": ["file_count", "tracker_stats", "downloaded_ever", "uploaded_ever"],
+            })),
+        )
+        .expect("an answer");
+    let built = metainfo::built() - start;
+    assert_eq!(
+        built, 0,
+        "{built} metainfos were built by reads that ask for none"
+    );
+    assert!(records.iter().all(|record| {
+        record.comment.is_none()
+            && record.creator.is_none()
+            && record.date_created.is_none()
+            && record.source.is_none()
+            && record.is_private.is_none()
+    }));
+    let torrent = raw.pointer("/torrents/0").expect("a torrent");
+    assert!(
+        torrent.get("tracker_stats").is_some(),
+        "the read was answered"
+    );
+    for key in ["comment", "creator", "date_created", "source", "is_private"] {
+        assert!(torrent.get(key).is_none(), "{key} is sent unasked");
+    }
+
+    // A field of the metainfo builds it, once for each torrent read, whichever field it is.
+    for field in [
+        TorrentField::Comment,
+        TorrentField::Creator,
+        TorrentField::DateCreated,
+        TorrentField::Source,
+        TorrentField::IsPrivate,
+    ] {
+        let before = metainfo::built();
+        read(&mut client, &hash, &[TorrentField::HashString, field]);
+        assert_eq!(metainfo::built() - before, 1, "{field:?}");
+    }
+    let before = metainfo::built();
+    read(&mut client, &hash, TorrentField::DETAILS_FULL);
+    assert_eq!(metainfo::built() - before, 1, "a full details read");
+}
+
+#[test]
 fn synthetic_details_have_the_wire_shapes_of_transmission() {
     let daemon = SyntheticDaemon::new(COUNT, Activity::Static);
     let hash = pick(&mut client(Activity::Static), |_, files| {

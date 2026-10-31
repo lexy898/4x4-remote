@@ -12,7 +12,7 @@ use x4_core::{
 };
 use x4_rpc::{
     Client, GetIds, HashString, RemoveData, RpcError, SessionSet, TorrentAction, TorrentField,
-    TorrentGetResponse, TorrentId, TorrentRecord, TorrentSelection, TorrentSet,
+    TorrentGetResponse, TorrentId, TorrentRecord, TorrentRef, TorrentSelection, TorrentSet,
 };
 
 use super::*;
@@ -446,6 +446,78 @@ fn a_list_of_torrents_gets_only_those_and_only_the_fields_asked_for() {
             .all(|record| record.magnet_link.is_none()),
         "the list carries no magnet links"
     );
+}
+
+/// The records of `refs`, named in one `torrent_get`, with the fields of the list.
+fn records_of(client: &mut Client<SyntheticDaemon>, refs: &[TorrentRef]) -> Vec<TorrentRecord> {
+    let selection = TorrentSelection::new(refs.to_vec()).expect("not empty");
+    client
+        .torrent_get(&GetIds::Selection(selection), TorrentField::LIST)
+        .expect("the client parses the answer")
+        .torrents
+}
+
+#[test]
+fn reading_ten_torrents_by_hash_matches_reading_them_one_by_one() {
+    let mut client = client(Activity::Static);
+    let all = shown(list(&mut client, &GetIds::All));
+    // Ten torrents spread over the list, in no order, with one the daemon does not know in the
+    // middle: eleven entries, which is past the length at which the daemon indexes the torrents
+    // instead of scanning them for each entry.
+    let chosen: Vec<&ShownTorrent> = [1703, 3, 951, 1999, 0, 412, 1203, 77, 1550, 600]
+        .iter()
+        .map(|&position| all.get(position).expect("a torrent"))
+        .collect();
+    assert!(chosen.len() + 1 > SHORT_LIST);
+    let unknown = HashString::parse("0000000000000000000000000000000000000000").expect("a hash");
+    let by_hash = |torrent: &ShownTorrent| TorrentRef::Hash(torrent.hash.clone());
+    let by_id = |torrent: &ShownTorrent| TorrentRef::Id(torrent.id);
+    let unknown_id = TorrentRef::Id(TorrentId(999_999));
+
+    for (name, of, unknown) in [
+        (
+            "hashes",
+            &by_hash as &dyn Fn(&ShownTorrent) -> TorrentRef,
+            TorrentRef::Hash(unknown),
+        ),
+        ("ids", &by_id, unknown_id),
+    ] {
+        let mut refs: Vec<TorrentRef> = chosen.iter().map(|&torrent| of(torrent)).collect();
+        refs.insert(5, unknown);
+
+        let together = records_of(&mut client, &refs);
+
+        let one_by_one: Vec<TorrentRecord> = chosen
+            .iter()
+            .flat_map(|&torrent| records_of(&mut client, &[of(torrent)]))
+            .collect();
+        assert_eq!(
+            together.len(),
+            chosen.len(),
+            "{name}: the unknown one is skipped"
+        );
+        assert_eq!(
+            together, one_by_one,
+            "{name}: the same records, in the same order"
+        );
+        let hashes: Vec<Option<String>> = together
+            .iter()
+            .map(|record| record.hash_string.clone())
+            .collect();
+        let wanted: Vec<Option<String>> = chosen
+            .iter()
+            .map(|torrent| Some(torrent.hash.to_string()))
+            .collect();
+        assert_eq!(hashes, wanted, "{name}: in the order named");
+        // A short list of the same kind, scanned rather than indexed, gives the same again.
+        let (head, tail) = refs.split_at(4);
+        let mut in_pieces = records_of(&mut client, head);
+        in_pieces.extend(records_of(&mut client, tail));
+        assert_eq!(
+            together, in_pieces,
+            "{name}: lists of 4 and 7 give the same"
+        );
+    }
 }
 
 #[test]

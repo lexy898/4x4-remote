@@ -18,7 +18,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::{Map, Value, json};
 
-use super::metainfo::Metainfo;
 use super::{Fields, KIB, Kind, Lcg, Torrent};
 use layout::{Layout, to_index, to_wide};
 
@@ -148,10 +147,13 @@ impl FileState {
     }
 
     /// Downloads `bytes` more: whole pieces, picked as `sequential` says, up to the last percent
-    /// of the pieces wanted, which stays missing so that the download keeps going in the demo.
+    /// of the pieces wanted (and at least the last one), which stays missing so that the download
+    /// keeps going in the demo. The percent is of the wanted pieces, not of all of them: a small
+    /// choice of files must still download.
     fn advance(&mut self, bytes: u64, sequential: bool) {
         self.credit = self.credit.saturating_add(bytes);
-        let floor = (self.have.len() / 100).max(1);
+        let wanted = self.needed.iter().filter(|&&needed| needed).count();
+        let floor = (wanted / 100).max(1);
         let mut open = (0..self.have.len())
             .filter(|&piece| self.is_open(piece))
             .count();
@@ -361,9 +363,9 @@ impl Torrent {
         }
     }
 
-    /// Adds to `record` the fields of `fields` that only a details read asks for. Those that
-    /// need the files come from them, which [`Torrent::files`] has made.
-    pub(super) fn add_details(&self, fields: &Fields, record: &mut Map<String, Value>) {
+    /// Adds to `record` the fields of `fields` that the files answer: the file count, and the
+    /// lists and the pieces, which come from the files [`Torrent::files`] has made.
+    pub(super) fn add_file_fields(&self, fields: &Fields, record: &mut Map<String, Value>) {
         if let Some(files) = &self.files {
             files.add_fields(fields, record);
         }
@@ -380,26 +382,5 @@ impl Torrent {
             );
             record.insert("file_count".to_owned(), json!(count));
         }
-        let added = self.added();
-        let metainfo = Metainfo::of(self.id, added);
-        let mut put = |field: &str, value: &dyn Fn() -> Value| {
-            if fields.asks(field) {
-                record.insert(field.to_owned(), value());
-            }
-        };
-        put("comment", &|| json!(metainfo.comment));
-        put("creator", &|| json!(metainfo.creator));
-        put("date_created", &|| json!(metainfo.date_created));
-        put("source", &|| json!(metainfo.source));
-        put("is_private", &|| json!(metainfo.is_private));
-        put("tracker_stats", &|| {
-            json!(self.trackers.stats(self.id, added))
-        });
-        // What came in is what is not left; what went out follows from the ratio.
-        let downloaded = u64::from(self.total_kib.saturating_sub(self.left_kib)) * KIB;
-        put("downloaded_ever", &|| json!(downloaded));
-        put("uploaded_ever", &|| {
-            json!(downloaded * u64::from(self.ratio_thousandths) / 1000)
-        });
     }
 }
