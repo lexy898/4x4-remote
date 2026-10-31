@@ -95,15 +95,27 @@ impl FileTreeView {
             .collect()
     }
 
-    /// The node the cursor is on, if any.
+    /// The node of `tree` the cursor is on, if any.
+    ///
+    /// For a tree of another torrent than the view's it is `None`, as in a view that is new: the
+    /// same path in another torrent is another file, so the cursor never reaches it.
     #[must_use]
-    pub fn cursor(&self) -> Option<&NodeKey> {
+    pub fn cursor(&self, tree: &FileTree) -> Option<&NodeKey> {
+        if !self.belongs_to(tree) {
+            return None;
+        }
         self.cursor.as_ref()
     }
 
-    /// Whether the folder `key` is open.
+    /// Whether the folder `key` of `tree` is open.
+    ///
+    /// For a tree of another torrent than the view's it answers as a view that is new, like
+    /// [`rows`](Self::rows).
     #[must_use]
-    pub fn is_expanded(&self, key: &NodeKey) -> bool {
+    pub fn is_expanded(&self, tree: &FileTree, key: &NodeKey) -> bool {
+        if !self.belongs_to(tree) {
+            return Self::new(tree).expanded.contains(key);
+        }
         self.expanded.contains(key)
     }
 

@@ -13,8 +13,8 @@ fn expand_collapse_and_cursor_moves() {
         ("T/a.mkv", 1, 0, true, Normal),
     ]);
     let mut view = FileTreeView::new(&tree);
-    assert_eq!(view.cursor(), None);
-    let cursor = |view: &FileTreeView| view.cursor().map(NodeKey::as_str).map(str::to_owned);
+    assert_eq!(view.cursor(&tree), None);
+    let cursor = |view: &FileTreeView| view.cursor(&tree).map(NodeKey::as_str).map(str::to_owned);
 
     // Down goes to the first row, then on, and stops at the last.
     view.move_cursor(&tree, 1);
@@ -29,9 +29,9 @@ fn expand_collapse_and_cursor_moves() {
     assert_eq!(cursor(&view).as_deref(), Some("T/sub"));
 
     // Opening a folder lists its entries; the cursor goes in and out of it.
-    assert!(!view.is_expanded(&key("T/sub")));
+    assert!(!view.is_expanded(&tree, &key("T/sub")));
     view.toggle_expanded(&tree, &key("T/sub"));
-    assert!(view.is_expanded(&key("T/sub")));
+    assert!(view.is_expanded(&tree, &key("T/sub")));
     assert_eq!(
         shape(&view.rows(&tree)),
         [
@@ -79,7 +79,7 @@ fn expand_collapse_and_cursor_moves() {
 
     // A file cannot be opened, and a key that is not in the tree is not a place for the cursor.
     view.toggle_expanded(&tree, &key("T/a.mkv"));
-    assert!(!view.is_expanded(&key("T/a.mkv")));
+    assert!(!view.is_expanded(&tree, &key("T/a.mkv")));
     view.set_cursor(&tree, &key("T/missing"));
     assert_eq!(cursor(&view).as_deref(), Some("T/sub"));
 }
@@ -93,11 +93,11 @@ fn a_step_without_a_cursor_starts_at_the_nearest_end() {
 
     let mut down = FileTreeView::new(&tree);
     down.move_cursor(&tree, 1);
-    assert_eq!(down.cursor(), Some(&key("T")));
+    assert_eq!(down.cursor(&tree), Some(&key("T")));
 
     let mut up = FileTreeView::new(&tree);
     up.move_cursor(&tree, -1);
-    assert_eq!(up.cursor(), Some(&key("T/b.mkv")));
+    assert_eq!(up.cursor(&tree), Some(&key("T/b.mkv")));
 }
 
 #[test]
@@ -110,15 +110,15 @@ fn the_cursor_stays_on_rows_that_are_shown() {
 
     // The file is inside a folder that is closed.
     view.set_cursor(&tree, &key("T/sub/b.mkv"));
-    assert_eq!(view.cursor(), None);
+    assert_eq!(view.cursor(&tree), None);
 
     view.toggle_expanded(&tree, &key("T/sub"));
     view.set_cursor(&tree, &key("T/sub/b.mkv"));
-    assert_eq!(view.cursor(), Some(&key("T/sub/b.mkv")));
+    assert_eq!(view.cursor(&tree), Some(&key("T/sub/b.mkv")));
 
     // Closing the top folder takes the cursor out of the hidden rows.
     view.toggle_expanded(&tree, &key("T"));
-    assert_eq!(view.cursor(), Some(&key("T")));
+    assert_eq!(view.cursor(&tree), Some(&key("T")));
 }
 
 #[test]
@@ -131,33 +131,40 @@ fn left_and_right_open_close_and_enter_folders() {
     view.set_cursor(&tree, &key("T/sub"));
 
     view.expand_or_first_child(&tree);
-    assert!(view.is_expanded(&key("T/sub")));
-    assert_eq!(view.cursor(), Some(&key("T/sub")), "the first press opens");
+    assert!(view.is_expanded(&tree, &key("T/sub")));
+    assert_eq!(
+        view.cursor(&tree),
+        Some(&key("T/sub")),
+        "the first press opens"
+    );
     view.expand_or_first_child(&tree);
     assert_eq!(
-        view.cursor(),
+        view.cursor(&tree),
         Some(&key("T/sub/b.mkv")),
         "the second press goes in"
     );
     view.expand_or_first_child(&tree);
     assert_eq!(
-        view.cursor(),
+        view.cursor(&tree),
         Some(&key("T/sub/b.mkv")),
         "a file has nothing to open"
     );
 
     view.collapse_or_parent(&tree);
     assert_eq!(
-        view.cursor(),
+        view.cursor(&tree),
         Some(&key("T/sub")),
         "from a file, to its folder"
     );
     view.collapse_or_parent(&tree);
-    assert!(!view.is_expanded(&key("T/sub")), "an open folder closes");
-    assert_eq!(view.cursor(), Some(&key("T/sub")));
+    assert!(
+        !view.is_expanded(&tree, &key("T/sub")),
+        "an open folder closes"
+    );
+    assert_eq!(view.cursor(&tree), Some(&key("T/sub")));
     view.collapse_or_parent(&tree);
     assert_eq!(
-        view.cursor(),
+        view.cursor(&tree),
         Some(&key("T")),
         "a closed folder goes to the one around it"
     );
