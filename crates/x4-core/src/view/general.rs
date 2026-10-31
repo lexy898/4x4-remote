@@ -13,7 +13,7 @@ use crate::state::Attention;
 /// How many pieces a torrent has and how big each one is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PiecesView {
-    /// The number of pieces; 0 while a magnet link has no metadata.
+    /// The number of pieces; never 0.
     pub count: u32,
     /// The size of one piece.
     pub size: HumanSize,
@@ -56,16 +56,17 @@ pub struct GeneralModel {
     pub done: Option<SystemTime>,
     /// When the metainfo was created; `None` when it does not say, or before the details.
     pub created: Option<SystemTime>,
-    /// The comment of the metainfo; empty when there is none, or before the details.
-    pub comment: String,
+    /// The comment of the metainfo; `None` when it has none or only blanks, or before the details.
+    pub comment: Option<String>,
     /// The program that created the metainfo; empty when it does not say, or before the details.
     pub creator: String,
-    /// The source tag of the metainfo, which private trackers set; `None` when it has none.
+    /// The source tag of the metainfo, which private trackers set; `None` when it has none or
+    /// only blanks, or before the details.
     pub source: Option<String>,
     /// Whether the torrent is private.
     pub private: bool,
-    /// The pieces; a count of 0 until the metadata is known.
-    pub pieces: PiecesView,
+    /// The pieces; `None` while a magnet link has no metadata, or before the details.
+    pub pieces: Option<PiecesView>,
     /// The problem the daemon reports for the torrent, if any.
     pub error: Option<ErrorView>,
     /// How the trackers are doing.
@@ -95,22 +96,28 @@ pub fn general_model(torrent: &Torrent, details: Option<&TorrentDetails>) -> Gen
         added: torrent.added,
         done: torrent.done,
         created: details.and_then(|details| details.date_created),
-        comment: details
-            .map(|details| details.comment.clone())
-            .unwrap_or_default(),
+        comment: details.and_then(|details| written(&details.comment)),
         creator: details
             .map(|details| details.creator.clone())
             .unwrap_or_default(),
-        source: details.and_then(|details| details.source.clone()),
+        source: details.and_then(|details| written(details.source.as_deref()?)),
         private: details.is_some_and(|details| details.is_private),
-        pieces: PiecesView {
-            count: details.map_or(0, |details| details.piece_count),
-            size: human_size(details.map_or(0, |details| details.piece_size)),
-        },
+        // A magnet link has no pieces until its metadata comes.
+        pieces: details
+            .filter(|details| details.piece_count > 0)
+            .map(|details| PiecesView {
+                count: details.piece_count,
+                size: human_size(details.piece_size),
+            }),
         error: torrent.attention.as_ref().and_then(error_of),
         trackers: details.map(tracker_summary).unwrap_or_default(),
         details_loaded: details.is_some(),
     }
+}
+
+/// `text` as the metainfo has it, or `None` when it holds only blanks, which says nothing.
+fn written(text: &str) -> Option<String> {
+    (!text.trim().is_empty()).then(|| text.to_owned())
 }
 
 /// The error in `attention`, if it is one: fetching the metadata of a magnet link is not.
@@ -214,16 +221,16 @@ mod tests {
         assert_eq!(model.downloaded, human_size(5_000));
         assert_eq!(model.uploaded, human_size(7_500));
         assert_eq!(model.created, Some(at(500)));
-        assert_eq!(model.comment, "from the tracker");
+        assert_eq!(model.comment.as_deref(), Some("from the tracker"));
         assert_eq!(model.creator, "mktorrent");
         assert_eq!(model.source.as_deref(), Some("PT"));
         assert!(model.private);
         assert_eq!(
             model.pieces,
-            PiecesView {
+            Some(PiecesView {
                 count: 100,
                 size: human_size(4 * 1024 * 1024)
-            }
+            })
         );
         assert_eq!(
             model.trackers.problem,
@@ -247,14 +254,55 @@ mod tests {
         assert_eq!(model.size_total, human_size(3_000));
         assert_eq!(model.added, Some(at(1_000)));
         assert!(!model.details_loaded);
-        assert_eq!(model.comment, "");
+        assert_eq!(model.comment, None);
         assert_eq!(model.creator, "");
         assert_eq!(model.created, None);
         assert_eq!(model.source, None);
         assert!(!model.private);
-        assert_eq!(model.pieces.count, 0);
+        assert_eq!(model.pieces, None);
         assert_eq!(model.downloaded, human_size(0));
         assert_eq!(model.trackers, TrackerSummary::default());
+    }
+
+    #[test]
+    fn a_blank_comment_or_source_is_none() {
+        let (torrent, details) = pair();
+        let with = |comment: &str, source: Option<&str>| {
+            general_model(
+                &torrent,
+                Some(&TorrentDetails {
+                    comment: comment.to_owned(),
+                    source: source.map(str::to_owned),
+                    ..details.clone()
+                }),
+            )
+        };
+
+        for blank in ["", " ", "\n\t "] {
+            let model = with(blank, Some(blank));
+            assert_eq!(model.comment, None, "{blank:?}");
+            assert_eq!(model.source, None, "{blank:?}");
+        }
+        assert_eq!(with("", None).source, None);
+        // A comment or source with text is kept as the metainfo has it, blanks and all.
+        let model = with("  see the site\n", Some(" PT "));
+        assert_eq!(model.comment.as_deref(), Some("  see the site\n"));
+        assert_eq!(model.source.as_deref(), Some(" PT "));
+    }
+
+    #[test]
+    fn a_magnet_without_metadata_has_no_pieces() {
+        let (torrent, details) = pair();
+        let magnet = TorrentDetails {
+            piece_count: 0,
+            piece_size: 0,
+            ..details
+        };
+
+        let model = general_model(&torrent, Some(&magnet));
+
+        assert!(model.details_loaded);
+        assert_eq!(model.pieces, None);
     }
 
     #[test]
@@ -268,7 +316,7 @@ mod tests {
         let model = general_model(&other, Some(&details));
 
         assert!(!model.details_loaded);
-        assert_eq!(model.comment, "");
+        assert_eq!(model.comment, None);
         assert_eq!(model.hash, other.hash);
     }
 

@@ -715,6 +715,8 @@ fn general_follows_newer_details_and_the_errors_of_the_list(cx: &mut TestAppCont
     assert!(!window.shown("general-source", cx));
     assert_eq!(window.value("general-comment", cx).as_deref(), Some("—"));
     assert_eq!(window.value("general-private", cx).as_deref(), Some("No"));
+    // These details have no pieces, as a magnet link before its metadata.
+    assert_eq!(window.value("general-pieces", cx).as_deref(), Some("—"));
     assert!(!window.shown("general-error", cx));
 
     // An error the daemon reports for the torrent comes first, in its own words.

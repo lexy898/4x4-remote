@@ -124,13 +124,10 @@ fn data_rows(model: &GeneralModel) -> Vec<Row> {
         Row::new(
             "general-pieces",
             t!("general-pieces").into(),
-            // A magnet link has no pieces until its metadata comes.
             read(loaded, || {
-                if model.pieces.count == 0 {
-                    t!("general-none").into()
-                } else {
-                    pieces_text(model.pieces)
-                }
+                model
+                    .pieces
+                    .map_or_else(|| t!("general-none").into(), pieces_text)
             }),
         ),
         Row::new(
@@ -155,10 +152,9 @@ fn data_rows(model: &GeneralModel) -> Vec<Row> {
 /// and what its metainfo says.
 fn torrent_rows(model: &GeneralModel, theme: &Theme) -> Vec<Row> {
     let loaded = model.details_loaded;
-    let problem = model.trackers.problem.as_ref().filter(|_| loaded);
     let mut rows = vec![
         Row {
-            note: problem.map(|problem| {
+            note: model.trackers.problem.as_ref().map(|problem| {
                 let color = match problem.kind {
                     TrackerProblemKind::AnnounceFailed | TrackerProblemKind::AnnounceTimedOut => {
                         theme.warning
@@ -197,26 +193,21 @@ fn torrent_rows(model: &GeneralModel, theme: &Theme) -> Vec<Row> {
         ),
     ];
     // Only private trackers set a source, so it is shown only when there is one.
-    if let Some(source) = model
-        .source
-        .as_deref()
-        .filter(|source| loaded && !source.trim().is_empty())
-    {
+    if let Some(source) = &model.source {
         rows.push(Row::new(
             "general-source",
             t!("general-source").into(),
-            source.to_owned().into(),
+            source.clone().into(),
         ));
     }
     rows.push(Row::new(
         "general-comment",
         t!("general-comment").into(),
         read(loaded, || {
-            if model.comment.trim().is_empty() {
-                t!("general-none").into()
-            } else {
-                model.comment.clone().into()
-            }
+            model
+                .comment
+                .clone()
+                .map_or_else(|| t!("general-none").into(), SharedString::from)
         }),
     ));
     rows.push(Row::new(
