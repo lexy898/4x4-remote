@@ -19,8 +19,9 @@ use x4_app::keymap::{EditSpeedLimits, ToggleAltSpeed};
 use x4_app::main_view::MainView;
 use x4_core::test_support::torrent;
 use x4_core::{
-    Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, Direction,
-    DisplayState, Event, KbPerSecond, SessionSummary, Snapshot, SpeedLimit, Torrent, UiState,
+    Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, DetailsState,
+    DetailsTab, Direction, DisplayState, Event, KbPerSecond, SessionSummary, Snapshot, SpeedLimit,
+    Torrent, UiState,
 };
 
 /// The turtle: the alternative speed limits.
@@ -48,6 +49,8 @@ const REMOVE: &str = "remove-torrents";
 const COLUMNS: &str = "column-menu";
 /// The id of a notification.
 const NOTIFICATION: &str = "notification";
+/// The details panel under the table.
+const DETAILS: &str = "details";
 /// What a field says under it when its text is not a whole number.
 const NOT_A_NUMBER: &str = "Enter a whole number of KiB/s";
 /// What a field says under it when its number is 0 or too large.
@@ -344,6 +347,16 @@ impl Window {
     /// Whether the popover of the limits is open.
     fn limits_open(&self, cx: &mut TestAppContext) -> bool {
         self.act(cx, |window, _| window.try_find(DOWN).is_some())
+    }
+
+    /// What the window knows of the details panel: whether it is shown, how high, which tab.
+    fn details(&self, cx: &mut TestAppContext) -> DetailsState {
+        cx.update(|cx| self.view.read(cx).ui_state().details)
+    }
+
+    /// Whether the details panel is drawn.
+    fn details_shown(&self, cx: &mut TestAppContext) -> bool {
+        self.act(cx, |window, _| window.try_find(DETAILS).is_some())
     }
 
     /// Whether the table has the keyboard focus, so that the list's keys reach it.
@@ -877,6 +890,51 @@ fn the_speed_keys_do_nothing_behind_a_toolbar_menu(cx: &mut TestAppContext) {
     // Closed, the menus let the keys work again.
     window.press("ctrl-t", cx);
     assert_eq!(window.sent_actions(), [Action::SetAltSpeed(true)]);
+}
+
+/// The popover keeps the keys of the details panel, as a menu does: Alt+Enter, Alt+1 and Alt+2
+/// change nothing behind it, from a field or from a switch. Each tab key is pressed while the
+/// other tab is open, where it would change something.
+#[gpui_kit::test]
+fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(limit(1024, true), off(), false, cx);
+    assert!(window.details_shown(cx));
+
+    for (open_tab, tab_key, other_tab_key) in [
+        (DetailsTab::General, "alt-1", "alt-2"),
+        (DetailsTab::Files, "alt-2", "alt-1"),
+    ] {
+        window.press(tab_key, cx);
+        let before = window.details(cx);
+        assert_eq!(before.tab, open_tab);
+        window.press("ctrl-l", cx);
+        assert!(window.focused(DOWN, cx));
+        let typed = window.value(DOWN, cx);
+        for place in ["the field", "the switch"] {
+            if place == "the switch" {
+                window.press("shift-tab", cx);
+                assert!(window.focused(DOWN_SWITCH, cx));
+            }
+            for key in ["alt-enter", other_tab_key] {
+                window.press(key, cx);
+                let at = format!("{open_tab:?}, {place}, {key}");
+                assert!(window.limits_open(cx), "{at}: the popover stays");
+                assert!(window.details_shown(cx), "{at}");
+                assert_eq!(window.details(cx), before, "{at}");
+            }
+        }
+        assert_eq!(window.value(DOWN, cx), typed, "nothing was typed");
+        window.press("escape", cx);
+        assert!(!window.limits_open(cx));
+    }
+    assert_eq!(window.sent(), []);
+
+    // Closed, the popover gives the keys back.
+    window.press("alt-1", cx);
+    assert_eq!(window.details(cx).tab, DetailsTab::General);
+    window.press("alt-enter", cx);
+    assert!(!window.details_shown(cx));
 }
 
 #[gpui_kit::test]

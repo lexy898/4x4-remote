@@ -20,7 +20,9 @@
 //! applies nothing; the popover stays open as it is. The main view closes the popover when the
 //! focus leaves the form, as Tab, Shift+Tab or Ctrl+F take it out: the list's keys must not act
 //! behind a popover that looks active. A switch to another app does not close it: the window's
-//! focus goes away and comes back, and what was typed is still there.
+//! focus goes away and comes back, and what was typed is still there. The form is the key context
+//! `SpeedLimits`, where the keymap binds the details panel's keys to nothing, so that they change
+//! nothing behind the popover.
 //!
 //! Like the other keys, the key that opened the popover acts only when it is pressed, not when it
 //! repeats while held. An Enter held on the limits button opens the popover, and its repeats must
@@ -51,6 +53,7 @@ use x4_core::{
 
 use crate::i18n::{limit_feedback_text, t};
 use crate::key_repeats::{KeyRepeats, same_key};
+use crate::keymap::SPEED_LIMITS_CONTEXT;
 
 /// The width of the form inside the popover.
 const FORM_WIDTH: f32 = 320.;
@@ -389,6 +392,7 @@ impl Render for SpeedLimits {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         v_flex()
             .id("speed-limits-form")
+            .key_context(SPEED_LIMITS_CONTEXT)
             .track_focus(&self.focus)
             // A press on blank space would otherwise move the focus from the field to the form,
             // where typing and Enter do nothing.

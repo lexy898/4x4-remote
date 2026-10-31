@@ -11,8 +11,10 @@
 //!   Ctrl+A, Ctrl+C, Delete or Space there edit or copy its text and never reach the torrents;
 //! - the window's own keys (Ctrl+F, `/`, Ctrl+T and Ctrl+L for the turtle and the speed limits,
 //!   and Alt+Enter, Alt+1 and Alt+2 for the details panel and its tabs) work in the whole main
-//!   window (`MainWindow`), the search box and the popover of the limits included: their text
-//!   fields bind none of these keys;
+//!   window (`MainWindow`), the search box included: its text field binds none of these keys.
+//!   The popover of the limits (`SpeedLimits`) lets through only the keys of the status bar and
+//!   those that take the focus out of it, which closes it; Alt+Enter, Alt+1 and Alt+2 do nothing
+//!   there, so that the details panel does not change behind it;
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
@@ -115,6 +117,9 @@ const ANY_MENU: &str = "PopupMenu";
 const TORRENTS: &str = "TorrentList && !PopupMenu";
 /// The key context around the buttons of a removal dialog, inside gpui-component's `Dialog`.
 pub(crate) const REMOVAL_FOOTER_CONTEXT: &str = "RemovalDialogFooter";
+/// The key context of the form in the popover of the speed limits, around its fields, switches
+/// and Apply button.
+pub(crate) const SPEED_LIMITS_CONTEXT: &str = "SpeedLimits";
 
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
@@ -265,6 +270,24 @@ pub const BINDINGS: &[Binding] = &[
         keys: "alt-2",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
+    },
+    // The popover of the speed limits keeps the keys of the details panel too, as a menu does.
+    // Ctrl+T and Ctrl+L belong to the status bar beside it, and Ctrl+F and `/` take the focus out,
+    // which closes the popover; those stay. A test holds every other window key to this.
+    Binding {
+        keys: "alt-enter",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "alt-1",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "alt-2",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
     },
     // The context menu has no Home, End, Page Up or Page Down: ours do not work behind it, and the
     // table's own are bound to nothing in it, which is deeper than the table, so that they do

@@ -7,7 +7,7 @@ use gpui_kit::{Action as _, KeyBindingContextPredicate, KeyContext, NoAction};
 
 use super::{
     ANY_MENU, BINDINGS, Binding, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT,
-    TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS,
+    SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS,
 };
 
 const README: &str = include_str!("../../../../README.md");
@@ -211,20 +211,22 @@ fn predicate(context: &str) -> KeyBindingContextPredicate {
     KeyBindingContextPredicate::parse(context).expect("a context of the key table parses")
 }
 
-/// A menu is modal: every key bound outside it, whose context does not leave an open menu out
-/// (`!PopupMenu`), is bound to nothing in the menu too, deeper than where it works, so that it
-/// does nothing there. Otherwise the key would act behind the menu, or take the focus out of it
-/// and leave it open.
-#[test]
-fn every_key_bound_outside_a_menu_does_nothing_while_one_is_open() {
+/// The keys that act with the focus in any of `stacks`, the key contexts from the window down to
+/// the focus, with where each is bound and the stack: every key that works there, unless it is one
+/// of `may_act` or bound to nothing in one of `keepers`, deeper than where it works.
+fn keys_acting_in<'s>(
+    stacks: &[&'s [&'s str]],
+    may_act: &[&str],
+    keepers: &[&str],
+) -> Vec<(&'static str, &'static str, &'s [&'s str])> {
     let mut acting = Vec::new();
-    for stack in OPEN_MENUS {
+    for &stack in stacks {
         let contexts: Vec<KeyContext> = stack
             .iter()
             .map(|context| KeyContext::parse(context).expect("a key context parses"))
             .collect();
         for binding in BINDINGS {
-            if is_no_action(binding) || ACT_IN_A_MENU.contains(&binding.keys) {
+            if is_no_action(binding) || may_act.contains(&binding.keys) {
                 continue;
             }
             let Some(context) = binding.context else {
@@ -232,7 +234,7 @@ fn every_key_bound_outside_a_menu_does_nothing_while_one_is_open() {
                 continue;
             };
             let Some(depth) = predicate(context).depth_of(&contexts) else {
-                // It does not work here: it leaves an open menu out, or it is bound elsewhere.
+                // It does not work here: its context leaves this place out, or is elsewhere.
                 continue;
             };
             let kept = BINDINGS.iter().any(|other| {
@@ -240,19 +242,69 @@ fn every_key_bound_outside_a_menu_does_nothing_while_one_is_open() {
                     && is_no_action(other)
                     && other
                         .context
-                        .filter(|context| [ANY_MENU, TABLE_MENU].contains(context))
+                        .filter(|context| keepers.contains(context))
                         .and_then(|context| predicate(context).depth_of(&contexts))
-                        .is_some_and(|menu_depth| menu_depth > depth)
+                        .is_some_and(|keeper_depth| keeper_depth > depth)
             });
             if !kept {
                 acting.push((binding.keys, context, stack));
             }
         }
     }
+    acting
+}
+
+/// A menu is modal: every key bound outside it, whose context does not leave an open menu out
+/// (`!PopupMenu`), is bound to nothing in the menu too, deeper than where it works, so that it
+/// does nothing there. Otherwise the key would act behind the menu, or take the focus out of it
+/// and leave it open.
+#[test]
+fn every_key_bound_outside_a_menu_does_nothing_while_one_is_open() {
+    let acting = keys_acting_in(OPEN_MENUS, ACT_IN_A_MENU, &[ANY_MENU, TABLE_MENU]);
     assert!(
         acting.is_empty(),
         "keys that act while a menu is open, (keys, where bound, around the menu): {acting:?}; \
          bind them to `NoAction` in `ANY_MENU` or `TABLE_MENU`"
+    );
+}
+
+/// The key contexts around the focus in the open popover of the speed limits, from the window
+/// down: in one of its fields, and on one of its switches or its Apply button. gpui-base's
+/// popover draws its content inside its trigger, which is in the window.
+const OPEN_SPEED_LIMITS: &[&[&str]] = &[
+    &[
+        MAIN_CONTEXT,
+        "Popover",
+        "PopoverContent",
+        SPEED_LIMITS_CONTEXT,
+        "Input",
+    ],
+    &[
+        MAIN_CONTEXT,
+        "Popover",
+        "PopoverContent",
+        SPEED_LIMITS_CONTEXT,
+    ],
+];
+
+/// The window's keys that act in the open popover of the speed limits: Ctrl+Q quits from
+/// anywhere; Ctrl+F and `/` take the focus out of the popover, which closes it; Ctrl+T and Ctrl+L
+/// are the keys of the status bar the popover belongs to.
+const ACT_IN_THE_SPEED_LIMITS: &[&str] = &["ctrl-q", "ctrl-f", "/", "ctrl-t", "ctrl-l"];
+
+/// The popover of the speed limits keeps the window's other keys, those of the details panel
+/// among them, so that they change nothing behind it.
+#[test]
+fn every_other_window_key_does_nothing_in_the_open_speed_limits() {
+    let acting = keys_acting_in(
+        OPEN_SPEED_LIMITS,
+        ACT_IN_THE_SPEED_LIMITS,
+        &[SPEED_LIMITS_CONTEXT],
+    );
+    assert!(
+        acting.is_empty(),
+        "keys that act while the speed limits are open, (keys, where bound, around the focus): \
+         {acting:?}; bind them to `NoAction` in `SPEED_LIMITS_CONTEXT`"
     );
 }
 
