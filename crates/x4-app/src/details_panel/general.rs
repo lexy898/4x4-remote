@@ -189,7 +189,9 @@ fn torrent_rows(model: &GeneralModel, theme: &Theme) -> Vec<Row> {
         Row::new(
             "general-created",
             t!("general-created").into(),
-            read(loaded, || created_text(&model.creator, model.created)),
+            read(loaded, || {
+                created_text(model.creator.as_deref(), model.created)
+            }),
         ),
     ];
     // Only private trackers set a source, so it is shown only when there is one.

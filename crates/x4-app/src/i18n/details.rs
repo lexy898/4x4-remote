@@ -49,19 +49,19 @@ pub(crate) fn pieces_text(pieces: PiecesView) -> SharedString {
 }
 
 /// Who made the metainfo and when, as far as it says: "by mktorrent on 2026-10-29 14:05", "by
-/// mktorrent", the date alone, or "—" when it says neither.
-pub(crate) fn created_text(creator: &str, created: Option<SystemTime>) -> SharedString {
-    let creator = creator.trim();
-    match (creator.is_empty(), created) {
-        (false, Some(created)) => t!(
+/// mktorrent", the date alone, or "—" when it says neither. The creator is drawn as x4-core gives
+/// it, which has already left out one that says nothing.
+pub(crate) fn created_text(creator: Option<&str>, created: Option<SystemTime>) -> SharedString {
+    match (creator, created) {
+        (Some(creator), Some(created)) => t!(
             "general-created-by-on",
             creator = creator,
             date = date_time_text(created).to_string()
         )
         .into(),
-        (false, None) => t!("general-created-by", creator = creator).into(),
-        (true, Some(created)) => date_time_text(created),
-        (true, None) => t!("general-none").into(),
+        (Some(creator), None) => t!("general-created-by", creator = creator).into(),
+        (None, Some(created)) => date_time_text(created),
+        (None, None) => t!("general-none").into(),
     }
 }
 
@@ -191,12 +191,17 @@ mod tests {
         let date = date_time_text(moment);
 
         assert_eq!(
-            created_text("mktorrent 1.1", Some(moment)),
+            created_text(Some("mktorrent 1.1"), Some(moment)),
             format!("by mktorrent 1.1 on {date}")
         );
-        assert_eq!(created_text("mktorrent 1.1", None), "by mktorrent 1.1");
-        assert_eq!(created_text("", Some(moment)), date);
-        assert_eq!(created_text("  ", None), "—");
+        assert_eq!(
+            created_text(Some("mktorrent 1.1"), None),
+            "by mktorrent 1.1"
+        );
+        assert_eq!(created_text(None, Some(moment)), date);
+        assert_eq!(created_text(None, None), "—");
+        // The creator is drawn as sent: x4-core decides what says nothing.
+        assert_eq!(created_text(Some(" mktorrent "), None), "by  mktorrent ");
     }
 
     #[test]

@@ -58,8 +58,9 @@ pub struct GeneralModel {
     pub created: Option<SystemTime>,
     /// The comment of the metainfo; `None` when it has none or only blanks, or before the details.
     pub comment: Option<String>,
-    /// The program that created the metainfo; empty when it does not say, or before the details.
-    pub creator: String,
+    /// The program that created the metainfo; `None` when it does not say or says only blanks, or
+    /// before the details.
+    pub creator: Option<String>,
     /// The source tag of the metainfo, which private trackers set; `None` when it has none or
     /// only blanks, or before the details.
     pub source: Option<String>,
@@ -97,9 +98,7 @@ pub fn general_model(torrent: &Torrent, details: Option<&TorrentDetails>) -> Gen
         done: torrent.done,
         created: details.and_then(|details| details.date_created),
         comment: details.and_then(|details| written(&details.comment)),
-        creator: details
-            .map(|details| details.creator.clone())
-            .unwrap_or_default(),
+        creator: details.and_then(|details| written(&details.creator)),
         source: details.and_then(|details| written(details.source.as_deref()?)),
         private: details.is_some_and(|details| details.is_private),
         // A magnet link has no pieces until its metadata comes.
@@ -222,7 +221,7 @@ mod tests {
         assert_eq!(model.uploaded, human_size(7_500));
         assert_eq!(model.created, Some(at(500)));
         assert_eq!(model.comment.as_deref(), Some("from the tracker"));
-        assert_eq!(model.creator, "mktorrent");
+        assert_eq!(model.creator.as_deref(), Some("mktorrent"));
         assert_eq!(model.source.as_deref(), Some("PT"));
         assert!(model.private);
         assert_eq!(
@@ -255,7 +254,7 @@ mod tests {
         assert_eq!(model.added, Some(at(1_000)));
         assert!(!model.details_loaded);
         assert_eq!(model.comment, None);
-        assert_eq!(model.creator, "");
+        assert_eq!(model.creator, None);
         assert_eq!(model.created, None);
         assert_eq!(model.source, None);
         assert!(!model.private);
@@ -288,6 +287,29 @@ mod tests {
         let model = with("  see the site\n", Some(" PT "));
         assert_eq!(model.comment.as_deref(), Some("  see the site\n"));
         assert_eq!(model.source.as_deref(), Some(" PT "));
+    }
+
+    #[test]
+    fn a_blank_creator_is_none_and_any_other_is_kept_as_sent() {
+        let (torrent, details) = pair();
+        let creator = |creator: &str| {
+            general_model(
+                &torrent,
+                Some(&TorrentDetails {
+                    creator: creator.to_owned(),
+                    ..details.clone()
+                }),
+            )
+            .creator
+        };
+
+        for blank in ["", " ", "\n\t "] {
+            assert_eq!(creator(blank), None, "{blank:?}");
+        }
+        assert_eq!(
+            creator(" mktorrent 1.1\n").as_deref(),
+            Some(" mktorrent 1.1\n")
+        );
     }
 
     #[test]
