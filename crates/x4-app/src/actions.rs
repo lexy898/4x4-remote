@@ -12,6 +12,14 @@
 //! from what `x4-core`'s `limit_edit` decided), sent and kept the same way, with no torrents
 //! named.
 //!
+//! The Files tab of the details panel changes one torrent: whether its files are downloaded, their
+//! priority, and whether its pieces come in order. Those are kinds of action too
+//! (`ActionKind::FilesWanted`, `ActionKind::FilePriority` and `ActionKind::Sequential`), but no
+//! request becomes one: the panel hands the main view a `FileRequest`, whose action on files the
+//! drawn `FileTree` of `x4-core` built, so that the torrent, the files and the new value come from
+//! one read of the details. A file action counts as the same action again when it is of the same
+//! kind on the same torrent and the same files.
+//!
 //! Removing is not a request: [`RemoveTorrents`] and [`RemoveTorrentsWithData`] only open a dialog
 //! that asks first (the `removal` module), and the dialog's own button sends the removal of the
 //! torrents it named when it opened. Copying is not one either: [`CopyHashes`] and
@@ -31,10 +39,10 @@ use std::collections::HashMap;
 
 use gpui_kit::{SharedString, actions};
 use x4_core::{
-    Action, ActionError, ActionId, Availability, Direction, KbPerSecond, LimitEdit, Row,
-    ToggleKind, toggle_kind,
+    Action, ActionError, ActionId, Availability, Direction, FileChange, KbPerSecond, LimitEdit,
+    Row, ToggleKind, toggle_kind,
 };
-use x4_rpc::{HashString, RemoveData};
+use x4_rpc::{FilePriority, HashString, RemoveData};
 
 use crate::i18n::action_failure_text;
 
@@ -109,6 +117,12 @@ pub(crate) enum ActionKind {
         /// The new limit; `None` switches it off.
         limit: Option<KbPerSecond>,
     },
+    /// Download files of one torrent (`true`) or skip them. Made by [`FileRequest`] only.
+    FilesWanted(bool),
+    /// Give files of one torrent this priority. Made by [`FileRequest`] only.
+    FilePriority(FilePriority),
+    /// Download the pieces of one torrent in order (`true`) or not. Made by [`FileRequest`] only.
+    Sequential(bool),
 }
 
 impl ActionKind {
@@ -125,8 +139,11 @@ impl ActionKind {
 
     /// The action to send for the torrents `hashes`. A change of the speed settings names no
     /// torrents, so it takes none.
-    pub(crate) fn action(self, hashes: Vec<HashString>) -> Action {
-        match self {
+    ///
+    /// `None` for a change of one torrent's files or of its downloading in order: those are not
+    /// made from a list of torrents, but come built, with their files, in a [`FileRequest`].
+    pub(crate) fn action(self, hashes: Vec<HashString>) -> Option<Action> {
+        Some(match self {
             Self::Start => Action::Start(hashes),
             Self::Pause => Action::Stop(hashes),
             Self::StartNow => Action::StartNow(hashes),
@@ -135,7 +152,8 @@ impl ActionKind {
             Self::Remove(data) => Action::Remove { hashes, data },
             Self::AltSpeed(enabled) => Action::SetAltSpeed(enabled),
             Self::SpeedLimit { direction, limit } => Action::SetSpeedLimit { direction, limit },
-        }
+            Self::FilesWanted(_) | Self::FilePriority(_) | Self::Sequential(_) => return None,
+        })
     }
 
     /// Whether `availability` allows it. The speed settings are not an action on the selected
@@ -148,12 +166,17 @@ impl ActionKind {
             Self::Verify => availability.verify,
             Self::Reannounce => availability.reannounce,
             Self::Remove(_) => availability.remove,
-            Self::AltSpeed(_) | Self::SpeedLimit { .. } => false,
+            Self::AltSpeed(_)
+            | Self::SpeedLimit { .. }
+            | Self::FilesWanted(_)
+            | Self::FilePriority(_)
+            | Self::Sequential(_) => false,
         }
     }
 
     /// A short name for logs, which also marks its failure's notification: one notification
-    /// per name. The turtle has one name whichever way it was switched, and each speed limit one.
+    /// per name. The turtle has one name whichever way it was switched, and each speed limit one;
+    /// so do the changes of files and of downloading in order, whatever value they set.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Start => "start",
@@ -172,7 +195,65 @@ impl ActionKind {
                 direction: Direction::Up,
                 ..
             } => "upload limit",
+            Self::FilesWanted(_) => "files wanted",
+            Self::FilePriority(_) => "file priority",
+            Self::Sequential(_) => "sequential",
         }
+    }
+}
+
+/// What the details panel asks the main view to send for its torrent: a change of its files, as
+/// the drawn file tree built it, or of its downloading in order.
+///
+/// It is made only from what was drawn: [`FileRequest::of_files`] reads back the action a
+/// `FileTree` built, and [`FileRequest::sequential`] takes the torrent of the row the switch was
+/// drawn for, so the torrent and the files cannot come from different reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileRequest {
+    /// What the action does.
+    pub(crate) kind: ActionKind,
+    /// The torrent it changes.
+    hash: HashString,
+    /// The files it names, sorted; none for the switch of downloading in order.
+    pub(crate) files: Vec<usize>,
+    /// The action itself, as it goes to the service.
+    pub(crate) action: Action,
+}
+
+impl FileRequest {
+    /// The request that sends `action`, which a `FileTree` built; `None` when `action` changes no
+    /// files.
+    pub(crate) fn of_files(action: Action) -> Option<Self> {
+        let target = action.file_change()?;
+        let kind = match target.change {
+            FileChange::Wanted(wanted) => ActionKind::FilesWanted(wanted),
+            FileChange::Priority(priority) => ActionKind::FilePriority(priority),
+        };
+        let hash = target.hash.clone();
+        let mut files = target.files.to_vec();
+        files.sort_unstable();
+        Some(Self {
+            kind,
+            hash,
+            files,
+            action,
+        })
+    }
+
+    /// The request that switches downloading the pieces of the torrent `hash` in order on
+    /// (`enabled`) or off.
+    pub(crate) fn sequential(hash: HashString, enabled: bool) -> Self {
+        Self {
+            kind: ActionKind::Sequential(enabled),
+            hash: hash.clone(),
+            files: Vec::new(),
+            action: Action::SetSequential { hash, enabled },
+        }
+    }
+
+    /// The torrent it changes.
+    pub(crate) fn hash(&self) -> &HashString {
+        &self.hash
     }
 }
 
@@ -204,7 +285,7 @@ pub(crate) fn decide(
 pub(crate) struct PendingAction {
     /// What the action does.
     pub(crate) kind: ActionKind,
-    /// How many torrents it named.
+    /// How many torrents it named; for an action on files, how many files.
     pub(crate) count: usize,
 }
 
@@ -217,13 +298,15 @@ pub(crate) struct Failure {
     pub(crate) text: SharedString,
 }
 
-/// An action sent and not answered yet, with the torrents it named.
+/// An action sent and not answered yet, with the torrents and the files it named.
 #[derive(Debug)]
 struct Sent {
     action: PendingAction,
     /// The hashes of its torrents, sorted, so that the same torrents in another order compare
     /// equal.
     targets: Vec<HashString>,
+    /// The indices of the files of its torrent, sorted; none for an action on whole torrents.
+    files: Vec<usize>,
 }
 
 /// The actions sent and not answered yet, by id, and the ids given out.
@@ -254,20 +337,54 @@ impl PendingActions {
     pub(crate) fn start(&mut self, kind: ActionKind, hashes: &[HashString]) -> Option<ActionId> {
         let mut targets = hashes.to_vec();
         targets.sort_unstable();
+        let count = targets.len();
+        self.keep(kind, targets, Vec::new(), count)
+    }
+
+    /// [`PendingActions::start`] for the action `kind` on the files `files` of the torrent
+    /// `hash`, or on the torrent alone when `files` is empty: it is the same action again only
+    /// when it is of the same kind on the same torrent and the same files, in any order.
+    pub(crate) fn start_files(
+        &mut self,
+        kind: ActionKind,
+        hash: &HashString,
+        files: &[usize],
+    ) -> Option<ActionId> {
+        let mut files = files.to_vec();
+        files.sort_unstable();
+        let count = files.len().max(1);
+        self.keep(kind, vec![hash.clone()], files, count)
+    }
+
+    /// Keeps the action `kind` on `targets` and `files`, both sorted, which a failure counts as
+    /// `count`, unless the action sent last is the same and still waits.
+    fn keep(
+        &mut self,
+        kind: ActionKind,
+        targets: Vec<HashString>,
+        files: Vec<usize>,
+        count: usize,
+    ) -> Option<ActionId> {
         if self
             .newest_action
             .and_then(|newest| self.pending.get(&newest))
-            .is_some_and(|last| last.action.kind == kind && last.targets == targets)
+            .is_some_and(|last| {
+                last.action.kind == kind && last.targets == targets && last.files == files
+            })
         {
             return None;
         }
         let id = self.next_id();
         self.newest_action = Some(id);
-        let action = PendingAction {
-            kind,
-            count: targets.len(),
-        };
-        self.pending.insert(id, Sent { action, targets });
+        let action = PendingAction { kind, count };
+        self.pending.insert(
+            id,
+            Sent {
+                action,
+                targets,
+                files,
+            },
+        );
         Some(id)
     }
 
@@ -312,8 +429,11 @@ impl PendingActions {
 
 #[cfg(test)]
 mod tests {
-    use x4_core::test_support::torrent;
-    use x4_core::{ConnectionError, DisplayState, QueueKind, Torrent, availability};
+    use x4_core::test_support::{details, torrent};
+    use x4_core::{
+        ConnectionError, DisplayState, FileTree, NodeKey, QueueKind, Torrent, availability,
+    };
+    use x4_rpc::FilePriority;
 
     use super::*;
 
@@ -385,37 +505,37 @@ mod tests {
         let hashes = vec![torrent("b").hash, torrent("a").hash];
         assert_eq!(
             ActionKind::Start.action(hashes.clone()),
-            Action::Start(hashes.clone())
+            Some(Action::Start(hashes.clone()))
         );
         assert_eq!(
             ActionKind::Pause.action(hashes.clone()),
-            Action::Stop(hashes.clone())
+            Some(Action::Stop(hashes.clone()))
         );
         assert_eq!(
             ActionKind::StartNow.action(hashes.clone()),
-            Action::StartNow(hashes.clone())
+            Some(Action::StartNow(hashes.clone()))
         );
         assert_eq!(
             ActionKind::Verify.action(hashes.clone()),
-            Action::Verify(hashes.clone())
+            Some(Action::Verify(hashes.clone()))
         );
         assert_eq!(
             ActionKind::Reannounce.action(hashes.clone()),
-            Action::Reannounce(hashes.clone())
+            Some(Action::Reannounce(hashes.clone()))
         );
         assert_eq!(
             ActionKind::Remove(RemoveData::Keep).action(hashes.clone()),
-            Action::Remove {
+            Some(Action::Remove {
                 hashes: hashes.clone(),
                 data: RemoveData::Keep
-            }
+            })
         );
         assert_eq!(
             ActionKind::Remove(RemoveData::Delete).action(hashes.clone()),
-            Action::Remove {
+            Some(Action::Remove {
                 hashes,
                 data: RemoveData::Delete
-            }
+            })
         );
     }
 
@@ -440,21 +560,21 @@ mod tests {
         };
         assert_eq!(
             down.action(Vec::new()),
-            Action::SetSpeedLimit {
+            Some(Action::SetSpeedLimit {
                 direction: Direction::Down,
                 limit: Some(KbPerSecond(524)),
-            }
+            })
         );
         assert_eq!(
             up_off.action(Vec::new()),
-            Action::SetSpeedLimit {
+            Some(Action::SetSpeedLimit {
                 direction: Direction::Up,
                 limit: None,
-            }
+            })
         );
         assert_eq!(
             ActionKind::AltSpeed(true).action(Vec::new()),
-            Action::SetAltSpeed(true)
+            Some(Action::SetAltSpeed(true))
         );
         // Each limit has a notification of its own, the turtle one for both ways.
         assert_ne!(down.name(), up_off.name());
@@ -583,6 +703,116 @@ mod tests {
                 kind: None,
                 text: "An action failed: access denied".into(),
             })
+        );
+    }
+
+    fn tree(files: &[(&str, bool, FilePriority)]) -> FileTree {
+        let files: Vec<(&str, u64, u64, bool, FilePriority)> = files
+            .iter()
+            .map(|&(name, wanted, priority)| (name, 1, 0, wanted, priority))
+            .collect();
+        FileTree::new(&details(&hash("a"), &files))
+    }
+
+    #[test]
+    fn a_file_request_takes_its_kind_and_files_from_the_action_the_tree_built() {
+        let tree = tree(&[
+            ("T/b.mkv", true, FilePriority::High),
+            ("T/a.mkv", true, FilePriority::Normal),
+        ]);
+        let folder = NodeKey::new("T");
+        let toggle = tree
+            .toggle_wanted_action(&folder)
+            .map(FileRequest::of_files);
+        let Some(Some(toggle)) = toggle else {
+            panic!("a folder of files can be toggled: {toggle:?}");
+        };
+        assert_eq!(toggle.kind, ActionKind::FilesWanted(false));
+        assert_eq!(toggle.hash(), &hash("a"));
+        assert_eq!(toggle.files, [0, 1]);
+        assert_eq!(Some(toggle.action), tree.toggle_wanted_action(&folder));
+
+        let step = tree
+            .step_priority_action(&NodeKey::new("T/a.mkv"), true)
+            .and_then(FileRequest::of_files);
+        assert_eq!(
+            step.map(|request| (request.kind, request.files)),
+            Some((ActionKind::FilePriority(FilePriority::High), vec![1]))
+        );
+        // Only an action on files becomes a request on files.
+        assert_eq!(FileRequest::of_files(Action::Stop(vec![hash("a")])), None);
+
+        let sequential = FileRequest::sequential(hash("b"), true);
+        assert_eq!(sequential.kind, ActionKind::Sequential(true));
+        assert_eq!(sequential.hash(), &hash("b"));
+        assert_eq!(sequential.files, [] as [usize; 0]);
+        assert_eq!(
+            sequential.action,
+            Action::SetSequential {
+                hash: hash("b"),
+                enabled: true
+            }
+        );
+    }
+
+    #[test]
+    fn the_actions_on_one_torrent_are_made_with_their_request_only() {
+        let everything = availability(true, &[&row(DisplayState::Paused)]);
+        for kind in [
+            ActionKind::FilesWanted(true),
+            ActionKind::FilePriority(FilePriority::Low),
+            ActionKind::Sequential(false),
+        ] {
+            assert!(!kind.allowed(everything), "{kind:?}");
+            assert_eq!(kind.action(vec![hash("a")]), None, "{kind:?}");
+        }
+        // One notification for each, whichever value it set.
+        assert_eq!(
+            ActionKind::FilesWanted(true).name(),
+            ActionKind::FilesWanted(false).name()
+        );
+        assert_eq!(
+            ActionKind::FilePriority(FilePriority::Low).name(),
+            ActionKind::FilePriority(FilePriority::High).name()
+        );
+        assert_eq!(
+            ActionKind::Sequential(true).name(),
+            ActionKind::Sequential(false).name()
+        );
+    }
+
+    #[test]
+    fn a_file_action_waits_for_its_answer_on_the_same_files_of_the_same_torrent() {
+        let mut pending = PendingActions::default();
+        let skip = ActionKind::FilesWanted(false);
+        let Some(first) = pending.start_files(skip, &hash("a"), &[3, 1]) else {
+            panic!("the first one goes");
+        };
+        assert_eq!(
+            pending.start_files(skip, &hash("a"), &[1, 3]),
+            None,
+            "the same files in another order"
+        );
+        assert!(pending.start_files(skip, &hash("a"), &[1]).is_some());
+        assert!(pending.start_files(skip, &hash("b"), &[1]).is_some());
+        assert!(
+            pending
+                .start_files(ActionKind::FilesWanted(true), &hash("b"), &[1])
+                .is_some()
+        );
+        assert!(
+            pending
+                .start(ActionKind::FilesWanted(true), &[hash("b")])
+                .is_some(),
+            "a request without files is another action"
+        );
+        assert_eq!(pending.len(), 5);
+
+        let failure = pending.finish(first, &Err(ActionError::NotConnected));
+        assert_eq!(
+            failure.map(|failure| failure.kind),
+            Some(Some(skip)),
+            "a failure says what it was"
         );
     }
 

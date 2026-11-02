@@ -8,7 +8,10 @@
 //! since, is a repeat. Neither Wayland nor X11 sends a key-up between the repeats of a held key
 //! (GPUI drops the ones X11 makes up).
 
-use gpui_kit::Keystroke;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use gpui_kit::{Action, App, Context, Keystroke, Window};
 
 /// The key held down now, and whether the last key-down repeated it.
 #[derive(Debug, Default)]
@@ -46,6 +49,27 @@ impl KeyRepeats {
     pub(crate) fn repeating(&self) -> bool {
         self.repeating
     }
+}
+
+/// The handler of the action `A` on the entity of `cx`, which runs `run` unless the action comes
+/// from a repeat of a held key, as `repeats` (the main view's) tells. The main view has its own,
+/// which reads its `repeats` itself.
+pub(crate) fn once_per_press_of<T: 'static, A: Action>(
+    repeats: &Rc<RefCell<KeyRepeats>>,
+    cx: &Context<'_, T>,
+    run: impl Fn(&mut T, &mut Window, &mut Context<'_, T>) + 'static,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    let repeats = Rc::clone(repeats);
+    cx.listener(move |this, action: &A, window, cx| {
+        if repeats.borrow().repeating() {
+            tracing::trace!(
+                action = action.name(),
+                "a held key repeats; the action is not run again"
+            );
+            return;
+        }
+        run(this, window, cx);
+    })
 }
 
 /// Whether `first` and `second` are the same key with the same modifiers, whatever text they type.

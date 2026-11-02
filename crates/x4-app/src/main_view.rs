@@ -21,7 +21,8 @@
 //! Under the table, the details panel (the `details` module) shows the selected torrent, when
 //! exactly one is, and the view asks the service to read its details while the panel is open.
 //! Alt+Enter shows and hides the panel; it shares a split with the table, whose handle sets its
-//! height.
+//! height. What the panel's Files tab changes goes out as an action too (the `file_actions`
+//! module).
 //!
 //! The selected torrents can be started, paused, started now, verified and reannounced, from their
 //! keys, from the toolbar's Start and Pause and from the list's context menu (the
@@ -45,6 +46,7 @@
 mod copying;
 mod details;
 mod events;
+mod file_actions;
 mod menu;
 mod persistence;
 mod selection_keys;
@@ -195,7 +197,8 @@ impl MainView {
         let key_repeats = Rc::new(RefCell::new(KeyRepeats::default()));
         let speed_limits = cx.new(|cx| SpeedLimits::new(Rc::clone(&key_repeats), window, cx));
         let limits_focus = speed_limits.focus_handle(cx);
-        let details_panel = cx.new(|_| DetailsPanel::new(ui.details.tab));
+        let details_panel =
+            cx.new(|cx| DetailsPanel::new(ui.details.tab, Rc::clone(&key_repeats), window, cx));
         let details_split = cx.new(|_| ResizableState::default());
         let mut subscriptions = vec![
             cx.subscribe_in(&table, window, Self::on_table_event),
@@ -544,8 +547,9 @@ impl MainView {
     }
 
     /// Tells the table whether its rows are stale data, which it draws at the stale opacity, and
-    /// whether the daemon is connected, which its context menu needs for most of its items; and
-    /// the speed limits popover whether it can apply.
+    /// whether the daemon is connected, which its context menu needs for most of its items; the
+    /// details panel whether its Files tab can act; and the speed limits popover whether it can
+    /// apply.
     fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
         let connected = self.status.connected();
@@ -556,6 +560,8 @@ impl MainView {
                 cx.notify();
             }
         });
+        self.details_panel
+            .update(cx, |panel, cx| panel.set_connected(connected, cx));
         self.show_speed_status(cx);
     }
 

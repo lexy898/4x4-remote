@@ -6,8 +6,9 @@ use std::collections::BTreeSet;
 use gpui_kit::{Action as _, KeyBindingContextPredicate, KeyContext, NoAction};
 
 use super::{
-    ANY_MENU, BINDINGS, Binding, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT,
-    SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS,
+    ANY_MENU, BINDINGS, Binding, FILE_LIST_CONTEXT, FILES, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT,
+    SEARCH_CONTEXT, SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU,
+    TORRENT_LIST_CONTEXT, TORRENTS,
 };
 
 const README: &str = include_str!("../../../../README.md");
@@ -22,12 +23,14 @@ const IN_THE_WINDOW: &str = "anywhere in the window";
 const OUTSIDE_TEXT: &str = "anywhere but a text field";
 const IN_THE_SEARCH_BOX: &str = "in the search box";
 const IN_THE_TABLE: &str = "in the table";
+const IN_THE_FILE_LIST: &str = "in the file list";
 const BOUND_PLACES: &[&str] = &[
     ANYWHERE,
     IN_THE_WINDOW,
     OUTSIDE_TEXT,
     IN_THE_SEARCH_BOX,
     IN_THE_TABLE,
+    IN_THE_FILE_LIST,
 ];
 /// The places of the README's table of keys where the keys are the toolkit's own.
 const TOOLKIT_PLACES: &[&str] = &["in a menu", "in a removal dialog", "in the speed limits"];
@@ -43,13 +46,26 @@ fn place(keys: &str, context: Option<&str>) -> &'static str {
         Some(MAIN_OUTSIDE_TEXT_CONTEXT) => OUTSIDE_TEXT,
         Some(SEARCH_CONTEXT) => IN_THE_SEARCH_BOX,
         Some(TABLE_CONTEXT | TABLE_NO_MENU | TORRENTS) => IN_THE_TABLE,
+        Some(FILES) => IN_THE_FILE_LIST,
         Some(other) => panic!("the README has no place for keys bound in {other:?}"),
     }
 }
 
 /// `keys` in gpui's spelling, such as `ctrl-shift-a`, as the README writes them: `Ctrl+Shift+A`.
+/// A key that is `-` itself ends the keystroke: `-`, or `ctrl--`.
 fn spelled(keys: &str) -> String {
-    keys.split('-')
+    let parts: Vec<&str> = match keys.strip_suffix('-') {
+        Some("") => vec!["-"],
+        Some(modifiers) => modifiers
+            .strip_suffix('-')
+            .unwrap_or(modifiers)
+            .split('-')
+            .chain(["-"])
+            .collect(),
+        None => keys.split('-').collect(),
+    };
+    parts
+        .into_iter()
         .map(|part| match part {
             "pageup" => "Page Up".to_owned(),
             "pagedown" => "Page Down".to_owned(),
@@ -185,10 +201,14 @@ fn keys_are_spelled_as_the_readme_writes_them() {
     assert_eq!(spelled("pagedown"), "Page Down");
     assert_eq!(spelled("shift-delete"), "Shift+Delete");
     assert_eq!(spelled("/"), "/");
+    assert_eq!(spelled("+"), "+");
+    assert_eq!(spelled("-"), "-");
+    assert_eq!(spelled("ctrl--"), "Ctrl+-");
 }
 
 /// The key contexts around an open menu, from the window down to the menu: the context menu,
-/// which is drawn inside the table, and a menu of the toolbar (Remove, Columns).
+/// which is drawn inside the table, a menu of the toolbar (Remove, Columns), and the priority menu
+/// of a row of the file list, which is drawn inside the list.
 const OPEN_MENUS: &[&[&str]] = &[
     &[
         MAIN_CONTEXT,
@@ -197,6 +217,13 @@ const OPEN_MENUS: &[&[&str]] = &[
         "PopupMenu",
     ],
     &[MAIN_CONTEXT, "PopupMenu"],
+    &[
+        MAIN_CONTEXT,
+        FILE_LIST_CONTEXT,
+        "Popover",
+        "PopoverContent",
+        "PopupMenu",
+    ],
 ];
 
 /// The keys that may act while a menu is open: Ctrl+Q quits from anywhere, and the menu's own
@@ -318,4 +345,18 @@ fn the_menu_rule_knows_which_contexts_leave_an_open_menu_out() {
     assert_eq!(predicate(TABLE_NO_MENU).depth_of(&context_menu), None);
     assert_eq!(predicate(TABLE_CONTEXT).depth_of(&context_menu), Some(3));
     assert_eq!(predicate(ANY_MENU).depth_of(&context_menu), Some(4));
+
+    let priority_menu: Vec<KeyContext> = OPEN_MENUS[2]
+        .iter()
+        .map(|context| KeyContext::parse(context).expect("a key context parses"))
+        .collect();
+    assert_eq!(predicate(FILES).depth_of(&priority_menu), None);
+    let file_list = [
+        KeyContext::parse(MAIN_CONTEXT),
+        KeyContext::parse(FILE_LIST_CONTEXT),
+    ]
+    .map(|context| context.expect("a key context parses"));
+    assert_eq!(predicate(FILES).depth_of(&file_list), Some(2));
+    assert_eq!(predicate(TORRENTS).depth_of(&file_list), None);
+    assert_eq!(predicate(TABLE_CONTEXT).depth_of(&file_list), None);
 }

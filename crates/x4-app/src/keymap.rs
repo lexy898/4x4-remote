@@ -15,6 +15,12 @@
 //!   The popover of the limits (`SpeedLimits`) lets through only the keys of the status bar and
 //!   those that take the focus out of it, which closes it; Alt+Enter, Alt+1 and Alt+2 do nothing
 //!   there, so that the details panel does not change behind it;
+//! - the keys of the Files tab work in its file list (`FileList`) while no menu of it is open: the
+//!   arrows, Home, End, Page Up and Page Down move its cursor and open and close folders, Space
+//!   downloads or skips the row under the cursor, and `+` and `-` step its priority. The list lies
+//!   outside the torrent list, so these never move the torrent selection, and the torrent list's
+//!   keys never move the file cursor. A priority menu is drawn inside the list, and `!PopupMenu`
+//!   leaves its keys to it;
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
@@ -91,6 +97,28 @@ actions!(
         ShowGeneralTab,
         /// Shows the Files tab of the details panel.
         ShowFilesTab,
+        /// Moves the cursor of the file list to the row above.
+        MoveFileCursorUp,
+        /// Moves the cursor of the file list to the row below.
+        MoveFileCursorDown,
+        /// Moves the cursor of the file list to its first row.
+        MoveFileCursorToFirst,
+        /// Moves the cursor of the file list to its last row.
+        MoveFileCursorToLast,
+        /// Moves the cursor of the file list a page up.
+        MoveFileCursorPageUp,
+        /// Moves the cursor of the file list a page down.
+        MoveFileCursorPageDown,
+        /// Closes the folder under the file cursor, or moves the cursor to the folder around it.
+        CollapseFileFolder,
+        /// Opens the folder under the file cursor, or moves the cursor into it.
+        ExpandFileFolder,
+        /// Downloads the file or folder under the file cursor, or skips it.
+        ToggleFileWanted,
+        /// Raises the priority of the file or folder under the file cursor by one step.
+        RaiseFilePriority,
+        /// Lowers the priority of the file or folder under the file cursor by one step.
+        LowerFilePriority,
     ]
 );
 
@@ -120,6 +148,11 @@ pub(crate) const REMOVAL_FOOTER_CONTEXT: &str = "RemovalDialogFooter";
 /// The key context of the form in the popover of the speed limits, around its fields, switches
 /// and Apply button.
 pub(crate) const SPEED_LIMITS_CONTEXT: &str = "SpeedLimits";
+/// The key context of the file list of the details panel's Files tab.
+pub(crate) const FILE_LIST_CONTEXT: &str = "FileList";
+/// Where the file list's keys work: in it, while no menu of it is open. A priority menu is drawn
+/// inside the list, so without `!PopupMenu` its arrows would move the file cursor behind it.
+const FILES: &str = "FileList && !PopupMenu";
 
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
@@ -423,6 +456,65 @@ pub const BINDINGS: &[Binding] = &[
         keys: "ctrl-shift-c",
         action: || Box::new(CopyHashes),
         context: Some(TORRENTS),
+    },
+    // The file list of the Files tab. It lies outside the torrent list, so these never reach the
+    // torrent selection, and the torrent list's keys never reach these. Space, `+` and `-` act
+    // once per press of the key; the moving keys repeat while held, as in the table.
+    Binding {
+        keys: "up",
+        action: || Box::new(MoveFileCursorUp),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "down",
+        action: || Box::new(MoveFileCursorDown),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "home",
+        action: || Box::new(MoveFileCursorToFirst),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "end",
+        action: || Box::new(MoveFileCursorToLast),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "pageup",
+        action: || Box::new(MoveFileCursorPageUp),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "pagedown",
+        action: || Box::new(MoveFileCursorPageDown),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "left",
+        action: || Box::new(CollapseFileFolder),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "right",
+        action: || Box::new(ExpandFileFolder),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "space",
+        action: || Box::new(ToggleFileWanted),
+        context: Some(FILES),
+    },
+    // Matched by the character typed: `+` is Shift and `=` on most layouts, or the keypad's plus.
+    Binding {
+        keys: "+",
+        action: || Box::new(RaiseFilePriority),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "-",
+        action: || Box::new(LowerFilePriority),
+        context: Some(FILES),
     },
     // Deeper than the dialog's own Enter, which confirms the dialog whatever has the focus: bound
     // to nothing here, Enter goes on to the focused button and presses it, as Space does.

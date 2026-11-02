@@ -112,9 +112,10 @@ under the pointer before the button comes up, and on nothing if that torrent has
 then. A selected torrent that the filter or the search hides, or that is gone from the daemon,
 leaves the selection, and it is not selected again when it shows again. With no row to start from
 (nothing clicked yet, or the selection cleared with Escape), Up, Down, Page Up, Page Down and Home
-select the first torrent, and End the last. Tab moves on from the table to the copy buttons of the
-details panel, the turtle and the speed limits in the status bar, then to the search box and the
-toolbar's buttons; a disabled button is passed over. The table has the keyboard focus when the
+select the first torrent, and End the last. Tab moves on from the table to the details panel (the
+copy buttons of the General tab, or the switch and the file list of the Files tab), the turtle and
+the speed limits in the status bar, then to the search box and the toolbar's buttons; a disabled
+button is passed over. The table has the keyboard focus when the
 window opens.
 
 The selected torrents that the list shows are what an action works on, in the order shown; a
@@ -201,8 +202,7 @@ The details panel under the table shows the selected torrent. With none selected
 a torrent", and with several, how many are selected; it shows a torrent only when exactly one of
 the torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from
 anywhere in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2`
-open; the Files tab is empty for now. While a menu or the speed limits popover is open, these three
-keys do nothing. Drag the line between the table and the panel to change its height. The panel
+open. While a menu or the speed limits popover is open, these three keys do nothing. Drag the line between the table and the panel to change its height. The panel
 keeps that height when it is hidden and between runs; when the window is too low for it and the
 table's header and two rows, it is drawn lower, and it grows back with the window.
 
@@ -221,6 +221,30 @@ many of its trackers work, with the worst problem among them in plain words, suc
 tracker.example.org: connection timed out". Dates are in the local time zone, such as
 "2026-10-29 14:05". The buttons next to the path and the hash copy them at once, also while the
 daemon is not connected, and give the keys back to the table.
+
+The Files tab shows the torrent's files as a tree: the torrent's own folder first, open, and in
+each folder the folders before the files, by name, with numbers in their natural order ("E2" before
+"E10"). Padding files, which some torrents carry only to line their pieces up, are hidden. After an
+arrow that opens and closes a folder, each row has a checkbox for whether it is downloaded (a dash
+for a folder where only some of its files are), the name, the size, the progress, and the
+priority, Low, Normal or High ("Mixed" for a folder whose files differ), which a click on it
+changes. A change to a folder applies to every file in it, the hidden padding files included.
+Under a file that is downloading, a line such as "Playable from start: 12.4 GiB (34%)" says how
+much of its beginning has come without a gap, which a player can already read. Above the list, the
+switch "Download in order (sequential)" has the daemon download the torrent's pieces from the
+start, so that a file can be played while it downloads. A change shows once the daemon's next
+answer does, a moment later, not before. While the daemon is not connected, the checkboxes, the
+priorities and the switch are disabled. A magnet link has no files until its metadata has come;
+the tab says so, and the switch can be set already.
+
+A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
+Home and End move between the rows, Left closes a folder or goes to the folder around the row,
+Right opens a folder or goes into it, Space downloads or skips the row, and `+` and `-` raise or
+lower its priority by a step (a folder of mixed priority goes to Normal). Holding Space, `+` or `-`
+acts once. With no row to start from, Down and Page Down go to the first row, Up and Page Up to the
+last. These keys never change the selected torrents, and the table's keys never move in the file
+list. While a priority menu is open, it keeps the keys. A change that fails shows a notification,
+one for downloading or skipping files, one for their priorities and one for the switch.
 
 The sidebar on the left filters the list by state:
 
@@ -315,6 +339,10 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
 | `Alt+Enter`                                         | anywhere in the window    | shows or hides the details panel             |
 | `Alt+1`, `Alt+2`                                    | anywhere in the window    | show the panel's General or Files tab        |
+| `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the file list          | move between files and folders               |
+| `Left`, `Right`                                     | in the file list          | close or open a folder, or go up or in       |
+| `Space`                                             | in the file list          | downloads or skips the file or folder        |
+| `+`, `-`                                            | in the file list          | raise or lower its priority                  |
 | `Enter`                                             | in the speed limits       | applies them                                 |
 | `Escape`                                            | in the speed limits       | closes them and changes nothing              |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |

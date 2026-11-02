@@ -116,8 +116,9 @@ impl MainView {
             .update(cx, |panel, cx| panel.set_tab(tab, cx));
     }
 
-    /// Carries out what the panel asks for: a tab, or a copy, which writes the clipboard at once
-    /// and gives the keys back to the table, as a toolbar button does.
+    /// Carries out what the panel asks for: a tab; a copy, which writes the clipboard at once
+    /// and gives the keys back to the table, as a toolbar button does; or a change in the Files
+    /// tab, which goes if it can go now.
     pub(super) fn on_details_event(
         &mut self,
         _: &Entity<DetailsPanel>,
@@ -131,6 +132,7 @@ impl MainView {
                 write_to_clipboard(copy.text.clone(), 1, copy.what, cx);
                 window.focus(&self.table.focus_handle(cx), cx);
             }
+            DetailsPanelEvent::Files(request) => self.request_files(request, window, cx),
         }
     }
 

@@ -27,10 +27,12 @@ use std::rc::Rc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{
-    Action, App, Context, Div, Focusable as _, InteractiveElement as _, KeyUpEvent, SharedString,
+    App, Context, Div, Focusable as _, InteractiveElement as _, KeyUpEvent, SharedString,
     Subscription, Window,
 };
-use x4_core::{ActionError, ActionId, Availability, Command, Row, availability, removal_summary};
+use x4_core::{
+    Action, ActionError, ActionId, Availability, Command, Row, availability, removal_summary,
+};
 use x4_rpc::{HashString, RemoveData};
 
 use super::MainView;
@@ -152,12 +154,32 @@ impl MainView {
             );
             return;
         };
+        let Some(action) = kind.action(hashes) else {
+            // Only the details panel's Files tab makes these, with their files, and sends them
+            // through `run`; one that comes here is answered as not sent, which says so.
+            tracing::error!(
+                action = kind.name(),
+                "an action on one torrent was asked for without what it changes; nothing sent"
+            );
+            self.action_finished(id, &Err(ActionError::EmptySelection), window, cx);
+            return;
+        };
+        self.run(id, kind, count, action, window, cx);
+    }
+
+    /// Sends `action`, of the kind `kind` on `count` torrents or files, kept as pending under `id`.
+    /// If the service has stopped, it is answered at once as not sent.
+    pub(super) fn run(
+        &mut self,
+        id: ActionId,
+        kind: ActionKind,
+        count: usize,
+        action: Action,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         tracing::info!(action = kind.name(), count, "action sent");
-        if self
-            .commands
-            .send(Command::Run(id, kind.action(hashes)))
-            .is_err()
-        {
+        if self.commands.send(Command::Run(id, action)).is_err() {
             tracing::warn!(
                 action = kind.name(),
                 "the service has stopped; the action was not sent"
@@ -402,7 +424,7 @@ pub(super) fn on_torrent_actions(root: Div, cx: &Context<'_, MainView>) -> Div {
 
 /// The handler of the action `A`, which asks the view of `cx` for `request`, unless the action
 /// comes from a repeat of a held key.
-fn handler<A: Action>(
+fn handler<A: gpui_kit::Action>(
     request: TorrentRequest,
     cx: &Context<'_, MainView>,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
@@ -413,7 +435,7 @@ fn handler<A: Action>(
 
 /// The handler of the action `A`, which runs `run` on the view of `cx`, unless the action comes
 /// from a repeat of a held key.
-pub(super) fn once_per_press<A: Action>(
+pub(super) fn once_per_press<A: gpui_kit::Action>(
     cx: &Context<'_, MainView>,
     run: impl Fn(&mut MainView, &mut Window, &mut Context<'_, MainView>) + 'static,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {

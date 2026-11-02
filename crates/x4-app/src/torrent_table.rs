@@ -63,6 +63,7 @@ use x4_core::{
 };
 use x4_rpc::HashString;
 
+pub(crate) use self::cells::{BAR_HEIGHT, bar_fraction};
 use self::right_click::RightClick;
 pub(crate) use self::right_click::{right_click, watch_right_click};
 pub(crate) use self::selection::{SelectionChange, change_selection, follow_table, page_step};

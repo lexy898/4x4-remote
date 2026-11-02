@@ -400,6 +400,53 @@ action-failed-speed-limit =
                *[up] Could not change the upload speed limit: { $reason }
             }
     }
+# Choosing whether files of a torrent are downloaded, in the Files tab. $wanted: yes when they
+# were to be downloaded, no when they were to be skipped; $outcome and $reason as above.
+action-failed-files-wanted =
+    { $outcome ->
+        [not-sent]
+            { $wanted ->
+                [yes] Could not choose files to download: the server is not connected, so nothing was sent
+               *[no] Could not skip files: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $wanted ->
+                [yes] The server did not answer while choosing files to download; they may have been chosen. The Files tab will show the result
+               *[no] The server did not answer while skipping files; they may have been skipped. The Files tab will show the result
+            }
+       *[failed]
+            { $wanted ->
+                [yes] Could not choose files to download: { $reason }
+               *[no] Could not skip files: { $reason }
+            }
+    }
+# Changing the priority of files of a torrent, in the Files tab; $outcome and $reason as above.
+action-failed-file-priority =
+    { $outcome ->
+        [not-sent] Could not change the priority of files: the server is not connected, so nothing was sent
+        [no-answer] The server did not answer while changing the priority of files; it may have changed. The Files tab will show the result
+       *[failed] Could not change the priority of files: { $reason }
+    }
+# Switching the download in order of a torrent, in the Files tab. $state: on or off, the way it
+# was switched; $outcome and $reason as above.
+action-failed-sequential =
+    { $outcome ->
+        [not-sent]
+            { $state ->
+                [on] Could not turn on downloading in order: the server is not connected, so nothing was sent
+               *[off] Could not turn off downloading in order: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $state ->
+                [on] The server did not answer while turning on downloading in order; it may be on now. The Files tab will show the result
+               *[off] The server did not answer while turning off downloading in order; it may be off now. The Files tab will show the result
+            }
+       *[failed]
+            { $state ->
+                [on] Could not turn on downloading in order: { $reason }
+               *[off] Could not turn off downloading in order: { $reason }
+            }
+    }
 # An action whose kind is not known; $outcome and $reason as above.
 action-failed-other =
     { $outcome ->
@@ -590,3 +637,32 @@ tracker-problem-announce-timed-out = Tracker { $host }: connection timed out
 # do.
 tracker-problem-scrape-failed = Tracker { $host } sends no peer counts: { $text }
 tracker-problem-scrape-timed-out = Tracker { $host } sends no peer counts: connection timed out
+
+## The Files tab of the details panel
+
+# The switch that has the server download the torrent's pieces in order, from the start of each
+# file, so that a file can be played while it downloads.
+files-sequential = Download in order (sequential)
+# What the tab says instead of the files of a magnet link, before its metadata has come.
+files-no-metadata = The file list arrives with the torrent's metadata
+# The name of the list of files and folders, for screen readers.
+files-list = Files
+# The name of the checkbox of a file or folder, for screen readers. $name: its name.
+files-wanted = Download { $name }
+# The priority of a file or folder, on its button and in its menu; a folder whose files have
+# different priorities shows files-priority-mixed.
+files-priority-low = Low
+files-priority-normal = Normal
+files-priority-high = High
+files-priority-mixed = Mixed
+# The name of the priority button of a file or folder, for screen readers. $name: its name;
+# $priority: one of the files-priority-* values.
+files-priority-label = Priority of { $name }: { $priority }
+# The name of the progress bar of a file or folder, for screen readers. $name: its name.
+files-progress-label = Progress of { $name }
+# Progress in whole percent. $percent: a number.
+files-percent = { $percent }%
+# How much of a file that downloads can be played from its start: what has come without a gap.
+# $size: the formatted size, such as "12.4 GiB"; $percent: the share of the file in whole percent
+# (a number).
+files-playable = Playable from start: { $size } ({ $percent }%)

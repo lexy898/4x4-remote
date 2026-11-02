@@ -9,7 +9,7 @@ use x4_core::{
     Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedControls, SpeedLimit, Subtitle, TimeUnit,
     UnsupportedReason, human_size, human_speed,
 };
-use x4_rpc::RemoveData;
+use x4_rpc::{FilePriority, RemoveData};
 
 use super::*;
 use crate::actions::{ActionKind, PendingAction};
@@ -814,6 +814,62 @@ fn a_failed_change_of_the_speeds_says_which_one() {
         failed(up_off, 0, &timeout),
         "The server did not answer while changing the upload speed limit; it may have changed. \
          The status bar will show the result"
+    );
+}
+
+#[test]
+fn a_failed_change_in_the_files_tab_says_what_it_changed() {
+    let busy = ActionError::Rpc(ConnectionError::Server("busy".to_owned()));
+    let timeout = ActionError::Rpc(ConnectionError::Timeout);
+    let offline = ActionError::NotConnected;
+    let download = ActionKind::FilesWanted(true);
+    let skip = ActionKind::FilesWanted(false);
+    let high = ActionKind::FilePriority(FilePriority::High);
+
+    assert_eq!(
+        failed(download, 3, &busy),
+        "Could not choose files to download: busy"
+    );
+    assert_eq!(
+        failed(skip, 1, &offline),
+        "Could not skip files: the server is not connected, so nothing was sent"
+    );
+    assert_eq!(
+        failed(download, 1, &timeout),
+        "The server did not answer while choosing files to download; they may have been chosen. \
+         The Files tab will show the result"
+    );
+    assert_eq!(
+        failed(skip, 2, &timeout),
+        "The server did not answer while skipping files; they may have been skipped. The Files \
+         tab will show the result"
+    );
+    assert_eq!(
+        failed(high, 2, &busy),
+        "Could not change the priority of files: busy"
+    );
+    assert_eq!(
+        failed(high, 2, &offline),
+        "Could not change the priority of files: the server is not connected, so nothing was sent"
+    );
+    assert_eq!(
+        failed(high, 2, &timeout),
+        "The server did not answer while changing the priority of files; it may have changed. \
+         The Files tab will show the result"
+    );
+    assert_eq!(
+        failed(ActionKind::Sequential(true), 1, &busy),
+        "Could not turn on downloading in order: busy"
+    );
+    assert_eq!(
+        failed(ActionKind::Sequential(false), 1, &offline),
+        "Could not turn off downloading in order: the server is not connected, so nothing was \
+         sent"
+    );
+    assert_eq!(
+        failed(ActionKind::Sequential(true), 1, &timeout),
+        "The server did not answer while turning on downloading in order; it may be on now. The \
+         Files tab will show the result"
     );
 }
 

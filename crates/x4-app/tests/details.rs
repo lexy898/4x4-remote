@@ -457,7 +457,7 @@ fn alt_1_and_alt_2_switch_tabs_and_the_tab_is_remembered(cx: &mut TestAppContext
     assert!(!window.tab_selected(GENERAL, cx));
     assert!(
         !window.shown("general-hash", cx),
-        "the Files tab is empty yet"
+        "the Files tab shows no General rows"
     );
     assert_eq!(window.ui_state(cx).details.tab, DetailsTab::Files);
     assert!(window.table_focused(cx), "the keys stay in the list");

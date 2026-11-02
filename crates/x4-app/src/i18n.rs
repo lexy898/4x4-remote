@@ -14,7 +14,8 @@
 //! language pick the wording. Nor does it format dates: [`date_time_text`] writes the parts of a
 //! moment in the local time zone, and the message `date-time` orders them.
 //!
-//! The `details` module holds the texts of the details panel that carry values.
+//! The `details` module holds the texts of the details panel that carry values, and the `files`
+//! module those of its Files tab.
 
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,8 +42,13 @@ pub(crate) use details::{
     created_text, details_placeholder_text, error_texts, pieces_text, size_with_wanted_text,
     tracker_problem_text, trackers_text,
 };
+pub(crate) use files::{
+    file_progress_label, files_wanted_label, percent_text, playable_text, priority_label,
+    priority_text,
+};
 
 mod details;
+mod files;
 #[cfg(test)]
 mod parity;
 #[cfg(test)]
@@ -618,6 +624,23 @@ pub(crate) fn action_failure_text(
                 Direction::Down => "down",
                 Direction::Up => "up",
             },
+            reason = reason
+        ),
+        ActionKind::FilesWanted(wanted) => t!(
+            "action-failed-files-wanted",
+            outcome = outcome,
+            wanted = if wanted { "yes" } else { "no" },
+            reason = reason
+        ),
+        ActionKind::FilePriority(_) => t!(
+            "action-failed-file-priority",
+            outcome = outcome,
+            reason = reason
+        ),
+        ActionKind::Sequential(enabled) => t!(
+            "action-failed-sequential",
+            outcome = outcome,
+            state = if enabled { "on" } else { "off" },
             reason = reason
         ),
     }
