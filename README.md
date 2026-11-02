@@ -5,7 +5,7 @@ in Rust.
 
 ## Status
 
-Early development — stage 3, actions. The window connects to the daemon set in `config.toml` and
+Early development — stage 4, details. The window connects to the daemon set in `config.toml` and
 shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
 state, with live counts, and a search box finds them by name. The status bar shows the total
 download and upload speeds, the free space and the state of the connection; it switches the
@@ -13,7 +13,12 @@ alternative speed limits and sets the global download and upload limits. The win
 columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
 started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
 the toolbar and a context menu; removing asks first, and deleting the files too only after an
-explicit confirmation.
+explicit confirmation. A panel under the table shows the selected torrent in two tabs. General gives
+where its data is, its size, hash, dates, share ratio and metainfo, and how its trackers are doing,
+with the worst problem in plain words. Files shows its files as a tree, with each one's progress and
+how much of it already plays from the start; each file or folder can be skipped or given a Low,
+Normal or High priority, and the torrent can be downloaded in order. Whether the panel is shown, its
+height and its tab are remembered too.
 
 ## What it will do
 
