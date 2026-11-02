@@ -109,8 +109,9 @@ impl From<bencode::Error> for MetainfoError {
 ///
 /// The input is untrusted: the reader never recurses and never panics. It reads at most
 /// [`MAX_TORRENT_FILE_BYTES`], with lists and dictionaries nested at most 31 levels deep, strings
-/// shorter than 128 MiB and integers that fit in 64 bits, as libtransmission does, and its file
-/// list holds at most 64 MiB of paths.
+/// shorter than 128 MiB and integers that fit in 64 bits, as libtransmission does. The name and
+/// the paths of the files may take at most 64 MiB together, which is checked before any path is
+/// built, so a hostile file is refused before it costs memory for each of its files.
 ///
 /// # Errors
 ///
@@ -122,7 +123,7 @@ impl From<bencode::Error> for MetainfoError {
 /// - [`MetainfoError::V2Only`] for a torrent without v1 piece hashes but with v2 metadata;
 /// - [`MetainfoError::Invalid`] for a torrent the daemon refuses: without files, with a file
 ///   whose path is empty, with two files of the same path, or with piece hashes that do not match
-///   the size; and for one whose paths would take more than 64 MiB.
+///   the size; and for one whose name and paths would take more than 64 MiB.
 pub fn parse_torrent(bytes: &[u8]) -> Result<ParsedTorrent, MetainfoError> {
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if size > MAX_TORRENT_FILE_BYTES {

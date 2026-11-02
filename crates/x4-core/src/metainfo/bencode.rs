@@ -221,6 +221,7 @@ fn read_value(bytes: &[u8], start: usize, base: usize) -> Result<Read<'_>, Error
 }
 
 /// One open list or dictionary while a container is scanned.
+#[derive(Clone, Copy)]
 struct Frame<'a> {
     dict: bool,
     /// The items read so far; in a dictionary, keys and values both count.
@@ -230,8 +231,52 @@ struct Frame<'a> {
 }
 
 impl Frame<'_> {
+    const CLOSED: Frame<'static> = Frame {
+        dict: false,
+        items: 0,
+        last_key: None,
+    };
+
     fn expects_key(&self) -> bool {
         self.dict && self.items.is_multiple_of(2)
+    }
+}
+
+/// The open lists and dictionaries, in a fixed array: scanning allocates nothing.
+struct Stack<'a> {
+    frames: [Frame<'a>; MAX_DEPTH],
+    len: usize,
+}
+
+impl<'a> Stack<'a> {
+    fn new() -> Self {
+        Self {
+            frames: [Frame::CLOSED; MAX_DEPTH],
+            len: 0,
+        }
+    }
+
+    /// Opens `frame`, unless [`MAX_DEPTH`] frames are open already.
+    fn push(&mut self, frame: Frame<'a>) -> bool {
+        let Some(slot) = self.frames.get_mut(self.len) else {
+            return false;
+        };
+        *slot = frame;
+        self.len += 1;
+        true
+    }
+
+    fn pop(&mut self) -> Option<Frame<'a>> {
+        self.len = self.len.checked_sub(1)?;
+        self.frames.get(self.len).copied()
+    }
+
+    fn last(&self) -> Option<&Frame<'a>> {
+        self.frames.get(self.len.checked_sub(1)?)
+    }
+
+    fn last_mut(&mut self) -> Option<&mut Frame<'a>> {
+        self.frames.get_mut(self.len.checked_sub(1)?)
     }
 }
 
@@ -250,8 +295,12 @@ fn scan_container(bytes: &[u8], start: usize, base: usize) -> Result<(usize, boo
         .ok_or(Error::Syntax {
             offset: base + start,
         })?;
-    let mut stack = Vec::with_capacity(MAX_DEPTH);
-    stack.push(opens(first));
+    let mut stack = Stack::new();
+    if !stack.push(opens(first)) {
+        return Err(Error::TooDeep {
+            offset: base + start,
+        });
+    }
     let mut odd_keys = false;
     let mut position = start + 1;
     loop {
@@ -262,12 +311,11 @@ fn scan_container(bytes: &[u8], start: usize, base: usize) -> Result<(usize, boo
         let byte = *bytes.get(position).ok_or(syntax)?;
         match byte {
             b'l' | b'd' if !expects_key => {
-                if stack.len() >= MAX_DEPTH {
+                if !stack.push(opens(byte)) {
                     return Err(Error::TooDeep {
                         offset: base + position,
                     });
                 }
-                stack.push(opens(byte));
                 position += 1;
             }
             b'e' => {

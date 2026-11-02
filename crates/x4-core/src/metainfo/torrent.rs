@@ -12,13 +12,19 @@ use sha1::{Digest, Sha1};
 use x4_rpc::HashString;
 
 use super::bencode::{Dict, Document, List, Value};
-use super::names::{Text, display_text, push_path_element, sanitized_subpath};
+use super::names::{
+    Text, display_text, push_path_element, sanitized_subpath, sanitized_subpath_len,
+};
 use super::{MetaFile, MetainfoError, ParsedTorrent};
 
-/// The most bytes that the paths of all files may take together. A torrent's paths are its name
-/// in front of each file's, so a long name and many files could otherwise turn a small file into
-/// gigabytes of text; real torrents stay far below it.
-const MAX_PATH_BYTES: usize = 64 * 1024 * 1024;
+/// The most bytes that the text of a [`ParsedTorrent`] may take: its name and the paths of its
+/// files. Each path starts with the name as its folder, so a long name and many files could
+/// otherwise turn a small file into gigabytes of text, and bytes that are not UTF-8 triple in
+/// size as U+FFFD. Real torrents stay far below it. It is checked before any path is built.
+const MAX_TEXT_BYTES: usize = 64 * 1024 * 1024;
+
+/// The refusal when [`MAX_TEXT_BYTES`] would be passed.
+const TOO_LONG: MetainfoError = MetainfoError::Invalid("the name and the file paths are too long");
 
 /// The size of one SHA-1 piece hash in `pieces` (T/torrent-metainfo.cc:374-381).
 const PIECE_HASH_BYTES: usize = 20;
@@ -48,10 +54,10 @@ pub(super) fn read_torrent(document: &Document<'_>) -> Result<ParsedTorrent, Met
         None
     };
     let name = display_text(info.name.unwrap_or_default());
-    let without_choice = |name: Text, reason: &'static str| {
+    let without_choice = |name: Text<'_>, reason: &'static str| {
         tracing::debug!(reason, "torrent file read without a choice of files");
         ParsedTorrent {
-            name: name.text,
+            name: name.text.into_owned(),
             hash: hash.clone(),
             total_size: None,
             files: None,
@@ -86,7 +92,7 @@ pub(super) fn read_torrent(document: &Document<'_>) -> Result<ParsedTorrent, Met
         piece_count,
     )?;
     Ok(ParsedTorrent {
-        name: name.text,
+        name: name.text.into_owned(),
         hash,
         total_size: Some(total_size),
         files: Some(files),
@@ -255,78 +261,102 @@ fn single_file(info: &InfoFacts<'_>, name: &str) -> Result<FileList, MetainfoErr
     let Ok(length) = u64::try_from(length) else {
         return Ok(FileList::Unsure("the file has a negative length"));
     };
+    if name.len().saturating_add(sanitized_subpath_len(name)) > MAX_TEXT_BYTES {
+        return Err(TOO_LONG);
+    }
     Ok(FileList::Files(vec![MetaFile {
         path: sanitized_subpath(name),
         length,
     }]))
 }
 
-/// One file of `info.files`, before the torrent's folder is put in front of its path.
-struct Entry {
-    subpath: String,
+/// What one entry of `info.files` gives besides its path.
+struct EntryFacts {
     length: u64,
     /// Whether a part of the path had bytes that are not UTF-8.
     repaired: bool,
 }
 
 /// The files of a `files` list (R2-R5, R10), under the folder `name`.
+///
+/// The list is walked twice. The first walk checks every entry and adds up the bytes of the
+/// paths, building each one only in a buffer that every entry reuses, and stops at the entry
+/// that would pass [`MAX_TEXT_BYTES`]: hostile input is refused before it costs memory for each
+/// file. The second walk builds the paths, each at its exact size.
 fn folder_files(entries: List<'_>, name: &str) -> Result<FileList, MetainfoError> {
-    let mut files = Vec::new();
-    for item in entries.items() {
-        // The daemon skips an item that is not a dictionary, so every later index would shift.
-        let Value::Dict(entry) = item? else {
-            return Ok(FileList::Unsure("a file entry is not a dictionary"));
-        };
-        match read_entry(entry)? {
-            Ok(file) => files.push(file),
-            Err(reason) => return Ok(FileList::Unsure(reason)),
-        }
-    }
-    if let Some(unsure) = check_unique(&files)? {
-        return Ok(FileList::Unsure(unsure));
-    }
-
     // The sanitized name is the folder of every file, unless it is empty
     // (T/torrent-metainfo.cc:503-508).
-    let folder = sanitized_subpath(name);
-    let mut path_bytes: usize = 0;
-    let mut out = Vec::with_capacity(files.len());
-    for file in files {
-        let path = if folder.is_empty() {
-            file.subpath
-        } else {
-            format!("{folder}/{}", file.subpath)
-        };
-        path_bytes = path_bytes.saturating_add(path.len());
-        if path_bytes > MAX_PATH_BYTES {
-            return Err(MetainfoError::Invalid("the file paths are too long"));
+    let folder_bytes = match sanitized_subpath_len(name) {
+        0 => 0,
+        length => length.saturating_add(1),
+    };
+    let mut subpath = String::new();
+
+    let mut count: usize = 0;
+    let mut text_bytes = name.len();
+    for item in entries.items() {
+        if let Err(reason) = read_entry(item?, &mut subpath)? {
+            return Ok(FileList::Unsure(reason));
         }
-        out.push(MetaFile {
-            path,
-            length: file.length,
-        });
+        count += 1;
+        text_bytes = text_bytes.saturating_add(folder_bytes.saturating_add(subpath.len()));
+        if text_bytes > MAX_TEXT_BYTES {
+            return Err(TOO_LONG);
+        }
     }
-    Ok(FileList::Files(out))
+
+    let folder = sanitized_subpath(name);
+    let mut files = Vec::with_capacity(count);
+    let mut repaired = Vec::with_capacity(count);
+    for item in entries.items() {
+        let entry = match read_entry(item?, &mut subpath)? {
+            Ok(entry) => entry,
+            Err(reason) => return Ok(FileList::Unsure(reason)),
+        };
+        let mut path = String::with_capacity(folder_bytes + subpath.len());
+        if !folder.is_empty() {
+            path.push_str(&folder);
+            path.push('/');
+        }
+        path.push_str(&subpath);
+        files.push(MetaFile {
+            path,
+            length: entry.length,
+        });
+        repaired.push(entry.repaired);
+    }
+    if let Some(unsure) = check_unique(&files, &repaired)? {
+        return Ok(FileList::Unsure(unsure));
+    }
+    Ok(FileList::Files(files))
 }
 
-/// Reads one entry of `files`, or says why the daemon could read it otherwise.
+/// Reads one item of `files` into `subpath`, its path before the torrent's folder, or says why
+/// the daemon could read it otherwise.
 ///
-/// An entry holds `length`, an integer of at least 0 (0 when missing,
-/// T/torrent-metainfo.cc:470), `path` and `path.utf-8`, lists of strings, and any other key with a
-/// scalar or a list of scalars (R4). In order, `path.utf-8` comes after `path` and replaces it
-/// (T/torrent-metainfo.cc:174-178). Anything else makes the daemon count the files differently:
-/// a dictionary inside the entry ends like an entry and adds a file (:148-156), and a list keyed
-/// `files` ends the file list (:187-191).
-fn read_entry(entry: Dict<'_>) -> Result<Result<Entry, &'static str>, MetainfoError> {
-    let mut file = Entry {
-        subpath: String::new(),
+/// An entry is a dictionary; the daemon skips any other item, which would shift every later index.
+/// It holds `length`, an integer of at least 0 (0 when missing, T/torrent-metainfo.cc:470), `path`
+/// and `path.utf-8`, lists of strings, and any other key with a scalar or a list of scalars (R4).
+/// In order, `path.utf-8` comes after `path` and replaces it (T/torrent-metainfo.cc:174-178).
+/// Anything else makes the daemon count the files differently: a dictionary inside the entry ends
+/// like an entry and adds a file (:148-156), and a list keyed `files` ends the file list
+/// (:187-191).
+fn read_entry(
+    item: Value<'_>,
+    subpath: &mut String,
+) -> Result<Result<EntryFacts, &'static str>, MetainfoError> {
+    let Value::Dict(entry) = item else {
+        return Ok(Err("a file entry is not a dictionary"));
+    };
+    subpath.clear();
+    let mut facts = EntryFacts {
         length: 0,
         repaired: false,
     };
     for item in entry.entries() {
         match item? {
             (b"length", Value::Int(length)) => match u64::try_from(length) {
-                Ok(length) => file.length = length,
+                Ok(length) => facts.length = length,
                 Err(_) => return Ok(Err("a file has a negative length")),
             },
             (b"length", _) => return Ok(Err("a file length is not an integer")),
@@ -335,16 +365,16 @@ fn read_entry(entry: Dict<'_>) -> Result<Result<Entry, &'static str>, MetainfoEr
                     return Ok(Err("a file path is not a list"));
                 };
                 if key == b"path.utf-8" {
-                    file.subpath.clear();
-                    file.repaired = false;
+                    subpath.clear();
+                    facts.repaired = false;
                 }
                 for part in parts.items() {
                     let Value::Bytes(part) = part? else {
                         return Ok(Err("a file path holds something else than strings"));
                     };
                     let part = display_text(part);
-                    file.repaired |= part.repaired;
-                    push_path_element(&mut file.subpath, &part.text);
+                    facts.repaired |= part.repaired;
+                    push_path_element(subpath, &part.text);
                 }
             }
             (b"files", _) => return Ok(Err("a file entry holds a files key")),
@@ -356,10 +386,10 @@ fn read_entry(entry: Dict<'_>) -> Result<Result<Entry, &'static str>, MetainfoEr
         }
     }
     // The daemon refuses a file whose path is empty (T/torrent-metainfo.cc:460-464).
-    if file.subpath.is_empty() {
+    if subpath.is_empty() {
         return Err(MetainfoError::Invalid("a file has an empty path"));
     }
-    Ok(Ok(file))
+    Ok(Ok(facts))
 }
 
 /// Whether `value` is a scalar or a list of scalars.
@@ -378,18 +408,31 @@ fn is_flat(value: Value<'_>) -> Result<bool, MetainfoError> {
     }
 }
 
-/// The daemon refuses two files with the same path (R10, T/torrent-metainfo.cc:490-501). Paths
-/// that are equal only after bytes that are not UTF-8 were replaced may not be equal for the
-/// daemon, whose repair differs, so they leave no choice instead of an error.
-fn check_unique(files: &[Entry]) -> Result<Option<&'static str>, MetainfoError> {
-    let mut order: Vec<&Entry> = files.iter().collect();
-    // Within equal paths the ones read exactly come first, so two of them are neighbours.
-    order.sort_by(|a, b| a.subpath.cmp(&b.subpath).then(a.repaired.cmp(&b.repaired)));
+/// The daemon refuses two files with the same path (R10, T/torrent-metainfo.cc:490-501); every
+/// path here starts with the same folder, so whole paths compare as the daemon's do. Paths that
+/// are equal only after bytes that are not UTF-8 were replaced (`repaired`) may not be equal for
+/// the daemon, whose repair differs, so they leave no choice instead of an error.
+fn check_unique(
+    files: &[MetaFile],
+    repaired: &[bool],
+) -> Result<Option<&'static str>, MetainfoError> {
+    let key = |index: usize| {
+        (
+            files.get(index).map(|file| file.path.as_str()),
+            repaired.get(index).copied(),
+        )
+    };
+    // Within equal paths the ones read exactly come first, so two of them are neighbours. The
+    // sort is in place, so it needs no memory beyond the indices.
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_unstable_by(|&a, &b| key(a).cmp(&key(b)));
     let mut unsure = None;
     for pair in order.windows(2) {
         let [first, second] = pair else { continue };
-        if first.subpath == second.subpath {
-            if !first.repaired && !second.repaired {
+        let ((first_path, first_repaired), (second_path, second_repaired)) =
+            (key(*first), key(*second));
+        if first_path == second_path {
+            if first_repaired == Some(false) && second_repaired == Some(false) {
                 return Err(MetainfoError::Invalid("two files have the same path"));
             }
             unsure = Some("two file paths may be the same");

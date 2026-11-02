@@ -4,10 +4,10 @@
 
 use std::borrow::Cow;
 
-/// A name as text.
+/// A name as text, borrowed from the file when it is valid UTF-8.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Text {
-    pub(super) text: String,
+pub(super) struct Text<'a> {
+    pub(super) text: Cow<'a, str>,
     /// Whether bytes that are not UTF-8 were replaced. libtransmission's repair may group them
     /// differently, so such a name might not read exactly as the daemon's.
     pub(super) repaired: bool,
@@ -16,18 +16,11 @@ pub(super) struct Text {
 /// `bytes` as text, the way libtransmission converts every name (`tr_strv_convert_utf8` and
 /// `tr_strv_replace_invalid`, T/utils.cc:318-337): everything from the first NUL on is dropped,
 /// and what is not UTF-8 becomes U+FFFD.
-pub(super) fn display_text(bytes: &[u8]) -> Text {
+pub(super) fn display_text(bytes: &[u8]) -> Text<'_> {
     let before_nul = bytes.split(|&byte| byte == 0).next().unwrap_or(bytes);
-    match String::from_utf8_lossy(before_nul) {
-        Cow::Borrowed(text) => Text {
-            text: text.to_owned(),
-            repaired: false,
-        },
-        Cow::Owned(text) => Text {
-            text,
-            repaired: true,
-        },
-    }
+    let text = String::from_utf8_lossy(before_nul);
+    let repaired = matches!(text, Cow::Owned(_));
+    Text { text, repaired }
 }
 
 /// `path` as a path inside the torrent (`tr_torrent_files::sanitize_subpath`,
@@ -37,6 +30,20 @@ pub(super) fn sanitized_subpath(path: &str) -> String {
     let mut out = String::new();
     append_sanitized_subpath(path, &mut out);
     out
+}
+
+/// The length of [`sanitized_subpath`] of `path`, found without building it.
+pub(super) fn sanitized_subpath_len(path: &str) -> usize {
+    let mut length: usize = 0;
+    let mut rest = path;
+    while !rest.is_empty() {
+        let (part, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        let underscore = usize::from(part == "." || part == "..");
+        length = length.saturating_add(underscore + part.len() + 1);
+        rest = tail;
+    }
+    // The trailing `/`.
+    length.saturating_sub(1)
 }
 
 /// Appends one element of a file's `path` list to `subpath`, after a `/` if `subpath` is not
@@ -69,7 +76,9 @@ fn append_sanitized_subpath(path: &str, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Text, display_text, push_path_element, sanitized_subpath};
+    use std::borrow::Cow;
+
+    use super::{Text, display_text, push_path_element, sanitized_subpath, sanitized_subpath_len};
 
     fn subpath(elements: &[&str]) -> String {
         let mut subpath = String::new();
@@ -81,8 +90,8 @@ mod tests {
 
     #[test]
     fn text_stops_at_a_nul_and_marks_repaired_bytes() {
-        let text = |text: &str, repaired| Text {
-            text: text.to_owned(),
+        let text = |text: &'static str, repaired| Text {
+            text: Cow::Borrowed(text),
             repaired,
         };
         assert_eq!(display_text(b"plain"), text("plain", false));
@@ -109,6 +118,32 @@ mod tests {
         assert_eq!(sanitized_subpath("/a"), "/a");
         // Windows names and characters are left alone on a Linux daemon.
         assert_eq!(sanitized_subpath("CON:*?.txt"), "CON:*?.txt");
+    }
+
+    #[test]
+    fn the_sanitized_length_is_the_length_of_the_sanitized_path() {
+        for path in [
+            "",
+            "a",
+            ".",
+            "..",
+            "...",
+            "/",
+            "//",
+            "a/",
+            "/a",
+            "a//b",
+            "./..",
+            "a/./b/../c/",
+            "\u{fffd}/.",
+            "été/..",
+        ] {
+            assert_eq!(
+                sanitized_subpath_len(path),
+                sanitized_subpath(path).len(),
+                "{path:?}"
+            );
+        }
     }
 
     #[test]

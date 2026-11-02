@@ -310,6 +310,30 @@ fn random_mutations_never_panic() {
 }
 
 #[test]
+fn the_path_limit_stops_the_reader_at_the_file_that_passes_it() {
+    // 4 MiB that are not UTF-8 make a 12 MiB name, so the sixth path passes 64 MiB. The reader
+    // stops there, before it builds any path: the entry after it, which would leave no choice of
+    // files, is never read.
+    let name = vec![0xff; 4 * 1024 * 1024];
+    let mut entries: Vec<_> = (0..6).map(|index| file(&[&index.to_string()], 1)).collect();
+    entries.push(bytes("not an entry"));
+    let info = dict([
+        ("files", Bencode::List(entries)),
+        ("name", bytes(&name)),
+        ("piece length", int(PIECE)),
+        ("pieces", bytes([0; 20])),
+    ]);
+
+    // Only the file count is compared, so a failure does not print the 12 MiB name.
+    assert_eq!(
+        parse_torrent(&torrent(info)).map(|parsed| parsed.files.map(|files| files.len())),
+        Err(MetainfoError::Invalid(
+            "the name and the file paths are too long"
+        ))
+    );
+}
+
+#[test]
 fn a_long_name_over_many_files_is_refused_before_it_bloats() {
     // The name is the folder of every file: 4 MiB in front of 20 paths would be 80 MiB of text
     // from a file of 4 MiB.
@@ -322,6 +346,21 @@ fn a_long_name_over_many_files_is_refused_before_it_bloats() {
         matches!(result, Err(MetainfoError::Invalid(_))),
         "{:?}",
         result.map(|parsed| parsed.files.map(|files| files.len()))
+    );
+
+    // A single file is named by the name too: 12 MiB that are not UTF-8 make 36 MiB of name
+    // and 36 MiB of path.
+    let info = dict([
+        ("length", int(1)),
+        ("name", bytes(vec![0xff; 12 * 1024 * 1024])),
+        ("piece length", int(PIECE)),
+        ("pieces", bytes([0; 20])),
+    ]);
+    assert_eq!(
+        parse_torrent(&torrent(info)).map(|parsed| parsed.files.map(|files| files.len())),
+        Err(MetainfoError::Invalid(
+            "the name and the file paths are too long"
+        ))
     );
 
     // The same name over a few files is read.
