@@ -11,7 +11,7 @@ use x4_rpc::testing::fixtures::{
     TORRENT_GET_RECENT,
 };
 use x4_rpc::{
-    AddSource, FilePriority, IdError, RemoveData, TorrentAdd, TorrentId, TorrentRecord,
+    AddSource, FilePriority, IdError, MagnetLink, RemoveData, TorrentAdd, TorrentId, TorrentRecord,
     TransportError,
 };
 
@@ -255,7 +255,10 @@ fn link_record(hash: &str, magnet_link: Option<&str>) -> TorrentRecord {
 
 fn magnet() -> TorrentAdd {
     TorrentAdd {
-        source: AddSource::Magnet("magnet:?xt=urn:btih:example".to_owned()),
+        source: AddSource::Magnet(
+            MagnetLink::parse("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+                .unwrap(),
+        ),
         download_dir: None,
         paused: true,
         files_unwanted: Vec::new(),

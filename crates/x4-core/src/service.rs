@@ -467,8 +467,8 @@ mod tests {
     };
     use x4_rpc::testing::{FakeTransport, RecordedRequest, ok};
     use x4_rpc::{
-        AddSource, FilePriority, HashString, HttpResponse, IdError, RemoveData, SESSION_FIELDS,
-        TorrentAdd, TorrentField,
+        AddSource, FilePriority, HashString, HttpResponse, IdError, MagnetLink, RemoveData,
+        SESSION_FIELDS, TorrentAdd, TorrentField,
     };
 
     use super::*;
@@ -779,7 +779,10 @@ mod tests {
     #[test]
     fn add_sends_the_torrent() {
         let add = TorrentAdd {
-            source: AddSource::Magnet("magnet:?xt=urn:btih:example".to_owned()),
+            source: AddSource::Magnet(
+                MagnetLink::parse("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+                    .unwrap(),
+            ),
             download_dir: None,
             paused: true,
             files_unwanted: Vec::new(),
@@ -792,7 +795,7 @@ mod tests {
             sent_for(Action::Add(add)),
             (
                 "torrent_add".to_owned(),
-                json!({ "filename": "magnet:?xt=urn:btih:example", "paused": true })
+                json!({ "filename": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "paused": true })
             )
         );
     }

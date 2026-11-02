@@ -9,8 +9,10 @@ use base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT;
 use serde::de::{Error as _, Unexpected};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::download_dir::DownloadDir;
 use crate::error::RpcError;
 use crate::ids::{HashString, TorrentId};
+use crate::magnet::MagnetLink;
 
 /// A key of the `fields` array of `torrent_get`; serializes as its wire name (`hash_string`, …).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -564,10 +566,14 @@ pub struct TorrentSet {
 }
 
 /// Where a torrent to add comes from.
+///
+/// The daemon reads `filename` as a URL to fetch or a path on its own disk too, so only a
+/// validated [`MagnetLink`] is ever sent there; the content of a `.torrent` file always goes as
+/// `metainfo`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddSource {
-    /// A magnet link (or a URL of a `.torrent` the server fetches), sent as `filename`.
-    Magnet(String),
+    /// A magnet link, sent as `filename`.
+    Magnet(MagnetLink),
     /// The content of a `.torrent` file, sent base64-encoded as `metainfo`.
     Metainfo(Vec<u8>),
 }
@@ -581,7 +587,7 @@ pub struct TorrentAdd {
     /// The magnet link or metainfo.
     pub source: AddSource,
     /// Where on the server to download to; `None` uses the session's default directory.
-    pub download_dir: Option<String>,
+    pub download_dir: Option<DownloadDir>,
     /// Add without starting.
     pub paused: bool,
     /// Indices of files not to download.

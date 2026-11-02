@@ -38,6 +38,17 @@ impl HashString {
         }
     }
 
+    /// The hash of a SHA-1 digest, as 40 lowercase hex digits.
+    pub(crate) fn from_sha1(digest: &[u8; 20]) -> Self {
+        let mut hex = String::with_capacity(40);
+        for byte in digest {
+            for nibble in [byte >> 4, byte & 0x0f] {
+                hex.extend(char::from_digit(u32::from(nibble), 16));
+            }
+        }
+        Self(hex)
+    }
+
     /// The hash as lowercase hex.
     #[must_use]
     pub fn as_str(&self) -> &str {

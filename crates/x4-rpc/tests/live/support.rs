@@ -27,8 +27,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use x4_rpc::{
-    AddOutcome, AddSource, Client, DEFAULT_TIMEOUT, FilePriority, GetIds, HashString, RemoveData,
-    Status, TorrentAdd, TorrentField, TorrentId, TorrentRecord, TorrentSelection, UreqTransport,
+    AddOutcome, AddSource, Client, DEFAULT_TIMEOUT, DownloadDir, FilePriority, GetIds, HashString,
+    RemoveData, Status, TorrentAdd, TorrentField, TorrentId, TorrentRecord, TorrentSelection,
+    UreqTransport,
 };
 
 use crate::metainfo::{
@@ -203,7 +204,10 @@ impl TestTorrent {
         let hash = metainfo.info_hash;
         let add = TorrentAdd {
             source: AddSource::Metainfo(metainfo.bytes),
-            download_dir: Some(env.remote_dir.clone()),
+            download_dir: Some(
+                DownloadDir::new(&env.remote_dir)
+                    .unwrap_or_else(|error| panic!("X4_LIVE_REMOTE_DIR is not a folder: {error}")),
+            ),
             paused: false,
             files_unwanted: Vec::new(),
             priority_high: Vec::new(),

@@ -244,7 +244,7 @@ impl Action {
 
 #[cfg(test)]
 mod tests {
-    use x4_rpc::AddSource;
+    use x4_rpc::{AddSource, MagnetLink};
 
     use super::*;
 
@@ -252,7 +252,10 @@ mod tests {
 
     fn add() -> TorrentAdd {
         TorrentAdd {
-            source: AddSource::Magnet("magnet:?xt=urn:btih:example".to_owned()),
+            source: AddSource::Magnet(
+                MagnetLink::parse("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+                    .unwrap(),
+            ),
             download_dir: None,
             paused: false,
             files_unwanted: Vec::new(),

@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 use x4_rpc::testing::fixtures::{TORRENT_GET_DETAILS, TORRENT_GET_LIST, TORRENT_GET_RECENT};
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
 use x4_rpc::{
-    AddOutcome, AddSource, AddedTorrent, Client, ErrorKind, GetIds, HashString, Pieces, RemoveData,
-    Status, TorrentAction, TorrentAdd, TorrentField, TorrentId, TorrentRef, TorrentSelection,
-    TorrentSet,
+    AddOutcome, AddSource, AddedTorrent, Client, DownloadDir, ErrorKind, GetIds, HashString,
+    MagnetLink, Pieces, RemoveData, Status, TorrentAction, TorrentAdd, TorrentField, TorrentId,
+    TorrentRef, TorrentSelection, TorrentSet,
 };
 
 const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -52,9 +52,12 @@ fn param_keys(params: &Value) -> Vec<String> {
     keys
 }
 
+#[expect(clippy::unwrap_used, reason = "built from a constant that is valid")]
 fn magnet_add() -> TorrentAdd {
     TorrentAdd {
-        source: AddSource::Magnet(format!("magnet:?xt=urn:btih:{HASH}")),
+        source: AddSource::Magnet(
+            MagnetLink::parse(&format!("magnet:?xt=urn:btih:{HASH}")).unwrap(),
+        ),
         download_dir: None,
         paused: false,
         files_unwanted: Vec::new(),
@@ -282,24 +285,44 @@ fn remove_sends_delete_flag() {
 }
 
 #[test]
-fn add_magnet_uses_filename() {
-    let magnet = format!("magnet:?xt=urn:btih:{HASH}");
-    let (mut client, transport) = client_answering(json!({
-        "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
-    }));
-    let add = TorrentAdd {
-        paused: true,
-        download_dir: Some("/data/torrents/video".to_owned()),
-        ..magnet_add()
+fn the_add_request_sends_a_magnet_as_filename_and_a_file_as_metainfo() {
+    let sent = |source: AddSource| {
+        let (mut client, transport) = client_answering(json!({
+            "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
+        }));
+        let add = TorrentAdd {
+            source,
+            paused: true,
+            download_dir: Some(DownloadDir::new("//data/torrents//video/\n").unwrap()),
+            ..magnet_add()
+        };
+        client.torrent_add(&add).unwrap();
+        let request = only_request(&transport).unwrap();
+        assert_eq!(request.method, "torrent_add");
+        request.params
     };
+    let magnet = MagnetLink::parse(&format!(
+        " MAGNET:?xt=urn:btih:{HASH}&dn=a%20b&tr=udp%3A%2F%2Fx \n"
+    ))
+    .unwrap();
 
-    client.torrent_add(&add).unwrap();
-
-    let request = only_request(&transport).unwrap();
-    assert_eq!(request.method, "torrent_add");
+    // The magnet goes as it was validated: trimmed, with the scheme in lower case.
     assert_eq!(
-        request.params,
-        json!({ "filename": magnet, "paused": true, "download_dir": "/data/torrents/video" })
+        sent(AddSource::Magnet(magnet)),
+        json!({
+            "filename": format!("magnet:?xt=urn:btih:{HASH}&dn=a%20b&tr=udp%3A%2F%2Fx"),
+            "paused": true,
+            "download_dir": "/data/torrents/video",
+        })
+    );
+    // A file goes as its content, never as a name the daemon would read on its own disk.
+    assert_eq!(
+        sent(AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec())),
+        json!({
+            "metainfo": "ZDQ6aW5mb2Q0Om5hbWUxOnhlZQ==",
+            "paused": true,
+            "download_dir": "/data/torrents/video",
+        })
     );
 }
 

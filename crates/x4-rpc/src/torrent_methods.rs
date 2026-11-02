@@ -10,6 +10,7 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
+use crate::download_dir::DownloadDir;
 use crate::error::RpcError;
 use crate::ids::{GetIds, TorrentSelection};
 use crate::torrent::{
@@ -107,7 +108,7 @@ impl<T: Transport> Client<T> {
         let params = AddParams {
             filename,
             metainfo,
-            download_dir: add.download_dir.as_deref(),
+            download_dir: add.download_dir.as_ref().map(DownloadDir::as_str),
             paused: add.paused,
             files_unwanted: &add.files_unwanted,
             priority_high: &add.priority_high,
