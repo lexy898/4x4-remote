@@ -27,14 +27,19 @@ pub(crate) fn details_placeholder_text(target: &DetailsTarget) -> Option<SharedS
     }
 }
 
-/// The size of a torrent: "22.9 GiB", or "22.9 GiB (4.1 GiB wanted)" when only some of its files
-/// are wanted, so that the two sizes read differently.
-pub(crate) fn size_with_wanted_text(size: HumanSize, wanted: HumanSize) -> SharedString {
-    let (size, wanted) = (size_string(size), size_string(wanted));
-    if size == wanted {
-        return size.into();
+/// The size of a torrent: "22.9 GiB", or "22.9 GiB (4.1 GiB wanted)" with the size of the wanted
+/// files, which x4-core gives only when it reads otherwise.
+pub(crate) fn size_with_wanted_text(size: HumanSize, wanted: Option<HumanSize>) -> SharedString {
+    let size = size_string(size);
+    match wanted {
+        Some(wanted) => t!(
+            "general-size-wanted",
+            size = size,
+            wanted = size_string(wanted)
+        )
+        .into(),
+        None => size.into(),
     }
-    t!("general-size-wanted", size = size, wanted = wanted).into()
 }
 
 /// How many pieces a torrent has and how large each is, such as "1,500 pieces of 4.0 MiB".
@@ -185,18 +190,13 @@ mod tests {
     }
 
     #[test]
-    fn the_wanted_size_shows_only_when_it_reads_differently() {
+    fn the_wanted_size_follows_the_size_when_there_is_one() {
         assert_eq!(
-            size_with_wanted_text(human_size(3 * 1024 * MIB), human_size(2 * 1024 * MIB)),
+            size_with_wanted_text(human_size(3 * 1024 * MIB), Some(human_size(2 * 1024 * MIB))),
             "3.0 GiB (2.0 GiB wanted)"
         );
         assert_eq!(
-            size_with_wanted_text(human_size(3 * 1024 * MIB), human_size(3 * 1024 * MIB)),
-            "3.0 GiB"
-        );
-        // A byte less reads the same.
-        assert_eq!(
-            size_with_wanted_text(human_size(3 * 1024 * MIB), human_size(3 * 1024 * MIB - 1)),
+            size_with_wanted_text(human_size(3 * 1024 * MIB), None),
             "3.0 GiB"
         );
     }

@@ -13,7 +13,7 @@ use gpui_kit::{
     AnyElement, Context, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, div, px,
 };
-use x4_core::{ErrorView, GeneralModel, TrackerProblemKind};
+use x4_core::{ErrorView, GeneralModel};
 
 use super::{CopyRequest, DetailsPanel, DetailsPanelEvent};
 use crate::i18n::{
@@ -155,14 +155,10 @@ fn torrent_rows(model: &GeneralModel, theme: &Theme) -> Vec<Row> {
     let mut rows = vec![
         Row {
             note: model.trackers.problem.as_ref().map(|problem| {
-                let color = match problem.kind {
-                    TrackerProblemKind::AnnounceFailed | TrackerProblemKind::AnnounceTimedOut => {
-                        theme.warning
-                    }
-                    // Many trackers never answer scrapes, so the mildest kind is said quietly.
-                    TrackerProblemKind::ScrapeFailed | TrackerProblemKind::ScrapeTimedOut => {
-                        theme.muted_foreground
-                    }
+                let color = if problem.kind.is_mild() {
+                    theme.muted_foreground
+                } else {
+                    theme.warning
                 };
                 ("tracker-problem", tracker_problem_text(problem), color)
             }),

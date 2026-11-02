@@ -17,6 +17,16 @@ pub enum TrackerProblemKind {
 }
 
 impl TrackerProblemKind {
+    /// Whether the kind is mild, for the UI to say it quietly: the problems of a scrape, which
+    /// many trackers never answer, while the announce, which brings the peers, works.
+    #[must_use]
+    pub fn is_mild(self) -> bool {
+        match self {
+            Self::AnnounceFailed | Self::AnnounceTimedOut => false,
+            Self::ScrapeFailed | Self::ScrapeTimedOut => true,
+        }
+    }
+
     /// How bad the kind is; the worse a problem is, the greater the number. An announce is what
     /// keeps the torrent supplied with peers, so its problems outrank those of a scrape, and a
     /// refusal, which the user may have to act on, outranks a timeout, which may pass.
@@ -324,6 +334,14 @@ mod tests {
                 "Tracker did not respond"
             ))
         );
+    }
+
+    #[test]
+    fn only_the_problems_of_a_scrape_are_mild() {
+        assert!(!TrackerProblemKind::AnnounceFailed.is_mild());
+        assert!(!TrackerProblemKind::AnnounceTimedOut.is_mild());
+        assert!(TrackerProblemKind::ScrapeFailed.is_mild());
+        assert!(TrackerProblemKind::ScrapeTimedOut.is_mild());
     }
 
     #[test]

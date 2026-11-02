@@ -40,8 +40,9 @@ pub struct GeneralModel {
     pub path: String,
     /// The size of all files.
     pub size_total: HumanSize,
-    /// The size of the files that are wanted.
-    pub size_wanted: HumanSize,
+    /// The size of the files that are wanted, when only some are: `None` when it reads the same
+    /// as `size_total`, so that the UI shows one size then.
+    pub size_wanted: Option<HumanSize>,
     /// Bytes downloaded over the torrent's life; zero until the details have been read.
     pub downloaded: HumanSize,
     /// Bytes uploaded over the torrent's life; zero until the details have been read.
@@ -86,10 +87,13 @@ pub struct GeneralModel {
 #[must_use]
 pub fn general_model(torrent: &Torrent, details: Option<&TorrentDetails>) -> GeneralModel {
     let details = details.filter(|details| details.hash == torrent.hash);
+    let size_total = human_size(torrent.total_size);
+    // A size is rounded as it is shown, so two that read the same are equal.
+    let size_wanted = Some(human_size(torrent.size_when_done)).filter(|&size| size != size_total);
     GeneralModel {
         path: join_path(&torrent.download_dir, &torrent.name),
-        size_total: human_size(torrent.total_size),
-        size_wanted: human_size(torrent.size_when_done),
+        size_total,
+        size_wanted,
         downloaded: human_size(details.map_or(0, |details| details.downloaded_ever)),
         uploaded: human_size(details.map_or(0, |details| details.uploaded_ever)),
         ratio: torrent.ratio,
@@ -211,7 +215,7 @@ mod tests {
         // From the list.
         assert_eq!(model.path, "/data/torrents/Show");
         assert_eq!(model.size_total, human_size(3_000));
-        assert_eq!(model.size_wanted, human_size(2_000));
+        assert_eq!(model.size_wanted, Some(human_size(2_000)));
         assert_eq!(model.ratio, Ratio::Value(1.5));
         assert_eq!(model.hash, torrent.hash);
         assert_eq!(model.added, Some(at(1_000)));
@@ -261,6 +265,27 @@ mod tests {
         assert_eq!(model.pieces, None);
         assert_eq!(model.downloaded, human_size(0));
         assert_eq!(model.trackers, TrackerSummary::default());
+    }
+
+    #[test]
+    fn the_wanted_size_is_given_only_when_it_reads_otherwise_than_the_size() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let wanted = |total_size, size_when_done| {
+            general_model(
+                &Torrent {
+                    total_size,
+                    size_when_done,
+                    ..torrent("a")
+                },
+                None,
+            )
+            .size_wanted
+        };
+
+        assert_eq!(wanted(3 * GIB, 2 * GIB), Some(human_size(2 * GIB)));
+        assert_eq!(wanted(3 * GIB, 3 * GIB), None, "every file is wanted");
+        // A byte less reads the same.
+        assert_eq!(wanted(3 * GIB, 3 * GIB - 1), None);
     }
 
     #[test]
