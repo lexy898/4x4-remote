@@ -12,6 +12,10 @@
 //! every path too. An interrupted run skips the guards, so each new torrent is named on stderr as
 //! soon as it is added.
 //!
+//! One test only reads: it looks for a few of the daemon's own torrents that have trackers and
+//! reads their details as the details panel does (the `tracker_entries` module), so that real
+//! tracker entries are parsed. It changes nothing and reports counts and kinds of values only.
+//!
 //! The offline tests of the support code (bencode, piece hashes, accepting the added torrent,
 //! the local data) run in `just test` too.
 
@@ -19,6 +23,8 @@
 mod metainfo;
 #[path = "live/support.rs"]
 mod support;
+#[path = "live/tracker_entries.rs"]
+mod tracker_entries;
 
 use std::time::Duration;
 
@@ -26,6 +32,7 @@ use support::{
     FILE_SIZE, LiveEnv, MULTI_FILES, TestTorrent, assert_others_unchanged, file_is_gone, file_size,
     others_fingerprint, torrent_by_hash, wait_until,
 };
+use tracker_entries::{WITH_TRACKERS, listed_hashes, read_and_check, with_trackers};
 use x4_rpc::{
     AddOutcome, Client, FilePriority, GetIds, RpcError, Status, TorrentAction, TorrentField,
     TorrentSelection, TorrentSet, UreqTransport,
@@ -403,4 +410,36 @@ fn sequential_on_and_off_on_an_own_torrent() {
     torrent.remove_with_data(&mut client);
     assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
     assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn real_tracker_stats_parse_on_the_daemons_torrents() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let hashes = listed_hashes(&mut client);
+    let (tracked, looked_at) = with_trackers(&mut client, &hashes);
+    eprintln!(
+        "tracker entries: {} torrents listed, {looked_at} looked at, {} of at most \
+         {WITH_TRACKERS} with trackers chosen",
+        hashes.len(),
+        tracked.len()
+    );
+    assert!(
+        !tracked.is_empty(),
+        "none of the {looked_at} torrents looked at has trackers"
+    );
+
+    // The read of the progress that goes out with the whole list, then the full read on select.
+    for (what, fields) in [
+        (
+            "progress and trackers",
+            TorrentField::DETAILS_PROGRESS_TRACKERS,
+        ),
+        ("full", TorrentField::DETAILS_FULL),
+    ] {
+        let tally = read_and_check(&mut client, &tracked, fields, what);
+        eprintln!("{what}: {tally}");
+        assert!(tally.entries > 0, "{what}: no tracker entry was parsed");
+    }
 }
