@@ -228,31 +228,47 @@ tracker.example.org: connection timed out". Dates are in the local time zone, su
 "2026-10-29 14:05". The buttons next to the path and the hash copy them at once, also while the
 daemon is not connected, and give the keys back to the table.
 
-The Files tab shows the torrent's files as a tree: the torrent's own folder first, open, and in
-each folder the folders before the files, by name, with numbers in their natural order ("E2" before
+The Files tab shows the torrent's files as a tree: the torrent's own folder first, open, and in each
+folder the folders before the files, by name, with numbers in their natural order ("E2" before
 "E10"). Padding files, which some torrents carry only to line their pieces up, are hidden. After an
 arrow that opens and closes a folder, each row has a checkbox for whether it is downloaded (a dash
-for a folder where only some of its files are), the name, the size, the progress, and the
-priority, Low, Normal or High ("Mixed" for a folder whose files differ), which a click on it
-changes. A change to a folder applies to every file in it, the hidden padding files included.
-Each row is one line. After the name of a file that is downloading, once its first bytes have come,
-muted text such as "Playable from start: 12.4 GiB (34%)" says how much of its beginning has come
-without a gap, which a player can already read; a long name is cut short before it is. Above the
-list, the switch "Download in order (sequential)" has the daemon download the torrent's pieces from
-the start, so that a file can be played while it downloads. A change shows once the daemon's next
-answer does, a moment later, not before. While the daemon is not connected, the checkboxes, the
-priorities and the switch are disabled. A magnet link has no files until its metadata has come; the
-tab says so, and the switch can be set already.
+for a folder where only some of its files are), the name, the size, the progress, and the priority,
+Low, Normal or High ("Mixed" for a folder whose files differ), which a click on it changes. A change
+to a folder applies to every file in it, the hidden padding files included. Each row is one line.
+After the name of a file that is downloading, once its first bytes have come, muted text such as
+"Playable from start: 12.4 GiB (34%)" says how much of its beginning has come without a gap, which a
+player can already read; a long name is cut short before it is. It is counted in the pieces the
+daemon has, from the file's first byte up to the first piece still missing, so a file that downloads
+in no particular order can be half done and still play only its first seconds. Above the list, the
+switch "Download in order (sequential)" has the daemon download the torrent's pieces from the start,
+so that a file can be played while it downloads. A change shows once the daemon's next answer does,
+a moment later, not before. While the daemon is not connected, the checkboxes, the priorities and
+the switch are disabled. A magnet link has no files until its metadata has come; the tab says so,
+and the switch can be set already.
 
 A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
-Home and End move between the rows, Left closes a folder or goes to the folder around the row,
-Right opens a folder or goes into it, Space downloads or skips the row, and `+` and `-` raise or
-lower its priority by a step (a folder of mixed priority goes to Normal). Holding Space, `+` or `-`
-acts once. With no row to start from, Up, Down, Page Up, Page Down and Home go to the first row,
-and End to the last, as in the table. These keys never change the selected torrents, and the
-table's keys never move in the file list. While a priority menu is open, it keeps the keys. A
-change that fails shows a notification, one for downloading or skipping files, one for their
-priorities and one for the switch.
+Home and End move between the rows, Left closes a folder or goes to the folder around the row, Right
+opens a folder or goes into it, Space downloads or skips the row, and `+` and `-` raise or lower its
+priority by a step (a folder of mixed priority goes to Normal). Holding Space, `+` or `-` acts once.
+With no row to start from, Up, Down, Page Up, Page Down and Home go to the first row, and End to the
+last, as in the table. These keys never change the selected torrents, and the table's keys never
+move in the file list. While a priority menu is open, it keeps the keys. A change that fails shows a
+notification, one for downloading or skipping files, one for their priorities and one for the
+switch. The open folders and the place in the list stay while the Files tab shows the same torrent,
+also after a visit to the General tab; when it shows another torrent, the list starts afresh, with
+only the torrent's own folder open. They are not remembered between runs.
+
+4x4 reads a torrent's details only while the window is shown and active, the panel is open and it
+shows one torrent, so that a small server is asked for no more than the panel needs. It reads them
+in full once the selection has stayed on the torrent for a quarter of a second, so that moving
+through the list with the arrow keys reads nothing on the way; again after connecting; and when the
+torrent's files change, as when a magnet link's metadata comes. In between it reads only what
+changes: each file's progress, priority and switch, the pieces, and the data moved over the
+torrent's life. That is every 3 seconds while the torrent downloads or is verified, and otherwise
+once a minute, with the whole list, when the trackers are read too; also once right after an action
+on the torrent, such as a change made in the Files tab or a pause, and when the window shows again.
+On a torrent of 2000 files that downloads, the panel adds about one request every 3 seconds and 11
+KiB per second; on one that seeds, one request of 3 KiB a minute (see [Performance](#performance)).
 
 The sidebar on the left filters the list by state:
 
@@ -377,7 +393,8 @@ Between runs 4x4 remembers, in `state.toml`:
   places windows, and an app can neither read nor set where its window is;
 - the details panel: whether it is shown, its height and the tab open in it.
 
-The search text, the selected torrent and the scroll position are not remembered.
+The search text, the selected torrent, the scroll position and the open folders of the Files tab
+are not remembered.
 
 4x4 saves a second after the last change, so that dragging a column edge or the window edge writes
 the file once, and at once when the window is closed or 4x4 quits (`Ctrl+Q`). Typing in the search
@@ -563,6 +580,56 @@ are those of a first start.
 - In 2 minutes against the owner's daemon (a debug build), 4x4 sent 169 requests, 1.4 per second:
   the recently active torrents and the session totals every 1.5 seconds, the free space every 30
   seconds, and the whole list and the session settings every minute.
+
+### The details panel (stage 4)
+
+Measured on 2026-11-02 on the same laptop, inside the headless KWin of `just virtual`, with the
+release build of the [synthetic demo](#synthetic-demo), its 2000 torrents busy. The torrent of 2000
+files is "Synthetic torrent 0005" (`--select 4`), which downloads; "Synthetic torrent 0014"
+(`--select 13`) seeds. The requests and their bytes were counted in the demo's debug log
+(`RUST_LOG=warn,x4_synthetic=debug,x4_core::service=debug`) over 60 seconds, from 15 seconds after
+the start; the bytes are those of the bodies, without the HTTP headers. The targets are those of the
+plan for the panel: at most 1.75 requests per second with it open on a torrent that downloads, and
+1.45 on one that seeds.
+
+| Details panel                       | Requests per second   | Details reads a minute | Details answers |
+| ----------------------------------- | --------------------- | ---------------------- | --------------- |
+| Open on the 2000 files, downloading | 1.733 (target ≤ 1.75) | 21                     | 11.1 KiB/s      |
+| Open on a seeding torrent           | 1.400 (target ≤ 1.45) | 1                      | 0.05 KiB/s      |
+| Closed                              | 1.383                 | 0                      | 0               |
+
+The rest is the same in all three: every 1.5 seconds the recently active torrents and the session
+statistics, the free space every 30 seconds, and the whole list and the session settings every
+minute, 83 requests in the 60 seconds. With the demo's 2000 busy torrents their answers carry about
+216 KiB/s, nearly all of it the 513 torrents that change on every poll; a real daemon with a few
+torrents sends a small part of that. The full read of the 2000 files, once when the torrent is
+selected, is 298 KiB; each of their progress reads is about 32 KiB, and the one with the trackers
+about the same; a seeding torrent's read with its trackers is 3 KiB. The 4x4 requests themselves are
+under 0.5 KiB/s.
+
+Memory and CPU, medians of three runs, each the first start of its own session
+(`X4_MEASURE_SETTLE_SECONDS=15 just virtual just measure --synthetic --cpu 30`, with `-- --select 4`
+for the General tab and `-- --select 4 --press alt-2` for the Files tab); "not met" marks every cell
+over its target:
+
+| Metric                     | Target              | Nothing selected    | 2000 files, General | 2000 files, Files   |
+| -------------------------- | ------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 234 ms              | 229 ms              | 226 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 165.0 MiB (not met) | 166.3 MiB (not met) | 169.4 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 78.1 MiB (not met)  | 79.2 MiB (not met)  | 82.4 MiB (not met)  |
+| Unique memory (USS)        | —                   | 66.7 MiB            | 67.8 MiB            | 71.0 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 37.3 MiB (not met)  | 38.4 MiB (not met)  | 41.6 MiB (not met)  |
+| Threads                    | —                   | 33                  | 33                  | 33                  |
+| CPU over 30 s, one core    | —                   | 1.30 %              | 1.53 %              | 1.83 %              |
+| Binary size                | —                   | 37.4 MiB            | 37.4 MiB            | 37.4 MiB            |
+
+- The details of the 2000 files add 1.1 MiB of private memory with the General tab open, and 4.3 MiB
+  with the Files tab, which keeps the tree of the files and its rows; leaving the tab lets the tree
+  go. Reading their progress every 3 seconds, merging it and, on the Files tab, making the tree
+  again, costs 0.2 and 0.5 points of one core.
+- The PSS and the private memory are close to those of the busy demo in stage 2 (81.6 and 38.6 MiB),
+  while the RSS is 65 MiB higher: it counts the shared driver pages that were resident in these
+  sessions (see above), so compare the columns of this table with each other.
 
 ## Development
 
