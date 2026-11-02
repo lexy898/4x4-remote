@@ -1,12 +1,15 @@
 //! The tests of the Files tab: what it holds as the tab, the panel and the target change, and
 //! when the list draws again.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::{TestAppContext, WindowHandle};
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{
+    AppContext as _, ElementId, ScrollDelta, Subscription, TestAppContext, WindowHandle, point, px,
+};
 use x4_core::test_support::{details, torrent};
-use x4_core::{DetailsTab, DetailsTarget};
+use x4_core::{DetailsTab, DetailsTarget, Edge};
 use x4_rpc::HashString;
 
 use super::*;
@@ -262,10 +265,8 @@ fn a_target_of_several_torrents_or_another_one_drops_the_old_details(cx: &mut Te
     assert_eq!(kept(panel, cx), (false, false, false, 0), "none");
 }
 
-#[gpui_kit::test]
-fn no_details_leave_no_room_kept_for_the_rows(cx: &mut TestAppContext) {
-    let mut tab = cx.update(FilesTab::new);
-    let album = torrent("album");
+/// A read of the details of the torrent `hash`: an album of 2000 tracks.
+fn album(hash: &HashString) -> Arc<TorrentDetails> {
     let names: Vec<String> = (1..=2000)
         .map(|track| format!("Album/Track {track:04}.flac"))
         .collect();
@@ -273,13 +274,97 @@ fn no_details_leave_no_room_kept_for_the_rows(cx: &mut TestAppContext) {
         .iter()
         .map(|name| (name.as_str(), 1024, 0, true, FilePriority::Normal))
         .collect();
-    tab.follow(Some(&Arc::new(details(&album.hash, &files))));
+    Arc::new(details(hash, &files))
+}
+
+#[gpui_kit::test]
+fn no_details_leave_no_room_kept_for_the_rows(cx: &mut TestAppContext) {
+    let mut tab = cx.update(FilesTab::new);
+    tab.follow(Some(&album(&torrent("album").hash)));
     assert_eq!(tab.rows.len(), 2001);
 
     assert!(tab.follow(None));
 
     assert_eq!(tab.rows.capacity(), 0, "the room of 2001 rows is let go");
     assert!(tab.tree.is_none() && tab.made_from.is_none());
+}
+
+/// Draws the window of `panel`.
+fn draw(panel: WindowHandle<DetailsPanel>, cx: &mut TestAppContext) {
+    cx.update_window(panel.into(), |_, window, cx| window.render_frame(cx))
+        .expect("the panel is open");
+}
+
+/// Whether the row at `path` was drawn in the file list, which draws only the rows in sight.
+fn row_drawn(panel: WindowHandle<DetailsPanel>, path: &str, cx: &mut TestAppContext) -> bool {
+    let row = ElementId::NamedChild(
+        Arc::new(ElementId::Name("file-row".into())),
+        path.to_owned().into(),
+    );
+    cx.update_window(panel.into(), |_, window, _| {
+        window.within(FILE_LIST_ID).try_find(row).is_some()
+    })
+    .expect("the panel is open")
+}
+
+/// Counts from now on how often `panel` asks to be drawn again; the count lasts as long as the
+/// subscription.
+fn count_redraws(
+    panel: WindowHandle<DetailsPanel>,
+    cx: &mut TestAppContext,
+) -> (Rc<Cell<usize>>, Subscription) {
+    let entity = panel.root(cx).expect("the panel is open");
+    let count = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&count);
+    let subscription =
+        cx.update(|cx| cx.observe(&entity, move |_, _| counter.set(counter.get() + 1)));
+    (count, subscription)
+}
+
+#[gpui_kit::test]
+fn a_key_draws_the_list_again_to_bring_the_cursor_back_into_sight(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let tracks = torrent("album");
+    let last = "Album/Track 2000.flac";
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::One(tracks.hash.clone()), Some(&tracks), cx);
+        panel.take_details(album(&tracks.hash), cx);
+    });
+    draw(panel, cx);
+    // End: the cursor goes to the last row, and the list scrolls to it.
+    change(panel, cx, |panel, cx| {
+        panel.change_file_view(None, |view, tree| view.cursor_to_edge(tree, Edge::Last), cx);
+    });
+    draw(panel, cx);
+    assert!(row_drawn(panel, last, cx) && !row_drawn(panel, "Album", cx));
+
+    // Down on the last row, in sight, changes nothing: nothing is drawn again.
+    let (redraws, _counting) = count_redraws(panel, cx);
+    change(panel, cx, |panel, cx| {
+        panel.change_file_view(None, |view, tree| view.move_cursor(tree, 1), cx);
+    });
+    assert_eq!(redraws.get(), 0, "in sight");
+
+    // The wheel takes the list back to its top, away from the cursor.
+    cx.update_window(panel.into(), |_, window, cx| {
+        window.scroll(
+            FILE_LIST_ID,
+            ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+            cx,
+        );
+    })
+    .expect("the panel is open");
+    draw(panel, cx);
+    assert!(row_drawn(panel, "Album", cx) && !row_drawn(panel, last, cx));
+    redraws.set(0);
+
+    // Down on the last row still moves nowhere, but the list is drawn again, back at the cursor.
+    change(panel, cx, |panel, cx| {
+        panel.change_file_view(None, |view, tree| view.move_cursor(tree, 1), cx);
+    });
+    assert_eq!(redraws.get(), 1, "out of sight");
+    draw(panel, cx);
+    assert!(row_drawn(panel, last, cx) && !row_drawn(panel, "Album", cx));
 }
 
 #[gpui_kit::test]

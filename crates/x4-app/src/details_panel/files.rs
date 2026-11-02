@@ -33,7 +33,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::{
     AnyElement, App, Context, FocusHandle, InteractiveElement as _, IntoElement, MouseDownEvent,
     ParentElement as _, Pixels, Role, ScrollStrategy, StatefulInteractiveElement as _, Styled as _,
-    TestSupportExt as _, UniformListScrollHandle, Window, div, uniform_list,
+    TestSupportExt as _, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use x4_core::{FileRow, FileTree, FileTreeView, NodeKey, Torrent, TorrentDetails};
 use x4_rpc::FilePriority;
@@ -119,8 +119,12 @@ impl FilesTab {
 
     /// Changes the view with `change` on the tree on screen, lists its rows again and scrolls the
     /// cursor into sight. Does nothing before there is a tree, nor for a click on a frame of
-    /// another torrent's tree (`drawn`): the same path there is another file. Returns whether the
-    /// rows or the cursor changed, so that the list is drawn again only then.
+    /// another torrent's tree (`drawn`): the same path there is another file.
+    ///
+    /// Returns whether the list must be drawn again: when the rows or the cursor changed, and
+    /// when the cursor's row is out of sight, so that a key brings the list back to the cursor
+    /// after the wheel took it away, even a key that moves the cursor nowhere. A key that
+    /// changes nothing on screen draws nothing again.
     fn change_view(
         &mut self,
         drawn: Option<&FileTree>,
@@ -138,13 +142,28 @@ impl FilesTab {
         let cursor = self.view.cursor(&tree).cloned();
         let changed = rows != self.rows || cursor != cursor_before;
         self.rows = rows;
-        let at = cursor
+        let out_of_sight = cursor
             .as_ref()
-            .and_then(|cursor| self.rows.iter().position(|row| &row.key == cursor));
-        if let Some(index) = at {
+            .and_then(|cursor| self.rows.iter().position(|row| &row.key == cursor))
+            .filter(|&index| !self.in_sight(index));
+        if let Some(index) = out_of_sight {
             self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         }
-        changed
+        changed || out_of_sight.is_some()
+    }
+
+    /// Whether the row at `index` is wholly in sight, in the list as it was last laid out.
+    /// Before its first layout the list shows nothing yet to scroll, so every row counts as in
+    /// sight.
+    fn in_sight(&self, index: usize) -> bool {
+        let state = self.scroll.0.borrow();
+        let height = state.base_handle.bounds().size.height;
+        if height <= Pixels::ZERO {
+            return true;
+        }
+        let top = -state.base_handle.offset().y;
+        let row_top = px(ROW_HEIGHT) * index;
+        row_top >= top && row_top + px(ROW_HEIGHT) <= top + height
     }
 
     /// The tree on screen and the row of it the cursor is on, if any.
@@ -295,8 +314,8 @@ impl DetailsPanel {
     }
 
     /// Changes the open folders or the cursor with `change`, and draws the list again if that
-    /// changed what it shows; for a click, only when the tree of its frame (`drawn`) is of the
-    /// same torrent.
+    /// changed what it shows or the cursor's row is to be scrolled into sight; for a click, only
+    /// when the tree of its frame (`drawn`) is of the same torrent.
     fn change_file_view(
         &mut self,
         drawn: Option<&FileTree>,
