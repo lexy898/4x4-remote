@@ -78,8 +78,8 @@ pub(crate) struct DetailsPanel {
     details: Option<Arc<TorrentDetails>>,
     /// What the General tab shows for `torrent` and `details`; `None` without one torrent.
     general: Option<GeneralModel>,
-    /// The tree the Files tab shows, of `details` while they are the torrent's, and what the user
-    /// has done to it.
+    /// The tree the Files tab shows, made from `details` while they are the torrent's and the tab
+    /// is open, and what the user has done to it.
     files: FilesTab,
     /// Whether the daemon is connected, so that the Files tab's controls can act.
     connected: bool,
@@ -120,10 +120,11 @@ impl DetailsPanel {
         }
     }
 
-    /// Opens the tab `tab`.
+    /// Opens the tab `tab`. The Files tab makes its tree then, from the newest details.
     pub(crate) fn set_tab(&mut self, tab: DetailsTab, cx: &mut Context<'_, Self>) {
         if tab != self.tab {
             self.tab = tab;
+            self.follow_files();
             cx.notify();
         }
     }
@@ -176,8 +177,13 @@ impl DetailsPanel {
     }
 
     /// Fits the Files tab to the newest details while they are the target's, and to none
-    /// otherwise; returns whether it shows something else now.
+    /// otherwise; returns whether it shows something else now. Only while the tab is shown: the
+    /// progress is read again every few seconds, and a tree of thousands of files is not made
+    /// for nothing. Opening the tab fits it then.
     fn follow_files(&mut self) -> bool {
+        if self.tab != DetailsTab::Files {
+            return false;
+        }
         let details = match &self.target {
             DetailsTarget::One(hash) => self
                 .details

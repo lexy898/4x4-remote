@@ -3,8 +3,9 @@
 //! priority and, after the name of a file that downloads, how much of it plays from the start.
 //!
 //! x4-core decides all of it. The tab keeps the [`FileTree`] it draws, made from the details of
-//! the panel's torrent, and a [`FileTreeView`] with the folders open and the cursor, fitted to each
-//! new tree with [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
+//! the panel's torrent while the tab is open (the panel keeps the newest details and makes the
+//! tree when the tab opens), and a [`FileTreeView`] with the folders open and the cursor, fitted
+//! to each new tree with [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
 //! metadata has no files yet, and the tab says so instead of the list; before the details come it
 //! shows the switch alone.
 //!
@@ -350,5 +351,103 @@ impl DetailsPanel {
                 .and_then(FileRequest::of_files),
             cx,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui_kit::{TestAppContext, WindowHandle};
+    use x4_core::test_support::{details, torrent};
+    use x4_core::{DetailsTab, DetailsTarget};
+    use x4_rpc::HashString;
+
+    use super::*;
+    use crate::app;
+
+    /// A read of the details of the torrent `hash`, a new one each time, as the service sends.
+    fn read(hash: &HashString) -> Arc<TorrentDetails> {
+        Arc::new(details(
+            hash,
+            &[("Show/film.mkv", 1024, 0, true, FilePriority::Normal)],
+        ))
+    }
+
+    /// The details the tree of the Files tab was made from, if it has one.
+    fn made_from(
+        panel: WindowHandle<DetailsPanel>,
+        cx: &mut TestAppContext,
+    ) -> Option<Arc<TorrentDetails>> {
+        panel
+            .update(cx, |panel, _, _| panel.files.made_from.clone())
+            .expect("the panel is open")
+    }
+
+    /// Runs `change` on the panel.
+    fn change(
+        panel: WindowHandle<DetailsPanel>,
+        cx: &mut TestAppContext,
+        change: impl FnOnce(&mut DetailsPanel, &mut Context<'_, DetailsPanel>),
+    ) {
+        panel
+            .update(cx, |panel, _, cx| change(panel, cx))
+            .expect("the panel is open");
+    }
+
+    fn made_from_read(
+        panel: WindowHandle<DetailsPanel>,
+        read: &Arc<TorrentDetails>,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        made_from(panel, cx).is_some_and(|made_from| Arc::ptr_eq(&made_from, read))
+    }
+
+    #[gpui_kit::test]
+    fn the_tree_is_made_only_while_the_files_tab_is_shown(cx: &mut TestAppContext) {
+        cx.update(app::init);
+        let panel = cx.add_window(|window, cx| {
+            DetailsPanel::new(DetailsTab::General, Rc::new(RefCell::default()), window, cx)
+        });
+        let film = torrent("a");
+        let first = read(&film.hash);
+        change(panel, cx, |panel, cx| {
+            panel.show(DetailsTarget::One(film.hash.clone()), Some(&film), cx);
+            panel.take_details(Arc::clone(&first), cx);
+        });
+        assert!(made_from(panel, cx).is_none(), "no tree on the General tab");
+
+        // The progress is read again every few seconds; on the General tab that makes no tree.
+        let second = read(&film.hash);
+        change(panel, cx, |panel, cx| {
+            panel.take_details(Arc::clone(&second), cx);
+        });
+        assert!(made_from(panel, cx).is_none(), "still none");
+
+        // The Files tab makes it from the newest read, and again from each newer one.
+        change(panel, cx, |panel, cx| {
+            panel.set_tab(DetailsTab::Files, cx);
+        });
+        assert!(made_from_read(panel, &second, cx));
+        let third = read(&film.hash);
+        change(panel, cx, |panel, cx| {
+            panel.take_details(Arc::clone(&third), cx);
+        });
+        assert!(made_from_read(panel, &third, cx));
+
+        // Back on General, reads make nothing until the Files tab is shown again.
+        change(panel, cx, |panel, cx| {
+            panel.set_tab(DetailsTab::General, cx);
+        });
+        let fourth = read(&film.hash);
+        change(panel, cx, |panel, cx| {
+            panel.take_details(Arc::clone(&fourth), cx);
+        });
+        assert!(made_from_read(panel, &third, cx));
+        change(panel, cx, |panel, cx| {
+            panel.set_tab(DetailsTab::Files, cx);
+        });
+        assert!(made_from_read(panel, &fourth, cx));
     }
 }
