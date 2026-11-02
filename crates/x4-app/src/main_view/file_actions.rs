@@ -26,7 +26,8 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let action = request.kind.name();
+        let kind = request.kind();
+        let action = kind.name();
         if !self.status.connected() {
             tracing::debug!(
                 action,
@@ -45,10 +46,10 @@ impl MainView {
             );
             return;
         }
-        let count = request.files.len();
+        let count = request.files().len();
         let Some(id) = self
             .pending
-            .start_files(request.kind, request.hash(), &request.files)
+            .start_files(kind, request.hash(), request.files())
         else {
             tracing::debug!(
                 action,
@@ -57,7 +58,7 @@ impl MainView {
             );
             return;
         };
-        self.run(id, request.kind, count, request.action.clone(), window, cx);
+        self.run(id, kind, count, request.action().clone(), window, cx);
     }
 }
 

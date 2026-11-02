@@ -691,8 +691,14 @@ impl Render for MainView {
             on_dismiss,
             cx,
         );
+        let repeats = &self.key_repeats;
         let root = on_details_actions(
-            on_speed_actions(on_selection_keys(on_torrent_actions(v_flex(), cx), cx), cx),
+            on_speed_actions(
+                on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+                repeats,
+                cx,
+            ),
+            repeats,
             cx,
         );
         let content = self.list_and_details(table, cx);

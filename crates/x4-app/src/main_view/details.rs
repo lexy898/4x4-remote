@@ -18,6 +18,8 @@
 //! Alt+Enter shows and hides the panel, and Alt+1 and Alt+2 open its tabs, once per press of the
 //! key. The open tab and whether the panel is shown are remembered too.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::resizable::{resizable_panel, v_resizable};
@@ -32,9 +34,9 @@ use x4_core::{
 use x4_rpc::HashString;
 
 use super::copying::write_to_clipboard;
-use super::torrent_actions::once_per_press;
 use super::{HEADER_HEIGHT, MainView, ROW_HEIGHT};
 use crate::details_panel::{DetailsPanel, DetailsPanelEvent};
+use crate::key_repeats::{KeyRepeats, once_per_press_of};
 use crate::keymap::{ShowFilesTab, ShowGeneralTab, ToggleDetails};
 
 /// The element id of the split of the table and the panel.
@@ -218,16 +220,25 @@ impl MainView {
 }
 
 /// `root`, the main view's root element, with the handlers of Alt+Enter, Alt+1 and Alt+2, which
-/// run once per press of their key.
-pub(super) fn on_details_actions(root: Div, cx: &Context<'_, MainView>) -> Div {
-    root.on_action(once_per_press::<ToggleDetails>(
+/// run once per press of their key, as `repeats`, the view's record of the key held, tells.
+pub(super) fn on_details_actions(
+    root: Div,
+    repeats: &Rc<RefCell<KeyRepeats>>,
+    cx: &Context<'_, MainView>,
+) -> Div {
+    root.on_action(once_per_press_of::<_, ToggleDetails>(
+        repeats,
         cx,
         MainView::toggle_details,
     ))
-    .on_action(once_per_press::<ShowGeneralTab>(cx, |view, _, cx| {
-        view.show_details_tab(DetailsTab::General, cx);
-    }))
-    .on_action(once_per_press::<ShowFilesTab>(cx, |view, _, cx| {
-        view.show_details_tab(DetailsTab::Files, cx);
-    }))
+    .on_action(once_per_press_of::<_, ShowGeneralTab>(
+        repeats,
+        cx,
+        |view, _, cx| view.show_details_tab(DetailsTab::General, cx),
+    ))
+    .on_action(once_per_press_of::<_, ShowFilesTab>(
+        repeats,
+        cx,
+        |view, _, cx| view.show_details_tab(DetailsTab::Files, cx),
+    ))
 }

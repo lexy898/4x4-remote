@@ -52,8 +52,8 @@ impl KeyRepeats {
 }
 
 /// The handler of the action `A` on the entity of `cx`, which runs `run` unless the action comes
-/// from a repeat of a held key, as `repeats` (the main view's) tells. The main view has its own,
-/// which reads its `repeats` itself.
+/// from a repeat of a held key, as `repeats` (the main view's) tells. The main view's actions that
+/// act once per press and the file list's Space, `+` and `-` are made with it.
 pub(crate) fn once_per_press_of<T: 'static, A: Action>(
     repeats: &Rc<RefCell<KeyRepeats>>,
     cx: &Context<'_, T>,

@@ -208,16 +208,19 @@ impl ActionKind {
 /// It is made only from what was drawn: [`FileRequest::of_files`] reads back the action a
 /// `FileTree` built, and [`FileRequest::sequential`] takes the torrent of the row the switch was
 /// drawn for, so the torrent and the files cannot come from different reads.
+///
+/// Its parts are read only through its getters, so that the torrent, the files and the action
+/// cannot be changed apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileRequest {
     /// What the action does.
-    pub(crate) kind: ActionKind,
+    kind: ActionKind,
     /// The torrent it changes.
     hash: HashString,
     /// The files it names, sorted; none for the switch of downloading in order.
-    pub(crate) files: Vec<usize>,
+    files: Vec<usize>,
     /// The action itself, as it goes to the service.
-    pub(crate) action: Action,
+    action: Action,
 }
 
 impl FileRequest {
@@ -251,9 +254,24 @@ impl FileRequest {
         }
     }
 
+    /// What the action does.
+    pub(crate) fn kind(&self) -> ActionKind {
+        self.kind
+    }
+
     /// The torrent it changes.
     pub(crate) fn hash(&self) -> &HashString {
         &self.hash
+    }
+
+    /// The files it names, sorted; none for the switch of downloading in order.
+    pub(crate) fn files(&self) -> &[usize] {
+        &self.files
+    }
+
+    /// The action itself, as it goes to the service.
+    pub(crate) fn action(&self) -> &Action {
+        &self.action
     }
 }
 
@@ -727,7 +745,7 @@ mod tests {
         let Some(Some(toggle)) = toggle else {
             panic!("a folder of files can be toggled: {toggle:?}");
         };
-        assert_eq!(toggle.kind, ActionKind::FilesWanted(false));
+        assert_eq!(toggle.kind(), ActionKind::FilesWanted(false));
         assert_eq!(toggle.hash(), &hash("a"));
         assert_eq!(toggle.files, [0, 1]);
         assert_eq!(Some(toggle.action), tree.toggle_wanted_action(&folder));
@@ -736,14 +754,14 @@ mod tests {
             .step_priority_action(&NodeKey::new("T/a.mkv"), true)
             .and_then(FileRequest::of_files);
         assert_eq!(
-            step.map(|request| (request.kind, request.files)),
+            step.map(|request| (request.kind(), request.files().to_vec())),
             Some((ActionKind::FilePriority(FilePriority::High), vec![1]))
         );
         // Only an action on files becomes a request on files.
         assert_eq!(FileRequest::of_files(Action::Stop(vec![hash("a")])), None);
 
         let sequential = FileRequest::sequential(hash("b"), true);
-        assert_eq!(sequential.kind, ActionKind::Sequential(true));
+        assert_eq!(sequential.kind(), ActionKind::Sequential(true));
         assert_eq!(sequential.hash(), &hash("b"));
         assert_eq!(sequential.files, [] as [usize; 0]);
         assert_eq!(

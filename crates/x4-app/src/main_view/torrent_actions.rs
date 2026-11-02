@@ -41,7 +41,7 @@ use crate::actions::{
     RemoveTorrentsWithData, StartTorrents, StartTorrentsNow, ToggleTorrents, TorrentRequest,
     VerifyTorrents, decide,
 };
-use crate::key_repeats::KeyRepeats;
+use crate::key_repeats::{KeyRepeats, once_per_press_of};
 use crate::removal::{self, Removal};
 
 /// Marks the notification of a failed action, together with the kind of action: the next failure
@@ -146,22 +146,22 @@ impl MainView {
         cx: &mut Context<'_, Self>,
     ) {
         let count = hashes.len();
-        let Some(id) = self.pending.start(kind, &hashes) else {
+        let targets = hashes.clone();
+        let Some(action) = kind.action(hashes) else {
+            // Only the details panel's Files tab makes these, with their files, and sends them
+            // through `run`; one asked for here is a mistake in the code, not the user's.
+            tracing::error!(
+                action = kind.name(),
+                "an action on one torrent was asked for without what it changes; nothing sent"
+            );
+            return;
+        };
+        let Some(id) = self.pending.start(kind, &targets) else {
             tracing::debug!(
                 action = kind.name(),
                 count,
                 "the same action on the same torrents is on its way; nothing sent"
             );
-            return;
-        };
-        let Some(action) = kind.action(hashes) else {
-            // Only the details panel's Files tab makes these, with their files, and sends them
-            // through `run`; one that comes here is answered as not sent, which says so.
-            tracing::error!(
-                action = kind.name(),
-                "an action on one torrent was asked for without what it changes; nothing sent"
-            );
-            self.action_finished(id, &Err(ActionError::EmptySelection), window, cx);
             return;
         };
         self.run(id, kind, count, action, window, cx);
@@ -394,60 +394,68 @@ pub(super) fn follow_key_repeats(
 
 /// `root`, the main view's root element, with the handlers of the actions on torrents, and the
 /// listener of key-ups that lets a held key go (before any element inside can stop the key-up).
-pub(super) fn on_torrent_actions(root: Div, cx: &Context<'_, MainView>) -> Div {
+/// `repeats` is the view's record of the key held; each action runs once per press of its key.
+pub(super) fn on_torrent_actions(
+    root: Div,
+    repeats: &Rc<RefCell<KeyRepeats>>,
+    cx: &Context<'_, MainView>,
+) -> Div {
     root.capture_key_up(cx.listener(|view, _: &KeyUpEvent, _, _| {
         view.key_repeats.borrow_mut().release();
     }))
-    .on_action(handler::<StartTorrents>(TorrentRequest::Start, cx))
-    .on_action(handler::<PauseTorrents>(TorrentRequest::Pause, cx))
-    .on_action(handler::<StartTorrentsNow>(TorrentRequest::StartNow, cx))
-    .on_action(handler::<ToggleTorrents>(TorrentRequest::Toggle, cx))
-    .on_action(handler::<VerifyTorrents>(TorrentRequest::Verify, cx))
-    .on_action(handler::<ReannounceTorrents>(
-        TorrentRequest::Reannounce,
+    .on_action(handler::<StartTorrents>(TorrentRequest::Start, repeats, cx))
+    .on_action(handler::<PauseTorrents>(TorrentRequest::Pause, repeats, cx))
+    .on_action(handler::<StartTorrentsNow>(
+        TorrentRequest::StartNow,
+        repeats,
         cx,
     ))
-    .on_action(once_per_press::<RemoveTorrents>(cx, |view, window, cx| {
-        view.ask_removal(RemoveData::Keep, window, cx);
-    }))
-    .on_action(once_per_press::<RemoveTorrentsWithData>(
+    .on_action(handler::<ToggleTorrents>(
+        TorrentRequest::Toggle,
+        repeats,
+        cx,
+    ))
+    .on_action(handler::<VerifyTorrents>(
+        TorrentRequest::Verify,
+        repeats,
+        cx,
+    ))
+    .on_action(handler::<ReannounceTorrents>(
+        TorrentRequest::Reannounce,
+        repeats,
+        cx,
+    ))
+    .on_action(once_per_press_of::<_, RemoveTorrents>(
+        repeats,
+        cx,
+        |view, window, cx| view.ask_removal(RemoveData::Keep, window, cx),
+    ))
+    .on_action(once_per_press_of::<_, RemoveTorrentsWithData>(
+        repeats,
         cx,
         |view, window, cx| view.ask_removal(RemoveData::Delete, window, cx),
     ))
-    .on_action(once_per_press::<CopyHashes>(cx, |view, _, cx| {
-        view.copy_selected_hashes(cx);
-    }))
-    .on_action(once_per_press::<CopyMagnetLinks>(cx, |view, window, cx| {
-        view.copy_selected_magnet_links(window, cx);
-    }))
+    .on_action(once_per_press_of::<_, CopyHashes>(
+        repeats,
+        cx,
+        |view, _, cx| view.copy_selected_hashes(cx),
+    ))
+    .on_action(once_per_press_of::<_, CopyMagnetLinks>(
+        repeats,
+        cx,
+        MainView::copy_selected_magnet_links,
+    ))
 }
 
 /// The handler of the action `A`, which asks the view of `cx` for `request`, unless the action
-/// comes from a repeat of a held key.
+/// comes from a repeat of a held key, as `repeats` tells.
 fn handler<A: gpui_kit::Action>(
     request: TorrentRequest,
+    repeats: &Rc<RefCell<KeyRepeats>>,
     cx: &Context<'_, MainView>,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
-    once_per_press::<A>(cx, move |view, window, cx| {
+    once_per_press_of::<_, A>(repeats, cx, move |view, window, cx| {
         view.request(request, window, cx);
-    })
-}
-
-/// The handler of the action `A`, which runs `run` on the view of `cx`, unless the action comes
-/// from a repeat of a held key.
-pub(super) fn once_per_press<A: gpui_kit::Action>(
-    cx: &Context<'_, MainView>,
-    run: impl Fn(&mut MainView, &mut Window, &mut Context<'_, MainView>) + 'static,
-) -> impl Fn(&A, &mut Window, &mut App) + 'static {
-    cx.listener(move |view, action: &A, window, cx| {
-        if view.key_repeats.borrow().repeating() {
-            tracing::trace!(
-                action = action.name(),
-                "a held key repeats; the action is not run again"
-            );
-            return;
-        }
-        run(view, window, cx);
     })
 }
 
