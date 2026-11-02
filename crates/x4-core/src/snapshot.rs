@@ -80,6 +80,7 @@ impl From<&RpcError> for ConnectionError {
             | RpcError::SessionIdRejected
             | RpcError::InvalidResponse(_)
             | RpcError::InvalidRequest(_)
+            | RpcError::MagnetWithFileChoices
             | RpcError::Selection(_)
             | RpcError::UnsupportedServer { .. } => Self::Protocol(error.to_string()),
         }
@@ -234,6 +235,7 @@ mod tests {
         protocol(RpcError::SessionIdRejected);
         protocol(RpcError::InvalidResponse("not JSON".to_owned()));
         protocol(RpcError::InvalidRequest("bad value".to_owned()));
+        protocol(RpcError::MagnetWithFileChoices);
         protocol(RpcError::UnsupportedServer {
             reason: UnsupportedReason::Version("5.4.0".to_owned()),
         });

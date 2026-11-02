@@ -7,8 +7,8 @@ use x4_rpc::testing::fixtures::{TORRENT_GET_DETAILS, TORRENT_GET_LIST, TORRENT_G
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
 use x4_rpc::{
     AddOutcome, AddSource, AddedTorrent, Client, DownloadDir, ErrorKind, GetIds, HashString,
-    MagnetLink, Pieces, RemoveData, Status, TorrentAction, TorrentAdd, TorrentField, TorrentId,
-    TorrentRef, TorrentSelection, TorrentSet,
+    MagnetLink, Pieces, RemoveData, RpcError, Status, TorrentAction, TorrentAdd, TorrentField,
+    TorrentId, TorrentRef, TorrentSelection, TorrentSet,
 };
 
 const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -332,6 +332,7 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
         "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
     }));
     let add = TorrentAdd {
+        source: AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec()),
         files_unwanted: vec![1],
         priority_high: vec![0],
         priority_low: vec![2, 3],
@@ -345,8 +346,8 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
     assert_eq!(
         param_keys(&params),
         [
-            "filename",
             "files_unwanted",
+            "metainfo",
             "paused",
             "priority_high",
             "priority_low",
@@ -358,6 +359,35 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
     assert_eq!(params["priority_high"], json!([0]));
     assert_eq!(params["priority_low"], json!([2, 3]));
     assert_eq!(params["sequential_download"], true);
+}
+
+#[test]
+fn a_magnet_with_file_choices_is_refused_and_nothing_is_sent() {
+    for add in [
+        TorrentAdd {
+            files_unwanted: vec![1],
+            ..magnet_add()
+        },
+        TorrentAdd {
+            priority_high: vec![0],
+            ..magnet_add()
+        },
+        TorrentAdd {
+            priority_low: vec![2],
+            ..magnet_add()
+        },
+    ] {
+        let (mut client, transport) = client_answering(json!({
+            "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
+        }));
+
+        assert_eq!(
+            client.torrent_add(&add),
+            Err(RpcError::MagnetWithFileChoices),
+            "{add:?}"
+        );
+        assert_eq!(transport.requests(), [], "{add:?}");
+    }
 }
 
 #[test]
@@ -416,7 +446,7 @@ fn add_without_an_outcome_is_invalid() {
     let outcome = client.torrent_add(&magnet_add());
 
     assert!(
-        matches!(outcome, Err(x4_rpc::RpcError::InvalidResponse(_))),
+        matches!(outcome, Err(RpcError::InvalidResponse(_))),
         "{outcome:?}"
     );
 }
@@ -467,7 +497,7 @@ fn malformed_hash_in_an_add_response_is_invalid() {
     let outcome = client.torrent_add(&magnet_add());
 
     assert!(
-        matches!(outcome, Err(x4_rpc::RpcError::InvalidResponse(_))),
+        matches!(outcome, Err(RpcError::InvalidResponse(_))),
         "{outcome:?}"
     );
 }

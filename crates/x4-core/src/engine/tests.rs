@@ -656,6 +656,7 @@ fn poll_errors_the_daemon_reports_keep_the_connection() {
             detail: Some("No such file or directory".to_owned()),
         },
         RpcError::InvalidRequest("cannot encode".to_owned()),
+        RpcError::MagnetWithFileChoices,
         RpcError::Selection(IdError::EmptySelection),
     ] {
         let mut engine = loaded(base);

@@ -98,11 +98,19 @@ impl<T: Transport> Client<T> {
     ///
     /// # Errors
     ///
-    /// Any [`RpcError`] of the call; [`RpcError::InvalidResponse`] when the result holds
-    /// neither or both of `torrent_added` and `torrent_duplicate`.
+    /// [`RpcError::MagnetWithFileChoices`], before anything is sent, when a magnet link comes
+    /// with unwanted files or file priorities. Otherwise any [`RpcError`] of the call;
+    /// [`RpcError::InvalidResponse`] when the result holds neither or both of `torrent_added`
+    /// and `torrent_duplicate`.
     pub fn torrent_add(&mut self, add: &TorrentAdd) -> Result<AddOutcome, RpcError> {
         let (filename, metainfo) = match &add.source {
-            AddSource::Magnet(link) => (Some(link.as_str()), None),
+            AddSource::Magnet(link) => {
+                let file_choices = [&add.files_unwanted, &add.priority_high, &add.priority_low];
+                if file_choices.iter().any(|files| !files.is_empty()) {
+                    return Err(RpcError::MagnetWithFileChoices);
+                }
+                (Some(link.as_str()), None)
+            }
             AddSource::Metainfo(bytes) => (None, Some(STANDARD.encode(bytes))),
         };
         let params = AddParams {

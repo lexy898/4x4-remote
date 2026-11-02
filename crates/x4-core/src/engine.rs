@@ -840,9 +840,10 @@ impl<'a> Failure<'a> {
             | RpcError::SessionIdRejected
             | RpcError::InvalidResponse(_) => Self::Unusable,
             RpcError::UnsupportedServer { reason } => Self::Unsupported(reason),
-            RpcError::Server { .. } | RpcError::InvalidRequest(_) | RpcError::Selection(_) => {
-                Self::Refused
-            }
+            RpcError::Server { .. }
+            | RpcError::InvalidRequest(_)
+            | RpcError::MagnetWithFileChoices
+            | RpcError::Selection(_) => Self::Refused,
         }
     }
 }
