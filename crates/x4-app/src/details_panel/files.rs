@@ -110,27 +110,32 @@ impl FilesTab {
 
     /// Changes the view with `change` on the tree on screen, lists its rows again and scrolls the
     /// cursor into sight. Does nothing before there is a tree, nor for a click on a frame of
-    /// another torrent's tree (`drawn`): the same path there is another file.
+    /// another torrent's tree (`drawn`): the same path there is another file. Returns whether the
+    /// rows or the cursor changed, so that the list is drawn again only then.
     fn change_view(
         &mut self,
         drawn: Option<&FileTree>,
         change: impl FnOnce(&mut FileTreeView, &FileTree),
-    ) {
+    ) -> bool {
         let Some(tree) = self.tree.clone() else {
-            return;
+            return false;
         };
         if drawn.is_some_and(|drawn| drawn.hash() != tree.hash()) {
-            return;
+            return false;
         }
+        let cursor_before = self.view.cursor(&tree).cloned();
         change(&mut self.view, &tree);
-        self.rows = self.view.rows(&tree);
-        let cursor = self
-            .view
-            .cursor(&tree)
+        let rows = self.view.rows(&tree);
+        let cursor = self.view.cursor(&tree).cloned();
+        let changed = rows != self.rows || cursor != cursor_before;
+        self.rows = rows;
+        let at = cursor
+            .as_ref()
             .and_then(|cursor| self.rows.iter().position(|row| &row.key == cursor));
-        if let Some(index) = cursor {
+        if let Some(index) = at {
             self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         }
+        changed
     }
 
     /// The tree on screen and the row of it the cursor is on, if any.
@@ -280,16 +285,18 @@ impl DetailsPanel {
         }
     }
 
-    /// Changes the open folders or the cursor with `change`, and draws the list again; for a
-    /// click, only when the tree of its frame (`drawn`) is of the same torrent.
+    /// Changes the open folders or the cursor with `change`, and draws the list again if that
+    /// changed what it shows; for a click, only when the tree of its frame (`drawn`) is of the
+    /// same torrent.
     fn change_file_view(
         &mut self,
         drawn: Option<&FileTree>,
         change: impl FnOnce(&mut FileTreeView, &FileTree),
         cx: &mut Context<'_, Self>,
     ) {
-        self.files.change_view(drawn, change);
-        cx.notify();
+        if self.files.change_view(drawn, change) {
+            cx.notify();
+        }
     }
 
     /// A click on the row `key` of `tree`, a tree drawn: the cursor goes there.
@@ -402,6 +409,34 @@ mod tests {
         cx: &mut TestAppContext,
     ) -> bool {
         made_from(panel, cx).is_some_and(|made_from| Arc::ptr_eq(&made_from, read))
+    }
+
+    #[gpui_kit::test]
+    fn a_key_that_changes_nothing_draws_nothing_again(cx: &mut TestAppContext) {
+        let mut tab = cx.update(FilesTab::new);
+        let film = torrent("a");
+        tab.follow(Some(&read(&film.hash)));
+        let step = |by: isize| {
+            move |view: &mut FileTreeView, tree: &FileTree| {
+                view.move_cursor(tree, by);
+            }
+        };
+
+        assert!(
+            tab.change_view(None, step(1)),
+            "the cursor comes to the first row"
+        );
+        assert!(!tab.change_view(None, step(-1)), "Up on the first row");
+        assert!(tab.change_view(None, step(1)), "Down to the film");
+        assert!(!tab.change_view(None, step(1)), "Down on the last row");
+        assert!(
+            tab.change_view(None, FileTreeView::collapse_or_parent),
+            "Left goes up to the folder"
+        );
+        assert!(
+            tab.change_view(None, FileTreeView::collapse_or_parent),
+            "Left closes it"
+        );
     }
 
     #[gpui_kit::test]
