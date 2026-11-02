@@ -101,29 +101,34 @@ fn held(
         .expect("the panel is open")
 }
 
-#[gpui_kit::test]
-fn leaving_the_files_tab_drops_the_tree_but_not_the_cursor_and_the_open_folders(
-    cx: &mut TestAppContext,
-) {
+/// A panel on the tab `tab`, about no torrent yet.
+fn panel_on(tab: DetailsTab, cx: &mut TestAppContext) -> WindowHandle<DetailsPanel> {
     cx.update(app::init);
-    let panel = cx.add_window(|window, cx| {
-        DetailsPanel::new(DetailsTab::Files, Rc::new(RefCell::default()), window, cx)
-    });
-    let show = torrent("a");
-    let season = |hash: &HashString| {
-        Arc::new(details(
-            hash,
-            &[
-                ("Show/Season 1/E01.mkv", 1024, 0, true, FilePriority::Normal),
-                ("Show/Season 1/E02.mkv", 1024, 0, true, FilePriority::Normal),
-                ("Show/info.nfo", 1, 1, true, FilePriority::Normal),
-            ],
-        ))
-    };
+    cx.add_window(|window, cx| DetailsPanel::new(tab, Rc::new(RefCell::default()), window, cx))
+}
+
+/// A read of the details of the torrent `hash`: a show with a season of two episodes.
+fn season(hash: &HashString) -> Arc<TorrentDetails> {
+    Arc::new(details(
+        hash,
+        &[
+            ("Show/Season 1/E01.mkv", 1024, 0, true, FilePriority::Normal),
+            ("Show/Season 1/E02.mkv", 1024, 0, true, FilePriority::Normal),
+            ("Show/info.nfo", 1, 1, true, FilePriority::Normal),
+        ],
+    ))
+}
+
+/// Shows `show` on `panel`, with a read of [`season`], and has the user open the season and go
+/// to its second episode; returns what the Files tab holds then.
+fn at_the_second_episode(
+    panel: WindowHandle<DetailsPanel>,
+    show: &Torrent,
+    cx: &mut TestAppContext,
+) -> (bool, Vec<String>, Option<String>) {
     change(panel, cx, |panel, cx| {
-        panel.show(DetailsTarget::One(show.hash.clone()), Some(&show), cx);
+        panel.show(DetailsTarget::One(show.hash.clone()), Some(show), cx);
         panel.take_details(season(&show.hash), cx);
-        // The user opens the season and goes to its second episode.
         let folder = NodeKey::new("Show/Season 1");
         let episode = NodeKey::new("Show/Season 1/E02.mkv");
         panel.change_file_view(
@@ -135,9 +140,9 @@ fn leaving_the_files_tab_drops_the_tree_but_not_the_cursor_and_the_open_folders(
             cx,
         );
     });
-    let before = held(panel, cx);
+    let held = held(panel, cx);
     assert_eq!(
-        before,
+        held,
         (
             true,
             [
@@ -152,6 +157,32 @@ fn leaving_the_files_tab_drops_the_tree_but_not_the_cursor_and_the_open_folders(
             Some("Show/Season 1/E02.mkv".to_owned())
         )
     );
+    held
+}
+
+/// What the panel keeps of the reads it was given: whether it has details, a General model and a
+/// tree (or the details a tree was made from), and how many rows its Files tab has room for.
+fn kept(panel: WindowHandle<DetailsPanel>, cx: &mut TestAppContext) -> (bool, bool, bool, usize) {
+    panel
+        .update(cx, |panel, _, _| {
+            let files = &panel.files;
+            (
+                panel.details.is_some(),
+                panel.general.is_some(),
+                files.tree.is_some() || files.made_from.is_some(),
+                files.rows.capacity(),
+            )
+        })
+        .expect("the panel is open")
+}
+
+#[gpui_kit::test]
+fn leaving_the_files_tab_drops_the_tree_but_not_the_cursor_and_the_open_folders(
+    cx: &mut TestAppContext,
+) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let show = torrent("a");
+    let before = at_the_second_episode(panel, &show, cx);
 
     change(panel, cx, |panel, cx| {
         panel.set_tab(DetailsTab::General, cx);
@@ -164,6 +195,91 @@ fn leaving_the_files_tab_drops_the_tree_but_not_the_cursor_and_the_open_folders(
         panel.set_tab(DetailsTab::Files, cx);
     });
     assert_eq!(held(panel, cx), before);
+}
+
+#[gpui_kit::test]
+fn a_hidden_panel_holds_no_details_tree_or_rows_but_keeps_the_cursor_and_the_open_folders(
+    cx: &mut TestAppContext,
+) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let show = torrent("a");
+    let before = at_the_second_episode(panel, &show, cx);
+
+    change(panel, cx, |panel, _| panel.hide());
+    assert_eq!(kept(panel, cx), (false, false, false, 0), "nothing kept");
+    // A read that was on its way when the panel hid is not kept either.
+    change(panel, cx, |panel, cx| {
+        panel.take_details(season(&show.hash), cx);
+    });
+    assert_eq!(kept(panel, cx), (false, false, false, 0));
+
+    // Shown again on the same torrent, the panel waits for the next read, which brings the tree
+    // back as it was left.
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::One(show.hash.clone()), Some(&show), cx);
+    });
+    assert_eq!(held(panel, cx), (false, Vec::new(), None), "no read yet");
+    change(panel, cx, |panel, cx| {
+        panel.take_details(season(&show.hash), cx);
+    });
+    assert_eq!(held(panel, cx), before);
+}
+
+#[gpui_kit::test]
+fn a_target_of_several_torrents_or_another_one_drops_the_old_details(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::General, cx);
+    let (a, b) = (torrent("a"), torrent("b"));
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::One(a.hash.clone()), Some(&a), cx);
+        panel.take_details(read(&a.hash), cx);
+    });
+    assert_eq!(kept(panel, cx), (true, true, false, 0));
+
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::Many(2), None, cx);
+    });
+    assert_eq!(kept(panel, cx), (false, false, false, 0), "several");
+
+    // Back on the one torrent, its details wait for the next read.
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::One(a.hash.clone()), Some(&a), cx);
+    });
+    assert_eq!(kept(panel, cx), (false, true, false, 0), "until the read");
+    change(panel, cx, |panel, cx| {
+        panel.take_details(read(&a.hash), cx);
+        panel.show(DetailsTarget::One(b.hash.clone()), Some(&b), cx);
+    });
+    assert_eq!(kept(panel, cx), (false, true, false, 0), "another torrent");
+
+    // A read of the old torrent that comes late is not kept for the new one.
+    change(panel, cx, |panel, cx| {
+        panel.take_details(read(&a.hash), cx);
+    });
+    assert_eq!(kept(panel, cx), (false, true, false, 0));
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::None, None, cx);
+    });
+    assert_eq!(kept(panel, cx), (false, false, false, 0), "none");
+}
+
+#[gpui_kit::test]
+fn no_details_leave_no_room_kept_for_the_rows(cx: &mut TestAppContext) {
+    let mut tab = cx.update(FilesTab::new);
+    let album = torrent("album");
+    let names: Vec<String> = (1..=2000)
+        .map(|track| format!("Album/Track {track:04}.flac"))
+        .collect();
+    let files: Vec<(&str, u64, u64, bool, FilePriority)> = names
+        .iter()
+        .map(|name| (name.as_str(), 1024, 0, true, FilePriority::Normal))
+        .collect();
+    tab.follow(Some(&Arc::new(details(&album.hash, &files))));
+    assert_eq!(tab.rows.len(), 2001);
+
+    assert!(tab.follow(None));
+
+    assert_eq!(tab.rows.capacity(), 0, "the room of 2001 rows is let go");
+    assert!(tab.tree.is_none() && tab.made_from.is_none());
 }
 
 #[gpui_kit::test]

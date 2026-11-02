@@ -443,6 +443,35 @@ fn alt_enter_hides_and_shows_the_panel_keeping_its_height(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn a_panel_shown_again_waits_for_a_new_read_of_the_details(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let show = show();
+    window.send(vec![show.clone()], cx);
+    window.click_row(0, cx);
+    window.send_details(show_details(), cx);
+    assert_eq!(
+        window.value("general-comment", cx).as_deref(),
+        Some("from the tracker")
+    );
+    window.selects();
+
+    // A hidden panel lets the details go. Shown again, it asks for them anew, and what only they
+    // know waits for them, as on a select.
+    window.press("alt-enter", cx);
+    window.press("alt-enter", cx);
+    assert_eq!(window.selects(), [None, Some(show.hash.clone())]);
+    for id in FROM_DETAILS {
+        assert_eq!(window.value(id, cx).as_deref(), Some(PENDING), "{id}");
+    }
+
+    window.send_details(show_details(), cx);
+    assert_eq!(
+        window.value("general-comment", cx).as_deref(),
+        Some("from the tracker")
+    );
+}
+
+#[gpui_kit::test]
 fn a_panel_hidden_last_time_opens_hidden_and_shows_at_its_height(cx: &mut TestAppContext) {
     let ui = UiState {
         details: DetailsState {

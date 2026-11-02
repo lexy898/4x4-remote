@@ -50,8 +50,8 @@ const FILE_LIST_ID: &str = "file-list";
 
 /// What the Files tab shows and what the user has done to it.
 pub(super) struct FilesTab {
-    /// The tree drawn: of the details of the panel's torrent; `None` until they come, and while
-    /// the panel is about no single torrent.
+    /// The tree drawn: of the details of the panel's torrent; `None` until they come, while the
+    /// panel is about no single torrent or hidden, and while another tab is open.
     tree: Option<Arc<FileTree>>,
     /// The details `tree` was made from, so that the same details make no new tree.
     made_from: Option<Arc<TorrentDetails>>,
@@ -89,9 +89,7 @@ impl FilesTab {
     pub(super) fn follow(&mut self, details: Option<&Arc<TorrentDetails>>) -> bool {
         let Some(details) = details else {
             let changed = self.tree.is_some();
-            self.tree = None;
-            self.made_from = None;
-            self.rows.clear();
+            self.leave();
             return changed;
         };
         if self
@@ -109,13 +107,14 @@ impl FilesTab {
         true
     }
 
-    /// Lets go of the tree and its rows, as the tab closes: a tree of thousands of files is not
-    /// kept for a tab nobody sees. The open folders and the cursor stay, and the next tree of the
-    /// same torrent keeps them.
+    /// Lets go of the tree, the details it was made from and its rows, with the room they took,
+    /// as the tab closes, the panel hides or its torrent has no details: a tree of thousands of
+    /// files is not kept for a tab nobody sees. The open folders and the cursor stay, and the next
+    /// tree of the same torrent keeps them.
     pub(super) fn leave(&mut self) {
         self.tree = None;
         self.made_from = None;
-        self.rows = Vec::new();
+        drop(std::mem::take(&mut self.rows));
     }
 
     /// Changes the view with `change` on the tree on screen, lists its rows again and scrolls the

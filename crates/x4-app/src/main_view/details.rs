@@ -7,7 +7,8 @@
 //! (`Select(None)`) while it is hidden or shows no single torrent. It sends only a change, so a
 //! new snapshot, a click on the same row or a redraw of the table sends nothing; it looks again
 //! whenever the selection, the rows the list shows or the panel's visibility change. The service
-//! paces the reads itself, so the view polls nothing.
+//! paces the reads itself, so the view polls nothing. A hidden panel lets go of what it showed,
+//! and shown again it waits for the read it asks for.
 //!
 //! The panel and the table share a vertical split. The panel keeps the height the user gave it by
 //! dragging the handle between them, which is remembered; nothing else changes that height. The
@@ -49,8 +50,8 @@ const FIT_TOLERANCE: f32 = 0.5;
 
 impl MainView {
     /// Follows a change of the selection, of the rows the list shows or of the panel's
-    /// visibility: hands the panel what it is about now, and asks the service for the details it
-    /// needs, if that changed.
+    /// visibility: hands the panel what it is about now, or has a hidden one let go of what it
+    /// showed, and asks the service for the details it needs, if that changed.
     pub(super) fn follow_details(&mut self, cx: &mut Context<'_, Self>) {
         let target = {
             let table = self.table.read(cx).delegate();
@@ -66,8 +67,14 @@ impl MainView {
             }),
             DetailsTarget::None | DetailsTarget::Many(_) => None,
         };
-        self.details_panel
-            .update(cx, |panel, cx| panel.show(target, torrent, cx));
+        let open = self.ui.details.open;
+        self.details_panel.update(cx, |panel, cx| {
+            if open {
+                panel.show(target, torrent, cx);
+            } else {
+                panel.hide();
+            }
+        });
     }
 
     /// Asks the service to read the details of the one torrent of `target` while the panel is

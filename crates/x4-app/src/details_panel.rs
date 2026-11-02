@@ -5,9 +5,10 @@
 //!
 //! - the target, x4-core's [`DetailsTarget`]: no torrent ("Select a torrent"), several ("3
 //!   torrents selected") or one, with its row of the daemon's list;
-//! - the newest details the service sent. They are shown only while their hash is the target's,
-//!   so the panel never shows the comment of one torrent under the name of another while the
-//!   selection moves; the rows that need them say "—" until they come (the `general` module);
+//! - the newest details the service sent of the target's torrent. Details of another torrent are
+//!   not kept, and those of the old torrent go when the target changes, so the panel never shows
+//!   the comment of one torrent under the name of another while the selection moves; the rows that
+//!   need them say "—" until they come (the `general` module);
 //! - the open tab, which the main view keeps in the state it remembers. A click on a tab only asks
 //!   for it ([`DetailsPanelEvent::TabChosen`]), as Alt+1 and Alt+2 do.
 //!
@@ -19,6 +20,11 @@
 //!
 //! The copy buttons of the General tab ask the main view to copy ([`DetailsPanelEvent::Copy`]),
 //! which writes the clipboard at once and gives the keys back to the table.
+//!
+//! A hidden panel holds nothing it showed: no details, no General tab, and no tree or rows of the
+//! Files tab, which can be several MiB for a torrent of thousands of files. Only the Files tab's
+//! open folders and cursor stay. Shown again, the panel is about the selection then, and the read
+//! the service makes for it fills it.
 
 mod files;
 mod general;
@@ -35,6 +41,7 @@ use gpui_kit::{
     Window, div,
 };
 use x4_core::{DetailsTab, DetailsTarget, GeneralModel, Torrent, TorrentDetails, general_model};
+use x4_rpc::HashString;
 
 use crate::actions::FileRequest;
 use crate::i18n::{details_placeholder_text, t};
@@ -74,7 +81,8 @@ pub(crate) struct DetailsPanel {
     target: DetailsTarget,
     /// The row of the daemon's list for a target of one torrent.
     torrent: Option<Torrent>,
-    /// The newest details the service sent, whichever torrent they are of.
+    /// The newest details the service sent of the target's torrent; `None` until they come, and
+    /// while the target is no single torrent.
     details: Option<Arc<TorrentDetails>>,
     /// What the General tab shows for `torrent` and `details`; `None` without one torrent.
     general: Option<GeneralModel>,
@@ -150,6 +158,11 @@ impl DetailsPanel {
         if target == self.target && torrent == self.torrent.as_ref() {
             return;
         }
+        // The details of a torrent the panel no longer shows are of no more use.
+        self.details = self
+            .details
+            .take()
+            .filter(|details| is_of(&target, &details.hash));
         self.target = target;
         self.torrent = torrent.cloned();
         self.general = self.general_model();
@@ -157,13 +170,29 @@ impl DetailsPanel {
         cx.notify();
     }
 
-    /// Takes the details the service sent, which are shown while they are the target's. Draws
-    /// again only when the General tab or the Files tab changed.
+    /// Lets go of everything the panel shows, as it hides: the target, the details, the General
+    /// tab, and the Files tab's tree and rows. The Files tab's open folders and cursor stay for
+    /// the next tree of the same torrent. A hidden panel is not drawn, so nothing is drawn again.
+    pub(crate) fn hide(&mut self) {
+        self.target = DetailsTarget::None;
+        self.torrent = None;
+        self.details = None;
+        self.general = None;
+        self.files.leave();
+    }
+
+    /// Takes the details the service sent, if they are of the target's torrent: a read that was
+    /// on its way when the target changed or the panel hid is dropped. Draws again only when the
+    /// General tab or the Files tab changed.
     pub(crate) fn take_details(
         &mut self,
         details: Arc<TorrentDetails>,
         cx: &mut Context<'_, Self>,
     ) {
+        if !is_of(&self.target, &details.hash) {
+            tracing::debug!("details of a torrent the panel does not show; dropped");
+            return;
+        }
         self.details = Some(details);
         let general = self.general_model();
         let files_changed = self.follow_files();
@@ -182,26 +211,18 @@ impl DetailsPanel {
         }
     }
 
-    /// Fits the Files tab to the newest details while they are the target's, and to none
-    /// otherwise; returns whether it shows something else now. Only while the tab is shown: the
-    /// progress is read again every few seconds, and a tree of thousands of files is not made
-    /// for nothing. Opening the tab fits it then.
+    /// Fits the Files tab to the details, and to none without them; returns whether it shows
+    /// something else now. Only while the tab is shown: the progress is read again every few
+    /// seconds, and a tree of thousands of files is not made for nothing. Opening the tab fits it
+    /// then.
     fn follow_files(&mut self) -> bool {
         if self.tab != DetailsTab::Files {
             return false;
         }
-        let details = match &self.target {
-            DetailsTarget::One(hash) => self
-                .details
-                .as_ref()
-                .filter(|details| &details.hash == hash),
-            DetailsTarget::None | DetailsTarget::Many(_) => None,
-        };
-        self.files.follow(details)
+        self.files.follow(self.details.as_ref())
     }
 
-    /// What the General tab shows for the torrent and the newest details: those of another
-    /// torrent are left out.
+    /// What the General tab shows for the torrent and its details.
     fn general_model(&self) -> Option<GeneralModel> {
         self.torrent
             .as_ref()
@@ -265,6 +286,11 @@ impl Render for DetailsPanel {
             .child(body.test_support())
             .test_support()
     }
+}
+
+/// Whether `target` is the one torrent `hash`.
+fn is_of(target: &DetailsTarget, hash: &HashString) -> bool {
+    matches!(target, DetailsTarget::One(one) if one == hash)
 }
 
 /// Handles a click on the tab at `index` of the panel of `cx`: asks the main view for it.
