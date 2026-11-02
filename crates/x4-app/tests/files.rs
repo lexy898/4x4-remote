@@ -39,6 +39,8 @@ const PLAYABLE: &str = "file-playable";
 const SEQUENTIAL: &str = "file-sequential";
 /// What the Files tab says while a torrent has no metadata.
 const NO_METADATA: &str = "files-no-metadata";
+/// What the Files tab says until the details come.
+const PENDING: &str = "files-pending";
 /// The id of an open menu.
 const MENU: &str = "popup-menu";
 /// The id of a notification.
@@ -1000,6 +1002,22 @@ fn the_sequential_switch_sends_set_sequential(cx: &mut TestAppContext) {
             enabled: false
         }
     );
+}
+
+#[gpui_kit::test]
+fn until_the_details_come_the_files_tab_says_they_are_pending(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let show = downloading("Show");
+    window.send(vec![show.clone()], cx);
+    window.click_row(0, cx);
+
+    assert_eq!(window.label(PENDING, cx).as_deref(), Some("—"));
+    assert!(!window.shown(FILE_LIST, cx));
+    assert!(window.shown(SEQUENTIAL, cx), "the switch is there already");
+
+    window.send_details(show_details(&show.hash), cx);
+    assert!(!window.shown(PENDING, cx));
+    assert!(window.row_shown("Show", cx));
 }
 
 #[gpui_kit::test]

@@ -8,7 +8,7 @@
 //! open and the cursor, which outlives the tree and is fitted to each new one with
 //! [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
 //! metadata has no files yet, and the tab says so instead of the list; before the details come it
-//! shows the switch alone.
+//! shows the switch and "—", as the General tab does for what only the details know.
 //!
 //! Every change of files is built by the tree that was drawn: a click takes the tree of its frame,
 //! a key the tree on screen, and the tree's own `toggle_wanted_action`, `priority_action` and
@@ -198,22 +198,22 @@ impl DetailsPanel {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> AnyElement {
+        let note = |id: &'static str, text: String| {
+            div()
+                .id(id)
+                .flex_1()
+                .px_3()
+                .py_2()
+                .text_color(cx.theme().muted_foreground)
+                .aria_label(text.clone())
+                .child(text)
+                .test_support()
+                .into_any_element()
+        };
         let body = match &self.files.tree {
             // The details have not come yet; they come within a moment.
-            None => div().flex_1().into_any_element(),
-            Some(tree) if tree.is_empty() => {
-                let text = t!("files-no-metadata");
-                div()
-                    .id("files-no-metadata")
-                    .flex_1()
-                    .px_3()
-                    .py_2()
-                    .text_color(cx.theme().muted_foreground)
-                    .aria_label(text.clone())
-                    .child(text)
-                    .test_support()
-                    .into_any_element()
-            }
+            None => note("files-pending", t!("details-pending")),
+            Some(tree) if tree.is_empty() => note("files-no-metadata", t!("files-no-metadata")),
             Some(_) => self.file_list(window, cx).into_any_element(),
         };
         v_flex()
