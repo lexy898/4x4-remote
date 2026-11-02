@@ -85,19 +85,19 @@ fn expand_collapse_and_cursor_moves() {
 }
 
 #[test]
-fn a_step_without_a_cursor_starts_at_the_nearest_end() {
+fn a_step_without_a_cursor_starts_at_the_first_row_either_way() {
     let tree = tree_of(&[
         ("T/a.mkv", 1, 0, true, Normal),
         ("T/b.mkv", 1, 0, true, Normal),
     ]);
 
-    let mut down = FileTreeView::new(&tree);
-    down.move_cursor(&tree, 1);
-    assert_eq!(down.cursor(&tree), Some(&key("T")));
-
-    let mut up = FileTreeView::new(&tree);
-    up.move_cursor(&tree, -1);
-    assert_eq!(up.cursor(&tree), Some(&key("T/b.mkv")));
+    // As in the table with nothing selected: Down, Up, Page Down and Page Up all start at the
+    // top, and only End goes to the bottom.
+    for step in [1, -1, 5, -5] {
+        let mut view = FileTreeView::new(&tree);
+        view.move_cursor(&tree, step);
+        assert_eq!(view.cursor(&tree), Some(&key("T")), "step {step}");
+    }
 }
 
 #[test]

@@ -115,8 +115,7 @@ leaves the selection, and it is not selected again when it shows again. With no 
 select the first torrent, and End the last. Tab moves on from the table to the details panel (the
 copy buttons of the General tab, or the switch and the file list of the Files tab), the turtle and
 the speed limits in the status bar, then to the search box and the toolbar's buttons; a disabled
-button is passed over. The table has the keyboard focus when the
-window opens.
+button is passed over. The table has the keyboard focus when the window opens.
 
 The selected torrents that the list shows are what an action works on, in the order shown; a
 torrent the filter or the search hides is never touched. With the table focused:
@@ -202,9 +201,10 @@ The details panel under the table shows the selected torrent. With none selected
 a torrent", and with several, how many are selected; it shows a torrent only when exactly one of
 the torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from
 anywhere in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2`
-open. While a menu or the speed limits popover is open, these three keys do nothing. Drag the line between the table and the panel to change its height. The panel
-keeps that height when it is hidden and between runs; when the window is too low for it and the
-table's header and two rows, it is drawn lower, and it grows back with the window.
+open. While a menu or the speed limits popover is open, these three keys do nothing. Drag the
+line between the table and the panel to change its height. The panel keeps that height when it is
+hidden and between runs; when the window is too low for it and the table's header and two rows, it
+is drawn lower, and it grows back with the window.
 
 The General tab shows, from the daemon's list:
 
@@ -241,10 +241,11 @@ A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, 
 Home and End move between the rows, Left closes a folder or goes to the folder around the row,
 Right opens a folder or goes into it, Space downloads or skips the row, and `+` and `-` raise or
 lower its priority by a step (a folder of mixed priority goes to Normal). Holding Space, `+` or `-`
-acts once. With no row to start from, Down and Page Down go to the first row, Up and Page Up to the
-last. These keys never change the selected torrents, and the table's keys never move in the file
-list. While a priority menu is open, it keeps the keys. A change that fails shows a notification,
-one for downloading or skipping files, one for their priorities and one for the switch.
+acts once. With no row to start from, Up, Down, Page Up, Page Down and Home go to the first row,
+and End to the last, as in the table. These keys never change the selected torrents, and the
+table's keys never move in the file list. While a priority menu is open, it keeps the keys. A
+change that fails shows a notification, one for downloading or skipping files, one for their
+priorities and one for the switch.
 
 The sidebar on the left filters the list by state:
 

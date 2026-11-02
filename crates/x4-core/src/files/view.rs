@@ -155,8 +155,9 @@ impl FileTreeView {
     }
 
     /// Moves the cursor `step` rows down, or up when `step` is negative, among the rows that are
-    /// shown, and stops at the first or the last. A huge step is Home or End. Without a cursor
-    /// a step down goes to the first row and a step up to the last.
+    /// shown, and stops at the first or the last; from a cursor, a huge step is Home or End.
+    /// Without a cursor any step goes to the first row, as the keys of the torrent list do with
+    /// nothing selected ([`FileTreeView::cursor_to_edge`] is End then).
     pub fn move_cursor(&mut self, tree: &FileTree, step: isize) {
         self.adopt(tree);
         let shown = self.shown(tree);
@@ -167,11 +168,7 @@ impl FileTreeView {
         let current = self
             .cursor_node(tree)
             .and_then(|cursor| shown.iter().position(|&(index, _)| index == cursor));
-        let target = match current {
-            Some(position) => position.saturating_add_signed(step).min(last),
-            None if step < 0 => last,
-            None => 0,
-        };
+        let target = current.map_or(0, |position| position.saturating_add_signed(step).min(last));
         self.cursor = shown
             .get(target)
             .and_then(|&(index, _)| tree.node(index))
