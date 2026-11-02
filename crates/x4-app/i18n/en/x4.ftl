@@ -133,7 +133,7 @@ status-config-problem = Config file not used
 status-dismiss = Dismiss
 # Shown while state.toml cannot be written, until a save works again; the detail is its tooltip.
 status-state-not-saved = Layout not saved
-status-state-not-saved-detail = The columns, sorting, filter, theme and window size cannot be saved to state.toml; the log says why
+status-state-not-saved-detail = The columns, sorting, filter, theme, window size and details panel cannot be saved to state.toml; the log says why
 
 ## The turtle and the speed limits, in the status bar
 
@@ -400,6 +400,53 @@ action-failed-speed-limit =
                *[up] Could not change the upload speed limit: { $reason }
             }
     }
+# Choosing whether files of a torrent are downloaded, in the Files tab. $wanted: yes when they
+# were to be downloaded, no when they were to be skipped; $outcome and $reason as above.
+action-failed-files-wanted =
+    { $outcome ->
+        [not-sent]
+            { $wanted ->
+                [yes] Could not choose files to download: the server is not connected, so nothing was sent
+               *[no] Could not skip files: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $wanted ->
+                [yes] The server did not answer while choosing files to download; they may have been chosen. The Files tab will show the result
+               *[no] The server did not answer while skipping files; they may have been skipped. The Files tab will show the result
+            }
+       *[failed]
+            { $wanted ->
+                [yes] Could not choose files to download: { $reason }
+               *[no] Could not skip files: { $reason }
+            }
+    }
+# Changing the priority of files of a torrent, in the Files tab; $outcome and $reason as above.
+action-failed-file-priority =
+    { $outcome ->
+        [not-sent] Could not change the priority of files: the server is not connected, so nothing was sent
+        [no-answer] The server did not answer while changing the priority of files; it may have changed. The Files tab will show the result
+       *[failed] Could not change the priority of files: { $reason }
+    }
+# Switching the download in order of a torrent, in the Files tab. $state: on or off, the way it
+# was switched; $outcome and $reason as above.
+action-failed-sequential =
+    { $outcome ->
+        [not-sent]
+            { $state ->
+                [on] Could not turn on downloading in order: the server is not connected, so nothing was sent
+               *[off] Could not turn off downloading in order: the server is not connected, so nothing was sent
+            }
+        [no-answer]
+            { $state ->
+                [on] The server did not answer while turning on downloading in order; it may be on now. The Files tab will show the result
+               *[off] The server did not answer while turning off downloading in order; it may be off now. The Files tab will show the result
+            }
+       *[failed]
+            { $state ->
+                [on] Could not turn on downloading in order: { $reason }
+               *[off] Could not turn off downloading in order: { $reason }
+            }
+    }
 # An action whose kind is not known; $outcome and $reason as above.
 action-failed-other =
     { $outcome ->
@@ -504,3 +551,124 @@ column-menu = Columns
 column-menu-tooltip = Show or hide columns
 # The peers column. $count: the connected peers (a number).
 peer-count = { $count }
+
+## Dates
+
+# A date and time in the local time zone, such as 2026-10-29 14:05. Each part comes as digits
+# with its leading zeros: $year has four, $month, $day, $hour (0 to 23) and $minute two each.
+date-time = { $year }-{ $month }-{ $day } { $hour }:{ $minute }
+
+## The details panel under the table
+
+# The tabs of the panel, which Alt+1 and Alt+2 choose too.
+details-tab-general = General
+details-tab-files = Files
+# What the panel says when it shows no torrent: none is selected, or several are.
+# $count: the torrents selected (a number, 2 or more).
+details-none = Select a torrent
+details-many =
+    { $count ->
+        [one] { $count } torrent selected
+       *[other] { $count } torrents selected
+    }
+# What a value says while it is read from the server and has not come yet.
+details-pending = —
+
+# The labels of the General tab.
+general-path = Path
+general-size = Size
+general-hash = Hash
+general-pieces = Pieces
+general-downloaded = Downloaded
+general-uploaded = Uploaded
+general-ratio = Ratio
+general-added = Added
+general-done = Completed
+general-created = Created
+general-source = Source
+general-comment = Comment
+general-private = Private
+general-trackers = Trackers
+# The label of the problem the server reports for the torrent: a local error, such as a full disk,
+# or what the tracker said.
+general-error-local = Error
+general-error-tracker = Tracker error
+general-warning-tracker = Tracker warning
+# The value of the problem when the server sent no text for it.
+general-error-no-text = no details from the server
+# The buttons next to the path and the hash: their names for screen readers and their tooltips.
+general-copy-path = Copy path
+general-copy-hash = Copy hash
+
+# The values of the General tab.
+# A value the torrent does not have, such as an empty comment or an unknown date.
+general-none = —
+# The torrent has not finished downloading.
+general-not-done = not yet
+general-yes = Yes
+general-no = No
+# The size when only some of the files are wanted. $size: the size of all files; $wanted: the
+# size of the wanted ones, both formatted, such as "22.9 GiB".
+general-size-wanted = { $size } ({ $wanted } wanted)
+# $count: the pieces (a number), for the plural; $pieces: the same number with its digits grouped,
+# such as "1,500"; $size: the size of one piece, such as "4.0 MiB".
+general-pieces-value =
+    { $count ->
+        [one] { $pieces } piece of { $size }
+       *[other] { $pieces } pieces of { $size }
+    }
+# Who made the metainfo and when. $creator: the program's name, as the metainfo says it; $date: a
+# date-time. When only the date is known, the value is the date alone.
+general-created-by-on = by { $creator } on { $date }
+general-created-by = by { $creator }
+# How the trackers are doing, counted by what they answered: working, they answered their last
+# announce; failing, it failed or was not answered in time; not contacted yet, no announce has
+# gone to them since the daemon started, as for a torrent that has not run since then, or a backup
+# tracker. A count that is 0 is left out. $count: a number.
+general-trackers-working = { $count } working
+general-trackers-failing = { $count } failing
+general-trackers-not-contacted = { $count } not contacted yet
+# Two or three of the counts above, in that order, such as "2 working, 1 failing".
+general-trackers-two = { $first }, { $second }
+general-trackers-three = { $first }, { $second }, { $third }
+# A torrent without trackers.
+general-trackers-none = none
+# The worst problem among the trackers, under the line above. $host: the tracker's host name;
+# $text: the server's own text, shown as sent, or general-error-no-text when it sent none.
+# A failed announce: the tracker could not be reached, or refused, as $text says.
+tracker-problem-announce-failed = Tracker { $host }: { $text }
+# The tracker did not answer the announce in time.
+tracker-problem-announce-timed-out = Tracker { $host }: connection timed out
+# A failed scrape: the tracker sends no counts of seeders and leechers, as many trackers never
+# do.
+tracker-problem-scrape-failed = Tracker { $host } sends no peer counts: { $text }
+tracker-problem-scrape-timed-out = Tracker { $host } sends no peer counts: connection timed out
+
+## The Files tab of the details panel
+
+# The switch that has the server download the torrent's pieces in order, from the start of each
+# file, so that a file can be played while it downloads.
+files-sequential = Download in order (sequential)
+# What the tab says instead of the files of a magnet link, before its metadata has come.
+files-no-metadata = The file list arrives with the torrent's metadata
+# The name of the list of files and folders, for screen readers.
+files-list = Files
+# The name of the checkbox of a file or folder, for screen readers. $name: its name.
+files-wanted = Download { $name }
+# The priority of a file or folder, on its button and in its menu; a folder whose files have
+# different priorities shows files-priority-mixed.
+files-priority-low = Low
+files-priority-normal = Normal
+files-priority-high = High
+files-priority-mixed = Mixed
+# The name of the priority button of a file or folder, for screen readers. $name: its name;
+# $priority: one of the files-priority-* values.
+files-priority-label = Priority of { $name }: { $priority }
+# The name of the progress bar of a file or folder, for screen readers. $name: its name.
+files-progress-label = Progress of { $name }
+# Progress in whole percent. $percent: a number.
+files-percent = { $percent }%
+# How much of a file that downloads can be played from its start: what has come without a gap.
+# $size: the formatted size, such as "12.4 GiB"; $percent: the share of the file in whole percent
+# (a number).
+files-playable = Playable from start: { $size } ({ $percent }%)

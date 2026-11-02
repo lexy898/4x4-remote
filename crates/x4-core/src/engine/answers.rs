@@ -1,13 +1,11 @@
 //! What the daemon's answers to the polls change in the engine's state.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Instant;
 
-use x4_rpc::{FreeSpace, HashString, SessionInfo, SessionStats, TorrentGetResponse, TorrentId};
+use x4_rpc::{FreeSpace, SessionInfo, SessionStats, TorrentGetResponse, TorrentId};
 
 use super::{Engine, Event, PollKind, Request, Response, unexpected};
-use crate::details::{self, Built, DetailsIssue};
 use crate::model::Torrent;
 use crate::snapshot::SessionSummary;
 use crate::store::{Converted, SkippedRecord, Store, torrents_from_records};
@@ -42,7 +40,9 @@ impl Engine {
                 self.list_read(list, ListKind::Recent);
                 Vec::new()
             }
-            (Request::Details(hash), Response::Details(answer)) => self.details_read(hash, answer),
+            (Request::Details { hash, kind }, Response::Details(answer)) => {
+                self.details_read(now, hash, *kind, answer)
+            }
             (poll, other) => return self.poll_failed(now, poll, &unexpected(poll, &other)),
         };
         if let Some(kind) = poll.poll_kind() {
@@ -145,37 +145,6 @@ impl Engine {
                 .store
                 .hash_for_id(torrent.id)
                 .is_some_and(|known| known != &torrent.hash)
-    }
-
-    fn details_read(&mut self, hash: &HashString, answer: TorrentGetResponse) -> Vec<Event> {
-        if answer.torrents.is_empty() {
-            // Removed since it was selected; the list shows that.
-            return Vec::new();
-        }
-        let Some(record) = details::find_record(hash, answer) else {
-            self.note_details_issues(hash, vec![DetailsIssue::NoMatchingRecord]);
-            return Vec::new();
-        };
-        let Built { details, issues } = details::build(hash.clone(), record);
-        self.note_details_issues(hash, issues);
-        if self.details.as_deref() == Some(&details) {
-            return Vec::new();
-        }
-        let details = Arc::new(details);
-        self.details = Some(Arc::clone(&details));
-        vec![Event::Details(details)]
-    }
-
-    /// Logs what is wrong with the selected torrent's details when that changes, not on every
-    /// tick.
-    fn note_details_issues(&mut self, hash: &HashString, issues: Vec<DetailsIssue>) {
-        if issues == self.details_issues {
-            return;
-        }
-        if !issues.is_empty() {
-            tracing::warn!(torrent = %hash, ?issues, "the daemon sent incomplete torrent details");
-        }
-        self.details_issues = issues;
     }
 }
 

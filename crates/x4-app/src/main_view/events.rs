@@ -19,9 +19,7 @@ impl MainView {
         for event in events {
             match event {
                 Event::Snapshot(snapshot) => changed |= self.show(snapshot, cx),
-                Event::Details(_) => {
-                    tracing::debug!("ignored torrent details: this window shows none yet");
-                }
+                Event::Details(details) => self.details_arrived(details, cx),
                 Event::ActionFinished { id, result } => {
                     self.action_finished(id, &result, window, cx);
                 }

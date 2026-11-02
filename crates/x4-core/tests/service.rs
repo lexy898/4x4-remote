@@ -32,6 +32,8 @@ fn fast() -> EngineConfig {
         full_refresh_interval: Duration::from_millis(50),
         session_interval: Duration::from_millis(50),
         free_space_interval: Duration::from_millis(50),
+        details_interval: Duration::from_millis(50),
+        details_settle: Duration::from_millis(10),
         backoff: vec![Duration::from_millis(10), Duration::from_millis(20)],
         stable_after: Duration::from_millis(50),
     }

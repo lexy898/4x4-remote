@@ -88,7 +88,7 @@ fn run() -> Result<(), RecordError> {
     let details = call(
         &mut client,
         "torrent_get",
-        json!({ "fields": TorrentField::DETAILS, "ids": [details_id] }),
+        json!({ "fields": TorrentField::DETAILS_FULL, "ids": [details_id] }),
     )?;
 
     // The torrent list goes first, so torrent numbers follow the list order.

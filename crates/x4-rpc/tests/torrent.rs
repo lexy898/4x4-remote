@@ -100,15 +100,19 @@ fn parses_details_fixture() {
     let response = client
         .torrent_get(
             &GetIds::Selection(TorrentSelection::new(vec![TorrentRef::Id(TorrentId(1))]).unwrap()),
-            TorrentField::DETAILS,
+            TorrentField::DETAILS_FULL,
         )
         .unwrap();
 
     let torrent = &response.torrents[0];
     let files = torrent.files.as_ref().unwrap();
-    let file_stats = torrent.file_stats.as_ref().unwrap();
     assert!(files.len() > 1);
-    assert_eq!(files.len(), file_stats.len());
+    assert_eq!(torrent.file_count, u32::try_from(files.len()).ok());
+    assert_eq!(torrent.priorities.as_ref().map(Vec::len), Some(files.len()));
+    assert_eq!(torrent.wanted.as_ref().map(Vec::len), Some(files.len()));
+    let trackers = torrent.tracker_stats.as_ref().unwrap();
+    assert!(trackers[0].has_announced);
+    assert_eq!(trackers[0].seeder_count, Some(57));
     let piece_count = torrent.piece_count.unwrap();
     // `end_piece` is exclusive: the last file ends at the piece count.
     assert_eq!(files.last().unwrap().end_piece, piece_count);

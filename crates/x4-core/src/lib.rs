@@ -25,6 +25,14 @@
 //! [`availability()`] and [`toggle_kind`] tell which actions those rows allow.
 //! [`removal_summary`] gives the [`RemovalSummary`] the removal dialog shows.
 //!
+//! The details panel under the table is decided here as well. [`details_target`] says which
+//! torrent it is about (a [`DetailsTarget`]), and [`general_model`] gives the values of its
+//! General tab, with the [`TrackerSummary`] of [`tracker_summary`]. A [`FileTree`] turns the files
+//! of the [`TorrentDetails`] into folders and files with their sums; a [`FileTreeView`] keeps
+//! which folders are open and where the cursor is and lists the [`FileRow`]s to draw; and
+//! [`FileTree::indices`] gives the files an action on a row reaches, as [`NonEmptyIndices`], which
+//! cannot be empty because the daemon reads an empty list as all files.
+//!
 //! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
 //! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
 //! and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
@@ -54,9 +62,10 @@
 //! names the [`Request`]s that are due, takes each [`Response`] and each [`Command`] of the UI,
 //! and hands out a new [`Snapshot`] only when something changed. It carries out [`Action`]s
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
-//! the [`TorrentDetails`] of the selected torrent every tick. A speed limit is set one
-//! [`Direction`] at a time. Magnet links are read once, on [`Command::ReadMagnetLinks`], under
-//! the same rules as an action.
+//! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
+//! their progress and, once a minute, their trackers ([`DetailsRead`]), and nothing while the
+//! window is hidden. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
+//! on [`Command::ReadMagnetLinks`], under the same rules as an action.
 //!
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
@@ -71,6 +80,7 @@ mod action;
 mod config;
 mod details;
 mod engine;
+mod files;
 mod filter;
 mod format;
 mod limits;
@@ -87,10 +97,16 @@ mod toml_error;
 mod ui_state;
 mod view;
 
-pub use action::{Action, ActionError, ActionId, Direction};
+pub use action::{Action, ActionError, ActionId, Direction, FileChange, FileTarget};
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
-pub use details::{FileEntry, TorrentDetails};
-pub use engine::{Command, Engine, EngineConfig, Event, Request, Response, Visibility};
+pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
+pub use engine::{
+    Command, DetailsRead, Engine, EngineConfig, Event, Request, Response, Visibility,
+};
+pub use files::{
+    FileRow, FileTree, FileTreeView, NodeKey, NonEmptyIndices, PriorityView, RowKind, WantedState,
+    next_priority,
+};
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,
@@ -101,21 +117,24 @@ pub use limits::{
     kib_to_kbps, limit_edit, limit_needs_value, limit_prefill, parse_limit,
 };
 pub use model::{Eta, ModelError, Ratio, Torrent};
-pub use playable::{file_offsets, playable_prefix};
+pub use playable::{Playable, file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 pub use sort::{SortDirection, SortKey, sort};
 pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_active};
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
 pub use toml_error::TextPosition;
 pub use ui_state::{
-    ColumnState, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
-    ParsedUiState, SortState, ThemeChoice, UI_STATE_VERSION, UiState, UiStateError, WindowState,
-    default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
+    ColumnState, DetailsState, DetailsTab, MAX_COLUMN_WIDTH, MAX_DETAILS_HEIGHT, MIN_COLUMN_WIDTH,
+    MIN_DETAILS_HEIGHT, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, ParsedUiState, SortState, ThemeChoice,
+    UI_STATE_VERSION, UiState, UiStateError, WindowState, default_columns, move_shown_column,
+    set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
-    Availability, ColumnId, CompactDuration, Edge, EmptyTable, EtaView, Indicator, RemovalSummary,
-    Row, Selection, ServiceStatus, SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit,
-    ToggleKind, ViewState, availability, removal_summary, status_model, table_model, toggle_kind,
+    Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,
+    GeneralModel, Indicator, PiecesView, RemovalSummary, Row, Selection, ServiceStatus,
+    SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit, ToggleKind, TrackerCount,
+    TrackerProblem, TrackerProblemKind, TrackerSummary, ViewState, availability, details_target,
+    general_model, removal_summary, status_model, table_model, toggle_kind, tracker_summary,
     visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on

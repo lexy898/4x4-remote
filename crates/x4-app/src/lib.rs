@@ -4,9 +4,10 @@
 //! of `x4-core` against the daemon and opens the main window, whose content is
 //! [`main_view::MainView`]. The view pumps the service's events without blocking the UI thread,
 //! and lays out a toolbar (the `toolbar` module) with the search box (the `search` module), the
-//! filter sidebar (the `sidebar` module), the torrent table ([`torrent_table`]) and the status bar
-//! (the `status_bar` module); the `theme` module holds the light and dark theme and the colors of
-//! states, and the `icons` module the icons beyond gpui-component's own. [`actions`] holds what
+//! filter sidebar (the `sidebar` module), the torrent table ([`torrent_table`]), the details panel
+//! under it (the `details_panel` module) and the status bar (the `status_bar` module); the
+//! `theme` module holds the light and dark theme and the colors of states, and the `icons` module
+//! the icons beyond gpui-component's own. [`actions`] holds what
 //! can be done to the selected torrents, the `context_menu` module the menu of a right-click on
 //! them, the `removal` module the dialogs that ask before they are removed, the `clipboard` module
 //! the copies of their hashes and magnet links, and the `key_repeats` module tells a press of
@@ -24,6 +25,7 @@ pub mod actions;
 pub mod app;
 mod clipboard;
 mod context_menu;
+mod details_panel;
 mod files;
 mod i18n;
 mod icons;

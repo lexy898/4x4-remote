@@ -10,25 +10,39 @@
 //! whose `targets` are the rows an action reaches. [`availability()`] tells which actions those
 //! targets allow, and [`toggle_kind`] what the Space key does to them. [`removal_summary`] tells
 //! the removal dialog what it is about to remove.
+//!
+//! The details panel is decided here too: [`details_target`] tells which torrent it is about,
+//! [`general_model`] gives the values of its General tab, and [`tracker_summary`] condenses the
+//! trackers into the worst problem and the counts of those that work, fail and were not contacted
+//! yet.
 
 mod availability;
 mod columns;
+mod details_target;
 mod eta;
-mod percent;
+mod general;
+// The file tree of the details panel rounds progress like the table does.
+pub(crate) mod percent;
 mod removal;
 mod row;
 mod selection;
 mod status;
 mod subtitle;
+mod trackers;
 
 pub use availability::{Availability, ToggleKind, availability, toggle_kind};
 pub use columns::{ColumnId, ViewState};
+pub use details_target::{DetailsTarget, details_target};
 pub use eta::{CompactDuration, EtaView, TimeUnit};
+pub use general::{ErrorView, GeneralModel, PiecesView, general_model};
 pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
 pub use selection::{Edge, Selection};
 pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
+pub use trackers::{
+    TrackerCount, TrackerProblem, TrackerProblemKind, TrackerSummary, tracker_summary,
+};
 
 use std::sync::Arc;
 

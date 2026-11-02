@@ -58,12 +58,12 @@ record-fixtures:
 # --no-capture runs the tests one at a time and streams their output, so the hash each test
 # prints for its torrent stays visible even if the run is interrupted (nextest drops the captured
 # output of a cancelled test).
-# Live tests on a torrent they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults.
+# Live tests (x4-rpc's and x4-core's) on torrents they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults.
 test-live:
     X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" \
     X4_LIVE_REMOTE_DIR="${X4_LIVE_REMOTE_DIR:-/mnt/hdd/torrents/4x4-test}" \
     X4_LIVE_LOCAL_DIR="${X4_LIVE_LOCAL_DIR:-/mnt/pi-hdd/torrents/4x4-test}" \
-    cargo nextest run -p x4-rpc --test live --run-ignored only --locked --no-capture
+    cargo nextest run -p x4-rpc -p x4-core --test live --run-ignored only --locked --no-capture
 
 # Enable the git hooks and verify the required tools are installed.
 setup:

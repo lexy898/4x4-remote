@@ -511,8 +511,8 @@ fn a_failed_save_is_shown_until_a_save_works(cx: &mut TestAppContext) {
         assert_eq!(
             window.find("state-not-saved").description(),
             Some(
-                "The columns, sorting, filter, theme and window size cannot be saved to \
-                 state.toml; the log says why"
+                "The columns, sorting, filter, theme, window size and details panel cannot be \
+                 saved to state.toml; the log says why"
             )
         );
     });

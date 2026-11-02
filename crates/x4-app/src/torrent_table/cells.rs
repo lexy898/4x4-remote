@@ -20,8 +20,8 @@ use crate::theme::{
     PROGRESS_TRACK_OPACITY, rate_color, state_color, subtitle_color, tabular_digits,
 };
 
-/// The height of a progress bar.
-const BAR_HEIGHT: f32 = 4.;
+/// The height of a progress bar; the file list of the details panel draws its bars alike.
+pub(crate) const BAR_HEIGHT: f32 = 4.;
 
 /// Whether `column` holds numbers, which are right-aligned in tabular digits.
 pub(super) fn is_numeric(column: ColumnId) -> bool {
@@ -158,7 +158,7 @@ fn number(text: SharedString, color: Hsla) -> Div {
     clippy::cast_possible_truncation,
     reason = "a fraction from 0 to 1 loses only digits far finer than a pixel"
 )]
-fn bar_fraction(progress: f64) -> f32 {
+pub(crate) fn bar_fraction(progress: f64) -> f32 {
     progress as f32
 }
 

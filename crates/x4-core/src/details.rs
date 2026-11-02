@@ -1,8 +1,20 @@
-//! The details of the selected torrent: its metainfo, its totals and its files.
+//! The details of the selected torrent: its metainfo, its trackers, its totals and its files.
+//!
+//! They are read in two ways. A full read ([`TorrentField::DETAILS_FULL`]) brings everything and
+//! is [built](build) into [`TorrentDetails`]; a progress read
+//! ([`TorrentField::DETAILS_PROGRESS`]) brings only what changes while the torrent downloads and
+//! is [merged](merge_progress) into the last full details. A progress read that also asks for the
+//! trackers ([`TorrentField::DETAILS_PROGRESS_TRACKERS`]) replaces them in the merge.
+//!
+//! [`TorrentField::DETAILS_FULL`]: x4_rpc::TorrentField::DETAILS_FULL
+//! [`TorrentField::DETAILS_PROGRESS`]: x4_rpc::TorrentField::DETAILS_PROGRESS
+//! [`TorrentField::DETAILS_PROGRESS_TRACKERS`]: x4_rpc::TorrentField::DETAILS_PROGRESS_TRACKERS
 
 use std::time::SystemTime;
 
-use x4_rpc::{FilePriority, HashString, Pieces, TorrentGetResponse, TorrentRecord};
+use x4_rpc::{
+    FilePriority, HashString, Pieces, TorrentGetResponse, TorrentRecord, TrackerStatRecord,
+};
 
 use crate::model::date_from_wire;
 use crate::playable::{file_offsets, playable_prefix};
@@ -27,9 +39,84 @@ pub struct FileEntry {
     pub playable_from_start: u64,
 }
 
+/// How a tracker's last announce or scrape went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrackerOutcome {
+    /// The tracker answered.
+    Succeeded,
+    /// The tracker did not answer in time.
+    TimedOut,
+    /// It failed otherwise: the tracker could not be reached, or refused; the text says which.
+    Failed,
+}
+
+/// A tracker's last answer to an announce or a scrape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackerAnswer {
+    /// How it went.
+    pub outcome: TrackerOutcome,
+    /// The daemon's text: `Success`, or why it failed, often in the tracker's own words. It is
+    /// shown as sent, not localized.
+    pub result: String,
+}
+
+impl TrackerAnswer {
+    /// The answer of the flags and text the daemon reports, if there was one at all.
+    fn of(happened: bool, succeeded: bool, timed_out: bool, result: String) -> Option<Self> {
+        let outcome = if succeeded {
+            TrackerOutcome::Succeeded
+        } else if timed_out {
+            TrackerOutcome::TimedOut
+        } else {
+            TrackerOutcome::Failed
+        };
+        happened.then_some(Self { outcome, result })
+    }
+}
+
+/// What one tracker of the torrent last answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackerStat {
+    /// The tracker's host and port, such as `tracker.example.org:443`.
+    pub host: String,
+    /// The last announce; `None` until the torrent was announced to this tracker, which backup
+    /// trackers never are.
+    pub last_announce: Option<TrackerAnswer>,
+    /// The last scrape; `None` until the tracker was scraped.
+    pub last_scrape: Option<TrackerAnswer>,
+    /// How many seeders the tracker knows of; `None` when it did not say.
+    pub seeders: Option<u32>,
+    /// How many leechers the tracker knows of; `None` when it did not say.
+    pub leechers: Option<u32>,
+}
+
+impl From<TrackerStatRecord> for TrackerStat {
+    fn from(record: TrackerStatRecord) -> Self {
+        // The daemon sends -1 for a count the tracker did not report.
+        let count = |count: Option<i64>| count.and_then(|count| u32::try_from(count).ok());
+        Self {
+            host: record.host,
+            last_announce: TrackerAnswer::of(
+                record.has_announced,
+                record.last_announce_succeeded,
+                record.last_announce_timed_out,
+                record.last_announce_result,
+            ),
+            last_scrape: TrackerAnswer::of(
+                record.has_scraped,
+                record.last_scrape_succeeded,
+                record.last_scrape_timed_out,
+                record.last_scrape_result,
+            ),
+            seeders: count(record.seeder_count),
+            leechers: count(record.leecher_count),
+        }
+    }
+}
+
 /// What the details panel shows about the selected torrent.
 ///
-/// Fields the server did not send hold a neutral value: empty text, zero, no date.
+/// Fields the server did not send hold a neutral value: empty text, zero, no date, no source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentDetails {
     /// The torrent these details belong to.
@@ -40,8 +127,8 @@ pub struct TorrentDetails {
     pub creator: String,
     /// When the metainfo was created; `None` when it does not say.
     pub date_created: Option<SystemTime>,
-    /// A magnet link for the torrent.
-    pub magnet_link: String,
+    /// The source tag of the metainfo, which private trackers set; `None` when it has none.
+    pub source: Option<String>,
     /// Whether the torrent is private (no DHT or peer exchange).
     pub is_private: bool,
     /// How many pieces the torrent has.
@@ -54,6 +141,9 @@ pub struct TorrentDetails {
     pub downloaded_ever: u64,
     /// Bytes uploaded over the torrent's life.
     pub uploaded_ever: u64,
+    /// The trackers, as of the last read that brought them: the full read, or a progress read
+    /// with the trackers.
+    pub trackers: Vec<TrackerStat>,
 }
 
 /// Something wrong with a details answer that the details could be built around.
@@ -61,12 +151,25 @@ pub struct TorrentDetails {
 pub(crate) enum DetailsIssue {
     /// The answer holds torrents, but none with the requested hash.
     NoMatchingRecord,
-    /// `files` and `file_stats` differ in length; the files past the shorter one are left out.
-    FileStatsMismatch {
+    /// `files`, `priorities` and `wanted` of a full read differ in length; the files past the
+    /// shortest one are left out.
+    FileArraysMismatch {
         /// Entries in `files`.
         files: usize,
-        /// Entries in `file_stats`.
-        file_stats: usize,
+        /// Entries in `priorities`.
+        priorities: usize,
+        /// Entries in `wanted`.
+        wanted: usize,
+    },
+    /// A per-file array of a progress read is missing or does not hold one entry per file; the
+    /// files keep their last values of it.
+    ProgressArrayMismatch {
+        /// The array's wire name.
+        array: &'static str,
+        /// The files of the last full read.
+        files: usize,
+        /// Entries in the array; `None` when the answer lacks it.
+        entries: Option<usize>,
     },
     /// The torrent has files but the answer has no `pieces`; nothing counts as playable.
     PiecesMissing,
@@ -97,44 +200,55 @@ pub(crate) fn find_record(
     })
 }
 
+/// How many files `record` says the torrent has: its `file_count`, or the length of its `files`
+/// when it lacks that; `None` when it says neither.
+pub(crate) fn file_count(record: &TorrentRecord) -> Option<u32> {
+    record.file_count.or_else(|| {
+        record
+            .files
+            .as_ref()
+            .and_then(|files| u32::try_from(files.len()).ok())
+    })
+}
+
 /// Builds the details of `hash` from its record, which was requested with
-/// [`TorrentField::DETAILS`](x4_rpc::TorrentField::DETAILS).
+/// [`TorrentField::DETAILS_FULL`](x4_rpc::TorrentField::DETAILS_FULL).
 ///
-/// The files come from `files` and `file_stats` side by side, and each one's playable prefix is
-/// computed from `pieces`. That walks the pieces of every file, so it is done for the selected
-/// torrent only. Nothing is logged here: the caller decides when an issue is worth a message.
+/// The files come from `files`, `priorities` and `wanted` side by side, and each one's playable
+/// prefix is computed from `pieces`. That walks the pieces of every file, so it is done for the
+/// selected torrent only. Nothing is logged here: the caller decides when an issue is worth a
+/// message.
 pub(crate) fn build(hash: HashString, record: TorrentRecord) -> Built {
     let mut issues = Vec::new();
     let files = record.files.unwrap_or_default();
-    let file_stats = record.file_stats.unwrap_or_default();
-    if files.len() != file_stats.len() {
-        issues.push(DetailsIssue::FileStatsMismatch {
+    let priorities = record.priorities.unwrap_or_default();
+    let wanted = record.wanted.unwrap_or_default();
+    if priorities.len() != files.len() || wanted.len() != files.len() {
+        issues.push(DetailsIssue::FileArraysMismatch {
             files: files.len(),
-            file_stats: file_stats.len(),
+            priorities: priorities.len(),
+            wanted: wanted.len(),
         });
     }
-    let pieces = if files.is_empty() {
-        Pieces::from_bytes(Vec::new())
-    } else {
-        decode_pieces(record.pieces.as_deref(), &mut issues)
-    };
+    let pieces = pieces_of(!files.is_empty(), record.pieces.as_deref(), &mut issues);
     let piece_size = record.piece_size.unwrap_or_default();
-    // Offsets come from the whole file list, so a short `file_stats` cannot shift them.
+    // Offsets come from the whole file list, so a short array cannot shift them.
     let offsets = file_offsets(&files);
 
     let entries = files
         .into_iter()
-        .zip(file_stats)
+        .zip(priorities)
+        .zip(wanted)
         .zip(offsets)
         .enumerate()
-        .map(|(index, ((file, stats), offset))| FileEntry {
+        .map(|(index, (((file, priority), wanted), offset))| FileEntry {
             index,
             playable_from_start: playable_prefix(&pieces, piece_size, offset, file.length),
             name: file.name,
             length: file.length,
-            bytes_completed: stats.bytes_completed,
-            wanted: stats.wanted,
-            priority: stats.priority,
+            bytes_completed: file.bytes_completed,
+            wanted,
+            priority,
         })
         .collect();
 
@@ -144,20 +258,106 @@ pub(crate) fn build(hash: HashString, record: TorrentRecord) -> Built {
             comment: record.comment.unwrap_or_default(),
             creator: record.creator.unwrap_or_default(),
             date_created: record.date_created.and_then(date_from_wire),
-            magnet_link: record.magnet_link.unwrap_or_default(),
+            source: record.source.filter(|source| !source.is_empty()),
             is_private: record.is_private.unwrap_or_default(),
             piece_count: record.piece_count.unwrap_or_default(),
             piece_size,
             files: entries,
             downloaded_ever: record.downloaded_ever.unwrap_or_default(),
             uploaded_ever: record.uploaded_ever.unwrap_or_default(),
+            trackers: record
+                .tracker_stats
+                .unwrap_or_default()
+                .into_iter()
+                .map(TrackerStat::from)
+                .collect(),
         },
         issues,
     }
 }
 
-/// The bitfield of `pieces`; an empty one, with the issue noted, when it is missing or invalid.
-fn decode_pieces(pieces: Option<&str>, issues: &mut Vec<DetailsIssue>) -> Pieces {
+/// The details `last` with the progress of `record` merged in; `record` was requested with
+/// [`TorrentField::DETAILS_PROGRESS`](x4_rpc::TorrentField::DETAILS_PROGRESS), or with
+/// [`TorrentField::DETAILS_PROGRESS_TRACKERS`](x4_rpc::TorrentField::DETAILS_PROGRESS_TRACKERS),
+/// for the same torrent, whose files have not changed since `last` was read.
+///
+/// Each file takes its bytes, priority and wanted switch from the arrays of the same names, and
+/// its playable prefix from the new pieces. An array that is missing or does not hold one entry
+/// per file is left out, so the files keep their last values of it, and is reported; the totals
+/// keep their last values when the answer lacks them. The names and the metainfo stay as `last`
+/// has them, and so do the trackers, unless the answer holds
+/// [`tracker_stats`](x4_rpc::TorrentField::TrackerStats), when those replace them.
+pub(crate) fn merge_progress(last: &TorrentDetails, record: TorrentRecord) -> Built {
+    let mut issues = Vec::new();
+    let mut details = last.clone();
+    let count = details.files.len();
+    if let Some(bytes) = per_file(
+        count,
+        "bytes_completed",
+        record.bytes_completed,
+        &mut issues,
+    ) {
+        for (file, bytes) in details.files.iter_mut().zip(bytes) {
+            file.bytes_completed = bytes;
+        }
+    }
+    if let Some(priorities) = per_file(count, "priorities", record.priorities, &mut issues) {
+        for (file, priority) in details.files.iter_mut().zip(priorities) {
+            file.priority = priority;
+        }
+    }
+    if let Some(wanted) = per_file(count, "wanted", record.wanted, &mut issues) {
+        for (file, wanted) in details.files.iter_mut().zip(wanted) {
+            file.wanted = wanted;
+        }
+    }
+    let pieces = pieces_of(count > 0, record.pieces.as_deref(), &mut issues);
+    let mut offset = 0_u64;
+    for file in &mut details.files {
+        file.playable_from_start =
+            playable_prefix(&pieces, details.piece_size, offset, file.length);
+        offset = offset.saturating_add(file.length);
+    }
+    if let Some(downloaded) = record.downloaded_ever {
+        details.downloaded_ever = downloaded;
+    }
+    if let Some(uploaded) = record.uploaded_ever {
+        details.uploaded_ever = uploaded;
+    }
+    if let Some(trackers) = record.tracker_stats {
+        details.trackers = trackers.into_iter().map(TrackerStat::from).collect();
+    }
+    Built { details, issues }
+}
+
+/// The per-file array `values` of a progress read when it holds one entry for each of `files`;
+/// otherwise `None`, with the issue noted. A torrent without files needs no array.
+fn per_file<T>(
+    files: usize,
+    array: &'static str,
+    values: Option<Vec<T>>,
+    issues: &mut Vec<DetailsIssue>,
+) -> Option<Vec<T>> {
+    match values {
+        Some(values) if values.len() == files => Some(values),
+        None if files == 0 => None,
+        values => {
+            issues.push(DetailsIssue::ProgressArrayMismatch {
+                array,
+                files,
+                entries: values.as_ref().map(Vec::len),
+            });
+            None
+        }
+    }
+}
+
+/// The bitfield of `pieces` for a torrent that `has_files`; an empty one, with the issue noted,
+/// when it is missing or invalid. A torrent without files needs none.
+fn pieces_of(has_files: bool, pieces: Option<&str>, issues: &mut Vec<DetailsIssue>) -> Pieces {
+    if !has_files {
+        return Pieces::from_bytes(Vec::new());
+    }
     let decoded = match pieces {
         None => Err(DetailsIssue::PiecesMissing),
         Some(text) => Pieces::decode_base64(text).map_err(|_| DetailsIssue::PiecesInvalid),
@@ -171,7 +371,7 @@ fn decode_pieces(pieces: Option<&str>, issues: &mut Vec<DetailsIssue>) -> Pieces
 #[cfg(test)]
 mod tests {
     use x4_rpc::testing::fixtures::TORRENT_GET_DETAILS;
-    use x4_rpc::{FileRecord, FileStatRecord, TorrentId};
+    use x4_rpc::{FileRecord, TorrentId, TrackerStatRecord};
 
     use super::*;
 
@@ -185,21 +385,13 @@ mod tests {
         HashString::parse(HASH).unwrap()
     }
 
-    fn file(name: &str, length: u64) -> FileRecord {
+    fn file(name: &str, length: u64, bytes_completed: u64) -> FileRecord {
         FileRecord {
             name: name.to_owned(),
             length,
-            bytes_completed: 0,
+            bytes_completed,
             begin_piece: 0,
             end_piece: 0,
-        }
-    }
-
-    fn stats(bytes_completed: u64, wanted: bool, priority: FilePriority) -> FileStatRecord {
-        FileStatRecord {
-            bytes_completed,
-            wanted,
-            priority,
         }
     }
 
@@ -209,21 +401,65 @@ mod tests {
         TorrentRecord {
             id: Some(TorrentId(1)),
             hash_string: Some(HASH.to_owned()),
+            comment: Some("a comment".to_owned()),
             piece_size: Some(4),
             piece_count: Some(4),
             // 0b1100_0000: pieces 0 and 1.
             pieces: Some("wA==".to_owned()),
-            files: Some(vec![file("t/a.mkv", 6), file("t/b.mkv", 10)]),
-            file_stats: Some(vec![
-                stats(6, true, FilePriority::High),
-                stats(2, false, FilePriority::Low),
-            ]),
+            file_count: Some(2),
+            files: Some(vec![file("t/a.mkv", 6, 6), file("t/b.mkv", 10, 2)]),
+            priorities: Some(vec![FilePriority::High, FilePriority::Low]),
+            wanted: Some(vec![true, false]),
+            downloaded_ever: Some(8),
+            uploaded_ever: Some(3),
             ..TorrentRecord::default()
         }
     }
 
+    /// The progress of [`two_files`] once both files are complete and the user changed their
+    /// priorities and wanted switches.
+    fn two_files_progress() -> TorrentRecord {
+        TorrentRecord {
+            hash_string: Some(HASH.to_owned()),
+            file_count: Some(2),
+            bytes_completed: Some(vec![6, 10]),
+            priorities: Some(vec![FilePriority::Normal, FilePriority::High]),
+            wanted: Some(vec![false, true]),
+            // 0b1111_0000: every piece.
+            pieces: Some("8A==".to_owned()),
+            downloaded_ever: Some(16),
+            uploaded_ever: Some(5),
+            ..TorrentRecord::default()
+        }
+    }
+
+    /// A tracker whose last announce timed out and whose last scrape succeeded.
+    fn tracker(host: &str, seeder_count: i64, leecher_count: i64) -> TrackerStatRecord {
+        TrackerStatRecord {
+            host: host.to_owned(),
+            has_announced: true,
+            last_announce_succeeded: false,
+            last_announce_timed_out: true,
+            last_announce_result: "Tracker did not respond".to_owned(),
+            has_scraped: true,
+            last_scrape_succeeded: true,
+            last_scrape_timed_out: false,
+            last_scrape_result: "Success".to_owned(),
+            seeder_count: Some(seeder_count),
+            leecher_count: Some(leecher_count),
+        }
+    }
+
+    fn playable(details: &TorrentDetails) -> Vec<u64> {
+        details
+            .files
+            .iter()
+            .map(|file| file.playable_from_start)
+            .collect()
+    }
+
     #[test]
-    fn files_take_their_state_from_file_stats_and_their_playable_prefix_from_pieces() {
+    fn files_take_their_state_from_the_arrays_and_their_playable_prefix_from_pieces() {
         let built = build(hash(), two_files());
 
         assert_eq!(built.issues, []);
@@ -253,40 +489,50 @@ mod tests {
     }
 
     #[test]
-    fn a_short_file_stats_list_cuts_the_files_and_is_reported() {
-        let record = TorrentRecord {
-            file_stats: Some(vec![stats(6, true, FilePriority::Normal)]),
+    fn a_short_per_file_array_cuts_the_files_and_is_reported() {
+        let short_priorities = TorrentRecord {
+            priorities: Some(vec![FilePriority::Normal]),
+            ..two_files()
+        };
+        let short_files = TorrentRecord {
+            files: Some(vec![file("t/a.mkv", 6, 6)]),
+            ..two_files()
+        };
+        let no_wanted = TorrentRecord {
+            wanted: None,
             ..two_files()
         };
 
-        let built = build(hash(), record);
-
+        let built = build(hash(), short_priorities);
         assert_eq!(built.details.files.len(), 1);
         assert_eq!(
             built.issues,
-            [DetailsIssue::FileStatsMismatch {
+            [DetailsIssue::FileArraysMismatch {
                 files: 2,
-                file_stats: 1
+                priorities: 1,
+                wanted: 2
             }]
         );
-    }
 
-    #[test]
-    fn a_short_file_list_cuts_the_stats_and_is_reported() {
-        let record = TorrentRecord {
-            files: Some(vec![file("t/a.mkv", 6)]),
-            ..two_files()
-        };
-
-        let built = build(hash(), record);
-
-        assert_eq!(built.details.files.len(), 1);
-        assert_eq!(built.details.files[0].playable_from_start, 6);
+        let built = build(hash(), short_files);
+        assert_eq!(playable(&built.details), [6]);
         assert_eq!(
             built.issues,
-            [DetailsIssue::FileStatsMismatch {
+            [DetailsIssue::FileArraysMismatch {
                 files: 1,
-                file_stats: 2
+                priorities: 2,
+                wanted: 2
+            }]
+        );
+
+        let built = build(hash(), no_wanted);
+        assert_eq!(built.details.files, []);
+        assert_eq!(
+            built.issues,
+            [DetailsIssue::FileArraysMismatch {
+                files: 2,
+                priorities: 2,
+                wanted: 0
             }]
         );
     }
@@ -306,13 +552,7 @@ mod tests {
             );
 
             assert_eq!(built.issues, std::slice::from_ref(&issue));
-            let playable: Vec<u64> = built
-                .details
-                .files
-                .iter()
-                .map(|file| file.playable_from_start)
-                .collect();
-            assert_eq!(playable, [0, 0], "{issue:?}");
+            assert_eq!(playable(&built.details), [0, 0], "{issue:?}");
         }
     }
 
@@ -322,8 +562,11 @@ mod tests {
             hash_string: Some(HASH.to_owned()),
             piece_size: Some(0),
             piece_count: Some(0),
+            file_count: Some(0),
             files: Some(Vec::new()),
-            file_stats: Some(Vec::new()),
+            priorities: Some(Vec::new()),
+            wanted: Some(Vec::new()),
+            pieces: Some(String::new()),
             ..TorrentRecord::default()
         };
 
@@ -345,16 +588,98 @@ mod tests {
                 comment: String::new(),
                 creator: String::new(),
                 date_created: None,
-                magnet_link: String::new(),
+                source: None,
                 is_private: false,
                 piece_count: 0,
                 piece_size: 0,
                 files: Vec::new(),
                 downloaded_ever: 0,
                 uploaded_ever: 0,
+                trackers: Vec::new(),
             }
         );
         assert_eq!(built.issues, []);
+    }
+
+    #[test]
+    fn an_empty_source_is_none() {
+        let source = |source: &str| {
+            build(
+                hash(),
+                TorrentRecord {
+                    source: Some(source.to_owned()),
+                    ..two_files()
+                },
+            )
+            .details
+            .source
+        };
+
+        assert_eq!(source(""), None);
+        assert_eq!(source("TAG"), Some("TAG".to_owned()));
+    }
+
+    #[test]
+    fn trackers_keep_what_they_answered_and_unknown_counts_are_none() {
+        let record = TorrentRecord {
+            tracker_stats: Some(vec![
+                tracker("a.example:443", 12, 3),
+                tracker("b.example:80", -1, -1),
+                TrackerStatRecord {
+                    host: "c.example:6969".to_owned(),
+                    ..TrackerStatRecord::default()
+                },
+            ]),
+            ..two_files()
+        };
+
+        let trackers = build(hash(), record).details.trackers;
+
+        assert_eq!(
+            trackers.first(),
+            Some(&TrackerStat {
+                host: "a.example:443".to_owned(),
+                last_announce: Some(TrackerAnswer {
+                    outcome: TrackerOutcome::TimedOut,
+                    result: "Tracker did not respond".to_owned(),
+                }),
+                last_scrape: Some(TrackerAnswer {
+                    outcome: TrackerOutcome::Succeeded,
+                    result: "Success".to_owned(),
+                }),
+                seeders: Some(12),
+                leechers: Some(3),
+            })
+        );
+        // Never announced to nor scraped, as a backup tracker.
+        assert_eq!(
+            trackers
+                .get(2)
+                .map(|tracker| (&tracker.last_announce, &tracker.last_scrape)),
+            Some((&None, &None))
+        );
+        let counts: Vec<(Option<u32>, Option<u32>)> = trackers
+            .iter()
+            .map(|tracker| (tracker.seeders, tracker.leechers))
+            .collect();
+        assert_eq!(counts, [(Some(12), Some(3)), (None, None), (None, None)]);
+    }
+
+    #[test]
+    fn a_tracker_answer_that_neither_succeeded_nor_timed_out_failed() {
+        let refused = TrackerStatRecord {
+            has_announced: true,
+            last_announce_result: "Unregistered torrent".to_owned(),
+            ..TrackerStatRecord::default()
+        };
+
+        assert_eq!(
+            TrackerStat::from(refused).last_announce,
+            Some(TrackerAnswer {
+                outcome: TrackerOutcome::Failed,
+                result: "Unregistered torrent".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -364,12 +689,14 @@ mod tests {
         let fixture_hash = HashString::parse(FIXTURE_HASH).unwrap();
 
         let record = find_record(&fixture_hash, response).unwrap();
+        assert_eq!(file_count(&record), Some(10));
         let built = build(fixture_hash.clone(), record);
 
         assert_eq!(built.issues, []);
         let details = built.details;
         assert_eq!(details.hash, fixture_hash);
         assert_eq!(details.comment, "redacted");
+        assert_eq!(details.source.as_deref(), Some("redacted"));
         assert_eq!(details.date_created, None);
         assert_eq!(details.piece_count, 14685);
         assert_eq!(details.piece_size, 4_194_304);
@@ -377,6 +704,188 @@ mod tests {
         assert_eq!(details.files[0].priority, FilePriority::High);
         let indices: Vec<usize> = details.files.iter().map(|file| file.index).collect();
         assert_eq!(indices, (0..10).collect::<Vec<_>>());
+        assert_eq!(details.trackers.len(), 1);
+        assert_eq!(
+            details.trackers[0]
+                .last_announce
+                .as_ref()
+                .map(|answer| answer.outcome),
+            Some(TrackerOutcome::Succeeded)
+        );
+        assert_eq!(details.trackers[0].seeders, Some(57));
+    }
+
+    #[test]
+    fn the_file_count_falls_back_to_the_files() {
+        assert_eq!(file_count(&two_files()), Some(2));
+        let without_count = TorrentRecord {
+            file_count: None,
+            ..two_files()
+        };
+        assert_eq!(file_count(&without_count), Some(2));
+        assert_eq!(file_count(&TorrentRecord::default()), None);
+    }
+
+    #[test]
+    fn progress_changes_only_what_moves_while_a_torrent_downloads() {
+        let last = build(hash(), two_files()).details;
+
+        let merged = merge_progress(&last, two_files_progress());
+
+        assert_eq!(merged.issues, []);
+        assert_eq!(
+            merged.details,
+            TorrentDetails {
+                downloaded_ever: 16,
+                uploaded_ever: 5,
+                files: vec![
+                    FileEntry {
+                        bytes_completed: 6,
+                        wanted: false,
+                        priority: FilePriority::Normal,
+                        playable_from_start: 6,
+                        ..last.files[0].clone()
+                    },
+                    FileEntry {
+                        bytes_completed: 10,
+                        wanted: true,
+                        priority: FilePriority::High,
+                        playable_from_start: 10,
+                        ..last.files[1].clone()
+                    },
+                ],
+                ..last.clone()
+            }
+        );
+        // The metainfo and the names come from the full read.
+        assert_eq!(merged.details.comment, "a comment");
+        assert_eq!(merged.details.files[1].name, "t/b.mkv");
+    }
+
+    #[test]
+    fn a_progress_array_of_the_wrong_length_keeps_its_last_values_and_is_reported() {
+        let last = build(hash(), two_files()).details;
+        let record = TorrentRecord {
+            priorities: Some(vec![FilePriority::Normal]),
+            wanted: None,
+            ..two_files_progress()
+        };
+
+        let merged = merge_progress(&last, record);
+
+        let state: Vec<(u64, bool, FilePriority)> = merged
+            .details
+            .files
+            .iter()
+            .map(|file| (file.bytes_completed, file.wanted, file.priority))
+            .collect();
+        // Bytes are new; the priorities and the wanted switches are the last ones.
+        assert_eq!(
+            state,
+            [
+                (6, true, FilePriority::High),
+                (10, false, FilePriority::Low)
+            ]
+        );
+        assert_eq!(
+            merged.issues,
+            [
+                DetailsIssue::ProgressArrayMismatch {
+                    array: "priorities",
+                    files: 2,
+                    entries: Some(1)
+                },
+                DetailsIssue::ProgressArrayMismatch {
+                    array: "wanted",
+                    files: 2,
+                    entries: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_progress_totals_keep_the_last_ones() {
+        let last = build(hash(), two_files()).details;
+        let record = TorrentRecord {
+            downloaded_ever: None,
+            uploaded_ever: None,
+            ..two_files_progress()
+        };
+
+        let merged = merge_progress(&last, record);
+
+        assert_eq!(
+            (merged.details.downloaded_ever, merged.details.uploaded_ever),
+            (8, 3)
+        );
+    }
+
+    #[test]
+    fn progress_with_trackers_replaces_them_and_one_without_keeps_them() {
+        let mut full = two_files();
+        full.tracker_stats = Some(vec![tracker("a.example:80", 3, 4)]);
+        let last = build(hash(), full).details;
+        assert_eq!(last.trackers.len(), 1);
+
+        let without = merge_progress(&last, two_files_progress());
+        let replaced = merge_progress(
+            &last,
+            TorrentRecord {
+                tracker_stats: Some(vec![
+                    tracker("b.example:443", 7, 8),
+                    tracker("c.example:80", 9, 1),
+                ]),
+                ..two_files_progress()
+            },
+        );
+        // A torrent whose trackers were all removed has none left.
+        let emptied = merge_progress(
+            &last,
+            TorrentRecord {
+                tracker_stats: Some(Vec::new()),
+                ..two_files_progress()
+            },
+        );
+
+        assert_eq!(without.details.trackers, last.trackers);
+        let hosts = |built: &Built| -> Vec<String> {
+            built
+                .details
+                .trackers
+                .iter()
+                .map(|tracker| tracker.host.clone())
+                .collect()
+        };
+        assert_eq!(hosts(&replaced), ["b.example:443", "c.example:80"]);
+        assert_eq!(replaced.details.trackers[0].seeders, Some(7));
+        assert_eq!(replaced.details.files, without.details.files);
+        assert_eq!(emptied.details.trackers, []);
+        assert_eq!(emptied.issues, []);
+    }
+
+    #[test]
+    fn progress_of_a_torrent_without_files_needs_no_arrays() {
+        let last = build(hash(), TorrentRecord::default()).details;
+
+        let merged = merge_progress(&last, TorrentRecord::default());
+
+        assert_eq!(merged.issues, []);
+        assert_eq!(merged.details, last);
+    }
+
+    #[test]
+    fn missing_progress_pieces_make_nothing_playable_and_are_reported() {
+        let last = build(hash(), two_files()).details;
+        let record = TorrentRecord {
+            pieces: None,
+            ..two_files_progress()
+        };
+
+        let merged = merge_progress(&last, record);
+
+        assert_eq!(merged.issues, [DetailsIssue::PiecesMissing]);
+        assert_eq!(playable(&merged.details), [0, 0]);
     }
 
     #[test]

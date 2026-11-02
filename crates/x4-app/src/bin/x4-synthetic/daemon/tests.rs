@@ -12,10 +12,15 @@ use x4_core::{
 };
 use x4_rpc::{
     Client, GetIds, HashString, RemoveData, RpcError, SessionSet, TorrentAction, TorrentField,
-    TorrentGetResponse, TorrentId, TorrentRecord, TorrentSelection, TorrentSet,
+    TorrentGetResponse, TorrentId, TorrentRecord, TorrentRef, TorrentSelection, TorrentSet,
 };
 
 use super::*;
+
+mod details;
+mod file_set;
+mod pieces;
+mod support;
 
 const COUNT: u32 = 2000;
 
@@ -34,6 +39,92 @@ fn shown(response: TorrentGetResponse) -> Vec<ShownTorrent> {
     let converted = x4_core::torrents_from_records(response.torrents);
     assert!(converted.skipped.is_empty(), "{:?}", converted.skipped);
     converted.torrents
+}
+
+/// What the daemon logs at debug about each answer: its method and the bytes of the request and
+/// of the answer, in order.
+fn answers_logged(run: impl FnOnce()) -> Vec<(String, u64, u64)> {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Default)]
+    struct Answer {
+        message: String,
+        method: String,
+        request_bytes: u64,
+        response_bytes: u64,
+    }
+    impl Visit for Answer {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "method" {
+                value.clone_into(&mut self.method);
+            }
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            match field.name() {
+                "request_bytes" => self.request_bytes = value,
+                "response_bytes" => self.response_bytes = value,
+                _ => {}
+            }
+        }
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.message = format!("{value:?}");
+            }
+        }
+    }
+    struct Recorder(Arc<Mutex<Vec<(String, u64, u64)>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Recorder {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            let mut answer = Answer::default();
+            event.record(&mut answer);
+            if *event.metadata().level() == tracing::Level::DEBUG
+                && answer.message == "synthetic daemon answered"
+            {
+                self.0.lock().unwrap().push((
+                    answer.method,
+                    answer.request_bytes,
+                    answer.response_bytes,
+                ));
+            }
+        }
+    }
+
+    let logged = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Recorder(Arc::clone(&logged)));
+    tracing::subscriber::with_default(subscriber, run);
+    logged.lock().unwrap().clone()
+}
+
+/// With `RUST_LOG=x4_synthetic=debug`, the demo's log tells what each request cost, so that the
+/// requests and the bytes the app asks of a daemon can be counted.
+#[test]
+fn each_answer_is_logged_at_debug_with_its_bytes_both_ways() {
+    let daemon = SyntheticDaemon::new(COUNT, Activity::Static);
+    let body = br#"{"jsonrpc":"2.0","id":1,"method":"session_get"}"#;
+    let mut answer = None;
+
+    let logged = answers_logged(|| {
+        answer = daemon
+            .post(&HttpRequest {
+                body,
+                session_id: None,
+            })
+            .ok();
+    });
+
+    let answered = answer.expect("an answer").body.len();
+    assert_eq!(
+        logged,
+        [(
+            "session_get".to_owned(),
+            u64::try_from(body.len()).unwrap(),
+            u64::try_from(answered).unwrap()
+        )]
+    );
 }
 
 #[test]
@@ -441,6 +532,78 @@ fn a_list_of_torrents_gets_only_those_and_only_the_fields_asked_for() {
             .all(|record| record.magnet_link.is_none()),
         "the list carries no magnet links"
     );
+}
+
+/// The records of `refs`, named in one `torrent_get`, with the fields of the list.
+fn records_of(client: &mut Client<SyntheticDaemon>, refs: &[TorrentRef]) -> Vec<TorrentRecord> {
+    let selection = TorrentSelection::new(refs.to_vec()).expect("not empty");
+    client
+        .torrent_get(&GetIds::Selection(selection), TorrentField::LIST)
+        .expect("the client parses the answer")
+        .torrents
+}
+
+#[test]
+fn reading_ten_torrents_by_hash_matches_reading_them_one_by_one() {
+    let mut client = client(Activity::Static);
+    let all = shown(list(&mut client, &GetIds::All));
+    // Ten torrents spread over the list, in no order, with one the daemon does not know in the
+    // middle: eleven entries, which is past the length at which the daemon indexes the torrents
+    // instead of scanning them for each entry.
+    let chosen: Vec<&ShownTorrent> = [1703, 3, 951, 1999, 0, 412, 1203, 77, 1550, 600]
+        .iter()
+        .map(|&position| all.get(position).expect("a torrent"))
+        .collect();
+    assert!(chosen.len() + 1 > SHORT_LIST);
+    let unknown = HashString::parse("0000000000000000000000000000000000000000").expect("a hash");
+    let by_hash = |torrent: &ShownTorrent| TorrentRef::Hash(torrent.hash.clone());
+    let by_id = |torrent: &ShownTorrent| TorrentRef::Id(torrent.id);
+    let unknown_id = TorrentRef::Id(TorrentId(999_999));
+
+    for (name, of, unknown) in [
+        (
+            "hashes",
+            &by_hash as &dyn Fn(&ShownTorrent) -> TorrentRef,
+            TorrentRef::Hash(unknown),
+        ),
+        ("ids", &by_id, unknown_id),
+    ] {
+        let mut refs: Vec<TorrentRef> = chosen.iter().map(|&torrent| of(torrent)).collect();
+        refs.insert(5, unknown);
+
+        let together = records_of(&mut client, &refs);
+
+        let one_by_one: Vec<TorrentRecord> = chosen
+            .iter()
+            .flat_map(|&torrent| records_of(&mut client, &[of(torrent)]))
+            .collect();
+        assert_eq!(
+            together.len(),
+            chosen.len(),
+            "{name}: the unknown one is skipped"
+        );
+        assert_eq!(
+            together, one_by_one,
+            "{name}: the same records, in the same order"
+        );
+        let hashes: Vec<Option<String>> = together
+            .iter()
+            .map(|record| record.hash_string.clone())
+            .collect();
+        let wanted: Vec<Option<String>> = chosen
+            .iter()
+            .map(|torrent| Some(torrent.hash.to_string()))
+            .collect();
+        assert_eq!(hashes, wanted, "{name}: in the order named");
+        // A short list of the same kind, scanned rather than indexed, gives the same again.
+        let (head, tail) = refs.split_at(4);
+        let mut in_pieces = records_of(&mut client, head);
+        in_pieces.extend(records_of(&mut client, tail));
+        assert_eq!(
+            together, in_pieces,
+            "{name}: lists of 4 and 7 give the same"
+        );
+    }
 }
 
 #[test]

@@ -162,10 +162,11 @@ pub(crate) fn execute<T: Transport>(
         Request::RecentlyActive => client
             .torrent_get(&GetIds::RecentlyActive, TorrentField::LIST)
             .map(Response::Torrents),
-        Request::Details(hash) => {
+        Request::Details { hash, kind } => {
+            // Always one named torrent: omitted ids would read every torrent's files.
             let ids = GetIds::Selection(selection(slice::from_ref(hash))?);
             client
-                .torrent_get(&ids, TorrentField::DETAILS)
+                .torrent_get(&ids, kind.fields())
                 .map(Response::Details)
         }
         Request::Action(_, action) => perform(client, action).map(|()| Response::Done),
@@ -472,6 +473,7 @@ mod tests {
 
     use super::*;
     use crate::action::{Action, ActionId, Direction};
+    use crate::engine::DetailsRead;
     use crate::test_support::{fixture_result, torrent};
 
     /// Answers like the recorded daemon: each read with its fixture, an add with a new torrent
@@ -551,9 +553,37 @@ mod tests {
                 json!({ "ids": "recently_active", "fields": fields(TorrentField::LIST) }),
             ),
             (
-                Request::Details(selected.clone()),
+                Request::Details {
+                    hash: selected.clone(),
+                    kind: DetailsRead::Full,
+                },
                 "torrent_get",
-                json!({ "ids": [selected.as_str()], "fields": fields(TorrentField::DETAILS) }),
+                json!({
+                    "ids": [selected.as_str()],
+                    "fields": fields(TorrentField::DETAILS_FULL),
+                }),
+            ),
+            (
+                Request::Details {
+                    hash: selected.clone(),
+                    kind: DetailsRead::Progress,
+                },
+                "torrent_get",
+                json!({
+                    "ids": [selected.as_str()],
+                    "fields": fields(TorrentField::DETAILS_PROGRESS),
+                }),
+            ),
+            (
+                Request::Details {
+                    hash: selected.clone(),
+                    kind: DetailsRead::ProgressAndTrackers,
+                },
+                "torrent_get",
+                json!({
+                    "ids": [selected.as_str()],
+                    "fields": fields(TorrentField::DETAILS_PROGRESS_TRACKERS),
+                }),
             ),
         ];
 
@@ -583,10 +613,19 @@ mod tests {
             answer(Request::RecentlyActive),
             Response::Torrents(_)
         ));
-        assert!(matches!(
-            answer(Request::Details(hash("a"))),
-            Response::Details(_)
-        ));
+        for kind in [
+            DetailsRead::Full,
+            DetailsRead::Progress,
+            DetailsRead::ProgressAndTrackers,
+        ] {
+            assert!(matches!(
+                answer(Request::Details {
+                    hash: hash("a"),
+                    kind
+                }),
+                Response::Details(_)
+            ));
+        }
         assert!(matches!(
             answer(Request::MagnetLinks(ActionId(1), vec![hash("a")])),
             Response::MagnetLinks(_)

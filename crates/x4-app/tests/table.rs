@@ -550,8 +550,8 @@ fn selected_torrent_removed_clears(cx: &mut TestAppContext) {
     let sent = window.sent();
     assert!(
         sent.iter()
-            .all(|command| matches!(command, Command::SetVisibility(_))),
-        "selecting sends nothing: {sent:?}"
+            .all(|command| matches!(command, Command::SetVisibility(_) | Command::Select(_))),
+        "selecting sends nothing but the torrent whose details to read: {sent:?}"
     );
 
     // It does not come back when the torrent does.

@@ -8772,6 +8772,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "base64 0.23.1",
+ "chrono",
  "crossbeam-channel",
  "directories",
  "fluent-syntax",
@@ -8797,6 +8799,7 @@ dependencies = [
  "crossbeam-channel",
  "serde",
  "serde_json",
+ "sha1",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "tracing",

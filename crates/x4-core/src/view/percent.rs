@@ -31,6 +31,26 @@ pub(crate) fn fraction(progress: f64) -> f64 {
     }
 }
 
+/// The largest `f64` below 1.0.
+const BELOW_ONE: f64 = 1.0 - f64::EPSILON / 2.0;
+
+/// `done` of `total` as 0.0 to 1.0, for a bar and for [`percent`]. Nothing to do (`total` is 0)
+/// counts as done, so an empty file or folder is not shown as 0%; `done` beyond `total` counts as
+/// all of it. It is 1.0 only when `done` has reached `total`, also for sizes where the division
+/// rounds up.
+#[must_use]
+pub(crate) fn fraction_of(done: u64, total: u64) -> f64 {
+    if done >= total {
+        return 1.0;
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the value is only shown, as a bar and whole percents"
+    )]
+    let fraction = done as f64 / total as f64;
+    fraction.min(BELOW_ONE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +93,18 @@ mod tests {
         assert_eq!(percent(f64::INFINITY), 100);
         assert_eq!(percent(f64::NEG_INFINITY), 0);
         assert_eq!(percent(f64::NAN), 0);
+    }
+
+    #[test]
+    fn fraction_of_counts_nothing_to_do_as_done() {
+        assert!((fraction_of(0, 0) - 1.0).abs() < f64::EPSILON);
+        assert!((fraction_of(5, 0) - 1.0).abs() < f64::EPSILON);
+        assert!((fraction_of(10, 10) - 1.0).abs() < f64::EPSILON);
+        assert!((fraction_of(11, 10) - 1.0).abs() < f64::EPSILON);
+        assert!((fraction_of(1, 4) - 0.25).abs() < f64::EPSILON);
+        assert!(fraction_of(0, 10).abs() < f64::EPSILON);
+        // One byte short stays below 100%, also for sizes beyond what f64 holds exactly.
+        assert_eq!(percent(fraction_of(9, 10)), 90);
+        assert_eq!(percent(fraction_of(u64::MAX - 1, u64::MAX)), 99);
     }
 }

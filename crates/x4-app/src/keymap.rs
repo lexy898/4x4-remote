@@ -9,9 +9,18 @@
 //!   while no menu of it is open (`!PopupMenu`): the context menu is drawn inside the list, and
 //!   Delete there must not act on the torrents behind it. The search box lies outside the list, so
 //!   Ctrl+A, Ctrl+C, Delete or Space there edit or copy its text and never reach the torrents;
-//! - the window's own keys (Ctrl+F, `/`, and Ctrl+T and Ctrl+L for the turtle and the speed
-//!   limits) work in the whole main window (`MainWindow`), the search box and the popover of the
-//!   limits included: their text fields bind neither Ctrl+T nor Ctrl+L;
+//! - the window's own keys (Ctrl+F, `/`, Ctrl+T and Ctrl+L for the turtle and the speed limits,
+//!   and Alt+Enter, Alt+1 and Alt+2 for the details panel and its tabs) work in the whole main
+//!   window (`MainWindow`), the search box included: its text field binds none of these keys.
+//!   The popover of the limits (`SpeedLimits`) lets through only the keys of the status bar and
+//!   those that take the focus out of it, which closes it; Alt+Enter, Alt+1 and Alt+2 do nothing
+//!   there, so that the details panel does not change behind it;
+//! - the keys of the Files tab work in its file list (`FileList`) while no menu of it is open: the
+//!   arrows, Home, End, Page Up and Page Down move its cursor and open and close folders, Space
+//!   downloads or skips the row under the cursor, and `+` and `-` step its priority. The list lies
+//!   outside the torrent list, so these never move the torrent selection, and the torrent list's
+//!   keys never move the file cursor. A priority menu is drawn inside the list, and `!PopupMenu`
+//!   leaves its keys to it;
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
@@ -26,8 +35,8 @@
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
 //! again here in its context, later, so that ours win (see [`BINDINGS`]). While a menu is open (the
 //! context menu, or a menu of the toolbar), its own Up, Down, Enter and Escape go first, and Tab,
-//! Shift+Tab, Ctrl+F, `/`, Ctrl+L and Ctrl+T do nothing, nor do Home, End, Page Up and Page Down
-//! in the context menu: the menu keeps the keys until it closes.
+//! Shift+Tab, Ctrl+F, `/`, Ctrl+L, Ctrl+T, Alt+Enter, Alt+1 and Alt+2 do nothing, nor do Home,
+//! End, Page Up and Page Down in the context menu: the menu keeps the keys until it closes.
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +91,34 @@ actions!(
         ToggleAltSpeed,
         /// Opens the popover of the normal speed limits.
         EditSpeedLimits,
+        /// Shows or hides the details panel under the table.
+        ToggleDetails,
+        /// Shows the General tab of the details panel.
+        ShowGeneralTab,
+        /// Shows the Files tab of the details panel.
+        ShowFilesTab,
+        /// Moves the cursor of the file list to the row above.
+        MoveFileCursorUp,
+        /// Moves the cursor of the file list to the row below.
+        MoveFileCursorDown,
+        /// Moves the cursor of the file list to its first row.
+        MoveFileCursorToFirst,
+        /// Moves the cursor of the file list to its last row.
+        MoveFileCursorToLast,
+        /// Moves the cursor of the file list a page up.
+        MoveFileCursorPageUp,
+        /// Moves the cursor of the file list a page down.
+        MoveFileCursorPageDown,
+        /// Closes the folder under the file cursor, or moves the cursor to the folder around it.
+        CollapseFileFolder,
+        /// Opens the folder under the file cursor, or moves the cursor into it.
+        ExpandFileFolder,
+        /// Downloads the file or folder under the file cursor, or skips it.
+        ToggleFileWanted,
+        /// Raises the priority of the file or folder under the file cursor by one step.
+        RaiseFilePriority,
+        /// Lowers the priority of the file or folder under the file cursor by one step.
+        LowerFilePriority,
     ]
 );
 
@@ -108,6 +145,14 @@ const ANY_MENU: &str = "PopupMenu";
 const TORRENTS: &str = "TorrentList && !PopupMenu";
 /// The key context around the buttons of a removal dialog, inside gpui-component's `Dialog`.
 pub(crate) const REMOVAL_FOOTER_CONTEXT: &str = "RemovalDialogFooter";
+/// The key context of the form in the popover of the speed limits, around its fields, switches
+/// and Apply button.
+pub(crate) const SPEED_LIMITS_CONTEXT: &str = "SpeedLimits";
+/// The key context of the file list of the details panel's Files tab.
+pub(crate) const FILE_LIST_CONTEXT: &str = "FileList";
+/// Where the file list's keys work: in it, while no menu of it is open. A priority menu is drawn
+/// inside the list, so without `!PopupMenu` its arrows would move the file cursor behind it.
+const FILES: &str = "FileList && !PopupMenu";
 
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
@@ -146,6 +191,23 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "ctrl-l",
         action: || Box::new(EditSpeedLimits),
+        context: Some(MAIN_CONTEXT),
+    },
+    // Alt+Enter is Transmission's key for a torrent's properties. Enter alone is a different key:
+    // a binding of Enter never runs for Alt+Enter, nor the reverse.
+    Binding {
+        keys: "alt-enter",
+        action: || Box::new(ToggleDetails),
+        context: Some(MAIN_CONTEXT),
+    },
+    Binding {
+        keys: "alt-1",
+        action: || Box::new(ShowGeneralTab),
+        context: Some(MAIN_CONTEXT),
+    },
+    Binding {
+        keys: "alt-2",
+        action: || Box::new(ShowFilesTab),
         context: Some(MAIN_CONTEXT),
     },
     // Shallower than the text field's own Escape, which goes first: it closes the field's menu or
@@ -194,8 +256,9 @@ pub const BINDINGS: &[Binding] = &[
     // A menu is modal. Up and Down in it move its highlight (the menu's own bindings are deeper).
     // Neither Tab, Shift+Tab, Ctrl+F, `/` nor Ctrl+L (which opens the speed limits) may take the
     // focus out of an open menu, which does not close when it loses the focus: the keys of the
-    // list or the search box would then act behind it. Ctrl+T does nothing behind it either. A
-    // test holds every key bound outside a menu to this, unless its context leaves menus out.
+    // list or the search box would then act behind it. Ctrl+T, Alt+Enter, Alt+1 and Alt+2 do
+    // nothing behind it either. A test holds every key bound outside a menu to this, unless its
+    // context leaves menus out.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
@@ -225,6 +288,39 @@ pub const BINDINGS: &[Binding] = &[
         keys: "ctrl-t",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "alt-enter",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "alt-1",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "alt-2",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    // The popover of the speed limits keeps the keys of the details panel too, as a menu does.
+    // Ctrl+T and Ctrl+L belong to the status bar beside it, and Ctrl+F and `/` take the focus out,
+    // which closes the popover; those stay. A test holds every other window key to this.
+    Binding {
+        keys: "alt-enter",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "alt-1",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "alt-2",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
     },
     // The context menu has no Home, End, Page Up or Page Down: ours do not work behind it, and the
     // table's own are bound to nothing in it, which is deeper than the table, so that they do
@@ -360,6 +456,65 @@ pub const BINDINGS: &[Binding] = &[
         keys: "ctrl-shift-c",
         action: || Box::new(CopyHashes),
         context: Some(TORRENTS),
+    },
+    // The file list of the Files tab. It lies outside the torrent list, so these never reach the
+    // torrent selection, and the torrent list's keys never reach these. Space, `+` and `-` act
+    // once per press of the key; the moving keys repeat while held, as in the table.
+    Binding {
+        keys: "up",
+        action: || Box::new(MoveFileCursorUp),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "down",
+        action: || Box::new(MoveFileCursorDown),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "home",
+        action: || Box::new(MoveFileCursorToFirst),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "end",
+        action: || Box::new(MoveFileCursorToLast),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "pageup",
+        action: || Box::new(MoveFileCursorPageUp),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "pagedown",
+        action: || Box::new(MoveFileCursorPageDown),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "left",
+        action: || Box::new(CollapseFileFolder),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "right",
+        action: || Box::new(ExpandFileFolder),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "space",
+        action: || Box::new(ToggleFileWanted),
+        context: Some(FILES),
+    },
+    // Matched by the character typed: `+` is Shift and `=` on most layouts, or the keypad's plus.
+    Binding {
+        keys: "+",
+        action: || Box::new(RaiseFilePriority),
+        context: Some(FILES),
+    },
+    Binding {
+        keys: "-",
+        action: || Box::new(LowerFilePriority),
+        context: Some(FILES),
     },
     // Deeper than the dialog's own Enter, which confirms the dialog whatever has the focus: bound
     // to nothing here, Enter goes on to the focused button and presses it, as Space does.

@@ -16,7 +16,13 @@
 //! view handles the selection keys of [`keymap`](crate::keymap) (the `selection_keys` module:
 //! Ctrl+A, Ctrl+Shift+A, Escape, the arrows, Home, End, Page Up and Page Down, with and without
 //! Shift) and hands them to it, and passes on what the table does to its own selected row and a
-//! right-click on a row. This stage reads nothing more for a selected torrent.
+//! right-click on a row.
+//!
+//! Under the table, the details panel (the `details` module) shows the selected torrent, when
+//! exactly one is, and the view asks the service to read its details while the panel is open.
+//! Alt+Enter shows and hides the panel; it shares a split with the table, whose handle sets its
+//! height. What the panel's Files tab changes goes out as an action too (the `file_actions`
+//! module).
 //!
 //! The selected torrents can be started, paused, started now, verified and reannounced, from their
 //! keys, from the toolbar's Start and Pause and from the list's context menu (the
@@ -33,12 +39,14 @@
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
 //!
-//! What the user changes in the [`UiState`] (the columns, the sort order, the filter, the theme
-//! and the window size) is saved a second after the last change, and when the window closes or
-//! the app quits (the `persistence` module).
+//! What the user changes in the [`UiState`] (the columns, the sort order, the filter, the theme,
+//! the window size and the details panel) is saved a second after the last change, and when the
+//! window closes or the app quits (the `persistence` module).
 
 mod copying;
+mod details;
 mod events;
+mod file_actions;
 mod menu;
 mod persistence;
 mod selection_keys;
@@ -52,12 +60,14 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, TestSupportExt as _, Window, div, px,
+    MouseDownEvent, ParentElement as _, Pixels, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Task, TestSupportExt as _, Window, div,
+    px,
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
@@ -65,10 +75,12 @@ use x4_core::{
     StatusModel, TableModel, UiState, ViewState, Visibility, shown_columns, status_model,
     table_model, visibility,
 };
+use x4_rpc::HashString;
 
 use crate::actions::PendingActions;
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
+use crate::details_panel::DetailsPanel;
 use crate::i18n::{connection_text, torrent_count_text};
 use crate::key_repeats::KeyRepeats;
 use crate::keymap::{
@@ -84,6 +96,7 @@ use crate::torrent_table::{
     TorrentTable, follow_table, new_table_state, right_click, show_column, show_rows,
     watch_right_click,
 };
+use details::on_details_actions;
 use persistence::Saver;
 use selection_keys::on_selection_keys;
 use speed_controls::on_speed_actions;
@@ -136,14 +149,23 @@ pub struct MainView {
     speed_limits: Entity<SpeedLimits>,
     /// Whether the speed limits popover is open.
     limits_open: bool,
+    /// The details panel under the table.
+    details_panel: Entity<DetailsPanel>,
+    /// The split of the table and the details panel, with their heights.
+    details_split: Entity<ResizableState>,
+    /// The torrent whose details the service was last asked to read; `None` for none, which is
+    /// also what the service starts with.
+    selected_details: Option<HashString>,
+    /// The height of the split when the panel was last fitted to it; `None` before the first fit.
+    fitted_split: Option<Pixels>,
     /// The event pump; dropping the view drops it, which cancels it.
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
     _service: Option<ServiceHandle>,
-    /// The table's, the search box's and the speed limits form's events, the table's changes, the
-    /// focus coming back to the table and leaving the speed limits, the window's activation,
-    /// visibility, appearance and bounds observers, the save when the app quits, and the
-    /// keystroke interceptor.
+    /// The table's, the search box's, the speed limits form's and the details panel's events, the
+    /// table's and the split's changes, the focus coming back to the table, leaving the speed
+    /// limits and getting lost, the window's activation, visibility, appearance and bounds
+    /// observers, the save when the app quits, and the keystroke interceptor.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -175,6 +197,9 @@ impl MainView {
         let key_repeats = Rc::new(RefCell::new(KeyRepeats::default()));
         let speed_limits = cx.new(|cx| SpeedLimits::new(Rc::clone(&key_repeats), window, cx));
         let limits_focus = speed_limits.focus_handle(cx);
+        let details_panel =
+            cx.new(|cx| DetailsPanel::new(ui.details.tab, Rc::clone(&key_repeats), window, cx));
+        let details_split = cx.new(|_| ResizableState::default());
         let mut subscriptions = vec![
             cx.subscribe_in(&table, window, Self::on_table_event),
             // The selection and the rows live in the table; the toolbar follows what they allow.
@@ -186,6 +211,17 @@ impl MainView {
             }),
             cx.subscribe_in(&search, window, Self::on_search_event),
             cx.subscribe_in(&speed_limits, window, Self::on_limits_applied),
+            cx.subscribe_in(&details_panel, window, Self::on_details_event),
+            // The window gave the split another height, or the user drags its handle.
+            cx.observe_in(&details_split, window, |view, _, window, cx| {
+                view.follow_split(window, cx);
+            }),
+            // What had the focus is gone, as a copy button of the details panel when the panel
+            // hides or shows another torrent. The window's keys work only while something in it
+            // has the focus, so the table takes it.
+            cx.on_focus_lost(window, |view, window, cx| {
+                window.focus(&view.table.focus_handle(cx), cx);
+            }),
             // Tab, Shift+Tab and Ctrl+F take the focus out of the popover, which then closes. An
             // inactive window has no focus either, so a switch to another app is no reason to
             // close it: what was typed is still there when the user comes back.
@@ -243,6 +279,10 @@ impl MainView {
             key_repeats,
             speed_limits,
             limits_open: false,
+            details_panel,
+            details_split,
+            selected_details: None,
+            fitted_split: None,
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,
@@ -501,12 +541,15 @@ impl MainView {
             changed = true;
         }
         changed |= self.refresh_availability(cx);
+        // The torrent the panel shows may have changed when its row did not.
+        self.follow_details(cx);
         changed
     }
 
     /// Tells the table whether its rows are stale data, which it draws at the stale opacity, and
-    /// whether the daemon is connected, which its context menu needs for most of its items; and
-    /// the speed limits popover whether it can apply.
+    /// whether the daemon is connected, which its context menu needs for most of its items; the
+    /// details panel whether its Files tab can act; and the speed limits popover whether it can
+    /// apply.
     fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
         let connected = self.status.connected();
@@ -517,6 +560,8 @@ impl MainView {
                 cx.notify();
             }
         });
+        self.details_panel
+            .update(cx, |panel, cx| panel.set_connected(connected, cx));
         self.show_speed_status(cx);
     }
 
@@ -646,7 +691,17 @@ impl Render for MainView {
             on_dismiss,
             cx,
         );
-        let root = on_speed_actions(on_selection_keys(on_torrent_actions(v_flex(), cx), cx), cx);
+        let repeats = &self.key_repeats;
+        let root = on_details_actions(
+            on_speed_actions(
+                on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+                repeats,
+                cx,
+            ),
+            repeats,
+            cx,
+        );
+        let content = self.list_and_details(table, cx);
         root.key_context(MAIN_CONTEXT)
             .size_full()
             .bg(theme.background)
@@ -658,7 +713,7 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(Self::on_clear_search))
             .child(toolbar)
-            .child(h_flex().flex_1().min_h_0().child(sidebar).child(table))
+            .child(h_flex().flex_1().min_h_0().child(sidebar).child(content))
             .child(status_bar)
     }
 }

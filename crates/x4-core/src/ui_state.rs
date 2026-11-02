@@ -1,5 +1,5 @@
-//! What the app remembers between runs: the window, the columns, the sort order, the filter and
-//! the theme, kept in `state.toml`.
+//! What the app remembers between runs: the window, the columns, the sort order, the filter, the
+//! theme and the details panel, kept in `state.toml`.
 //!
 //! This file is the app's own, so it is rewritten whenever something changes, and nobody is
 //! expected to edit it. It must still never keep the app from starting: unknown keys, unknown
@@ -12,6 +12,7 @@
 //! `columns` module).
 
 mod columns;
+mod details;
 mod wire;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ use crate::toml_error::describe;
 use crate::view::{ColumnId, ViewState};
 
 pub use columns::{move_shown_column, set_column_shown, set_shown_widths, shown_columns};
+pub use details::{DetailsState, DetailsTab, MAX_DETAILS_HEIGHT, MIN_DETAILS_HEIGHT};
 
 /// The version of the state file this build writes. A file with a higher version was written by a
 /// newer build and is left alone.
@@ -67,11 +69,14 @@ pub struct UiState {
     /// The theme the user chose.
     #[serde(deserialize_with = "wire::or_default")]
     pub theme: ThemeChoice,
+    /// The details panel under the table. A file from before the panel existed has none, and the
+    /// default applies.
+    pub details: DetailsState,
 }
 
 impl Default for UiState {
     /// The first run: [`default_columns`], sorted by name, every torrent, following the system
-    /// theme.
+    /// theme, with the details panel open.
     fn default() -> Self {
         Self {
             version: UI_STATE_VERSION,
@@ -80,6 +85,7 @@ impl Default for UiState {
             sort: SortState::default(),
             filter: Filter::default(),
             theme: ThemeChoice::default(),
+            details: DetailsState::default(),
         }
     }
 }
@@ -231,10 +237,10 @@ impl UiState {
     /// Reads the contents of `state.toml`.
     ///
     /// The reading is tolerant: an empty text gives the defaults, a missing key takes its
-    /// default, unknown keys and tables are ignored, a filter, sort key, direction or theme this
-    /// version does not know becomes the default, and a column it does not know is dropped. What
-    /// is left is then repaired by [`UiState::normalized`], so the state returned can be used as
-    /// it is.
+    /// default, unknown keys and tables are ignored, a filter, sort key, direction, theme or
+    /// details tab this version does not know becomes the default, and a column it does not know
+    /// is dropped. What is left is then repaired by [`UiState::normalized`], so the state returned
+    /// can be used as it is.
     ///
     /// A file from a newer version (`version` above [`UI_STATE_VERSION`]) is not read at all: the
     /// result holds the defaults and has [`ParsedUiState::newer`] set, so that the caller can
@@ -287,9 +293,12 @@ impl UiState {
     ///   its column.
     /// - A window smaller than 400 by 300 pixels, larger than 16384 pixels in either direction,
     ///   or with a size that is not a number, takes the default size.
+    /// - The details panel is 110 to 2000 pixels high; a height that is not a number takes the
+    ///   default one.
     #[must_use]
     pub fn normalized(mut self) -> Self {
         self.window = self.window.normalized();
+        self.details = self.details.normalized();
 
         let mut columns: Vec<ColumnState> = Vec::with_capacity(ColumnId::ALL.len());
         for column in self.columns {

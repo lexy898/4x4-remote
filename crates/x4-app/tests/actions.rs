@@ -217,11 +217,12 @@ impl Window {
         self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
     }
 
-    /// The commands the window has sent so far, other than the window's visibility.
+    /// The commands the window has sent so far, other than the window's visibility and the
+    /// torrent whose details to read, which the `details` tests cover.
     fn sent(&self) -> Vec<Command> {
         self.commands
             .try_iter()
-            .filter(|command| !matches!(command, Command::SetVisibility(_)))
+            .filter(|command| !matches!(command, Command::SetVisibility(_) | Command::Select(_)))
             .collect()
     }
 
@@ -412,16 +413,17 @@ fn a_toolbar_button_hands_the_keys_back_to_the_list(cx: &mut TestAppContext) {
     assert!(window.table_focused(cx));
     window.finish(id, Ok(()), cx);
 
-    // Pressed with the keyboard, the button gives the focus back to the list.
-    window.press("tab", cx);
-    window.press("tab", cx);
-    window.act(cx, |window, _| {
-        assert_eq!(
-            window.find(PAUSE).focused(),
-            Some(true),
-            "Tab reached Pause"
-        );
-    });
+    // Pressed with the keyboard, the button gives the focus back to the list. From the list, Tab
+    // passes the controls of the details panel and the status bar, and the search box; how many
+    // there are is not the point, so it goes on until Pause, within a sane number of presses.
+    let pause_focused =
+        |cx: &mut TestAppContext| window.act(cx, |window, _| window.find(PAUSE).focused());
+    let mut presses = 0;
+    while pause_focused(cx) != Some(true) {
+        assert!(presses < 20, "Tab never reached Pause");
+        window.press("tab", cx);
+        presses += 1;
+    }
     window.press("space", cx);
     let (id, action) = window.sent_action();
     assert_eq!(action, Action::Stop(hashes(&["a"])));

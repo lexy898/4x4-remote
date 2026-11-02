@@ -14,12 +14,15 @@
 //! (Tab, Shift+Tab, Ctrl+F), it closes too, sends nothing, and the focus stays where it went. A
 //! switch to another app takes the window's focus away too, but the popover stays open as it is.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui_kit::{Context, Div, Entity, Focusable as _, InteractiveElement as _, Window};
 use x4_core::Direction;
 
 use super::MainView;
-use super::torrent_actions::once_per_press;
 use crate::actions::ActionKind;
+use crate::key_repeats::{KeyRepeats, once_per_press_of};
 use crate::keymap::{EditSpeedLimits, ToggleAltSpeed};
 use crate::speed_limits::{LimitsApplied, SpeedLimits};
 
@@ -121,13 +124,19 @@ impl MainView {
 }
 
 /// `root`, the main view's root element, with the handlers of Ctrl+T and Ctrl+L, which run once
-/// per press of their key.
-pub(super) fn on_speed_actions(root: Div, cx: &Context<'_, MainView>) -> Div {
-    root.on_action(once_per_press::<ToggleAltSpeed>(
+/// per press of their key, as `repeats`, the view's record of the key held, tells.
+pub(super) fn on_speed_actions(
+    root: Div,
+    repeats: &Rc<RefCell<KeyRepeats>>,
+    cx: &Context<'_, MainView>,
+) -> Div {
+    root.on_action(once_per_press_of::<_, ToggleAltSpeed>(
+        repeats,
         cx,
         MainView::toggle_alt_speed,
     ))
-    .on_action(once_per_press::<EditSpeedLimits>(
+    .on_action(once_per_press_of::<_, EditSpeedLimits>(
+        repeats,
         cx,
         MainView::edit_speed_limits,
     ))

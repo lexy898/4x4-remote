@@ -25,6 +25,9 @@ x4-rpc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# The live tests build their torrents with the metainfo code of x4-rpc's live tests, which
+# hashes the pieces with it.
+sha1.workspace = true
 # Self dev-dependency: `just test` and `just lint` (plain `--workspace --all-targets`) build the
 # crate with its own `test-support` feature, so the module that dependent crates use is
 # compiled and linted without extra flags. The feature brings `x4-rpc`'s fixtures along.
