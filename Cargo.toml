@@ -33,7 +33,8 @@ i18n-embed-fl = "0.10.1"
 rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# SHA-1 for the metainfo the live tests create (dev-dependency only).
+# SHA-1: the info hash of a .torrent file (x4-core), and the piece hashes of the metainfo the
+# live tests create.
 sha1 = "0.11.0"
 # The UI state is written to a temporary file first and renamed over the old one.
 tempfile = "3.27.0"

@@ -33,6 +33,11 @@
 //! [`FileTree::indices`] gives the files an action on a row reaches, as [`NonEmptyIndices`], which
 //! cannot be empty because the daemon reads an empty list as all files.
 //!
+//! Adding a torrent starts here as well: [`parse_torrent`] reads a `.torrent` file of at most
+//! [`MAX_TORRENT_FILE_BYTES`], strictly, into a [`ParsedTorrent`] with its info hash and its
+//! [`MetaFile`]s at the indices the daemon will give them, or into no files at all when the daemon
+//! could number them otherwise, and refuses with a [`MetainfoError`] what the daemon would.
+//!
 //! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
 //! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
 //! and [`kib_to_kbps`] and [`kbps_to_kib`] convert between the two. The [`SessionSummary`] keeps
@@ -84,6 +89,7 @@ mod files;
 mod filter;
 mod format;
 mod limits;
+mod metainfo;
 mod model;
 mod playable;
 pub mod service;
@@ -116,6 +122,7 @@ pub use limits::{
     KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB, kbps_to_kib,
     kib_to_kbps, limit_edit, limit_needs_value, limit_prefill, parse_limit,
 };
+pub use metainfo::{MAX_TORRENT_FILE_BYTES, MetaFile, MetainfoError, ParsedTorrent, parse_torrent};
 pub use model::{Eta, ModelError, Ratio, Torrent};
 pub use playable::{Playable, file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
