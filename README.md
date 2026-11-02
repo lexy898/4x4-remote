@@ -597,22 +597,27 @@ nowhere else.
 
 ### Synthetic demo
 
-`just demo-synthetic` opens the main window over a synthetic daemon of 2000 torrents in every
-state, made up in memory: nothing goes over the network, and none of 4x4's files is read or written
-(the log goes to stderr only). The rates of the active torrents change on every poll. `--static`
-keeps every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10
-seconds, logs the intervals between the frames and quits; `--select N` selects the row at index `N`
-(from 0) once the list is there, and `--extend K` then extends the selection `K` rows down, as
-Shift+Down would. The made-up daemon carries out the actions on its own torrents: pausing,
-starting (a torrent that lacks data downloads, a complete one seeds), starting ahead of the queue,
-verifying (the torrent checks for three updates, then goes back to what it was), removing and
-the speed settings. `--press KEY`, which can be given several times, presses each key in turn
-once the list is there and selected, one every three seconds, as on the keyboard: for example
-`just virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the
-sixth torrent and starts it again, and `--press shift-delete` opens the dialog that would delete
-its files. `just virtual just demo-synthetic --scroll` runs it off
-screen. The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build
-does not contain it.
+`just demo-synthetic` opens the main window over a synthetic daemon of 2000 torrents in every state,
+made up in memory: nothing goes over the network, and none of 4x4's files is read or written (the
+log goes to stderr only). The rates of the active torrents change on every poll. `--static` keeps
+every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10 seconds,
+logs the intervals between the frames and quits; `--select N` selects the row at index `N` (from 0)
+once the list is there, and `--extend K` then extends the selection `K` rows down, as Shift+Down
+would. The made-up daemon carries out the actions on its own torrents: pausing, starting (a torrent
+that lacks data downloads, a complete one seeds), starting ahead of the queue, verifying (the
+torrent checks for three updates, then goes back to what it was), removing, the speed settings, and
+what the Files tab changes: which files download, their priorities and downloading in order. Its
+torrents have files, most one, some a folder of several, a few dozens, and "Synthetic torrent 0005"
+(`--select 4`) 2000 in folders; their pieces follow the download, from the start when it is in
+order. `--press KEY`, which can be given several times, presses each key in turn once the list is
+there and selected, one every three seconds, as on the keyboard: for example `just virtual just
+demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
+it again, and `--press shift-delete` opens the dialog that would delete its files. `just virtual
+just demo-synthetic --scroll` runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up
+daemon logs each request it answers with the bytes of the request and of the answer, which is how
+the requests and the bytes the app asks of a daemon are counted (see [Performance](#performance)).
+The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build does not
+contain it.
 
 ### Live tests
 

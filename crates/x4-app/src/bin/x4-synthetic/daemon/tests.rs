@@ -41,6 +41,92 @@ fn shown(response: TorrentGetResponse) -> Vec<ShownTorrent> {
     converted.torrents
 }
 
+/// What the daemon logs at debug about each answer: its method and the bytes of the request and
+/// of the answer, in order.
+fn answers_logged(run: impl FnOnce()) -> Vec<(String, u64, u64)> {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Default)]
+    struct Answer {
+        message: String,
+        method: String,
+        request_bytes: u64,
+        response_bytes: u64,
+    }
+    impl Visit for Answer {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "method" {
+                value.clone_into(&mut self.method);
+            }
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            match field.name() {
+                "request_bytes" => self.request_bytes = value,
+                "response_bytes" => self.response_bytes = value,
+                _ => {}
+            }
+        }
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.message = format!("{value:?}");
+            }
+        }
+    }
+    struct Recorder(Arc<Mutex<Vec<(String, u64, u64)>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Recorder {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            let mut answer = Answer::default();
+            event.record(&mut answer);
+            if *event.metadata().level() == tracing::Level::DEBUG
+                && answer.message == "synthetic daemon answered"
+            {
+                self.0.lock().unwrap().push((
+                    answer.method,
+                    answer.request_bytes,
+                    answer.response_bytes,
+                ));
+            }
+        }
+    }
+
+    let logged = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Recorder(Arc::clone(&logged)));
+    tracing::subscriber::with_default(subscriber, run);
+    logged.lock().unwrap().clone()
+}
+
+/// With `RUST_LOG=x4_synthetic=debug`, the demo's log tells what each request cost, so that the
+/// requests and the bytes the app asks of a daemon can be counted.
+#[test]
+fn each_answer_is_logged_at_debug_with_its_bytes_both_ways() {
+    let daemon = SyntheticDaemon::new(COUNT, Activity::Static);
+    let body = br#"{"jsonrpc":"2.0","id":1,"method":"session_get"}"#;
+    let mut answer = None;
+
+    let logged = answers_logged(|| {
+        answer = daemon
+            .post(&HttpRequest {
+                body,
+                session_id: None,
+            })
+            .ok();
+    });
+
+    let answered = answer.expect("an answer").body.len();
+    assert_eq!(
+        logged,
+        [(
+            "session_get".to_owned(),
+            u64::try_from(body.len()).unwrap(),
+            u64::try_from(answered).unwrap()
+        )]
+    );
+}
+
 #[test]
 fn every_read_of_the_engine_gets_an_answer_the_client_parses() {
     let mut client = client(Activity::Ticking);

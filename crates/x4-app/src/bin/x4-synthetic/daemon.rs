@@ -143,10 +143,19 @@ impl Transport for SyntheticDaemon {
                 "error": { "code": refusal.code, "message": refusal.message },
             }),
         };
+        let body = body.to_string().into_bytes();
+        // What each call costs, for counting the requests and the bytes the app asks of a daemon:
+        // the bodies, as HTTP would carry them, without headers.
+        tracing::debug!(
+            method,
+            request_bytes = request.body.len(),
+            response_bytes = body.len(),
+            "synthetic daemon answered"
+        );
         Ok(HttpResponse {
             status: 200,
             session_id: None,
-            body: body.to_string().into_bytes(),
+            body,
         })
     }
 }
