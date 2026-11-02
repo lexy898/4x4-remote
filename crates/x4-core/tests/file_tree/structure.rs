@@ -268,7 +268,7 @@ fn the_order_does_not_depend_on_the_order_of_the_files() {
 }
 
 #[test]
-fn playable_is_shown_only_for_wanted_incomplete_files() {
+fn playable_is_shown_only_for_wanted_incomplete_files_with_a_start_to_play() {
     let mut details = details_of(&[
         ("T/done.mkv", 100, 100, true, Normal),
         ("T/going.mkv", 200, 80, true, Normal),
@@ -296,6 +296,9 @@ fn playable_is_shown_only_for_wanted_incomplete_files() {
     assert_eq!(going.bytes, 40);
     assert_eq!(going.size, human_size(40));
     assert_eq!(going.percent, 20);
-    let waiting = row(&rows, "T/waiting.mkv").playable.unwrap();
-    assert_eq!((waiting.bytes, waiting.percent), (0, 0));
+    assert_eq!(
+        row(&rows, "T/waiting.mkv").playable,
+        None,
+        "nothing plays yet: \"0 B (0%)\" would say nothing"
+    );
 }

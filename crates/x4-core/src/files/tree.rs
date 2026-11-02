@@ -56,7 +56,8 @@ pub(super) struct Node {
     pub(super) priority: PriorityView,
     /// The indices of all files below, padding files included, or the file's own; ascending.
     pub(super) files: Vec<usize>,
-    /// What plays from the start; a file only, and only while it is wanted and incomplete.
+    /// What plays from the start; a file only, and only while it is wanted and incomplete and
+    /// some of its start has come.
     pub(super) playable: Option<Playable>,
 }
 
@@ -287,8 +288,9 @@ impl<'a> Builder<'a> {
         };
         if let Some(node) = self.nodes.get_mut(leaf) {
             node.absorb(&shown);
-            // Only a file that is being downloaded has a use for a prefix to play.
-            node.playable = (entry.wanted && done < entry.length)
+            // Only a file that is being downloaded has a use for a prefix to play, and only once
+            // some of it plays: "0 B" would say nothing.
+            node.playable = (entry.wanted && done < entry.length && entry.playable_from_start > 0)
                 .then(|| Playable::of(entry.playable_from_start, entry.length));
         }
         let mut above = parent;

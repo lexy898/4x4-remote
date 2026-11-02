@@ -44,8 +44,8 @@ pub struct FileRow {
     pub wanted: WantedState,
     /// The priority; a folder can have mixed ones.
     pub priority: PriorityView,
-    /// What plays from the start of the file; `None` for a folder, a complete file and a file
-    /// that is not wanted.
+    /// What plays from the start of the file; `None` for a folder, a complete file, a file that
+    /// is not wanted and a file of which nothing plays yet.
     pub playable: Option<Playable>,
 }
 
