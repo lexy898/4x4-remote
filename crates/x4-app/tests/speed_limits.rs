@@ -937,6 +937,37 @@ fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
     assert!(!window.details_shown(cx));
 }
 
+/// From a switch or Apply, where `/` types nothing, it goes to the search box as anywhere else, so
+/// the popover closes and sends nothing; Ctrl+T switches the turtle and leaves the popover open.
+#[gpui_kit::test]
+fn slash_leaves_the_popover_and_ctrl_t_works_in_it(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send_limits(limit(1024, true), off(), false, cx);
+
+    // The download switch is before its field, Apply three stops after it.
+    for (place, key, presses) in [(DOWN_SWITCH, "shift-tab", 1), (APPLY, "tab", 3)] {
+        window.press("ctrl-l", cx);
+        window.type_text("512", cx);
+        for _ in 0..presses {
+            window.press(key, cx);
+        }
+        assert!(window.focused(place, cx), "{place}");
+        window.press("/", cx);
+        assert!(!window.limits_open(cx), "{place}: / closed the popover");
+        assert!(window.focused(SEARCH, cx), "{place}");
+        assert_eq!(window.sent(), [], "{place}: nothing was applied");
+        window.press("escape", cx);
+    }
+
+    window.press("ctrl-l", cx);
+    window.press("shift-tab", cx);
+    assert!(window.focused(DOWN_SWITCH, cx));
+    window.press("ctrl-t", cx);
+    assert_eq!(window.sent_action().1, Action::SetAltSpeed(true));
+    assert!(window.limits_open(cx), "the popover stays open");
+    assert!(window.focused(DOWN_SWITCH, cx));
+}
+
 #[gpui_kit::test]
 fn the_popover_closes_when_the_focus_leaves_it(cx: &mut TestAppContext) {
     let window = Window::open(cx);

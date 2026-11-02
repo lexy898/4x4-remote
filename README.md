@@ -291,15 +291,17 @@ another client shows here as 98 KiB/s. Each field starts with the daemon's value
 limit is off. Typing a speed into a field switches its limit on, and clearing the field switches it
 off. `Enter` in a field, or Apply, sends the limits that changed, and only those, and closes the
 popover; `Escape`, a click beside it, or moving the focus out of it (`Tab` past Apply, `Shift+Tab`,
-`Ctrl+F`) closes it and changes nothing. Switching to another app leaves it open, with what was
-typed, until you come back. A click on blank space in the popover leaves the cursor in the field. A
-limit is a whole number from 1 to 1,000,000 KiB/s: anything else is refused with a note under its
-field, and nothing is sent; a limit switched on with an empty field asks for a speed. A key held
-down to open the popover does not type into it or apply it. While a menu is open, the context menu
-or one of the toolbar, `Ctrl+T` and `Ctrl+L` do nothing. The turtle and the limits are disabled
-until the daemon has sent its settings, and while it is not connected; an open popover then keeps
-what was typed, and Apply waits for the connection. A change that fails shows a notification, as an
-action does, one for the turtle and one for each limit.
+`Ctrl+F`) closes it and changes nothing. So does `/` pressed on a switch or on Apply, where it types
+nothing: it goes to the search box, as anywhere else. `Ctrl+T` switches the turtle and leaves the
+popover open. Switching to another app leaves it open, with what was typed, until you come back. A
+click on blank space in the popover leaves the cursor in the field. A limit is a whole number from 1
+to 1,000,000 KiB/s: anything else is refused with a note under its field, and nothing is sent; a
+limit switched on with an empty field asks for a speed. A key held down to open the popover does not
+type into it or apply it. While a menu is open, the context menu or one of the toolbar, `Ctrl+T` and
+`Ctrl+L` do nothing. The turtle and the limits are disabled until the daemon has sent its settings,
+and while it is not connected; an open popover then keeps what was typed, and Apply waits for the
+connection. A change that fails shows a notification, as an action does, one for the turtle and one
+for each limit.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
