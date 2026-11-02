@@ -15,7 +15,8 @@
 //!   path.
 //!
 //! x4-core's live tests include this file and `metainfo.rs` too, so that their torrents follow the
-//! same rules.
+//! same rules. The offline tests of both are in `support_tests.rs` and `metainfo_tests.rs`, which
+//! only x4-rpc's live tests declare, so that they run once.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -472,7 +473,7 @@ impl Drop for TestTorrent {
 /// is in it. Dropping it deletes them too, so a test that fails before its torrent is added leaves
 /// nothing behind either.
 #[derive(Debug)]
-struct LocalData {
+pub(crate) struct LocalData {
     /// What the daemon names after the torrent: its file, or its folder.
     path: PathBuf,
     /// The test directory.
@@ -490,7 +491,7 @@ impl LocalData {
     ///
     /// `dir` itself is created if missing, but not its parents: a missing parent means the
     /// mount is not there.
-    fn write_file(dir: &Path, name: &str, data: &[u8]) -> io::Result<Self> {
+    pub(crate) fn write_file(dir: &Path, name: &str, data: &[u8]) -> io::Result<Self> {
         let mut local = Self::in_dir(dir, name)?;
         local.create_file(local.path.clone(), data)?;
         Ok(local)
@@ -501,7 +502,11 @@ impl LocalData {
     ///
     /// `dir` itself is created if missing, but not its parents, as in
     /// [`LocalData::write_file`].
-    fn write_folder(dir: &Path, name: &str, files: &[(&str, &[u8])]) -> io::Result<Self> {
+    pub(crate) fn write_folder(
+        dir: &Path,
+        name: &str,
+        files: &[(&str, &[u8])],
+    ) -> io::Result<Self> {
         let mut local = Self::in_dir(dir, name)?;
         fs::create_dir(&local.path)?;
         local.owns_folder = true;
@@ -536,18 +541,18 @@ impl LocalData {
         file.sync_all()
     }
 
-    fn is_clean(&self) -> bool {
+    pub(crate) fn is_clean(&self) -> bool {
         self.files.is_empty() && !self.owns_folder && !self.owns_dir
     }
 
     /// Whether every file this run created is gone, as when the daemon deleted them.
-    fn files_are_gone(&self) -> bool {
+    pub(crate) fn files_are_gone(&self) -> bool {
         self.files.iter().all(|file| file_is_gone(file))
     }
 
     /// Moves what this run owns into a new `LocalData`, which deletes it from then on; this one
     /// is left clean.
-    fn hand_over(&mut self) -> Self {
+    pub(crate) fn hand_over(&mut self) -> Self {
         Self {
             path: self.path.clone(),
             dir: self.dir.clone(),
@@ -558,7 +563,7 @@ impl LocalData {
     }
 
     /// Deletes the files, the folder and the directory this run created; returns what went wrong.
-    fn delete(&mut self) -> Vec<String> {
+    pub(crate) fn delete(&mut self) -> Vec<String> {
         let mut problems = Vec::new();
         self.files.retain(|file| match fs::remove_file(file) {
             Ok(()) => false,
@@ -627,7 +632,7 @@ fn remove_empty_dir(dir: &Path) -> Result<(), String> {
 /// the directory if this run created it, and dropping it deletes them too, so a failed check
 /// leaves nothing behind.
 #[derive(Debug)]
-pub(crate) struct KeptFile(LocalData);
+pub(crate) struct KeptFile(pub(crate) LocalData);
 
 impl KeptFile {
     /// The file, as mounted on this machine.
@@ -648,7 +653,10 @@ impl KeptFile {
 
 /// The id of the torrent `torrent_add` reported, if it is the one this run built: newly added,
 /// under the info hash of this run's metainfo. Anything else is not this run's to remove.
-fn accept_added(outcome: &AddOutcome, expected: &HashString) -> Result<TorrentId, String> {
+pub(crate) fn accept_added(
+    outcome: &AddOutcome,
+    expected: &HashString,
+) -> Result<TorrentId, String> {
     match outcome {
         AddOutcome::Added(added) if added.hash == *expected => Ok(added.id),
         AddOutcome::Added(added) => Err(format!(
@@ -844,123 +852,4 @@ pub(crate) fn assert_others_unchanged(
         changes.is_empty(),
         "STOP: other torrents changed during a live test: {changes:#?}"
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use x4_rpc::AddedTorrent;
-
-    use super::*;
-
-    fn hash(digit: char) -> HashString {
-        HashString::parse(&digit.to_string().repeat(40)).unwrap()
-    }
-
-    fn torrent(hash: HashString) -> AddedTorrent {
-        AddedTorrent {
-            id: TorrentId(9),
-            name: "4x4-live-0.bin".to_owned(),
-            hash,
-        }
-    }
-
-    #[test]
-    fn a_new_torrent_with_the_built_hash_is_accepted() {
-        let outcome = AddOutcome::Added(torrent(hash('a')));
-
-        assert_eq!(accept_added(&outcome, &hash('a')), Ok(TorrentId(9)));
-    }
-
-    #[test]
-    fn a_new_torrent_with_another_hash_is_rejected() {
-        let outcome = AddOutcome::Added(torrent(hash('b')));
-
-        assert!(accept_added(&outcome, &hash('a')).is_err());
-    }
-
-    #[test]
-    fn a_duplicate_is_rejected_even_with_the_built_hash() {
-        let outcome = AddOutcome::Duplicate(torrent(hash('a')));
-
-        assert!(accept_added(&outcome, &hash('a')).is_err());
-    }
-
-    /// A local test file in a directory of its own, which the file creates.
-    fn local_file() -> (PathBuf, LocalData) {
-        let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
-        let file = LocalData::write_file(&dir, "kept.bin", b"data").unwrap();
-        (dir, file)
-    }
-
-    #[test]
-    fn a_kept_file_outlives_the_torrent_and_is_deleted_by_the_test() {
-        let (dir, mut file) = local_file();
-
-        let kept = KeptFile(file.hand_over());
-        drop(file);
-
-        assert!(
-            !file_is_gone(kept.path()),
-            "the torrent's guard deleted the kept file"
-        );
-        let path = kept.path().to_owned();
-        kept.delete();
-        assert!(file_is_gone(&path), "{} is still there", path.display());
-        assert!(!dir.exists(), "{} is left behind", dir.display());
-    }
-
-    #[test]
-    fn a_folder_of_files_is_deleted_with_the_directory_it_made() {
-        let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
-        let files: [(&str, &[u8]); 2] = [("a.bin", b"a"), ("b.bin", b"bb")];
-        let data = LocalData::write_folder(&dir, "folder", &files).unwrap();
-        assert_eq!(fs::read(dir.join("folder/b.bin")).unwrap(), b"bb");
-        assert!(!data.files_are_gone());
-
-        drop(data);
-
-        assert!(!dir.exists(), "{} is left behind", dir.display());
-    }
-
-    #[test]
-    fn a_folder_that_is_already_there_is_left_alone() {
-        let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
-        let theirs = dir.join("folder");
-        fs::create_dir_all(&theirs).unwrap();
-        fs::write(theirs.join("a.bin"), b"theirs").unwrap();
-        let files: [(&str, &[u8]); 1] = [("a.bin", b"ours")];
-
-        let written = LocalData::write_folder(&dir, "folder", &files);
-
-        assert!(written.is_err());
-        assert_eq!(fs::read(theirs.join("a.bin")).unwrap(), b"theirs");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn files_the_daemon_deleted_leave_the_folder_to_remove() {
-        let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
-        let files: [(&str, &[u8]); 2] = [("a.bin", b"a"), ("b.bin", b"bb")];
-        let mut data = LocalData::write_folder(&dir, "folder", &files).unwrap();
-        // As the daemon does when it deletes a torrent's data, the files go first.
-        fs::remove_file(dir.join("folder/a.bin")).unwrap();
-        fs::remove_file(dir.join("folder/b.bin")).unwrap();
-        assert!(data.files_are_gone());
-
-        assert_eq!(data.delete(), Vec::<String>::new());
-
-        assert!(data.is_clean());
-        assert!(!dir.exists(), "{} is left behind", dir.display());
-    }
-
-    #[test]
-    fn a_kept_file_is_deleted_when_the_test_fails_before_deleting_it() {
-        let (dir, mut file) = local_file();
-        let kept = KeptFile(file.hand_over());
-        drop(file);
-
-        drop(kept);
-
-        assert!(!dir.exists(), "{} is left behind", dir.display());
-    }
 }

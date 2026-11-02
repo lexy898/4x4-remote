@@ -17,12 +17,19 @@
 //! tracker entries are parsed. It changes nothing and reports counts and kinds of values only.
 //!
 //! The offline tests of the support code (bencode, piece hashes, accepting the added torrent,
-//! the local data) run in `just test` too.
+//! the local data) run in `just test` too. They are in files of their own that only this crate
+//! declares: x4-core's live tests share the support, and would run them a second time.
 
 #[path = "live/metainfo.rs"]
 mod metainfo;
+#[cfg(test)]
+#[path = "live/metainfo_tests.rs"]
+mod metainfo_tests;
 #[path = "live/support.rs"]
 mod support;
+#[cfg(test)]
+#[path = "live/support_tests.rs"]
+mod support_tests;
 #[path = "live/tracker_entries.rs"]
 mod tracker_entries;
 
