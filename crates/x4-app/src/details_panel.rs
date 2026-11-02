@@ -262,7 +262,7 @@ impl Render for DetailsPanel {
             .size_full()
             .text_sm()
             .child(tabs)
-            .child(body)
+            .child(body.test_support())
             .test_support()
     }
 }

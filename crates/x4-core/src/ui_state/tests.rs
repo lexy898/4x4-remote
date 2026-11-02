@@ -78,7 +78,7 @@ fn ui_state_default_is_the_first_run() {
         state.details,
         DetailsState {
             open: true,
-            height: 240.0,
+            height: 273.0,
             tab: DetailsTab::General
         }
     );
@@ -184,7 +184,7 @@ direction = "ascending"
 
 [details]
 open = true
-height = 240.0
+height = 273.0
 tab = "general"
 "#
     );
@@ -897,7 +897,7 @@ fn old_state_files_get_default_details() {
         parsed.state.details,
         DetailsState {
             open: true,
-            height: 240.0,
+            height: 273.0,
             tab: DetailsTab::General
         }
     );
@@ -950,6 +950,19 @@ fn details_state_round_trips() {
 }
 
 #[test]
+fn a_saved_height_stays_as_saved_whatever_the_first_run_height() {
+    // 240 was the first-run height before the General tab needed more; a file that has it keeps
+    // it, as any height the user dragged to.
+    for height in [240.0, 255.5, MIN_DETAILS_HEIGHT, 300.0] {
+        let text = format!("[details]\nheight = {height:?}\n");
+        assert!(
+            (load(&text).details.height - height).abs() < f32::EPSILON,
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn details_height_is_clamped() {
     assert!((MIN_DETAILS_HEIGHT - 110.0).abs() < f32::EPSILON);
     assert!((MAX_DETAILS_HEIGHT - 2000.0).abs() < f32::EPSILON);
@@ -964,9 +977,9 @@ fn details_height_is_clamped() {
         (2000.0, 2000.0),
         (2000.1, 2000.0),
         (1.0e9, 2000.0),
-        (f32::INFINITY, 240.0),
-        (f32::NEG_INFINITY, 240.0),
-        (f32::NAN, 240.0),
+        (f32::INFINITY, 273.0),
+        (f32::NEG_INFINITY, 273.0),
+        (f32::NAN, 273.0),
     ] {
         let state = UiState {
             details: DetailsState {

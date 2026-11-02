@@ -11,8 +11,9 @@ pub const MIN_DETAILS_HEIGHT: f32 = 110.0;
 /// The highest the panel can be, in logical pixels, so that a hand-edited file cannot make it
 /// taller than any screen. The window shrinks the panel to fit when it is shown.
 pub const MAX_DETAILS_HEIGHT: f32 = 2000.0;
-/// The height on the first run, in logical pixels.
-const DEFAULT_DETAILS_HEIGHT: f32 = 240.0;
+/// The height on the first run, in logical pixels: the General tab of a torrent with a source
+/// and a tracker problem, every row the tab has but an error, fits without scrolling.
+const DEFAULT_DETAILS_HEIGHT: f32 = 273.0;
 
 /// The panel under the table.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -29,7 +30,7 @@ pub struct DetailsState {
 }
 
 impl Default for DetailsState {
-    /// The first run: open, 240 pixels high, on the General tab.
+    /// The first run: open, 273 pixels high, on the General tab.
     fn default() -> Self {
         Self {
             open: true,

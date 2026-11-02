@@ -201,10 +201,11 @@ The details panel under the table shows the selected torrent. With none selected
 a torrent", and with several, how many are selected; it shows a torrent only when exactly one of
 the torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from
 anywhere in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2`
-open. While a menu or the speed limits popover is open, these three keys do nothing. Drag the
-line between the table and the panel to change its height. The panel keeps that height when it is
+open. While a menu or the speed limits popover is open, these three keys do nothing. The first
+time, the panel is open on the General tab and just high enough for all of it. Drag the line
+between the table and the panel to change its height. The panel keeps that height when it is
 hidden and between runs; when the window is too low for it and the table's header and two rows, it
-is drawn lower, and it grows back with the window.
+is drawn lower, and it grows back with the window. When the General tab does not fit, it scrolls.
 
 The General tab shows, from the daemon's list:
 

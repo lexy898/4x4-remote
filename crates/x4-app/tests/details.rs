@@ -15,7 +15,7 @@ use gpui_kit::component::table::TableState;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, ClipboardItem, Entity, Focusable as _, Pixels,
-    TestAppContext, point, px, size,
+    ScrollDelta, TestAppContext, point, px, size,
 };
 use x4_app::app;
 use x4_app::main_view::MainView;
@@ -60,6 +60,26 @@ const FROM_DETAILS: &[&str] = &[
     "general-pieces",
     "general-trackers",
 ];
+/// Every row of the General tab, the left column and then the right one, for a torrent with a
+/// source; the tracker problem is a line of `general-trackers`.
+const GENERAL_ROWS: &[&str] = &[
+    "general-path",
+    "general-hash",
+    "general-size",
+    "general-pieces",
+    "general-downloaded",
+    "general-uploaded",
+    "general-ratio",
+    "general-trackers",
+    "general-added",
+    "general-done",
+    "general-created",
+    "general-source",
+    "general-comment",
+    "general-private",
+];
+/// The body of the panel under its tab bar, which holds the open tab.
+const BODY: &str = "details-body";
 /// The lowest the table may be: its header and two rows.
 const TABLE_MIN_HEIGHT: f32 = 120.;
 /// The id of an open menu.
@@ -849,4 +869,74 @@ fn a_window_lower_than_both_minimums_keeps_them_and_recovers(cx: &mut TestAppCon
         window.ui_state(cx).details.height,
         DetailsState::default().height
     );
+}
+
+#[gpui_kit::test]
+fn the_first_run_panel_shows_every_general_row_without_scrolling(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    // A torrent with every row the General tab has for one without an error: a source, and a
+    // tracker problem under the trackers.
+    window.send(vec![show()], cx);
+    window.click_row(0, cx);
+    window.send_details(show_details(), cx);
+    assert!(window.shown(TRACKER_PROBLEM, cx));
+
+    let body = window.bounds(BODY, cx);
+    for id in GENERAL_ROWS {
+        let row = window.bounds(id, cx);
+        assert!(
+            row.top() >= body.top() && row.bottom() <= body.bottom(),
+            "{id} at {row:?} is not all inside the panel's body {body:?}"
+        );
+    }
+
+    // Everything fits, so the wheel has nothing to scroll.
+    let last = window.bounds("general-private", cx);
+    window.act(cx, |window, cx| {
+        window.scroll(BODY, ScrollDelta::Pixels(point(px(0.), px(-1000.))), cx);
+    });
+    assert_eq!(window.bounds("general-private", cx), last);
+}
+
+#[gpui_kit::test]
+fn a_low_panel_scrolls_the_general_tab_to_its_last_row(cx: &mut TestAppContext) {
+    let low = UiState {
+        details: DetailsState {
+            height: MIN_DETAILS_HEIGHT,
+            ..DetailsState::default()
+        },
+        ..UiState::default()
+    };
+    let window = Window::open_with(&low, cx);
+    // An error adds a row above the others, so this is the tallest the tab gets.
+    window.send(
+        vec![Torrent {
+            attention: Some(Attention::LocalError("No space left on device".to_owned())),
+            ..show()
+        }],
+        cx,
+    );
+    window.click_row(0, cx);
+    window.send_details(show_details(), cx);
+    let body = window.bounds(BODY, cx);
+    let last = window.bounds("general-private", cx);
+    assert!(
+        last.bottom() > body.bottom(),
+        "the last row {last:?} fits in {body:?}, so nothing needs to scroll"
+    );
+
+    // The wheel brings the last row into sight, and the first one leaves it.
+    window.act(cx, |window, cx| {
+        window.scroll(BODY, ScrollDelta::Pixels(point(px(0.), px(-1000.))), cx);
+    });
+
+    let last = window.bounds("general-private", cx);
+    assert!(
+        last.top() >= body.top() && last.bottom() <= body.bottom(),
+        "the last row {last:?} is not inside {body:?} after scrolling"
+    );
+    let first = window.bounds("general-error", cx);
+    assert!(first.bottom() <= body.top(), "{first:?} above {body:?}");
+    // The panel itself stays where it was.
+    assert_eq!(window.bounds(BODY, cx), body);
 }
