@@ -76,24 +76,31 @@ const OWN_FIELDS: &[TorrentField] = &[
 pub(crate) struct LiveEnv {
     /// `X4_LIVE_URL`: the daemon's RPC endpoint.
     pub(crate) url: String,
-    /// `X4_LIVE_REMOTE_DIR`: the test directory as the daemon sees it.
-    pub(crate) remote_dir: String,
+    /// `X4_LIVE_REMOTE_DIR`: the test directory as the daemon sees it, in the normalized form
+    /// in which it is sent and compared.
+    pub(crate) remote_dir: DownloadDir,
     /// `X4_LIVE_LOCAL_DIR`: the same directory as mounted on this machine.
     pub(crate) local_dir: PathBuf,
 }
 
 impl LiveEnv {
     /// Reads the environment `just test-live` sets.
+    #[expect(
+        clippy::panic,
+        reason = "a live test cannot run without its environment"
+    )]
     pub(crate) fn from_env() -> Self {
+        let remote_dir = required_var("X4_LIVE_REMOTE_DIR");
         let env = Self {
             url: required_var("X4_LIVE_URL"),
-            remote_dir: required_var("X4_LIVE_REMOTE_DIR"),
+            remote_dir: DownloadDir::new(&remote_dir).unwrap_or_else(|error| {
+                panic!("X4_LIVE_REMOTE_DIR is not a folder ({error}): {remote_dir:?}")
+            }),
             local_dir: PathBuf::from(required_var("X4_LIVE_LOCAL_DIR")),
         };
         assert!(
-            env.remote_dir.starts_with('/') && !env.remote_dir.trim_end_matches('/').is_empty(),
-            "X4_LIVE_REMOTE_DIR must be an absolute directory below the root: {:?}",
-            env.remote_dir
+            env.remote_dir.as_str() != "/",
+            "X4_LIVE_REMOTE_DIR must be an absolute directory below the root: {remote_dir:?}"
         );
         assert!(
             env.local_dir.is_absolute() && env.local_dir.parent().is_some(),
@@ -137,7 +144,7 @@ pub(crate) struct TestTorrent {
     id: TorrentId,
     add: TorrentAdd,
     url: String,
-    remote_dir: String,
+    remote_dir: DownloadDir,
     data: LocalData,
     /// Set once the daemon no longer has the torrent.
     removed: bool,
@@ -204,10 +211,7 @@ impl TestTorrent {
         let hash = metainfo.info_hash;
         let add = TorrentAdd {
             source: AddSource::Metainfo(metainfo.bytes),
-            download_dir: Some(
-                DownloadDir::new(&env.remote_dir)
-                    .unwrap_or_else(|error| panic!("X4_LIVE_REMOTE_DIR is not a folder: {error}")),
-            ),
+            download_dir: Some(env.remote_dir.clone()),
             paused: false,
             files_unwanted: Vec::new(),
             priority_high: Vec::new(),
@@ -420,7 +424,7 @@ impl TestTorrent {
         // Only a torrent in the test directory is removed, and its data deleted, whatever
         // happened before.
         let download_dir = record.download_dir.as_deref().unwrap_or_default();
-        if download_dir.trim_end_matches('/') != self.remote_dir.trim_end_matches('/') {
+        if !is_the_test_dir(download_dir, &self.remote_dir) {
             return Err(format!(
                 "test torrent {} is in {download_dir:?}, not in the test directory {:?}; \
                  not deleting its data",
@@ -757,8 +761,7 @@ pub(crate) fn torrent_fields_by_hash(
     clippy::expect_used,
     reason = "a live test stops at the first failure; nothing was changed yet"
 )]
-fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: &str) {
-    let test_dir = remote_dir.trim_end_matches('/');
+fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: &DownloadDir) {
     let response = client
         .torrent_get(&GetIds::All, &[TorrentField::DownloadDir])
         .expect("torrent_get of every download directory failed");
@@ -766,16 +769,34 @@ fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: 
         .torrents
         .iter()
         .filter_map(|record| record.download_dir.as_deref())
-        .filter(|dir| {
-            let dir = dir.trim_end_matches('/');
-            dir == test_dir || dir.starts_with(&format!("{test_dir}/"))
-        })
+        .filter(|dir| is_in_test_dir(dir, remote_dir))
         .count();
     assert_eq!(
         in_test_dir, 0,
         "{in_test_dir} torrent(s) already download into the test directory {remote_dir:?}; \
          remove leftovers by hash or choose an unused X4_LIVE_REMOTE_DIR"
     );
+}
+
+/// Whether a torrent's `download_dir`, as the daemon reports it, is the test directory itself,
+/// both in their normalized forms. A folder that does not normalize is not it, so the data of
+/// such a torrent is never deleted.
+pub(crate) fn is_the_test_dir(download_dir: &str, test_dir: &DownloadDir) -> bool {
+    DownloadDir::new(download_dir).is_ok_and(|dir| dir == *test_dir)
+}
+
+/// Whether a torrent's `download_dir`, as the daemon reports it, is the test directory or a
+/// folder inside it, both in their normalized forms. A folder that does not normalize (a `.` or
+/// `..` part, say) is compared by its text, without trailing slashes, so it is counted rather
+/// than missed.
+pub(crate) fn is_in_test_dir(download_dir: &str, test_dir: &DownloadDir) -> bool {
+    let normalized = DownloadDir::new(download_dir);
+    let dir = normalized
+        .as_ref()
+        .map_or(download_dir.trim_end_matches('/'), DownloadDir::as_str);
+    let test_dir = test_dir.as_str();
+    dir.strip_prefix(test_dir)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// What the tests must leave untouched on every other torrent: status, sequential download, and

@@ -6,10 +6,12 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use x4_rpc::{AddOutcome, AddedTorrent, HashString, TorrentId};
+use x4_rpc::{AddOutcome, AddedTorrent, DownloadDir, HashString, TorrentId};
 
 use crate::metainfo::random_seed;
-use crate::support::{KeptFile, LocalData, accept_added, file_is_gone};
+use crate::support::{
+    KeptFile, LocalData, accept_added, file_is_gone, is_in_test_dir, is_the_test_dir,
+};
 
 fn hash(digit: char) -> HashString {
     HashString::parse(&digit.to_string().repeat(40)).unwrap()
@@ -121,4 +123,38 @@ fn a_kept_file_is_deleted_when_the_test_fails_before_deleting_it() {
     drop(kept);
 
     assert!(!dir.exists(), "{} is left behind", dir.display());
+}
+
+#[test]
+fn the_test_directory_is_compared_in_its_normalized_form() {
+    let test_dir = DownloadDir::new("//mnt/hdd//torrents/4x4-test/").unwrap();
+
+    for dir in [
+        "/mnt/hdd/torrents/4x4-test",
+        "/mnt/hdd/torrents/4x4-test/",
+        "//mnt/hdd//torrents/4x4-test//",
+    ] {
+        assert!(is_the_test_dir(dir, &test_dir), "{dir}");
+        assert!(is_in_test_dir(dir, &test_dir), "{dir}");
+    }
+    // Inside it. A folder that does not normalize is compared by its text, so it is counted
+    // rather than missed.
+    for dir in [
+        "/mnt/hdd/torrents/4x4-test/sub",
+        "//mnt/hdd/torrents//4x4-test//sub/",
+        "/mnt/hdd/torrents/4x4-test/../other",
+    ] {
+        assert!(!is_the_test_dir(dir, &test_dir), "{dir}");
+        assert!(is_in_test_dir(dir, &test_dir), "{dir}");
+    }
+    for dir in [
+        "/mnt/hdd/torrents",
+        "/mnt/hdd/torrents/4x4-test2",
+        "/mnt/hdd/torrents/4x4-tes",
+        "mnt/hdd/torrents/4x4-test",
+        "",
+    ] {
+        assert!(!is_the_test_dir(dir, &test_dir), "{dir}");
+        assert!(!is_in_test_dir(dir, &test_dir), "{dir}");
+    }
 }
