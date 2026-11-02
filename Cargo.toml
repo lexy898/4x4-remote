@@ -47,6 +47,9 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # Plain HTTP only: the daemon is reached over http:// on the local network, so no TLS stack.
 ureq = { version = "3.5.0", default-features = false }
+# file:// launch arguments become local paths (x4-core). gpui already pulls it in; `std` is the
+# feature `Url::to_file_path` needs.
+url = { version = "2.5.8", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

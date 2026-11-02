@@ -37,6 +37,9 @@
 //! [`MAX_TORRENT_FILE_BYTES`], strictly, into a [`ParsedTorrent`] with its info hash and its
 //! [`MetaFile`]s at the indices the daemon will give them, or into no files at all when the daemon
 //! could number them otherwise, and refuses with a [`MetainfoError`] what the daemon would.
+//! [`launch::classify`] tells what each argument 4x4 is launched with asks for: a magnet link, a
+//! `.torrent` file to read, or a [`launch::RejectedArg`] that the window explains. It never
+//! touches the file system, and it never lets a URL through.
 //!
 //! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
 //! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
@@ -88,6 +91,7 @@ mod engine;
 mod files;
 mod filter;
 mod format;
+pub mod launch;
 mod limits;
 mod metainfo;
 mod model;
