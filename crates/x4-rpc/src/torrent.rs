@@ -4,6 +4,8 @@
 //! Records keep the server's raw values (bytes, bytes/s, seconds, Unix times, the `-1`/`-2`
 //! sentinels of `eta` and `upload_ratio`); turning them into the app's model is `x4-core`'s job.
 
+use std::fmt;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT;
 use serde::de::{Error as _, Unexpected};
@@ -570,12 +572,26 @@ pub struct TorrentSet {
 /// The daemon reads `filename` as a URL to fetch or a path on its own disk too, so only a
 /// validated [`MagnetLink`] is ever sent there; the content of a `.torrent` file always goes as
 /// `metainfo`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Its `Debug` shows a link as [`MagnetLink`] does, and the content only by its length.
+#[derive(Clone, PartialEq, Eq)]
 pub enum AddSource {
     /// A magnet link, sent as `filename`.
     Magnet(MagnetLink),
     /// The content of a `.torrent` file, sent base64-encoded as `metainfo`.
     Metainfo(Vec<u8>),
+}
+
+impl fmt::Debug for AddSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Magnet(link) => f.debug_tuple("Magnet").field(link).finish(),
+            Self::Metainfo(content) => f
+                .debug_struct("Metainfo")
+                .field("len", &content.len())
+                .finish(),
+        }
+    }
 }
 
 /// A `torrent_add` request; `None` and empty lists are left out of the request.
@@ -917,5 +933,42 @@ mod tests {
             Pieces::decode_base64("not base64!"),
             Err(RpcError::InvalidResponse(_))
         ));
+    }
+
+    #[test]
+    fn the_debug_text_of_an_add_shows_neither_the_link_nor_the_content() {
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let link = format!(
+            "magnet:?xt=urn:btih:{hash}&dn=x&tr=http%3A%2F%2Ft.example%2Fa%3Fpasskey%3DSECRET"
+        );
+        let content = b"d4:infod4:name6:SECRETee".to_vec();
+        let add = |source| TorrentAdd {
+            source,
+            download_dir: None,
+            paused: false,
+            files_unwanted: Vec::new(),
+            priority_high: Vec::new(),
+            priority_low: Vec::new(),
+            sequential_download: None,
+        };
+        let magnet = add(AddSource::Magnet(MagnetLink::parse(&link).unwrap()));
+        let metainfo = add(AddSource::Metainfo(content.clone()));
+
+        for text in [format!("{magnet:?}"), format!("{magnet:#?}")] {
+            for secret in ["magnet:?", "t.example", "passkey", "SECRET"] {
+                assert!(!text.contains(secret), "{secret} in {text}");
+            }
+            assert!(text.contains(hash), "{text}");
+            assert!(text.contains(&format!("len: {}", link.len())), "{text}");
+        }
+        for text in [format!("{metainfo:?}"), format!("{metainfo:#?}")] {
+            // The bytes as `Vec<u8>` prints them: `[100, 52, …]`.
+            assert!(
+                !text.contains("100, 52") && !text.contains("100,\n"),
+                "{text}"
+            );
+            assert!(!text.contains("SECRET"), "{text}");
+            assert!(text.contains(&format!("len: {}", content.len())), "{text}");
+        }
     }
 }

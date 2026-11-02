@@ -4,6 +4,8 @@
 //! a magnet link (T/rpcimpl.cc:1848-1874). A [`MagnetLink`] is the only thing this crate sends
 //! there, so a URL or a path never reaches the daemon by mistake.
 
+use std::fmt;
+
 use thiserror::Error;
 
 use crate::ids::HashString;
@@ -18,7 +20,10 @@ pub const MAX_MAGNET_BYTES: usize = 64 * 1024;
 /// Built only by [`MagnetLink::parse`], which reads the link the way the daemon does
 /// (`parseMagnet`, T/magnet-metainfo.cc:218-286), so the hash and the name here are the ones the
 /// daemon will show.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Its `Debug` shows only the hash and the length: trackers in the link can carry passkeys, and
+/// a request that holds a link may be logged.
+#[derive(Clone, PartialEq, Eq)]
 pub struct MagnetLink {
     text: String,
     hash: HashString,
@@ -113,6 +118,15 @@ impl MagnetLink {
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+}
+
+impl fmt::Debug for MagnetLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MagnetLink")
+            .field("hash", &self.hash)
+            .field("len", &self.text.len())
+            .finish_non_exhaustive()
     }
 }
 
