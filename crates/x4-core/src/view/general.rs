@@ -59,8 +59,8 @@ pub struct GeneralModel {
     pub created: Option<SystemTime>,
     /// The comment of the metainfo; `None` when it has none or only blanks, or before the details.
     pub comment: Option<String>,
-    /// The program that created the metainfo; `None` when it does not say or says only blanks, or
-    /// before the details.
+    /// The program that created the metainfo, without the blanks around it; `None` when it does
+    /// not say or says only blanks, or before the details.
     pub creator: Option<String>,
     /// The source tag of the metainfo, which private trackers set; `None` when it has none or
     /// only blanks, or before the details.
@@ -102,7 +102,10 @@ pub fn general_model(torrent: &Torrent, details: Option<&TorrentDetails>) -> Gen
         done: torrent.done,
         created: details.and_then(|details| details.date_created),
         comment: details.and_then(|details| written(&details.comment)),
-        creator: details.and_then(|details| written(&details.creator)),
+        // Said inside a sentence ("by mktorrent 1.1 on …"), where blanks around it would show.
+        creator: details
+            .and_then(|details| written(&details.creator))
+            .map(|creator| creator.trim().to_owned()),
         source: details.and_then(|details| written(details.source.as_deref()?)),
         private: details.is_some_and(|details| details.is_private),
         // A magnet link has no pieces until its metadata comes.
@@ -315,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_creator_is_none_and_any_other_is_kept_as_sent() {
+    fn a_blank_creator_is_none_and_any_other_loses_the_blanks_around_it() {
         let (torrent, details) = pair();
         let creator = |creator: &str| {
             general_model(
@@ -331,10 +334,9 @@ mod tests {
         for blank in ["", " ", "\n\t "] {
             assert_eq!(creator(blank), None, "{blank:?}");
         }
-        assert_eq!(
-            creator(" mktorrent 1.1\n").as_deref(),
-            Some(" mktorrent 1.1\n")
-        );
+        // It is said inside a sentence, "by mktorrent 1.1 on …".
+        assert_eq!(creator(" mktorrent 1.1 ").as_deref(), Some("mktorrent 1.1"));
+        assert_eq!(creator("mktorrent 1.1\n").as_deref(), Some("mktorrent 1.1"));
     }
 
     #[test]

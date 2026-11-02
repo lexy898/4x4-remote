@@ -629,11 +629,11 @@ fn show() -> Torrent {
 }
 
 /// The details of [`show`], with its metainfo, its totals and two trackers, one of which did not
-/// answer in time.
+/// answer in time. The creator comes with blanks around it, as some metainfo has it.
 fn show_details() -> TorrentDetails {
     TorrentDetails {
         comment: "from the tracker".to_owned(),
-        creator: "mktorrent".to_owned(),
+        creator: " mktorrent\n".to_owned(),
         date_created: Some(at(1_600_000_000)),
         source: Some("PT".to_owned()),
         is_private: true,

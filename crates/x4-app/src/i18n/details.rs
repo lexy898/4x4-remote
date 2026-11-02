@@ -55,7 +55,7 @@ pub(crate) fn pieces_text(pieces: PiecesView) -> SharedString {
 
 /// Who made the metainfo and when, as far as it says: "by mktorrent on 2026-10-29 14:05", "by
 /// mktorrent", the date alone, or "—" when it says neither. The creator is drawn as x4-core gives
-/// it, which has already left out one that says nothing.
+/// it, which has already trimmed it and left out one that says nothing.
 pub(crate) fn created_text(creator: Option<&str>, created: Option<SystemTime>) -> SharedString {
     match (creator, created) {
         (Some(creator), Some(created)) => t!(
@@ -226,8 +226,6 @@ mod tests {
         );
         assert_eq!(created_text(None, Some(moment)), date);
         assert_eq!(created_text(None, None), "—");
-        // The creator is drawn as sent: x4-core decides what says nothing.
-        assert_eq!(created_text(Some(" mktorrent "), None), "by  mktorrent ");
     }
 
     #[test]
