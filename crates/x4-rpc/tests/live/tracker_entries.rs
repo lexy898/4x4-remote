@@ -361,7 +361,8 @@ fn read(
 ) -> Answer {
     let mut params = match serde_json::to_value(ids) {
         Ok(Value::Object(params)) => params,
-        other => panic!("{what}: the ids do not encode as an object: {other:?}"),
+        Ok(_) => panic!("{what}: the ids do not encode as an object"),
+        Err(error) => panic!("{what}: the ids do not encode: {error}"),
     };
     match serde_json::to_value(fields) {
         Ok(fields) => params.insert("fields".to_owned(), fields),

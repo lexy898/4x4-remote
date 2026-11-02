@@ -60,8 +60,9 @@ pub struct TrackerSummary {
     pub working: usize,
     /// How many failed their last announce, or did not answer it in time.
     pub failing: usize,
-    /// How many were not announced to yet: all of them while the torrent is paused or queued,
-    /// and backup trackers. They are neither working nor failing.
+    /// How many the daemon has not announced to since it started: all of them for a torrent that
+    /// has not run since then, and backup trackers. A stop is announced too, so a torrent paused
+    /// after it ran keeps its trackers' last answers. These are neither working nor failing.
     pub not_contacted: usize,
     /// The worst current problem, even when other trackers work; `None` when there is none.
     pub problem: Option<TrackerProblem>,
@@ -92,9 +93,9 @@ impl TrackerSummary {
     /// were not contacted yet, each only when there are some; nothing for a torrent without
     /// trackers.
     ///
-    /// The count of all trackers is not said: a healthy torrent that is paused or queued has
-    /// contacted none of them, and "0 of 3 working" would read as broken where "3 not contacted
-    /// yet" says what is so.
+    /// The count of all trackers is not said: a healthy torrent that has not run since the daemon
+    /// started has contacted none of them, and "0 of 3 working" would read as broken where "3 not
+    /// contacted yet" says what is so.
     #[must_use]
     pub fn counts(&self) -> Vec<TrackerCount> {
         [
@@ -414,7 +415,8 @@ mod tests {
         };
         let waiting = || tracker("backup.example.org:80", None, None);
 
-        // A paused or queued torrent has contacted none of its trackers: that is not a failure.
+        // A torrent that has not run since the daemon started has contacted none of its trackers:
+        // that is not a failure.
         assert_eq!(
             summary(vec![waiting(), waiting(), waiting()]).counts(),
             [TrackerCount::NotContacted(3)]

@@ -623,8 +623,8 @@ general-created-by-on = by { $creator } on { $date }
 general-created-by = by { $creator }
 # How the trackers are doing, counted by what they answered: working, they answered their last
 # announce; failing, it failed or was not answered in time; not contacted yet, no announce has
-# gone to them, as for a torrent that is paused or queued, or a backup tracker. A count that is 0
-# is left out. $count: a number.
+# gone to them since the daemon started, as for a torrent that has not run since then, or a backup
+# tracker. A count that is 0 is left out. $count: a number.
 general-trackers-working = { $count } working
 general-trackers-failing = { $count } failing
 general-trackers-not-contacted = { $count } not contacted yet

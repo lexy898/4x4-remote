@@ -239,7 +239,7 @@ mod tests {
         };
         assert_eq!(trackers_text(&summary(3, 0, 0)), "3 working");
         assert_eq!(trackers_text(&summary(2, 1, 0)), "2 working, 1 failing");
-        // A paused or queued torrent has contacted none of them yet.
+        // A torrent that has not run since the daemon started has contacted none of them yet.
         assert_eq!(trackers_text(&summary(0, 0, 3)), "3 not contacted yet");
         assert_eq!(
             trackers_text(&summary(1, 1, 1)),
