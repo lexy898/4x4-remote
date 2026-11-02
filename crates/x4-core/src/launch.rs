@@ -17,8 +17,9 @@ use x4_rpc::{MagnetError, MagnetLink};
 pub enum LaunchArg {
     /// A valid magnet link.
     Magnet(MagnetLink),
-    /// A local file to read as a `.torrent`: absolute, as the user named it (`..` and symlinks
-    /// are not resolved).
+    /// A local file to read as a `.torrent`, by an absolute path. A path is kept as the user
+    /// named it: `..` and symlinks are not resolved. In a `file:` URI, the URL rules resolve `.`
+    /// and `..` segments, also when they are written `%2e%2e`.
     File(PathBuf),
     /// Neither: the window says why.
     Rejected(RejectedArg),
@@ -34,8 +35,14 @@ pub struct RejectedArg {
 /// Why a launch argument is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectKind {
-    /// A URL that is neither a magnet link nor a local `file://` URI: `http(s)`, `ftp` and the
-    /// like, a `file://` URI with a host other than `localhost`, or with a query or a fragment.
+    /// A URL that is neither a magnet link nor a local file: any scheme but `magnet` and `file`
+    /// followed by `//` (`http(s)`, `ftp` and the like), or a `file:` URI that
+    /// - does not parse, or is not UTF-8;
+    /// - has a control character, or ends with a space, which `Url::parse` would drop;
+    /// - has a backslash, which the URL rules read as `/` (launchers write `%5C`);
+    /// - has a host other than `localhost`;
+    /// - has a query or a fragment.
+    ///
     /// 4x4 never has the daemon fetch a URL.
     Url,
     /// An option (it starts with `-`); none are defined.
@@ -56,11 +63,12 @@ pub enum RejectKind {
 /// Tells what the launch argument `arg` asks for; a relative path is joined to `cwd`, the
 /// working directory of the process that was launched with it.
 ///
-/// - `magnet:` in any case is a magnet link, validated by [`MagnetLink::parse`].
-/// - `file://` with an empty host or `localhost`, and no query or fragment, is the local path it
-///   names, percent-decoded.
+/// - `magnet:` in any case, with white space around it or not, is a magnet link, validated by
+///   [`MagnetLink::parse`].
+/// - `file:/…` or `file://…` with an empty host or `localhost`, and no query or fragment, is the
+///   local path it names, percent-decoded.
 /// - Any other scheme followed by `//` is a [`RejectKind::Url`]. A scheme is told from a file
-///   name such as `a:b.torrent` by RFC 3986's scheme grammar and that `//`.
+///   name such as `a:b.torrent` by RFC 3986's scheme grammar and the slashes after it.
 /// - An empty argument, one starting with `-`, and a bare info hash are refused.
 /// - Anything else is a path, joined to `cwd` when it is relative.
 #[must_use]
@@ -72,16 +80,20 @@ pub fn classify(arg: &OsStr, cwd: &Path) -> LaunchArg {
     if bytes.starts_with(b"-") {
         return reject(RejectKind::Option);
     }
+    // A magnet link is trimmed, as `MagnetLink::parse` trims it; a path is not, since a file name
+    // may start or end with a space.
+    if split_scheme(bytes.trim_ascii_start())
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case(b"magnet"))
+    {
+        return magnet(arg);
+    }
     if let Some((scheme, rest)) = split_scheme(bytes) {
-        if scheme.eq_ignore_ascii_case(b"magnet") {
-            return magnet(arg);
+        // RFC 8089 allows `file:/path` as well as `file:///path`.
+        if scheme.eq_ignore_ascii_case(b"file") && rest.starts_with(b"/") {
+            return file_uri(arg);
         }
         if rest.starts_with(b"//") {
-            return if scheme.eq_ignore_ascii_case(b"file") {
-                file_uri(arg)
-            } else {
-                reject(RejectKind::Url)
-            };
+            return reject(RejectKind::Url);
         }
     }
     if arg
@@ -118,15 +130,17 @@ fn magnet(arg: &OsStr) -> LaunchArg {
     }
 }
 
-/// The local file a `file://` URI names, through [`Url::to_file_path`], which refuses a host
-/// other than `localhost`.
+/// The local file a `file:` URI names, through [`Url::to_file_path`], which refuses a host other
+/// than `localhost`.
 fn file_uri(arg: &OsStr) -> LaunchArg {
     let Some(text) = arg.to_str() else {
         return reject(RejectKind::Url);
     };
     // `Url::parse` drops tabs and line breaks inside and control characters and spaces at the
-    // end, so such a URI would name another file than the one given.
-    if text.contains(|character: char| character.is_ascii_control()) || text.ends_with(' ') {
+    // end, and reads a backslash as `/`, so such a URI would name another file than the one given.
+    if text.contains(|character: char| character.is_ascii_control() || character == '\\')
+        || text.ends_with(' ')
+    {
         return reject(RejectKind::Url);
     }
     let Ok(url) = Url::parse(text) else {
@@ -192,10 +206,18 @@ mod tests {
             magnet(&format!("magnet:?xt=urn:btih:{HASH}&dn=Фильм+1%23")).name(),
             Some("Фильм+1#")
         );
-        assert_eq!(
-            magnet(&format!("MAGNET:?xt=urn:btih:{HASH}")).as_str(),
-            format!("magnet:?xt=urn:btih:{HASH}")
-        );
+        // The scheme in any case, and white space around the link, as a shell may pass it.
+        for arg in [
+            format!("MAGNET:?xt=urn:btih:{HASH}"),
+            format!(" magnet:?xt=urn:btih:{HASH}"),
+            format!("\tMagnet:?xt=urn:btih:{HASH}\n"),
+        ] {
+            assert_eq!(
+                magnet(&arg).as_str(),
+                format!("magnet:?xt=urn:btih:{HASH}"),
+                "{arg:?}"
+            );
+        }
 
         for (arg, path) in [
             (
@@ -209,6 +231,17 @@ mod tests {
             ("FILE:///home/user/a.torrent", "/home/user/a.torrent"),
             // Pasted into a shell, with a raw space.
             ("file:///home/user/my a.torrent", "/home/user/my a.torrent"),
+            // One slash (RFC 8089).
+            ("file:/home/user/a.torrent", "/home/user/a.torrent"),
+            ("FILE:/home/user/a.torrent", "/home/user/a.torrent"),
+            // A backslash as launchers write it.
+            ("file:///home/user/a%5Cb.torrent", "/home/user/a\\b.torrent"),
+            // The URL rules resolve `..`, also written `%2e%2e`.
+            ("file:///home/user/x/../a.torrent", "/home/user/a.torrent"),
+            (
+                "file:///home/user/x/%2e%2e/a.torrent",
+                "/home/user/a.torrent",
+            ),
             (
                 "/home/user/my file ü #1.torrent",
                 "/home/user/my file ü #1.torrent",
@@ -220,6 +253,8 @@ mod tests {
             ("http:a.torrent", "/home/user/Downloads/http:a.torrent"),
             ("1http://a", "/home/user/Downloads/1http://a"),
             ("magnet.torrent", "/home/user/Downloads/magnet.torrent"),
+            // A path is not trimmed: a file name may start or end with a space.
+            (" a.torrent ", "/home/user/Downloads/ a.torrent "),
             (&HASH[1..], &format!("{CWD}/{}", &HASH[1..])),
         ] {
             assert_eq!(launched(arg), file(path), "{arg:?}");
@@ -255,6 +290,9 @@ mod tests {
             "file:///home/user/a\t.torrent",
             "file:///home/user/a.torrent ",
             "file://[::1/a.torrent",
+            // The URL rules read a backslash as `/`, which would name another file.
+            "file:///home/user/a\\b.torrent",
+            "file:/home/user/a\\b.torrent",
         ] {
             assert_eq!(launched(arg), rejected(RejectKind::Url), "{arg:?}");
         }
