@@ -11,8 +11,8 @@ use std::time::SystemTime;
 
 use gpui_kit::SharedString;
 use x4_core::{
-    DetailsTarget, ErrorView, HumanSize, PiecesView, TrackerProblem, TrackerProblemKind,
-    TrackerSummary,
+    DetailsTarget, ErrorView, HumanSize, PiecesView, TrackerCount, TrackerProblem,
+    TrackerProblemKind, TrackerSummary,
 };
 
 use super::{date_time_text, has_text, integer, size_string, t};
@@ -65,14 +65,40 @@ pub(crate) fn created_text(creator: Option<&str>, created: Option<SystemTime>) -
     }
 }
 
-/// How the trackers are doing: "3 of 12 working", or "none" for a torrent without trackers.
+/// How the trackers are doing, in the counts x4-core picks: "3 working", "2 working, 1
+/// failing", "3 not contacted yet" for a torrent that is paused, or "none" for a torrent without
+/// trackers.
 pub(crate) fn trackers_text(summary: &TrackerSummary) -> SharedString {
-    t!(
-        "general-trackers-value",
-        working = summary.working,
-        total = summary.total
-    )
+    let counts: Vec<String> = summary
+        .counts()
+        .into_iter()
+        .map(tracker_count_text)
+        .collect();
+    match counts.as_slice() {
+        [] => t!("general-trackers-none"),
+        [one] => one.clone(),
+        [first, second] => t!(
+            "general-trackers-two",
+            first = first.as_str(),
+            second = second.as_str()
+        ),
+        [first, second, third, ..] => t!(
+            "general-trackers-three",
+            first = first.as_str(),
+            second = second.as_str(),
+            third = third.as_str()
+        ),
+    }
     .into()
+}
+
+/// One count of the trackers, such as "2 working".
+fn tracker_count_text(count: TrackerCount) -> String {
+    match count {
+        TrackerCount::Working(count) => t!("general-trackers-working", count = count),
+        TrackerCount::Failing(count) => t!("general-trackers-failing", count = count),
+        TrackerCount::NotContacted(count) => t!("general-trackers-not-contacted", count = count),
+    }
 }
 
 /// The worst problem among the trackers in plain words, such as "Tracker tracker.example.org:
@@ -205,16 +231,27 @@ mod tests {
     }
 
     #[test]
-    fn trackers_count_the_working_ones() {
-        let summary = |working, total| TrackerSummary {
-            total,
+    fn trackers_are_counted_by_what_was_contacted() {
+        let summary = |working, failing, not_contacted| TrackerSummary {
+            total: working + failing + not_contacted,
             working,
-            failing: total - working,
+            failing,
+            not_contacted,
             problem: None,
         };
-        assert_eq!(trackers_text(&summary(3, 12)), "3 of 12 working");
-        assert_eq!(trackers_text(&summary(0, 1)), "0 of 1 working");
-        assert_eq!(trackers_text(&summary(0, 0)), "none");
+        assert_eq!(trackers_text(&summary(3, 0, 0)), "3 working");
+        assert_eq!(trackers_text(&summary(2, 1, 0)), "2 working, 1 failing");
+        // A paused or queued torrent has contacted none of them yet.
+        assert_eq!(trackers_text(&summary(0, 0, 3)), "3 not contacted yet");
+        assert_eq!(
+            trackers_text(&summary(1, 1, 1)),
+            "1 working, 1 failing, 1 not contacted yet"
+        );
+        assert_eq!(
+            trackers_text(&summary(0, 2, 1)),
+            "2 failing, 1 not contacted yet"
+        );
+        assert_eq!(trackers_text(&summary(0, 0, 0)), "none");
     }
 
     #[test]

@@ -13,7 +13,8 @@
 //!
 //! The details panel is decided here too: [`details_target`] tells which torrent it is about,
 //! [`general_model`] gives the values of its General tab, and [`tracker_summary`] condenses the
-//! trackers into the worst problem and the counts of those that work and fail.
+//! trackers into the worst problem and the counts of those that work, fail and were not contacted
+//! yet.
 
 mod availability;
 mod columns;
@@ -39,7 +40,9 @@ pub use row::Row;
 pub use selection::{Edge, Selection};
 pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
-pub use trackers::{TrackerProblem, TrackerProblemKind, TrackerSummary, tracker_summary};
+pub use trackers::{
+    TrackerCount, TrackerProblem, TrackerProblemKind, TrackerSummary, tracker_summary,
+};
 
 use std::sync::Arc;
 

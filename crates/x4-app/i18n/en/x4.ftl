@@ -621,12 +621,18 @@ general-pieces-value =
 # date-time. When only the date is known, the value is the date alone.
 general-created-by-on = by { $creator } on { $date }
 general-created-by = by { $creator }
-# How many trackers answered their last announce. $working and $total: numbers.
-general-trackers-value =
-    { $total ->
-        [0] none
-       *[other] { $working } of { $total } working
-    }
+# How the trackers are doing, counted by what they answered: working, they answered their last
+# announce; failing, it failed or was not answered in time; not contacted yet, no announce has
+# gone to them, as for a torrent that is paused or queued, or a backup tracker. A count that is 0
+# is left out. $count: a number.
+general-trackers-working = { $count } working
+general-trackers-failing = { $count } failing
+general-trackers-not-contacted = { $count } not contacted yet
+# Two or three of the counts above, in that order, such as "2 working, 1 failing".
+general-trackers-two = { $first }, { $second }
+general-trackers-three = { $first }, { $second }, { $third }
+# A torrent without trackers.
+general-trackers-none = none
 # The worst problem among the trackers, under the line above. $host: the tracker's host name;
 # $text: the server's own text, shown as sent, or general-error-no-text when it sent none.
 # A failed announce: the tracker could not be reached, or refused, as $text says.

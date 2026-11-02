@@ -728,7 +728,7 @@ fn general_shows_metainfo_dates_and_the_tracker_problem(cx: &mut TestAppContext)
     );
     assert_eq!(
         window.value("general-trackers", cx).as_deref(),
-        Some("1 of 2 working")
+        Some("1 working, 1 failing")
     );
     assert_eq!(
         window.label(TRACKER_PROBLEM, cx).as_deref(),

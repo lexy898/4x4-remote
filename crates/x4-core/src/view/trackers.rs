@@ -48,11 +48,54 @@ pub struct TrackerSummary {
     pub total: usize,
     /// How many answered their last announce.
     pub working: usize,
-    /// How many failed their last announce, or did not answer it in time. A backup tracker that
-    /// was never announced to is neither working nor failing.
+    /// How many failed their last announce, or did not answer it in time.
     pub failing: usize,
+    /// How many were not announced to yet: all of them while the torrent is paused or queued,
+    /// and backup trackers. They are neither working nor failing.
+    pub not_contacted: usize,
     /// The worst current problem, even when other trackers work; `None` when there is none.
     pub problem: Option<TrackerProblem>,
+}
+
+/// One count of how the trackers are doing, as the summary says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackerCount {
+    /// So many trackers answered their last announce.
+    Working(usize),
+    /// So many failed their last announce, or did not answer it in time.
+    Failing(usize),
+    /// So many were not announced to yet.
+    NotContacted(usize),
+}
+
+impl TrackerCount {
+    /// How many trackers it counts.
+    fn count(self) -> usize {
+        match self {
+            Self::Working(count) | Self::Failing(count) | Self::NotContacted(count) => count,
+        }
+    }
+}
+
+impl TrackerSummary {
+    /// What the summary says, in this order: how many trackers work, how many fail and how many
+    /// were not contacted yet, each only when there are some; nothing for a torrent without
+    /// trackers.
+    ///
+    /// The count of all trackers is not said: a healthy torrent that is paused or queued has
+    /// contacted none of them, and "0 of 3 working" would read as broken where "3 not contacted
+    /// yet" says what is so.
+    #[must_use]
+    pub fn counts(&self) -> Vec<TrackerCount> {
+        [
+            TrackerCount::Working(self.working),
+            TrackerCount::Failing(self.failing),
+            TrackerCount::NotContacted(self.not_contacted),
+        ]
+        .into_iter()
+        .filter(|count| count.count() > 0)
+        .collect()
+    }
 }
 
 /// The summary of the trackers in `details`.
@@ -72,7 +115,7 @@ pub fn tracker_summary(details: &TorrentDetails) -> TrackerSummary {
         match tracker.last_announce.as_ref().map(|answer| answer.outcome) {
             Some(TrackerOutcome::Succeeded) => summary.working += 1,
             Some(TrackerOutcome::Failed | TrackerOutcome::TimedOut) => summary.failing += 1,
-            None => {}
+            None => summary.not_contacted += 1,
         }
         if let Some((kind, result)) = problem_of(tracker)
             && worst.is_none_or(|(found, ..)| kind.severity() > found.severity())
@@ -203,6 +246,7 @@ mod tests {
         assert_eq!(summary.total, 4);
         assert_eq!(summary.working, 2);
         assert_eq!(summary.failing, 1);
+        assert_eq!(summary.not_contacted, 1);
         assert_eq!(
             summary.problem,
             Some(problem(
@@ -335,9 +379,49 @@ mod tests {
                 total: 2,
                 working: 0,
                 failing: 0,
+                not_contacted: 2,
                 problem: None
             }
         );
+    }
+
+    #[test]
+    fn the_counts_say_what_was_contacted_and_leave_out_those_of_none() {
+        let failed = || {
+            tracker(
+                "bad.example.org:80",
+                Some(answer(TrackerOutcome::Failed, "refused")),
+                None,
+            )
+        };
+        let waiting = || tracker("backup.example.org:80", None, None);
+
+        // A paused or queued torrent has contacted none of its trackers: that is not a failure.
+        assert_eq!(
+            summary(vec![waiting(), waiting(), waiting()]).counts(),
+            [TrackerCount::NotContacted(3)]
+        );
+        assert_eq!(
+            summary(vec![
+                working("a.example.org:80"),
+                working("b.example.org:80")
+            ])
+            .counts(),
+            [TrackerCount::Working(2)]
+        );
+        assert_eq!(
+            summary(vec![waiting(), failed(), working("a.example.org:80")]).counts(),
+            [
+                TrackerCount::Working(1),
+                TrackerCount::Failing(1),
+                TrackerCount::NotContacted(1)
+            ]
+        );
+        assert_eq!(
+            summary(vec![failed(), failed()]).counts(),
+            [TrackerCount::Failing(2)]
+        );
+        assert_eq!(summary(Vec::new()).counts(), []);
     }
 
     #[test]

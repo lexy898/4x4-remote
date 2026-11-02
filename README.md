@@ -223,10 +223,11 @@ The rest comes from the torrent's details, which 4x4 reads only while the panel 
 torrent and keeps only while it shows them, and says "—" until they have come: how many pieces there
 are and their size, the data downloaded and uploaded over the torrent's life, who created the
 torrent and when, its source (a private tracker's tag, shown only when there is one), its comment,
-whether it is private, and how many of its trackers work, with the worst problem among them in plain
-words, such as "Tracker tracker.example.org: connection timed out". Dates are in the local time
-zone, such as "2026-10-29 14:05". The buttons next to the path and the hash copy them at once, also
-while the daemon is not connected, and give the keys back to the table.
+whether it is private, and how its trackers are doing: how many work, how many fail and how many
+were not contacted yet (all of them, while the torrent is paused or queued), with the worst problem
+among them in plain words, such as "Tracker tracker.example.org: connection timed out". Dates are in
+the local time zone, such as "2026-10-29 14:05". The buttons next to the path and the hash copy them
+at once, also while the daemon is not connected, and give the keys back to the table.
 
 The Files tab shows the torrent's files as a tree: the torrent's own folder first, open, and in each
 folder the folders before the files, by name, with numbers in their natural order ("E2" before
