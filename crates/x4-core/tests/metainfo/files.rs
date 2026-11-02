@@ -23,6 +23,32 @@ fn a_single_file_torrent_has_one_file_at_index_0() {
 }
 
 #[test]
+fn an_empty_files_list_leaves_a_single_file_torrent() {
+    // An empty `files` adds no file, so the daemon reads `length` and `name` as one file (R2, R6).
+    let info = |length: Option<i64>| {
+        let mut entries = vec![
+            ("files", list([])),
+            ("name", bytes("movie.mkv")),
+            ("piece length", int(PIECE)),
+            ("pieces", pieces(40_000)),
+        ];
+        entries.extend(length.map(|length| ("length", int(length))));
+        dict(entries)
+    };
+
+    let parsed = parse_torrent(&torrent(info(Some(40_000)))).unwrap();
+    assert_eq!(parsed.name, "movie.mkv");
+    assert_eq!(parsed.total_size, Some(40_000));
+    assert_eq!(parsed.files, Some(vec![meta("movie.mkv", 40_000)]));
+
+    // Without a `length` it has no files at all.
+    assert_eq!(
+        parse_torrent(&torrent(info(None))),
+        Err(MetainfoError::Invalid("the torrent has no files"))
+    );
+}
+
+#[test]
 fn files_keep_the_raw_info_files_order() {
     // Neither sorted by name nor grouped by folder: the daemon numbers them as listed.
     let entries = vec![
