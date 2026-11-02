@@ -12,7 +12,9 @@ pub const MIN_DETAILS_HEIGHT: f32 = 110.0;
 /// taller than any screen. The window shrinks the panel to fit when it is shown.
 pub const MAX_DETAILS_HEIGHT: f32 = 2000.0;
 /// The height on the first run, in logical pixels: the General tab of a torrent with a source
-/// and a tracker problem, every row the tab has but an error, fits without scrolling.
+/// and a tracker problem, every row the tab has but an error, fits without scrolling. It was
+/// measured on the headless test platform, whose glyphs are wider than a real window's, so a
+/// real window has some room to spare.
 const DEFAULT_DETAILS_HEIGHT: f32 = 273.0;
 
 /// The panel under the table.

@@ -202,15 +202,15 @@ same, and the notification says so: the list shows the result. Copying magnet li
 way, with a notification, when the daemon cannot send them or no longer has the torrents; the
 clipboard then keeps what it had.
 
-The details panel under the table shows the selected torrent. With none selected it says "Select
-a torrent", and with several, how many are selected; it shows a torrent only when exactly one of
-the torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from
-anywhere in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2`
-open. While a menu or the speed limits popover is open, these three keys do nothing. The first
-time, the panel is open on the General tab and just high enough for all of it. Drag the line
-between the table and the panel to change its height. The panel keeps that height when it is
-hidden and between runs; when the window is too low for it and the table's header and two rows, it
-is drawn lower, and it grows back with the window. When the General tab does not fit, it scrolls.
+The details panel under the table shows the selected torrent. With none selected it says "Select a
+torrent", and with several, how many are selected; it shows a torrent only when exactly one of the
+torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from anywhere
+in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2` open. While
+a menu or the speed limits popover is open, these three keys do nothing. The first time, the panel
+is open on the General tab, high enough for its usual rows. Drag the line between the table and the
+panel to change its height. The panel keeps that height when it is hidden and between runs; when the
+window is too low for it and the table's header and two rows, it is drawn lower, and it grows back
+with the window. When the General tab does not fit, it scrolls.
 
 The General tab shows, from the daemon's list:
 
@@ -231,21 +231,21 @@ at once, also while the daemon is not connected, and give the keys back to the t
 
 The Files tab shows the torrent's files as a tree: the torrent's own folder first, open, and in each
 folder the folders before the files, by name, with numbers in their natural order ("E2" before
-"E10"). Padding files, which some torrents carry only to line their pieces up, are hidden. After an
-arrow that opens and closes a folder, each row has a checkbox for whether it is downloaded (a dash
-for a folder where only some of its files are), the name, the size, the progress, and the priority,
-Low, Normal or High ("Mixed" for a folder whose files differ), which a click on it changes. A change
-to a folder applies to every file in it, the hidden padding files included. Each row is one line.
-After the name of a file that is downloading, once its first bytes have come, muted text such as
-"Playable from start: 12.4 GiB (34%)" says how much of its beginning has come without a gap, which a
-player can already read; a long name is cut short before it is. It is counted in the pieces the
-daemon has, from the file's first byte up to the first piece still missing, so a file that downloads
-in no particular order can be half done and still play only its first seconds. Above the list, the
-switch "Download in order (sequential)" has the daemon download the torrent's pieces from the start,
-so that a file can be played while it downloads. A change shows once the daemon's next answer does,
-a moment later, not before. While the daemon is not connected, the checkboxes, the priorities and
-the switch are disabled. Until the details have come, the tab says "—" under the switch. A magnet
-link has no files until its metadata has come; the tab says so, and the switch can be set already.
+"E10"). Padding files, which some torrents carry only to line their pieces up, are hidden. Each row
+has the arrow that opens and closes a folder, a checkbox for whether it is downloaded (a dash for a
+folder where only some of its files are), the name, the size, the progress, and the priority, Low,
+Normal or High ("Mixed" for a folder whose files differ), which a click on it changes. A change to a
+folder applies to every file in it, the hidden padding files included. Each row is one line. After
+the name of a file that is downloading, once its first bytes have come, muted text such as "Playable
+from start: 12.4 GiB (34%)" says how much of its beginning has come without a gap, which a player
+can already read; a long name is cut short before it is. It is counted in the pieces the daemon has,
+from the file's first byte up to the first piece still missing, so a file that downloads in no
+particular order can be half done and still play only its first seconds. Above the list, the switch
+"Download in order (sequential)" has the daemon download the torrent's pieces from the start, so
+that a file can be played while it downloads. A change shows once the daemon's next answer does, a
+moment later, not before. While the daemon is not connected, the checkboxes, the priorities and the
+switch are disabled. Until the details have come, the tab says "—" under the switch. A magnet link
+has no files until its metadata has come; the tab says so, and the switch can be set already.
 
 A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
 Home and End move between the rows, Left closes a folder or goes to the folder around the row, Right
@@ -589,9 +589,9 @@ release build of the [synthetic demo](#synthetic-demo), its 2000 torrents busy. 
 files is "Synthetic torrent 0005" (`--select 4`), which downloads; "Synthetic torrent 0014"
 (`--select 13`) seeds. The requests and their bytes were counted in the demo's debug log
 (`RUST_LOG=warn,x4_synthetic=debug,x4_core::service=debug`) over 60 seconds, from 15 seconds after
-the start; the bytes are those of the bodies, without the HTTP headers. The targets are those of the
-plan for the panel: at most 1.75 requests per second with it open on a torrent that downloads, and
-1.45 on one that seeds.
+the start; the bytes are those of the bodies, without the HTTP headers. The stage 4 targets are at
+most 1.75 requests per second with the panel open on a torrent that downloads, and 1.45 on one that
+seeds.
 
 | Details panel                       | Requests per second   | Details reads a minute | Details answers |
 | ----------------------------------- | --------------------- | ---------------------- | --------------- |
