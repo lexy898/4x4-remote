@@ -41,6 +41,8 @@ const SEQUENTIAL: &str = "file-sequential";
 const NO_METADATA: &str = "files-no-metadata";
 /// The id of an open menu.
 const MENU: &str = "popup-menu";
+/// The id of a notification.
+const NOTIFICATION: &str = "notification";
 
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
@@ -361,6 +363,16 @@ impl Window {
                 })
                 .map(|(path, _)| path)
         })
+    }
+
+    /// How many notifications are on screen.
+    fn notifications(&self, cx: &mut TestAppContext) -> usize {
+        self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
+    }
+
+    /// The text of the last failure the window showed.
+    fn last_failure(&self, cx: &mut TestAppContext) -> Option<String> {
+        cx.update(|cx| self.view.read(cx).last_failure().map(str::to_owned))
     }
 
     /// Whether the file list has the keyboard focus.
@@ -842,6 +854,35 @@ fn priority_dropdown_and_plus_minus_send_set_file_priority(cx: &mut TestAppConte
     assert_eq!(
         window.sent_action().1,
         priority(&show.hash, &[0, 1, 2, 3, 4], FilePriority::Normal)
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_file_action_shows_a_notification_of_its_kind(cx: &mut TestAppContext) {
+    let (window, show) = window_with_show(cx);
+    window.click_file("Show/info.nfo", cx);
+    window.press("space", cx);
+    let (skip, action) = window.sent_action();
+    assert_eq!(action, wanted(&show.hash, &[4], false));
+    window.press("+", cx);
+    let (raise, action) = window.sent_action();
+    assert_eq!(action, priority(&show.hash, &[4], FilePriority::High));
+
+    let busy = Err(ActionError::Rpc(ConnectionError::Server("busy".to_owned())));
+    window.finish(skip, busy, cx);
+    assert_eq!(window.notifications(cx), 1);
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some("Could not skip files: busy")
+    );
+    window.finish(raise, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
+    assert_eq!(window.notifications(cx), 2, "one for each kind of change");
+    assert_eq!(
+        window.last_failure(cx).as_deref(),
+        Some(
+            "The server did not answer while changing the priority of files; it may have \
+             changed. The Files tab will show the result"
+        )
     );
 }
 

@@ -148,17 +148,35 @@ mod tests {
 
         /// Draws the window and says where the checkbox of `Show/info.nfo` is.
         fn checkbox(&self, cx: &mut TestAppContext) -> Point<Pixels> {
-            let row = ElementId::NamedChild(
-                Arc::new(ElementId::Name("file-row".into())),
-                "Show/info.nfo".into(),
-            );
+            self.middle_of("file-wanted", cx)
+        }
+
+        /// Draws the window and says where the middle of the part `part` of the row of
+        /// `Show/info.nfo` is.
+        fn middle_of(&self, part: &'static str, cx: &mut TestAppContext) -> Point<Pixels> {
             self.act(cx, |window, _| {
                 window
                     .within("file-list")
-                    .within(row)
-                    .find("file-wanted")
+                    .within(row("Show/info.nfo"))
+                    .find(part)
                     .bounds()
                     .center()
+            })
+        }
+
+        /// Draws the window and says which of the rows at `paths` the file cursor is on.
+        fn cursor_rows(&self, paths: &[&str], cx: &mut TestAppContext) -> Vec<String> {
+            self.act(cx, |window, _| {
+                paths
+                    .iter()
+                    .filter(|path| {
+                        window
+                            .within("file-list")
+                            .try_find(row(path))
+                            .is_some_and(|row| row.selected() == Some(true))
+                    })
+                    .map(|path| (*path).to_owned())
+                    .collect()
             })
         }
 
@@ -220,6 +238,14 @@ mod tests {
         }
     }
 
+    /// The element id of the row of the file list at `path`.
+    fn row(path: &str) -> ElementId {
+        ElementId::NamedChild(
+            Arc::new(ElementId::Name("file-row".into())),
+            path.to_owned().into(),
+        )
+    }
+
     fn hash(name: &str) -> HashString {
         torrent(name).hash
     }
@@ -276,6 +302,40 @@ mod tests {
         );
 
         assert_eq!(harness.actions(), []);
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_row_of_a_torrent_the_panel_has_left_leaves_the_new_cursor_alone(
+        cx: &mut TestAppContext,
+    ) {
+        let harness = Harness::with_a_drawn(cx);
+        let position = harness.middle_of("file-name", cx);
+
+        // The selection moves to b, whose details come with the same paths, so that b's tree is
+        // the one the panel has; the click lands on a's row on the frame drawn before.
+        harness.change_then_click(
+            position,
+            |view, cx| {
+                let step = SelectionChange::Step {
+                    step: 1,
+                    extend: false,
+                };
+                view.table
+                    .update(cx, |table, cx| change_selection(table, step, cx));
+                view.follow_details(cx);
+                view.details_arrived(Arc::new(files_of(&hash("b"), true)), cx);
+            },
+            cx,
+        );
+
+        // The same path in b is another file: the cursor does not go there.
+        let paths = ["Show", "Show/film.mkv", "Show/info.nfo"];
+        assert_eq!(harness.cursor_rows(&paths, cx), Vec::<String>::new());
+        assert_eq!(harness.actions(), []);
+        // A click on b's own frame moves it.
+        let position = harness.middle_of("file-name", cx);
+        harness.change_then_click(position, |_, _| {}, cx);
+        assert_eq!(harness.cursor_rows(&paths, cx), ["Show/info.nfo"]);
     }
 
     #[gpui_kit::test]
