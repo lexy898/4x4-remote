@@ -1,6 +1,6 @@
 //! Opening and closing folders and moving the cursor.
 
-use x4_core::{FileTreeView, NodeKey};
+use x4_core::{Edge, FileTreeView, NodeKey};
 use x4_rpc::FilePriority::Normal;
 
 use super::{key, shape, tree_of};
@@ -98,6 +98,43 @@ fn a_step_without_a_cursor_starts_at_the_nearest_end() {
     let mut up = FileTreeView::new(&tree);
     up.move_cursor(&tree, -1);
     assert_eq!(up.cursor(&tree), Some(&key("T/b.mkv")));
+}
+
+#[test]
+fn home_and_end_go_to_the_first_and_the_last_row_shown() {
+    let tree = tree_of(&[
+        ("T/sub/b.mkv", 1, 0, true, Normal),
+        ("T/a.mkv", 1, 0, true, Normal),
+        ("T/c.mkv", 1, 0, true, Normal),
+    ]);
+
+    // Without a cursor, Home goes to the first row and End to the last, not the other way.
+    let mut home = FileTreeView::new(&tree);
+    home.cursor_to_edge(&tree, Edge::First);
+    assert_eq!(home.cursor(&tree), Some(&key("T")));
+    let mut end = FileTreeView::new(&tree);
+    end.cursor_to_edge(&tree, Edge::Last);
+    assert_eq!(end.cursor(&tree), Some(&key("T/c.mkv")));
+
+    // From a cursor, the last row is the last one shown: the closed folder hides its file.
+    end.cursor_to_edge(&tree, Edge::First);
+    assert_eq!(end.cursor(&tree), Some(&key("T")));
+    end.toggle_expanded(&tree, &key("T/sub"));
+    end.cursor_to_edge(&tree, Edge::Last);
+    assert_eq!(end.cursor(&tree), Some(&key("T/c.mkv")));
+    end.toggle_expanded(&tree, &key("T"));
+    end.cursor_to_edge(&tree, Edge::Last);
+    assert_eq!(
+        end.cursor(&tree),
+        Some(&key("T")),
+        "only the top folder is shown"
+    );
+
+    // A tree with nothing to show has no place for the cursor.
+    let empty = tree_of(&[]);
+    let mut nowhere = FileTreeView::new(&empty);
+    nowhere.cursor_to_edge(&empty, Edge::Last);
+    assert_eq!(nowhere.cursor(&empty), None);
 }
 
 #[test]

@@ -85,6 +85,27 @@ pub enum Action {
     Add(TorrentAdd),
 }
 
+/// What an action on the files of one torrent changes in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileChange {
+    /// Whether the files are downloaded.
+    Wanted(bool),
+    /// Their download priority.
+    Priority(FilePriority),
+}
+
+/// An action on the files of one torrent, read back from the [`Action`]: the torrent, the files
+/// and what changes in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileTarget<'a> {
+    /// The torrent.
+    pub hash: &'a HashString,
+    /// Indices into the torrent's file list, as the action names them.
+    pub files: &'a [usize],
+    /// What changes in those files.
+    pub change: FileChange,
+}
+
 /// Why an [`Action`] did not happen.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ActionError {
@@ -158,6 +179,47 @@ impl Action {
             | Self::SetAltSpeed(_)
             | Self::SetSpeedLimit { .. }
             | Self::Add(_) => false,
+        }
+    }
+
+    /// The torrent, the files and the change of an action on files
+    /// ([`SetFilePriority`](Self::SetFilePriority) or [`SetFilesWanted`](Self::SetFilesWanted));
+    /// `None` for every other action.
+    ///
+    /// The app reads back an action that a [`FileTree`](crate::FileTree) built, to tell a repeat
+    /// of it and to word its failure, rather than taking it apart or building one itself.
+    #[must_use]
+    pub fn file_change(&self) -> Option<FileTarget<'_>> {
+        // No wildcard: a new action has to decide.
+        match self {
+            Self::SetFilePriority {
+                hash,
+                files,
+                priority,
+            } => Some(FileTarget {
+                hash,
+                files,
+                change: FileChange::Priority(*priority),
+            }),
+            Self::SetFilesWanted {
+                hash,
+                files,
+                wanted,
+            } => Some(FileTarget {
+                hash,
+                files,
+                change: FileChange::Wanted(*wanted),
+            }),
+            Self::Start(_)
+            | Self::StartNow(_)
+            | Self::Stop(_)
+            | Self::Verify(_)
+            | Self::Reannounce(_)
+            | Self::Remove { .. }
+            | Self::SetSequential { .. }
+            | Self::SetAltSpeed(_)
+            | Self::SetSpeedLimit { .. }
+            | Self::Add(_) => None,
         }
     }
 
@@ -309,6 +371,65 @@ mod tests {
             Action::Add(add()),
         ] {
             assert!(!action.changes_details_of(&named), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_action_reads_back_its_torrent_files_and_change() {
+        let hash = torrent("a").hash;
+        let priority = Action::SetFilePriority {
+            hash: hash.clone(),
+            files: vec![0, 3, 4],
+            priority: FilePriority::High,
+        };
+        assert_eq!(
+            priority.file_change(),
+            Some(FileTarget {
+                hash: &hash,
+                files: &[0, 3, 4],
+                change: FileChange::Priority(FilePriority::High),
+            })
+        );
+        let wanted = Action::SetFilesWanted {
+            hash: hash.clone(),
+            files: vec![2],
+            wanted: false,
+        };
+        assert_eq!(
+            wanted.file_change(),
+            Some(FileTarget {
+                hash: &hash,
+                files: &[2],
+                change: FileChange::Wanted(false),
+            })
+        );
+    }
+
+    #[test]
+    fn other_actions_change_no_files() {
+        let hash = torrent("a").hash;
+        for action in [
+            Action::Start(vec![hash.clone()]),
+            Action::StartNow(vec![hash.clone()]),
+            Action::Stop(vec![hash.clone()]),
+            Action::Verify(vec![hash.clone()]),
+            Action::Reannounce(vec![hash.clone()]),
+            Action::Remove {
+                hashes: vec![hash.clone()],
+                data: RemoveData::Keep,
+            },
+            Action::SetSequential {
+                hash: hash.clone(),
+                enabled: true,
+            },
+            Action::SetAltSpeed(true),
+            Action::SetSpeedLimit {
+                direction: Direction::Up,
+                limit: None,
+            },
+            Action::Add(add()),
+        ] {
+            assert_eq!(action.file_change(), None, "{action:?}");
         }
     }
 

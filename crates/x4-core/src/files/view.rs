@@ -8,6 +8,7 @@ use super::tree::Node;
 use super::{FileTree, NodeKey, PriorityView, WantedState};
 use crate::format::{HumanSize, human_size};
 use crate::playable::Playable;
+use crate::view::Edge;
 use crate::view::percent::{fraction_of, percent};
 
 /// What a row of the file tree is.
@@ -173,6 +174,20 @@ impl FileTreeView {
         };
         self.cursor = shown
             .get(target)
+            .and_then(|&(index, _)| tree.node(index))
+            .map(|node| node.key.clone());
+    }
+
+    /// Puts the cursor on the first row shown (Home) or the last one (End), with a cursor or
+    /// without one.
+    pub fn cursor_to_edge(&mut self, tree: &FileTree, edge: Edge) {
+        self.adopt(tree);
+        let shown = self.shown(tree);
+        let end = match edge {
+            Edge::First => shown.first(),
+            Edge::Last => shown.last(),
+        };
+        self.cursor = end
             .and_then(|&(index, _)| tree.node(index))
             .map(|node| node.key.clone());
     }

@@ -97,7 +97,7 @@ mod toml_error;
 mod ui_state;
 mod view;
 
-pub use action::{Action, ActionError, ActionId, Direction};
+pub use action::{Action, ActionError, ActionId, Direction, FileChange, FileTarget};
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
 pub use engine::{
