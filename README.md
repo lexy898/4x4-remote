@@ -616,26 +616,30 @@ does not contain it.
 
 ### Live tests
 
-`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` against a real Transmission 4.1+
-daemon; `just test` and `just check` skip them. They never touch existing torrents or the daemon's
-settings. One test only reads the server version. Each of the others writes a random 3 MiB file
-into a test directory, adds it as a trackerless torrent, works only on that torrent (stop, start,
-start now, verify, reannounce, sequential download, file priority, adding it twice), and removes it
-together with its file. One removes it from the list only, checks that the daemon kept the file,
-and then deletes the file itself. Every test checks that every other torrent kept its status,
-sequential mode, file priorities and wanted files. The torrent and the file are removed even when a
-test fails.
+`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` and `crates/x4-core/tests/live.rs`
+against a real Transmission 4.1+ daemon; `just test` and `just check` skip them. They never touch
+existing torrents or the daemon's settings. One test only reads the server version. Each of the
+others writes the data of a torrent of its own into a test directory, a random 3 MiB file or a
+folder of three random files of a few KiB, adds it as a trackerless torrent, works only on that
+torrent (stop, start, start now, verify, reannounce, sequential download on and off, which files are
+downloaded and their priorities, a file index past the last file, which the daemon refuses, adding
+it twice), and removes it together with its data. One removes it from the list only, checks that the
+daemon kept the file, and then deletes the file itself. The test of x4-core reads the details of its
+torrent as the app does, in full and then only their progress, with and without the trackers, and
+checks that the app understands every answer. Every test checks that every other torrent kept its
+status, sequential mode, file priorities and wanted files. The torrent and its data are removed even
+when a test fails.
 
-An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and
-the file of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with
-data file <path>`). To recover, remove the torrent with that hash in any Transmission client,
-choosing to delete its local data. If no such line was printed, the run most likely stopped before
-the torrent was added: delete the single `4x4-live-<hex>.bin` file from the test directory instead.
-The next run refuses to start while any torrent downloads into the test directory, so a leftover
-torrent cannot go unnoticed; remove it the same way. The test that removes its torrent from the list
-only, keeping the file, may be interrupted after the removal: then the daemon no longer has the
-torrent, and the file stays. Delete by hand the file named on its `live test: added torrent …`
-line.
+An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and the
+data of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with its
+data at <path>`). To recover, remove the torrent with that hash in any Transmission client, choosing
+to delete its local data. If no such line was printed, the run most likely stopped before the
+torrent was added: delete the `4x4-live-<hex>.bin` file or the `4x4-live-<hex>` folder from the test
+directory instead. The next run refuses to start while any torrent downloads into the test
+directory, so a leftover torrent cannot go unnoticed; remove it the same way. The test that removes
+its torrent from the list only, keeping the file, may be interrupted after the removal: then the
+daemon no longer has the torrent, and the file stays. Delete by hand the file named on its `live
+test: added torrent …` line.
 
 The test directory is one directory seen from both sides: the daemon reads it under one path and
 this machine writes to it under another (for example over NFS), so both must be able to write
