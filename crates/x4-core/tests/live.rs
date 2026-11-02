@@ -133,11 +133,12 @@ impl Driven<'_> {
         assert_eq!(events, [], "the command brought events at once");
     }
 
-    /// Whether the engine is connected, as its latest snapshot says.
+    /// Whether the engine is connected, as its latest snapshot says; the test takes none before,
+    /// so there is one.
     fn connected(&mut self) -> bool {
         self.engine
             .take_snapshot()
-            .is_none_or(|snapshot| snapshot.connection == ConnectionState::Connected)
+            .is_some_and(|snapshot| snapshot.connection == ConnectionState::Connected)
     }
 }
 
@@ -242,14 +243,18 @@ fn latest(details: &[Arc<TorrentDetails>], own: &HashString, after: &str) -> Tor
     TorrentDetails::clone(last)
 }
 
-/// Checks the details of a full read of the seeding test torrent of [`MULTI_FILES`] in `folder`.
-fn check_full(full: &TorrentDetails, folder: &str) {
-    let names: Vec<(usize, String, u64)> = full
+/// Each file's index, name and length in `details`.
+fn names(details: &TorrentDetails) -> Vec<(usize, String, u64)> {
+    details
         .files
         .iter()
         .map(|file| (file.index, file.name.clone(), file.length))
-        .collect();
-    let expected: Vec<(usize, String, u64)> = MULTI_FILES
+        .collect()
+}
+
+/// The index, name and length of each file of the test torrent of [`MULTI_FILES`] in `folder`.
+fn expected_names(folder: &str) -> Vec<(usize, String, u64)> {
+    MULTI_FILES
         .iter()
         .enumerate()
         .map(|(index, (name, size))| {
@@ -259,8 +264,12 @@ fn check_full(full: &TorrentDetails, folder: &str) {
                 u64::try_from(*size).unwrap_or(0),
             )
         })
-        .collect();
-    assert_eq!(names, expected);
+        .collect()
+}
+
+/// Checks the details of a full read of the seeding test torrent of [`MULTI_FILES`] in `folder`.
+fn check_full(full: &TorrentDetails, folder: &str) {
+    assert_eq!(names(full), expected_names(folder));
     for file in &full.files {
         // Seeding: every piece is there, so all of each file is done and plays from its start.
         assert_eq!(file.bytes_completed, file.length, "{file:?}");
@@ -321,6 +330,7 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
         ..TorrentSet::default()
     };
     set(driven.client, &selection, &skip_second);
+    assert_others_unchanged(driven.client, Some(&own), &before);
     driven.command(Command::SetVisibility(Visibility::Hidden));
     driven.command(Command::SetVisibility(Visibility::Visible));
     driven.wait(Duration::from_millis(100));
@@ -329,7 +339,12 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
         switches(&progress),
         [(true, Normal), (false, Normal), (true, Normal)]
     );
-    assert_eq!(progress.files.len(), MULTI_FILES.len());
+    // The progress read brings no names: the merge keeps those of the full read.
+    assert_eq!(
+        names(&progress),
+        expected_names(&folder),
+        "after a progress read"
+    );
 
     // The progress read that goes out with the whole list, a minute on, brings the trackers too.
     let third_high = TorrentSet {
@@ -337,6 +352,7 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
         ..TorrentSet::default()
     };
     set(driven.client, &selection, &third_high);
+    assert_others_unchanged(driven.client, Some(&own), &before);
     driven.wait(Duration::from_secs(61));
     let with_trackers = latest(
         &driven.settle(),
@@ -346,6 +362,11 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
     assert_eq!(
         switches(&with_trackers),
         [(true, Normal), (false, Normal), (true, High)]
+    );
+    assert_eq!(
+        names(&with_trackers),
+        expected_names(&folder),
+        "after a progress read with the trackers"
     );
     assert_eq!(with_trackers.trackers, []);
 
