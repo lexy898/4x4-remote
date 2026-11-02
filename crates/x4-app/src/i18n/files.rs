@@ -1,5 +1,5 @@
 //! The texts of the Files tab that carry values: the names screen readers hear for the parts of a
-//! row, the priority a row shows, its progress in percent and the "Playable from start" line.
+//! row, the priority a row shows, its progress in percent and the "Playable from start" part.
 //!
 //! The switch, the name of the list and the line of a magnet link without metadata are plain
 //! messages, which the tab fetches itself.
@@ -51,7 +51,7 @@ pub(crate) fn percent_text(percent: u8) -> SharedString {
     t!("files-percent", percent = percent).into()
 }
 
-/// The line under a file that downloads, such as "Playable from start: 12.4 GiB (34%)".
+/// What follows the name of a file that downloads, such as "Playable from start: 12.4 GiB (34%)".
 pub(crate) fn playable_text(playable: Playable) -> SharedString {
     t!(
         "files-playable",

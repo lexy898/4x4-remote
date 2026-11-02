@@ -1,6 +1,7 @@
-//! One row of the file list, as x4-core's [`FileRow`] decides it: indented by its depth, with an
-//! expander for a folder, its checkbox, its name (and under a file that downloads, how much of it
-//! plays from the start), its size, its progress and its priority button.
+//! One row of the file list, as x4-core's [`FileRow`] decides it, on one line: indented by its
+//! depth, with an expander for a folder, its checkbox, its name (and after the name of a file that
+//! downloads, muted, how much of it plays from the start), its size, its progress and its priority
+//! button. A long name is cut short before that part is.
 //!
 //! The ids of a row and of its parts are keyed by the row's [`NodeKey`], never by its place in the
 //! list: the toolkit keeps state under them (a button's focus, a menu), and a place would hand one
@@ -16,7 +17,7 @@ use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, Progress, Progr
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Theme, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Theme, h_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -35,8 +36,8 @@ use crate::i18n::{
 use crate::theme::{PROGRESS_TRACK_OPACITY, tabular_digits};
 use crate::torrent_table::{BAR_HEIGHT, bar_fraction};
 
-/// The height of a row: room for the name and the line under it.
-pub(super) const ROW_HEIGHT: f32 = 36.;
+/// The height of a row: one line, with the controls' room around it.
+pub(super) const ROW_HEIGHT: f32 = 28.;
 /// How far each level of folders indents its entries.
 const INDENT: f32 = 16.;
 /// The width of the expander, and of the space a file leaves for it.
@@ -221,26 +222,32 @@ fn wanted_box(
         )
 }
 
-/// The name, and under a file that downloads the part of it that plays from the start.
+/// The name, and after the name of a file that downloads, muted, the part of it that plays from
+/// the start; the name is cut short first.
 fn name_cell(row: &FileRow, theme: &Theme) -> impl IntoElement {
     let muted = row.wanted == WantedState::None;
-    v_flex()
+    h_flex()
         .flex_1()
         .min_w_0()
-        .h_full()
-        .justify_center()
+        .items_baseline()
+        .gap_2()
         .child(
             div()
+                .id("file-name")
+                .flex_initial()
+                .min_w_0()
                 .truncate()
                 .when(muted, |name| name.text_color(theme.muted_foreground))
-                .child(SharedString::from(row.name.clone())),
+                .child(SharedString::from(row.name.clone()))
+                .test_support(),
         )
         .when_some(row.playable, |cell, playable| {
             let text = playable_text(playable);
             cell.child(
                 div()
                     .id("file-playable")
-                    .truncate()
+                    .flex_none()
+                    .whitespace_nowrap()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .aria_label(text.clone())

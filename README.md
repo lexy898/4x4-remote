@@ -229,13 +229,14 @@ arrow that opens and closes a folder, each row has a checkbox for whether it is 
 for a folder where only some of its files are), the name, the size, the progress, and the
 priority, Low, Normal or High ("Mixed" for a folder whose files differ), which a click on it
 changes. A change to a folder applies to every file in it, the hidden padding files included.
-Under a file that is downloading, a line such as "Playable from start: 12.4 GiB (34%)" says how
-much of its beginning has come without a gap, which a player can already read. Above the list, the
-switch "Download in order (sequential)" has the daemon download the torrent's pieces from the
-start, so that a file can be played while it downloads. A change shows once the daemon's next
-answer does, a moment later, not before. While the daemon is not connected, the checkboxes, the
-priorities and the switch are disabled. A magnet link has no files until its metadata has come;
-the tab says so, and the switch can be set already.
+Each row is one line. After the name of a file that is downloading, muted text such as "Playable
+from start: 12.4 GiB (34%)" says how much of its beginning has come without a gap, which a player
+can already read; a long name is cut short before it is. Above the list, the switch "Download in
+order (sequential)" has the daemon download the torrent's pieces from the start, so that a file can
+be played while it downloads. A change shows once the daemon's next answer does, a moment later, not
+before. While the daemon is not connected, the checkboxes, the priorities and the switch are
+disabled. A magnet link has no files until its metadata has come; the tab says so, and the switch
+can be set already.
 
 A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
 Home and End move between the rows, Left closes a folder or goes to the folder around the row,

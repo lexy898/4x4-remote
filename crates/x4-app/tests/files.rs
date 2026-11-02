@@ -1,6 +1,6 @@
 //! Headless tests for the Files tab of the details panel: the file tree it draws, opening and
 //! closing folders by click and by key, the wanted checkboxes, the priority dropdown and `+`/`-`,
-//! the sequential switch, the "Playable from start" line, which torrent and which files an action
+//! the sequential switch, the "Playable from start" part, which torrent and which files an action
 //! names, and how the file list's keys and the torrent list's keys stay apart.
 //!
 //! Each test builds the two channels of a service itself and opens the window with no service
@@ -12,9 +12,9 @@ use std::sync::Arc;
 use gpui_kit::component::table::TableState;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, ElementId, Entity, Focusable as _, InputEvent as _,
-    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, OperatingSystem, Pixels, Point, Role, TestAppContext,
+    AnyWindowHandle, App, AppContext as _, Bounds, ElementId, Entity, Focusable as _,
+    InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point, Role, TestAppContext, px,
 };
 use x4_app::app;
 use x4_app::main_view::MainView;
@@ -33,6 +33,7 @@ const EXPANDER: &str = "file-expander";
 const WANTED: &str = "file-wanted";
 const PRIORITY: &str = "file-priority";
 const PROGRESS: &str = "file-progress";
+const NAME: &str = "file-name";
 const PLAYABLE: &str = "file-playable";
 /// The switch of downloading in order.
 const SEQUENTIAL: &str = "file-sequential";
@@ -199,15 +200,21 @@ impl Window {
         part: &'static str,
         cx: &mut TestAppContext,
     ) -> Point<Pixels> {
+        self.bounds_of(path, part, cx).center()
+    }
+
+    /// Draws the window and says where the part `part` of the row at `path` is.
+    fn bounds_of(&self, path: &str, part: &'static str, cx: &mut TestAppContext) -> Bounds<Pixels> {
         let row = row(path);
         self.act(cx, |window, _| {
-            window
-                .within(FILE_LIST)
-                .within(row)
-                .find(part)
-                .bounds()
-                .center()
+            window.within(FILE_LIST).within(row).find(part).bounds()
         })
+    }
+
+    /// Draws the window and says where the row at `path` is.
+    fn row_bounds(&self, path: &str, cx: &mut TestAppContext) -> Bounds<Pixels> {
+        let row = row(path);
+        self.act(cx, |window, _| window.within(FILE_LIST).find(row).bounds())
     }
 
     /// Selects the torrent at `row` of the table, as a caller of the table does, and clicks at
@@ -994,7 +1001,7 @@ fn a_torrent_without_metadata_says_its_files_come_later(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
-fn playable_line_shows_for_wanted_incomplete_files(cx: &mut TestAppContext) {
+fn the_playable_part_shows_for_wanted_incomplete_files(cx: &mut TestAppContext) {
     let (window, _) = window_with_show(cx);
     window.click_in_row("Show/Season 1", EXPANDER, cx);
     window.click_in_row("Show/Season 2", EXPANDER, cx);
@@ -1006,7 +1013,7 @@ fn playable_line_shows_for_wanted_incomplete_files(cx: &mut TestAppContext) {
             .as_deref(),
         Some("Playable from start: 20.0 MiB (20%)")
     );
-    // Complete, not wanted, a folder: no line.
+    // Complete, not wanted, a folder: none.
     for path in [
         "Show/Season 1/E01.mkv",
         "Show/Season 2/E01.mkv",
@@ -1025,6 +1032,47 @@ fn playable_line_shows_for_wanted_incomplete_files(cx: &mut TestAppContext) {
             "{path}"
         );
     }
+}
+
+#[gpui_kit::test]
+fn a_row_is_one_line_with_the_playable_part_after_the_name(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = downloading("a");
+    window.send(vec![film.clone()], cx);
+    window.click_row(0, cx);
+    let short = "Show/E01.mkv";
+    let long = format!("Show/{}.mkv", "A very long name of an episode ".repeat(20));
+    let mut both = details(
+        &film.hash,
+        &[
+            (short, 100 * MIB, 30 * MIB, true, FilePriority::Normal),
+            (&long, 100 * MIB, 30 * MIB, true, FilePriority::Normal),
+        ],
+    );
+    for file in &mut both.files {
+        file.playable_from_start = 20 * MIB;
+    }
+    window.send_details(both, cx);
+
+    let height = window.row_bounds(short, cx).size.height;
+    assert!(height <= px(28.), "a row is one line: {height:?}");
+    for path in [short, long.as_str()] {
+        let name = window.bounds_of(path, NAME, cx);
+        let playable = window.bounds_of(path, PLAYABLE, cx);
+        assert!(
+            playable.top() >= name.top() && playable.bottom() <= name.bottom(),
+            "on the line of the name: {name:?}, {playable:?}"
+        );
+        assert!(
+            playable.left() >= name.right(),
+            "after the name: {name:?}, {playable:?}"
+        );
+    }
+    // The long name is cut short, not the part after it, which says the same as the short one's.
+    assert_eq!(
+        window.bounds_of(&long, PLAYABLE, cx).size.width,
+        window.bounds_of(short, PLAYABLE, cx).size.width
+    );
 }
 
 #[gpui_kit::test]

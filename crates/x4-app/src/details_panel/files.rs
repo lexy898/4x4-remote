@@ -1,6 +1,6 @@
 //! The Files tab: the switch of downloading in order, and the files and folders of the torrent as
-//! a tree, one row each, with a checkbox for whether it is downloaded, its size, its progress, its
-//! priority and, under a file that downloads, how much of it plays from the start.
+//! a tree, one line each, with a checkbox for whether it is downloaded, its size, its progress, its
+//! priority and, after the name of a file that downloads, how much of it plays from the start.
 //!
 //! x4-core decides all of it. The tab keeps the [`FileTree`] it draws, made from the details of
 //! the panel's torrent, and a [`FileTreeView`] with the folders open and the cursor, fitted to each
