@@ -3,9 +3,10 @@
 //! priority and, after the name of a file that downloads, how much of it plays from the start.
 //!
 //! x4-core decides all of it. The tab keeps the [`FileTree`] it draws, made from the details of
-//! the panel's torrent while the tab is open (the panel keeps the newest details and makes the
-//! tree when the tab opens), and a [`FileTreeView`] with the folders open and the cursor, fitted
-//! to each new tree with [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
+//! the panel's torrent while the tab is open (the panel keeps the newest details, makes the tree
+//! when the tab opens and lets it go when the tab closes), and a [`FileTreeView`] with the folders
+//! open and the cursor, which outlives the tree and is fitted to each new one with
+//! [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
 //! metadata has no files yet, and the tab says so instead of the list; before the details come it
 //! shows the switch alone.
 //!
@@ -106,6 +107,15 @@ impl FilesTab {
         self.tree = Some(tree);
         self.made_from = Some(Arc::clone(details));
         true
+    }
+
+    /// Lets go of the tree and its rows, as the tab closes: a tree of thousands of files is not
+    /// kept for a tab nobody sees. The open folders and the cursor stay, and the next tree of the
+    /// same torrent keeps them.
+    pub(super) fn leave(&mut self) {
+        self.tree = None;
+        self.made_from = None;
+        self.rows = Vec::new();
     }
 
     /// Changes the view with `change` on the tree on screen, lists its rows again and scrolls the
@@ -439,6 +449,95 @@ mod tests {
         );
     }
 
+    /// What the Files tab of the panel holds: whether it has a tree, the keys of its rows and
+    /// the row of the cursor.
+    fn held(
+        panel: WindowHandle<DetailsPanel>,
+        cx: &mut TestAppContext,
+    ) -> (bool, Vec<String>, Option<String>) {
+        panel
+            .update(cx, |panel, _, _| {
+                let files = &panel.files;
+                let rows = files
+                    .rows
+                    .iter()
+                    .map(|row| row.key.as_str().to_owned())
+                    .collect();
+                let cursor = files
+                    .tree
+                    .as_ref()
+                    .and_then(|tree| files.view.cursor(tree))
+                    .map(|key| key.as_str().to_owned());
+                (files.tree.is_some(), rows, cursor)
+            })
+            .expect("the panel is open")
+    }
+
+    #[gpui_kit::test]
+    fn leaving_the_files_tab_drops_the_tree_but_not_the_cursor_and_the_open_folders(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(app::init);
+        let panel = cx.add_window(|window, cx| {
+            DetailsPanel::new(DetailsTab::Files, Rc::new(RefCell::default()), window, cx)
+        });
+        let show = torrent("a");
+        let season = |hash: &HashString| {
+            Arc::new(details(
+                hash,
+                &[
+                    ("Show/Season 1/E01.mkv", 1024, 0, true, FilePriority::Normal),
+                    ("Show/Season 1/E02.mkv", 1024, 0, true, FilePriority::Normal),
+                    ("Show/info.nfo", 1, 1, true, FilePriority::Normal),
+                ],
+            ))
+        };
+        change(panel, cx, |panel, cx| {
+            panel.show(DetailsTarget::One(show.hash.clone()), Some(&show), cx);
+            panel.take_details(season(&show.hash), cx);
+            // The user opens the season and goes to its second episode.
+            let folder = NodeKey::new("Show/Season 1");
+            let episode = NodeKey::new("Show/Season 1/E02.mkv");
+            panel.change_file_view(
+                None,
+                |view, tree| {
+                    view.toggle_expanded(tree, &folder);
+                    view.set_cursor(tree, &episode);
+                },
+                cx,
+            );
+        });
+        let before = held(panel, cx);
+        assert_eq!(
+            before,
+            (
+                true,
+                [
+                    "Show",
+                    "Show/Season 1",
+                    "Show/Season 1/E01.mkv",
+                    "Show/Season 1/E02.mkv",
+                    "Show/info.nfo",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                Some("Show/Season 1/E02.mkv".to_owned())
+            )
+        );
+
+        change(panel, cx, |panel, cx| {
+            panel.set_tab(DetailsTab::General, cx);
+        });
+        assert_eq!(held(panel, cx), (false, Vec::new(), None), "nothing held");
+
+        // A read comes meanwhile; back on Files, the tree is made again, as it was left.
+        change(panel, cx, |panel, cx| {
+            panel.take_details(season(&show.hash), cx);
+            panel.set_tab(DetailsTab::Files, cx);
+        });
+        assert_eq!(held(panel, cx), before);
+    }
+
     #[gpui_kit::test]
     fn the_tree_is_made_only_while_the_files_tab_is_shown(cx: &mut TestAppContext) {
         cx.update(app::init);
@@ -471,7 +570,7 @@ mod tests {
         });
         assert!(made_from_read(panel, &third, cx));
 
-        // Back on General, reads make nothing until the Files tab is shown again.
+        // Back on General, the tree goes, and reads make none until the Files tab is shown again.
         change(panel, cx, |panel, cx| {
             panel.set_tab(DetailsTab::General, cx);
         });
@@ -479,7 +578,7 @@ mod tests {
         change(panel, cx, |panel, cx| {
             panel.take_details(Arc::clone(&fourth), cx);
         });
-        assert!(made_from_read(panel, &third, cx));
+        assert!(made_from(panel, cx).is_none(), "none on General");
         change(panel, cx, |panel, cx| {
             panel.set_tab(DetailsTab::Files, cx);
         });

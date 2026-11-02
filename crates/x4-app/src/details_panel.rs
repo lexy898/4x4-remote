@@ -120,11 +120,17 @@ impl DetailsPanel {
         }
     }
 
-    /// Opens the tab `tab`. The Files tab makes its tree then, from the newest details.
+    /// Opens the tab `tab`. The Files tab makes its tree then, from the newest details, and lets
+    /// it go when another tab opens; its open folders and cursor stay for its next tree.
     pub(crate) fn set_tab(&mut self, tab: DetailsTab, cx: &mut Context<'_, Self>) {
         if tab != self.tab {
             self.tab = tab;
-            self.follow_files();
+            match tab {
+                DetailsTab::Files => {
+                    self.follow_files();
+                }
+                DetailsTab::General => self.files.leave(),
+            }
             cx.notify();
         }
     }
