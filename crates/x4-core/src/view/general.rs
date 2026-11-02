@@ -339,6 +339,9 @@ mod tests {
 
         assert!(!model.details_loaded);
         assert_eq!(model.comment, None);
+        assert_eq!(model.creator, None);
+        // The other torrent's tracker problem is not this one's either.
+        assert_eq!(model.trackers, TrackerSummary::default());
         assert_eq!(model.hash, other.hash);
     }
 
