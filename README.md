@@ -677,8 +677,12 @@ once the list is there, and `--extend K` then extends the selection `K` rows dow
 would. The made-up daemon carries out the actions on its own torrents: pausing, starting (a torrent
 that lacks data downloads, a complete one seeds), starting ahead of the queue, verifying (the
 torrent checks for three updates, then goes back to what it was), removing, the speed settings, and
-what the Files tab changes: which files download, their priorities and downloading in order. Its
-torrents have files, most one, some a folder of several, a few dozens, and "Synthetic torrent 0005"
+what the Files tab changes: which files download, their priorities and downloading in order. It
+also adds torrents, from the content of a `.torrent` file (with the files it lists, in its order) or
+from a magnet link (which stays without its metadata), honouring `paused`, the folder and the files
+left out; it reports a torrent it already has as a duplicate and changes nothing; and its free space
+answers for the session's folder and the folders of its torrents, with Transmission's error 5, "No
+such file or directory", for any other. Its torrents have files, most one, some a folder of several, a few dozens, and "Synthetic torrent 0005"
 (`--select 4`) 2000 in folders; their pieces follow the download, from the start when it is in
 order. `--press KEY`, which can be given several times, presses each key in turn once the list is
 there and selected, one every three seconds, as on the keyboard: for example `just virtual just

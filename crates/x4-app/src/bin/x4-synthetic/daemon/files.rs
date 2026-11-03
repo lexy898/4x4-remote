@@ -1,7 +1,8 @@
 //! The files and pieces of the made-up torrents, and what `torrent_set` does to the files.
 //!
 //! What a torrent's files are (their names, sizes and pieces) follows from its [`Plan`] and its id
-//! alone, so it is the same on every run (`layout`). The state that changes is made when a read or
+//! alone, so it is the same on every run (`layout`). A torrent a client added has the files its
+//! metainfo lists, or none while it is a magnet link without its metadata. The state that changes is made when a read or
 //! a `torrent_set` first needs it: which files are wanted, with which priority, and which pieces
 //! are present. It starts from how much of the torrent the daemon says is left, and from then
 //! on the pieces are the truth: a download adds pieces, from the start of the torrent when it is
@@ -304,7 +305,7 @@ impl Torrent {
             ..
         } = self;
         files.get_or_insert_with(|| {
-            let layout = Layout::of(*plan, name, *total_kib, *id);
+            let layout = Layout::of(plan, name, *total_kib, *id);
             let state = FileState::new(layout, *left_kib, *sequential, *id);
             *left_kib = state.left_kib();
             state
@@ -352,6 +353,10 @@ impl Torrent {
     /// Turns a download that has nothing wanted left into a seed, and a seed that has something
     /// wanted missing into a download, as a daemon does once the wanted files change.
     fn settle(&mut self) {
+        // A magnet link without metadata has nothing wanted and nothing left, yet it is not done.
+        if !self.plan.has_metadata() {
+            return;
+        }
         match self.kind {
             Kind::Downloading if self.left_kib == 0 => {
                 self.kind = Kind::Seeding;
@@ -374,7 +379,7 @@ impl Torrent {
             // make the pieces of each.
             let count = self.files.as_ref().map_or_else(
                 || {
-                    Layout::of(self.plan, &self.name, self.total_kib, self.id)
+                    Layout::of(&self.plan, &self.name, self.total_kib, self.id)
                         .files
                         .len()
                 },

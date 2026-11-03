@@ -17,6 +17,7 @@ use x4_rpc::{
 
 use super::*;
 
+mod adding;
 mod details;
 mod file_set;
 mod pieces;
@@ -245,14 +246,14 @@ fn post(daemon: &SyntheticDaemon, body: &str) -> Value {
 }
 
 #[test]
-fn adding_and_unknown_methods_are_refused_and_change_nothing() {
+fn unknown_methods_are_refused_and_change_nothing() {
     let daemon = SyntheticDaemon::new(COUNT, Activity::Static);
     let before = post(
         &daemon,
         r#"{"jsonrpc":"2.0","id":1,"method":"torrent_get","params":{}}"#,
     );
 
-    for method in ["torrent_add", "torrent_set_location", "blocklist_update"] {
+    for method in ["torrent_set_location", "blocklist_update"] {
         let answer = post(
             &daemon,
             &format!(r#"{{"jsonrpc":"2.0","id":9,"method":"{method}","params":{{}}}}"#),

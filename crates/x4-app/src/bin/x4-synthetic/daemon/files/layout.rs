@@ -26,7 +26,7 @@ pub(super) fn to_wide(value: usize) -> u64 {
 }
 
 /// How a torrent's files are arranged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Shape {
     /// One file, named like the torrent.
     Single,
@@ -36,6 +36,11 @@ enum Shape {
     Series,
     /// An album of 2000 tracks, in discs and parts: folders three deep.
     Album,
+    /// The files of a torrent a client added, as its metainfo lists them: a path and a size in
+    /// bytes each, in the metainfo's order.
+    Listed(Vec<(String, u64)>),
+    /// A torrent added by a magnet link, whose metadata has not arrived: no files yet.
+    Magnet,
 }
 
 /// How a padded torrent names its padding files (BEP 47).
@@ -47,8 +52,9 @@ enum Padding {
     Prefix,
 }
 
-/// What a torrent's files are, before sizes: decided by the seed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a torrent's files are, before sizes: decided by the seed, or by the metainfo of a torrent a
+/// client added.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in super::super) struct Plan {
     shape: Shape,
     /// Whether every file but the last is followed by a padding file that fills its last piece.
@@ -64,7 +70,7 @@ impl Plan {
             950..955 => Shape::Series,
             _ => Shape::Single,
         };
-        let padding = match (shape, random.below(5)) {
+        let padding = match (&shape, random.below(5)) {
             (Shape::Single, _) | (_, 1..) => None,
             (_, 0) if random.below(2) == 0 => Some(Padding::Folder),
             (_, 0) => Some(Padding::Prefix),
@@ -80,12 +86,50 @@ impl Plan {
         }
     }
 
+    /// The plan of a torrent whose metainfo lists `files`, each a path and a size in bytes, and
+    /// how many KiB they take together.
+    ///
+    /// The made-up torrents count in whole KiB, so every size is rounded up to one (0 stays 0);
+    /// the files then add up to exactly the KiB returned. `None` when they are more than a torrent
+    /// of this daemon can hold, which counts in `u32`.
+    pub(in super::super) fn listed(files: Vec<(String, u64)>) -> Option<(Self, u32)> {
+        let mut total_kib = 0_u32;
+        let mut rounded = Vec::with_capacity(files.len());
+        for (name, length) in files {
+            let length = length.checked_next_multiple_of(KIB)?;
+            total_kib = total_kib.checked_add(u32::try_from(length / KIB).ok()?)?;
+            rounded.push((name, length));
+        }
+        let shape = Shape::Listed(rounded);
+        Some((
+            Self {
+                shape,
+                padding: None,
+            },
+            total_kib,
+        ))
+    }
+
+    /// The plan of a torrent added by a magnet link: no metadata, so no files.
+    pub(in super::super) fn magnet() -> Self {
+        Self {
+            shape: Shape::Magnet,
+            padding: None,
+        }
+    }
+
+    /// Whether the torrent knows its files: not a magnet link still looking for its metadata.
+    pub(in super::super) fn has_metadata(&self) -> bool {
+        !matches!(self.shape, Shape::Magnet)
+    }
+
     /// The files without padding, with the name inside the folder `top` and a weight for the size
     /// each takes: the bigger the weight, the bigger the file.
-    fn content(self, top: &str, random: &mut Lcg) -> Vec<(String, u64)> {
+    fn content(&self, top: &str, random: &mut Lcg) -> Vec<(String, u64)> {
         let mut weigh = |base: u32| u64::from(base * random.between(1, 5));
         match self.shape {
             Shape::Single => vec![(top.to_owned(), 1)],
+            Shape::Listed(_) | Shape::Magnet => Vec::new(),
             Shape::Folder(count) => {
                 let mut files: Vec<_> = (1..count)
                     .map(|number| (format!("{top}/E{number:02}.mkv"), weigh(8)))
@@ -150,14 +194,16 @@ impl Layout {
     /// The layout of torrent `id`, called `top`, of `total_kib` KiB, as `plan` says.
     ///
     /// The files add up to exactly `total_kib`. Their sizes are cut from it by weight, and the
-    /// last file takes what remains, padding included.
-    pub(super) fn of(plan: Plan, top: &str, total_kib: u32, id: u32) -> Self {
+    /// last file takes what remains, padding included. The files of a metainfo are laid as it
+    /// lists them, and a magnet link has none.
+    pub(super) fn of(plan: &Plan, top: &str, total_kib: u32, id: u32) -> Self {
+        match &plan.shape {
+            Shape::Listed(files) => return Self::listed(files),
+            Shape::Magnet => return Self::listed(&[]),
+            _ => {}
+        }
         let total = u64::from(total_kib) * KIB;
-        // Pieces of a power of two, as many as fit in `MAX_PIECES` at most.
-        let piece_size = total
-            .div_ceil(MAX_PIECES)
-            .next_power_of_two()
-            .max(MIN_PIECE_SIZE);
+        let piece_size = Self::piece_size(total);
         let content = plan.content(top, &mut Lcg::stream(id, WEIGHTS_STREAM));
         let weights: u64 = content.iter().map(|(_, weight)| weight).sum::<u64>().max(1);
         let budget = u64::from(total_kib) * SHARE_BEFORE_LAST / 100;
@@ -191,6 +237,29 @@ impl Layout {
             }
         }
         layout
+    }
+
+    /// The layout of the files a metainfo lists, one after the other, in its order.
+    fn listed(files: &[(String, u64)]) -> Self {
+        let total = files.iter().map(|&(_, length)| length).sum();
+        let mut layout = Self {
+            files: Vec::with_capacity(files.len()),
+            piece_size: Self::piece_size(total),
+            total,
+        };
+        for (name, length) in files {
+            layout.push(name.clone(), *length);
+        }
+        layout
+    }
+
+    /// The piece size for `total` bytes: a power of two, with as many pieces as fit in
+    /// `MAX_PIECES` at most.
+    fn piece_size(total: u64) -> u64 {
+        total
+            .div_ceil(MAX_PIECES)
+            .next_power_of_two()
+            .max(MIN_PIECE_SIZE)
     }
 
     /// Where the files so far end, in bytes.

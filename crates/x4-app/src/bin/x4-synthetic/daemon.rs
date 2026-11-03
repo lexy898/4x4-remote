@@ -15,7 +15,14 @@
 //! - `torrent_set` keeps the sequential download and the wanted switch and the priority of the
 //!   files, as Transmission 4.1 reads them: an empty list of file indices means every file, and an
 //!   index out of range fails the call with error 6 (`files`);
-//! - `session_set` keeps the speed settings, and `session_get` answers with them.
+//! - `session_set` keeps the speed settings, and `session_get` answers with them;
+//! - `torrent_add` adds a torrent from the content of a `.torrent` file or from a magnet link, as
+//!   Transmission 4.1 does (`add`): the files the metainfo lists, or none until a magnet link has
+//!   its metadata, which in this demo it never does. It honours `paused`, `download_dir` and the
+//!   file lists, reports a torrent it already has by its hash as a duplicate and changes nothing
+//!   then, and refuses with the daemon's codes and words;
+//! - `free_space` knows the session's folder and the folders of the torrents, and answers error 5
+//!   ("No such file or directory") for any other (`free_space`).
 //!
 //! Every torrent has files (most one, some a folder, a few dozens, one 2000, some with BEP 47
 //! padding files), and the pieces it has follow how much of it is downloaded, from the start when
@@ -25,11 +32,14 @@
 //!
 //! As a real daemon does, an action without `ids` reaches every torrent, an unknown torrent is
 //! skipped, and a torrent an action changed is among the recently active ones at the next poll.
-//! It adds no torrents: `torrent_add`, like any other method, is refused with a JSON-RPC error. It
-//! never touches the network or a file.
+//! Any other method is refused with a JSON-RPC error. The daemon never touches the network or a
+//! file.
 
+mod add;
 mod files;
+mod free_space;
 mod metainfo;
+mod refusal;
 mod torrent;
 
 use std::collections::{HashMap, HashSet};
@@ -39,6 +49,7 @@ use serde_json::{Value, json};
 use x4_rpc::{HttpRequest, HttpResponse, Transport, TransportError};
 
 use files::{FileOps, Plan};
+use refusal::Refusal;
 use torrent::{Kind, Torrent};
 
 /// The seed of the torrents, so that every run shows the same ones.
@@ -98,6 +109,7 @@ impl SyntheticDaemon {
                 session: Session::default(),
                 activity,
                 random,
+                next_id: count.saturating_add(1),
             }),
         }
     }
@@ -121,7 +133,7 @@ impl Transport for SyntheticDaemon {
             "session_get" => Ok(state.session.answer()),
             "session_set" => state.session.set(params).map(|()| json!({})),
             "session_stats" => Ok(state.stats()),
-            "free_space" => Ok(free_space()),
+            "free_space" => state.free_space(params),
             "torrent_get" => state.torrent_get(params),
             "torrent_start" => state.act(params, |torrent| torrent.start(false)),
             "torrent_start_now" => state.act(params, |torrent| torrent.start(true)),
@@ -130,9 +142,11 @@ impl Transport for SyntheticDaemon {
             "torrent_reannounce" => state.act(params, |_| {}),
             "torrent_remove" => state.remove(params),
             "torrent_set" => state.torrent_set(params),
+            "torrent_add" => state.torrent_add(params),
             _ => Err(Refusal {
                 code: METHOD_NOT_FOUND,
                 message: format!("the synthetic daemon has no {method:?}"),
+                data: None,
             }),
         };
         let body = match result {
@@ -140,7 +154,7 @@ impl Transport for SyntheticDaemon {
             Err(refusal) => json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": { "code": refusal.code, "message": refusal.message },
+                "error": refusal.to_json(),
             }),
         };
         let body = body.to_string().into_bytes();
@@ -160,22 +174,6 @@ impl Transport for SyntheticDaemon {
     }
 }
 
-/// Why the daemon refused a request: the JSON-RPC error it answers with.
-#[derive(Debug)]
-struct Refusal {
-    code: i64,
-    message: String,
-}
-
-impl Refusal {
-    fn invalid(message: impl Into<String>) -> Self {
-        Self {
-            code: INVALID_PARAMS,
-            message: message.into(),
-        }
-    }
-}
-
 /// The torrents and what moves them, and the settings.
 struct State {
     torrents: Vec<Torrent>,
@@ -184,6 +182,9 @@ struct State {
     session: Session,
     activity: Activity,
     random: Lcg,
+    /// The id of the next torrent added. Ids are never reused, as a daemon never reuses them
+    /// while it runs.
+    next_id: u32,
 }
 
 impl State {
@@ -226,7 +227,7 @@ impl State {
         let mut records = Vec::new();
         for torrent in &mut self.torrents {
             let verifying = torrent.verify_poll();
-            let moves = ticking && !verifying && torrent.kind.moves();
+            let moves = ticking && !verifying && torrent.moves();
             if moves {
                 torrent.tick(&mut self.random);
             }
@@ -497,15 +498,6 @@ impl Session {
         *self = next;
         Ok(())
     }
-}
-
-/// The answer to `free_space`: 800 GiB free of 1 TiB.
-fn free_space() -> Value {
-    json!({
-        "path": DOWNLOAD_DIR,
-        "size_bytes": 800_u64 << 30,
-        "total_size": 1_u64 << 40,
-    })
 }
 
 /// A tiny linear congruential generator (Knuth's MMIX constants): varied torrents, the same on
