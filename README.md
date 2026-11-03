@@ -519,10 +519,11 @@ of its own and the log says so.
 The desktop entry in `packaging/linux/`,
 [`io.github.lexy898.FourByFour.desktop`](packaging/linux/io.github.lexy898.FourByFour.desktop),
 offers 4x4 as a handler for `.torrent` files and `magnet:` links (`Exec=4x4 %U`, one process for all
-the files and links of a launch). Nothing installs or registers it yet, so today no file manager or
-browser opens them with 4x4: start it with them, or drop them on its window. Stage 6, packaging,
-will install it and offer to make 4x4 the handler for `.torrent` files and magnet links; 4x4 never
-makes itself the default handler without asking.
+the files and links of a launch). The package installs it (see [Install](#install)), so file
+managers and browsers list 4x4 among the apps for them; `just default-handler` makes it their
+default and `just default-handler --undo` gives them back. 4x4 never makes itself the default
+handler without asking. From the source tree, without the package, start it with them or drop them
+on its window.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
