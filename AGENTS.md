@@ -26,7 +26,15 @@ just lint-policy      # lint exceptions, workspace lints, the one unsafe call, d
 just run              # run the app (debug build)
 just release          # optimized build
 just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp
-                      # state dir; --synthetic measures the demo; run it inside `just virtual`
+                      # state dir; --synthetic measures the demo, --binary <path> a built file;
+                      # agents run it inside `just virtual` and measure the app with --offline (the
+                      # session's config dir is empty, so the app would poll the owner's daemon)
+just package          # the Arch package of the committed master under ~/.cache/4x4-pkg; prints its
+                      # path (installing it is the owner's). Agents run it only from a scratch
+                      # clone, with XDG_CACHE_HOME under ~/.cache/x4-scratch, never in the owner's
+                      # cache
+just default-handler  # make the installed 4x4 the default app for .torrent files and magnet links
+                      # (--undo gives them back); the owner's only: agents never run it
 just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
 just demo-synthetic   # the main window over 2000 made-up torrents, no network
                       # (--static, --scroll, --select N)
