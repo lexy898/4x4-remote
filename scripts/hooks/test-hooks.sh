@@ -2463,10 +2463,39 @@ test_default_handler_reports_a_choice_that_another_list_overrides() {
     [[ $stderr != *x-scheme-handler/magnet* ]] || fail "the script blamed the magnet type too: $stderr"
 }
 
+# Sets the desktop's PATH to links to the programs of the caller's PATH, the first of each name as
+# a lookup finds it, but none named 4x4: the 4x4 package may be installed where the cases run.
+hide_installed_4x4() {
+    python3 -I - "$desktop/system-bin" <<'EOF'
+import os
+import sys
+
+links = sys.argv[1]
+os.mkdir(links)
+for directory in os.environ["PATH"].split(":"):
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        continue
+    for name in names:
+        program = os.path.join(directory, name)
+        link = os.path.join(links, name)
+        if name == "4x4" or os.path.lexists(link):
+            continue
+        if os.path.isfile(program) and os.access(program, os.X_OK):
+            os.symlink(program, link)
+EOF
+    desktop_env[2]="PATH=$desktop/bin:$desktop/system-bin"
+}
+
 # The 4x4 executable is missing from PATH: xdg-mime ignores the desktop file then.
 test_default_handler_reports_a_choice_that_does_not_take_effect() {
     new_desktop
     rm "$desktop/bin/4x4"
+    hide_installed_4x4
+    if "${desktop_env[@]}" sh -c 'command -v 4x4' >/dev/null; then
+        fail "a 4x4 is still on the desktop's PATH: $("${desktop_env[@]}" sh -c 'command -v 4x4')"
+    fi
     run_default_handler --yes
     expect_status 1
     expect_contains "still opens with another app" "$stderr" stderr
