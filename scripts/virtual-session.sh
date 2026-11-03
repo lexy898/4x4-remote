@@ -4,17 +4,18 @@
 #
 # The command gets a virtual screen that no monitor shows, so it can open windows, measure them
 # and take screenshots (`spectacle -b -n -f -o <file>`) without showing anything on the real
-# desktop or taking its focus. The session has its own D-Bus session and its own XDG config,
-# data, state, cache and runtime dirs, and neither it nor anything it starts sees the owner's
-# DISPLAY or XAUTHORITY. The command's stdout and stderr are the caller's; KWin's own output goes
-# to kwin.log in the session's temp dir, which is removed at the end, after every process still
-# running with the session's dirs is stopped.
+# desktop or taking its focus. The session has its own D-Bus session, its own XDG config, data,
+# state, cache and runtime dirs and its own HOME, and neither it nor anything it starts sees the
+# owner's DISPLAY or XAUTHORITY; cargo and rustup keep the owner's CARGO_HOME and RUSTUP_HOME, so
+# builds inside reuse the registry and the toolchains. The command's stdout and stderr are the
+# caller's; KWin's own output goes to kwin.log in the session's temp dir, which is removed at the
+# end, after every process still running with the session's dirs is stopped.
 #
 # Env: X4_VIRTUAL_WIDTH and X4_VIRTUAL_HEIGHT, the size of the virtual screen (default 1440x900);
-# X4_VIRTUAL_KEEP=1 keeps the session's temp dir (kwin.log, the session's XDG dirs) and prints
-# its path. Exits with 127 when a tool is missing, with 125 when KWin ended before the command ran
-# (KWin's log is printed then), and with 2 for a bad command line or a TMPDIR so long that KWin's
-# socket path in it would not fit a Unix socket address (107 bytes).
+# X4_VIRTUAL_KEEP=1 keeps the session's temp dir (kwin.log, the session's XDG dirs and HOME) and
+# prints its path. Exits with 127 when a tool is missing, with 125 when KWin ended before the
+# command ran (KWin's log is printed then), and with 2 for a bad command line or a TMPDIR so long
+# that KWin's socket path in it would not fit a Unix socket address (107 bytes).
 set -euo pipefail
 
 for tool in kwin_wayland dbus-run-session; do
@@ -32,8 +33,15 @@ fi
 width=${X4_VIRTUAL_WIDTH:-1440}
 height=${X4_VIRTUAL_HEIGHT:-900}
 owner_config=${XDG_CONFIG_HOME:-$HOME/.config}
+# Cargo's and rustup's homes stay the owner's while HOME changes below, as they would be found
+# from HOME. Neither has to exist (Arch's cargo needs no rustup).
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
 
 root=$(mktemp -d "${TMPDIR:-/tmp}/x4-virtual.XXXXXX")
+# Absolute, also under a relative TMPDIR: HOME and the links below must not depend on the current
+# directory. Without CDPATH, which could send cd elsewhere and make it print the dir.
+root=$(CDPATH='' cd -- "$root" && pwd)
 # KWin's socket, in the session's runtime dir.
 socket=x4-virtual-$$
 
@@ -111,6 +119,16 @@ fi
 # document portal's and gvfs's mounts), away from the owner's.
 mkdir -p "$root/config" "$root/data" "$root/state" "$root/cache"
 mkdir -m 0700 "$root/runtime"
+# A HOME of its own too, because some programs write by fixed paths under HOME, not through the XDG
+# dirs: KDE's update scripts, which the session's first Plasma start runs, once rewrote the owner's
+# ~/.local/share/plasma-systemmonitor that way. Its usual dirs lead to the session's XDG dirs, so
+# both ways of finding a file find the same one. Only HOME changes: a program that looks the home
+# up in the passwd database, or follows an absolute path it inherits, still finds the owner's.
+mkdir -p "$root/home/.local"
+ln -s "$root/config" "$root/home/.config"
+ln -s "$root/data" "$root/home/.local/share"
+ln -s "$root/state" "$root/home/.local/state"
+ln -s "$root/cache" "$root/home/.cache"
 # Copies of the owner's font and KDE settings, so the window looks as it does on the desktop.
 # Anything the session writes lands in the copies, never in the owner's files, even where those
 # are symlinks: the copies follow the links (-L).
@@ -142,7 +160,8 @@ chmod +x "$session"
 kwin_status=0
 env -u DISPLAY -u XAUTHORITY WAYLAND_DISPLAY="$socket" XDG_RUNTIME_DIR="$root/runtime" \
     XDG_CONFIG_HOME="$root/config" XDG_DATA_HOME="$root/data" XDG_STATE_HOME="$root/state" \
-    XDG_CACHE_HOME="$root/cache" \
+    XDG_CACHE_HOME="$root/cache" HOME="$root/home" CARGO_HOME="$cargo_home" \
+    RUSTUP_HOME="$rustup_home" \
     dbus-run-session -- kwin_wayland --virtual --no-lockscreen --socket "$socket" \
     --width "$width" --height "$height" --exit-with-session "$session" \
     3>&1 4>&2 >"$root/kwin.log" 2>&1 || kwin_status=$?

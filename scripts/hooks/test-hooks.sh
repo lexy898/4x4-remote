@@ -1205,9 +1205,10 @@ test_measure_without_offline_keeps_the_callers_config_dir() {
 # sees to <dir>/<tool>.txt. Also an owner's home with a kdeglobals, and an empty TMPDIR for the
 # session's directory.
 virtual_dir=
-virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY)='
+virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY|HOME)='
 new_virtual_env() {
     virtual_dir=$(mktemp -d "$tmp_root/virtual.XXXXXX")
+    virtual_caller_env=()
     mkdir -p "$virtual_dir/bin" "$virtual_dir/home/.config/fontconfig" "$virtual_dir/tmp"
     printf '[General]\nColorScheme=Owner\n' >"$virtual_dir/home/.config/kdeglobals"
     printf '<fontconfig/>\n' >"$virtual_dir/home/.config/fontconfig/fonts.conf"
@@ -1233,14 +1234,17 @@ EOF
 }
 
 # run_virtual <command...>: the helper with the fakes first on PATH, in the fake home, with the
-# owner's XDG dirs left to their defaults and the owner's displays, X authority and runtime dir set
-# as on a desktop.
+# owner's XDG dirs, cargo's and rustup's homes left to their defaults (CI sets CARGO_HOME) and the
+# owner's displays, X authority and runtime dir set as on a desktop. The assignments in
+# virtual_caller_env come last, so a case can set or override any of them.
+virtual_caller_env=()
 run_virtual() {
     mkdir -p "$virtual_dir/owner-runtime"
     run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
-        -u X4_VIRTUAL_KEEP PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
-        TMPDIR="$virtual_dir/tmp" DISPLAY=:0 XAUTHORITY="$virtual_dir/home/.Xauthority" \
-        WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$virtual_dir/owner-runtime" \
+        -u X4_VIRTUAL_KEEP -u CARGO_HOME -u RUSTUP_HOME PATH="$virtual_dir/bin:$PATH" \
+        HOME="$virtual_dir/home" TMPDIR="$virtual_dir/tmp" DISPLAY=:0 \
+        XAUTHORITY="$virtual_dir/home/.Xauthority" WAYLAND_DISPLAY=wayland-0 \
+        XDG_RUNTIME_DIR="$virtual_dir/owner-runtime" "${virtual_caller_env[@]}" \
         "$BASH" "$virtual_session" "$@"
 }
 
@@ -1307,6 +1311,59 @@ test_virtual_session_keeps_the_owner_display_and_runtime_dir_away() {
             fail "$seen sees the owner's X server: $(<"$virtual_dir/$seen.txt")"
         fi
     done
+}
+
+# Some programs write to ~/.config or ~/.local/share by fixed paths, not through the XDG dirs (KDE's
+# update scripts, which a session's first Plasma start runs, do): the session's HOME is its own,
+# with ~/.config, ~/.local/share, ~/.local/state and ~/.cache leading to its XDG dirs, while cargo
+# and rustup still find the owner's registry and toolchains, and homes the caller set for them stay.
+test_virtual_session_gives_the_command_a_home_of_its_own() {
+    local seen session_home
+    new_virtual_env
+    run_virtual bash -c 'echo "home=$HOME"; echo "cargo=$CARGO_HOME"; echo "rustup=$RUSTUP_HOME"
+        mkdir -p "$HOME/.local/share/monitor" && echo page >"$HOME/.local/share/monitor/a.page"
+        echo changed >"$HOME/.config/kdeglobals"
+        echo state >"$HOME/.local/state/s"; echo cache >"$HOME/.cache/c"
+        [[ -f $XDG_DATA_HOME/monitor/a.page ]] && echo "data shared"
+        [[ $(<"$XDG_CONFIG_HOME/kdeglobals") == changed ]] && echo "config shared"
+        [[ -f $XDG_STATE_HOME/s && -f $XDG_CACHE_HOME/c ]] && echo "state and cache shared"'
+    expect_status 0
+    session_home=$(sed -n 's/^home=//p' <<<"$stdout")
+    [[ $session_home == "$virtual_dir/tmp/x4-virtual."*/home ]] ||
+        fail "the command's HOME is not the session's: '$session_home'"
+    expect_contains "cargo=$virtual_dir/home/.cargo" "$stdout" "the command's CARGO_HOME"
+    expect_contains "rustup=$virtual_dir/home/.rustup" "$stdout" "the command's RUSTUP_HOME"
+    expect_contains "data shared" "$stdout" "~/.local/share in the session"
+    expect_contains "config shared" "$stdout" "~/.config in the session"
+    expect_contains "state and cache shared" "$stdout" "~/.local/state and ~/.cache in the session"
+    [[ ! -e $virtual_dir/home/.local/share/monitor ]] ||
+        fail "the command wrote into the owner's home"
+    [[ $(<"$virtual_dir/home/.config/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
+        fail "the owner's kdeglobals changed"
+    for seen in dbus-run-session kwin_wayland; do
+        expect_contains "HOME=$session_home" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+    done
+    virtual_caller_env=(CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup)
+    run_virtual bash -c 'echo "cargo=$CARGO_HOME rustup=$RUSTUP_HOME"'
+    expect_status 0
+    expect_contains "cargo=/opt/cargo rustup=/opt/rustup" "$stdout" "homes the caller set"
+}
+
+# Under a relative TMPDIR the session's dir, its HOME and the links in it are still absolute, so
+# they hold wherever the command changes to; a CDPATH that makes cd print the dir changes nothing.
+test_virtual_session_makes_a_relative_tmpdir_absolute() {
+    local before=$PWD
+    new_virtual_env
+    virtual_caller_env=(TMPDIR=tmp CDPATH=.)
+    cd "$virtual_dir"
+    run_virtual bash -c 'cd /; echo "home=$HOME"
+        [[ -d $HOME/.config && -d $HOME/.local/share ]] && echo "links hold"'
+    cd "$before"
+    expect_status 0
+    expect_contains "home=$virtual_dir/tmp/x4-virtual." "$stdout" "the command's HOME"
+    expect_contains "links hold" "$stdout" "the links of the session's HOME"
+    [[ -z $(ls -A "$virtual_dir/tmp") ]] ||
+        fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
 }
 
 # A fontconfig dir and a kdeglobals that are symlinks (into a dotfiles repository, say) are copied
@@ -1576,21 +1633,25 @@ RUSTUP_TOOLCHAIN: stable"
 }
 
 # package() in a stand-in of makepkg's $srcdir and $pkgdir, with a stand-in binary and the
-# repository's own desktop file, icon and licenses: exactly those five files, with pacman's modes.
-test_package_installs_the_binary_desktop_file_icon_and_licenses() {
+# repository's own desktop files (4x4's, and the hidden one that gives the windows of the debug
+# build the icon), icon and licenses: exactly those six files, with pacman's modes.
+test_package_installs_the_binary_desktop_files_icon_and_licenses() {
     local dir checkout listing expected
     dir=$(mktemp -d "$tmp_root/package-files.XXXXXX")
     checkout=$dir/src/4x4
     mkdir -p "$checkout/target/release" "$checkout/packaging/linux" "$dir/pkg"
     printf '#!/bin/sh\n' >"$checkout/target/release/4x4"
     cp "$root/packaging/linux/io.github.lexy898.FourByFour.desktop" "$checkout/packaging/linux/"
+    cp "$root/packaging/linux/io.github.lexy898.FourByFour.Devel.desktop" \
+        "$checkout/packaging/linux/" 2>/dev/null || fail "no desktop file for the debug build"
     cp "$icon" "$checkout/packaging/linux/" 2>/dev/null || fail "no icon at $icon"
     cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$checkout/"
     run_with_input '' env -C "$dir/src" X4_REPO="$dir" srcdir="$dir/src" pkgdir="$dir/pkg" \
         bash -e -c 'source "$1" && package' _ "$pkgbuild"
     expect_status 0
     listing=$(cd "$dir/pkg" && find . -type f -printf '%m %p\n' | LC_ALL=C sort)
-    expected="644 ./usr/share/applications/io.github.lexy898.FourByFour.desktop
+    expected="644 ./usr/share/applications/io.github.lexy898.FourByFour.Devel.desktop
+644 ./usr/share/applications/io.github.lexy898.FourByFour.desktop
 644 ./usr/share/icons/hicolor/scalable/apps/io.github.lexy898.FourByFour.svg
 644 ./usr/share/licenses/4x4-git/LICENSE-APACHE
 644 ./usr/share/licenses/4x4-git/LICENSE-MIT
@@ -2429,10 +2490,45 @@ test_default_handler_reports_a_choice_that_another_list_overrides() {
     [[ $stderr != *x-scheme-handler/magnet* ]] || fail "the script blamed the magnet type too: $stderr"
 }
 
+# Sets the desktop's PATH to links to the programs of the caller's PATH, the first of each name as
+# a lookup finds it, but none named 4x4: the 4x4 package may be installed where the cases run, in
+# /usr/bin beside sh, python3 and the tools xdg-mime calls, so that dir cannot simply be left out.
+hide_installed_4x4() {
+    local i
+    python3 -I - "$desktop/system-bin" <<'EOF'
+import os
+import sys
+
+links = sys.argv[1]
+os.mkdir(links)
+for directory in os.environ["PATH"].split(":"):
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        continue
+    for name in names:
+        program = os.path.join(directory, name)
+        link = os.path.join(links, name)
+        if name == "4x4" or os.path.lexists(link):
+            continue
+        if os.path.isfile(program) and os.access(program, os.X_OK):
+            os.symlink(program, link)
+EOF
+    for i in "${!desktop_env[@]}"; do
+        if [[ ${desktop_env[i]} == PATH=* ]]; then
+            desktop_env[i]="PATH=$desktop/bin:$desktop/system-bin"
+        fi
+    done
+}
+
 # The 4x4 executable is missing from PATH: xdg-mime ignores the desktop file then.
 test_default_handler_reports_a_choice_that_does_not_take_effect() {
     new_desktop
     rm "$desktop/bin/4x4"
+    hide_installed_4x4
+    if "${desktop_env[@]}" sh -c 'command -v 4x4' >/dev/null; then
+        fail "a 4x4 is still on the desktop's PATH: $("${desktop_env[@]}" sh -c 'command -v 4x4')"
+    fi
     run_default_handler --yes
     expect_status 1
     expect_contains "still opens with another app" "$stderr" stderr
@@ -2592,6 +2688,8 @@ cases=(
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
     virtual_session_keeps_the_owner_display_and_runtime_dir_away
+    virtual_session_gives_the_command_a_home_of_its_own
+    virtual_session_makes_a_relative_tmpdir_absolute
     virtual_session_copies_linked_settings_as_files
     virtual_session_keeps_arguments_with_spaces
     virtual_session_names_a_missing_tool
@@ -2604,7 +2702,7 @@ cases=(
     package_version_is_the_workspace_version_with_the_commit_count_and_hash
     package_version_stops_without_a_workspace_version
     package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped
-    package_installs_the_binary_desktop_file_icon_and_licenses
+    package_installs_the_binary_desktop_files_icon_and_licenses
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
     package_recipe_stops_outside_a_git_repository

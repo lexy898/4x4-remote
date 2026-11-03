@@ -105,7 +105,8 @@ repository (a copy of the files without `.git`) it stops the same way, with git'
 checkout has moved to another directory, the next build starts over from it and takes the full
 four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
 `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
-application menu with its icon at once, without logging out.
+application menu with its icon at once, without logging out. It also installs a second, hidden
+desktop file for debug builds (described below).
 
 To update, run the same four commands again; pacman replaces the installed version.
 
@@ -148,6 +149,13 @@ id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links 
 window rules for the one never catch the other. But both read the same `config.toml` and write the
 same `state.toml` and log: whichever saves last decides the window size, columns and filter the next
 start remembers.
+
+KDE and GNOME take a window's icon from the desktop file named after its app id, so the package also
+installs `io.github.lexy898.FourByFour.Devel.desktop`, which gives the windows of `just run` the
+same icon in the title bar and the task manager. It is hidden from the menu and search and opens
+no files or links. Its command runs the installed 4x4 under the development id (`X4_DEVEL=1`), which
+hands over to a running debug build, as a second start of 4x4 does, or opens a window of its own
+when none runs. Until the package is installed, debug windows show the desktop's generic icon.
 
 The icon, a rose under a resin dome, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
 installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small
@@ -1071,10 +1079,13 @@ the newest, and it redraws only when what it shows has changed, so an idle daemo
 `just virtual <command>` runs a command inside a headless KWin with a D-Bus session and XDG
 directories of its own, runtime directory included, and without your desktop's `DISPLAY`, so the
 windows it opens show on no monitor, take no focus and leave the desktop's settings alone;
-`spectacle -b -n -f -o /tmp/shot.png` inside it captures the virtual screen. Whatever the session
-started is stopped when it ends. For example, `just virtual just measure --offline` measures the app
-without a window on your screens and without reaching your daemon. It needs KDE Plasma
-(`kwin_wayland` and `dbus-run-session`) and works nowhere else.
+`spectacle -b -n -f -o /tmp/shot.png` inside it captures the virtual screen. `HOME` is the
+session's own as well, because some programs write by fixed paths under it rather than through the
+XDG directories (KDE's update scripts, run when Plasma first starts in a session, do); cargo and
+rustup keep your `~/.cargo` and `~/.rustup`. Whatever the session started is stopped when it ends.
+For example, `just virtual just measure --offline` measures the app without a window on your
+screens and without reaching your daemon. It needs KDE Plasma (`kwin_wayland` and
+`dbus-run-session`) and works nowhere else.
 
 ### Synthetic demo
 
