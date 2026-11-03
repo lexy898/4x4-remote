@@ -840,10 +840,34 @@ test_measure_cpu_line_rejects_an_unreadable_stat() {
     [[ -z $stdout ]] || fail "expected no CPU line, got: $stdout"
 }
 
+# write_measured_stand_in <path> <dir> <name>: a program for scripts/measure.sh to measure. It
+# records its arguments in <dir>/args-<name>.txt, its XDG_STATE_HOME in <dir>/state-<name>.txt, its
+# XDG_CONFIG_HOME in <dir>/config-dir-<name>.txt and a copy of the 4x4/config.toml there, if any,
+# in <dir>/config-<name>.toml (the script removes its temp dirs at the end); writes a state file
+# and a log as the app does, logs its first frame like the app and then sleeps until the script
+# stops it.
+write_measured_stand_in() {
+    {
+        printf '#!/usr/bin/env bash\nrecord=%q\n' "$2"
+        printf 'name=%q\n' "$3"
+        cat <<'EOF'
+echo "$*" >"$record/args-$name.txt"
+echo "${XDG_STATE_HOME-unset}" >"$record/state-$name.txt"
+echo "${XDG_CONFIG_HOME-unset}" >"$record/config-dir-$name.txt"
+if [[ -n ${XDG_CONFIG_HOME:-} && -e $XDG_CONFIG_HOME/4x4/config.toml ]]; then
+    cp "$XDG_CONFIG_HOME/4x4/config.toml" "$record/config-$name.toml"
+fi
+mkdir -p "$XDG_STATE_HOME/4x4" && touch "$XDG_STATE_HOME/4x4/state.toml" "$XDG_STATE_HOME/4x4/4x4.log"
+echo "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2
+exec sleep 30
+EOF
+    } >"$1"
+    chmod +x "$1"
+}
+
 # A fake build for scripts/measure.sh: `just` and `cargo` that record their arguments, and in
-# <dir>/target the binaries of the app and of the synthetic demo, which record theirs and
-# their XDG_STATE_HOME, write a state file and a log there as the app does, log their first frame
-# like the app and then sleep until the script stops them.
+# <dir>/target the binaries of the app and of the synthetic demo (write_measured_stand_in, named
+# 4x4 and x4-synthetic).
 new_measure_env() {
     local dir name
     dir=$(mktemp -d "$tmp_root/measure.XXXXXX")
@@ -853,9 +877,7 @@ new_measure_env() {
         chmod +x "$dir/bin/$name"
     done
     for name in 4x4 x4-synthetic; do
-        printf '#!/usr/bin/env bash\necho "$*" >%q\necho "${XDG_STATE_HOME-unset}" >%q\nmkdir -p "$XDG_STATE_HOME/4x4" && touch "$XDG_STATE_HOME/4x4/state.toml" "$XDG_STATE_HOME/4x4/4x4.log"\necho "INFO x4_app::app: first frame rendered elapsed_ms=42" >&2\nexec sleep 30\n' \
-            "$dir/args-$name.txt" "$dir/state-$name.txt" >"$dir/target/release/$name"
-        chmod +x "$dir/target/release/$name"
+        write_measured_stand_in "$dir/target/release/$name" "$dir" "$name"
     done
     echo "$dir"
 }
@@ -925,13 +947,133 @@ test_measure_gives_the_app_an_absolute_state_dir_under_a_relative_tmpdir() {
 test_measure_rejects_unknown_options() {
     local dir option
     dir=$(new_measure_env)
-    for option in --bogus "--cpu x" "--cpu" "--example synthetic"; do
+    for option in --bogus "--cpu x" "--cpu" "--example synthetic" "--binary"; do
         # Unquoted on purpose: "--cpu x" is an option and its value.
         run_measure_script "$dir" $option
         expect_status 2
         expect_contains "usage: scripts/measure.sh" "$stderr" "stderr for $option"
     done
     [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "a bad command line built something"
+}
+
+# --binary measures a file built elsewhere, such as the installed /usr/bin/4x4: nothing is built,
+# and the binary size is that file's. Its directory's name holds a "=", which env(1) would take
+# for a variable to set.
+test_measure_measures_the_given_binary_and_builds_nothing() {
+    local dir
+    dir=$(new_measure_env)
+    mkdir "$dir/opt=1"
+    write_measured_stand_in "$dir/opt=1/4x4" "$dir" installed
+    # The script stops reading at its `exec`, so the padding never runs; it makes the size 3 MiB.
+    truncate -s 3145728 "$dir/opt=1/4x4"
+    run_measure_script "$dir" --binary "$dir/opt=1/4x4" --cpu 1 -- --flag 'two words'
+    expect_status 0
+    [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ .*\ binary_mib=3\.0$'\n'cpu_percent= ]] ||
+        fail "unexpected report: $stdout"
+    [[ $(<"$dir/args-installed.txt") == "--flag two words" ]] ||
+        fail "unexpected arguments: $(<"$dir/args-installed.txt")"
+    [[ $(<"$dir/state-installed.txt") == "$dir/tmp/"* ]] ||
+        fail "the binary did not get a temp state dir: $(<"$dir/state-installed.txt")"
+    [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] ||
+        fail "something was built: $(cat "$dir/just.txt" "$dir/cargo.txt" 2>/dev/null)"
+    [[ ! -e $dir/args-4x4.txt && ! -e $dir/args-x4-synthetic.txt ]] || fail "a binary of the build ran"
+}
+
+# A relative --binary names a file from the caller's directory, as TMPDIR does, not from the
+# repository the script changes into.
+test_measure_takes_a_relative_binary_from_the_callers_directory() {
+    local dir
+    dir=$(new_measure_env)
+    mkdir "$dir/installed"
+    write_measured_stand_in "$dir/installed/4x4" "$dir" installed
+    run_with_input '' env -C "$dir" -u XDG_STATE_HOME PATH="$dir/bin:$PATH" \
+        CARGO_TARGET_DIR="$dir/target" HOME="$dir/home" TMPDIR="$dir/tmp" X4_MEASURE_SETTLE_SECONDS=1 \
+        "$BASH" "$measure" --binary installed/4x4
+    expect_status 0
+    [[ -e $dir/args-installed.txt ]] || fail "the given binary did not run (stderr: $stderr)"
+    [[ ! -e $dir/just.txt ]] || fail "the app was built: $(<"$dir/just.txt")"
+}
+
+test_measure_refuses_a_binary_it_cannot_run() {
+    local dir binary
+    dir=$(new_measure_env)
+    mkdir "$dir/installed"
+    printf 'not a program\n' >"$dir/installed/4x4"
+    for binary in "$dir/installed/missing" "$dir/installed/4x4" "$dir/installed"; do
+        run_measure_script "$dir" --binary "$binary"
+        expect_status 2
+        expect_contains "$binary" "$stderr" "stderr for --binary $binary"
+    done
+    [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "a bad binary built something"
+}
+
+# The synthetic demo is a build of its own, so a given binary cannot be it.
+test_measure_refuses_a_binary_with_the_synthetic_demo() {
+    local dir
+    dir=$(new_measure_env)
+    mkdir "$dir/installed"
+    write_measured_stand_in "$dir/installed/4x4" "$dir" installed
+    run_measure_script "$dir" --binary "$dir/installed/4x4" --synthetic
+    expect_status 2
+    expect_contains "--binary" "$stderr" stderr
+    expect_contains "--synthetic" "$stderr" stderr
+    run_measure_script "$dir" --synthetic --binary "$dir/installed/4x4"
+    expect_status 2
+    [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "something was built"
+    [[ ! -e $dir/args-installed.txt && ! -e $dir/args-x4-synthetic.txt ]] || fail "something ran"
+}
+
+# Inside `just virtual` the config dir is empty, so the app would poll the default daemon, the
+# owner's. --offline gives it a config dir of its own, whose config.toml names a closed port on
+# this machine, whatever the caller's config dir holds; the dir is removed at the end.
+test_measure_offline_gives_the_program_a_config_of_a_closed_port() {
+    local dir config_dir binary
+    dir=$(new_measure_env)
+    mkdir -p "$dir/caller-config/4x4" "$dir/installed"
+    printf '[connection]\nurl = "http://192.0.2.1:9091/transmission/rpc"\n' >"$dir/caller-config/4x4/config.toml"
+    write_measured_stand_in "$dir/installed/4x4" "$dir" installed
+    printf '[connection]\nurl = "http://127.0.0.1:1/transmission/rpc"\n' >"$dir/expected.toml"
+    for binary in 4x4 installed; do
+        if [[ $binary == 4x4 ]]; then
+            XDG_CONFIG_HOME="$dir/caller-config" run_measure_script "$dir" --offline
+        else
+            XDG_CONFIG_HOME="$dir/caller-config" run_measure_script "$dir" --offline --binary "$dir/installed/4x4"
+        fi
+        expect_status 0
+        [[ $stdout =~ ^first_frame_ms=42\ pss_mib=[0-9.]+\ [^$'\n']*$ ]] || fail "expected one report line, got: $stdout"
+        config_dir=$(<"$dir/config-dir-$binary.txt")
+        [[ $config_dir == "$dir/tmp/"* ]] || fail "$binary did not get a temp config dir: '$config_dir'"
+        cmp -s "$dir/config-$binary.toml" "$dir/expected.toml" ||
+            fail "unexpected config.toml for $binary: $(cat "$dir/config-$binary.toml" 2>&1)"
+        [[ ! -e $config_dir ]] || fail "the config dir was left behind: $config_dir"
+    done
+    [[ $(<"$dir/caller-config/4x4/config.toml") == *192.0.2.1* ]] || fail "the caller's config.toml changed"
+    [[ -z $(ls -A "$dir/home") ]] || fail "something was written to HOME: $(ls -A "$dir/home")"
+    [[ -z $(ls -A "$dir/tmp") ]] || fail "temp files were left behind: $(ls -A "$dir/tmp")"
+}
+
+# The app ignores a relative XDG_CONFIG_HOME and reads ~/.config instead, the owner's config.
+test_measure_offline_config_dir_is_absolute_under_a_relative_tmpdir() {
+    local dir config_dir
+    dir=$(new_measure_env)
+    run_with_input '' env -C "$dir" -u XDG_STATE_HOME PATH="$dir/bin:$PATH" \
+        CARGO_TARGET_DIR="$dir/target" HOME="$dir/home" TMPDIR=tmp X4_MEASURE_SETTLE_SECONDS=1 \
+        "$BASH" "$measure" --offline
+    expect_status 0
+    config_dir=$(<"$dir/config-dir-4x4.txt")
+    [[ $config_dir == "$dir/tmp/"* ]] || fail "the config dir is not an absolute temp dir: '$config_dir'"
+    [[ -e $dir/config-4x4.toml ]] || fail "the app found no config.toml in $config_dir"
+}
+
+# Without --offline the program reads the caller's config, as `just measure` always did.
+test_measure_without_offline_keeps_the_callers_config_dir() {
+    local dir
+    dir=$(new_measure_env)
+    mkdir -p "$dir/caller-config"
+    XDG_CONFIG_HOME="$dir/caller-config" run_measure_script "$dir"
+    expect_status 0
+    [[ $(<"$dir/config-dir-4x4.txt") == "$dir/caller-config" ]] ||
+        fail "the app did not get the caller's config dir: $(<"$dir/config-dir-4x4.txt")"
 }
 
 # A directory with a fake `dbus-run-session`, which runs its command, and a fake `kwin_wayland`,
@@ -1898,6 +2040,13 @@ cases=(
     measure_gives_the_app_a_temp_state_dir
     measure_gives_the_app_an_absolute_state_dir_under_a_relative_tmpdir
     measure_rejects_unknown_options
+    measure_measures_the_given_binary_and_builds_nothing
+    measure_takes_a_relative_binary_from_the_callers_directory
+    measure_refuses_a_binary_it_cannot_run
+    measure_refuses_a_binary_with_the_synthetic_demo
+    measure_offline_gives_the_program_a_config_of_a_closed_port
+    measure_offline_config_dir_is_absolute_under_a_relative_tmpdir
+    measure_without_offline_keeps_the_callers_config_dir
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
     virtual_session_keeps_the_owner_display_and_runtime_dir_away

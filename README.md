@@ -5,8 +5,8 @@ in Rust.
 
 ## Status
 
-Early development — stage 5, adding. The window connects to the daemon set in `config.toml` and
-shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
+Early development — stage 6, installation. The window connects to the daemon set in `config.toml`
+and shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
 state, with live counts, and a search box finds them by name. The status bar shows the total
 download and upload speeds, the free space and the state of the connection; it switches the
 alternative speed limits and sets the global download and upload limits. The window remembers its
@@ -22,7 +22,10 @@ height and its tab are remembered too. Torrents are added from `.torrent` files,
 desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
 that picks the folder on the server (with its free space and the folders used lately), the files to
 download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
-file or a link, hands them to the 4x4 that runs.
+file or a link, hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built
+from this checkout and shows in the application menu with its icon, a placeholder until the real
+one is drawn; one command makes it the default app for `.torrent` files and magnet links, and
+undoes that again (see [Install](#install)).
 
 ## What it will do
 
@@ -671,19 +674,28 @@ the message `number-decimal-separator` (a dot in English).
 ## Performance
 
 `just measure` builds the release binary, starts it with a temporary state directory (so its
-`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits 5
-seconds and prints one line: the time to the first rendered frame, then the memory as proportional
-(`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the
-thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary size. It adds
-a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private
-memory, 55 MiB PSS, 120 MiB RSS) or when the OpenGL stack is mapped, which it should not be where a
-Vulkan driver is installed. The exit code stays 0 unless the measurement itself failed.
-`--cpu <seconds>` adds a second line, the CPU time of all its threads over that many seconds after
-the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic` measures the release
-build of the [synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to
-the program, as in `just measure --synthetic --cpu 30 -- --static`. Measure the app with no
-development 4x4 running in the same session, or inside `just virtual`: otherwise the measured start
-hands over to it and exits.
+`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`, unless
+`--offline`), waits 5 seconds and prints one line: the time to the first rendered frame, then the
+memory as proportional (`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident
+(`rss_mib`) size, the thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and
+the binary size. It adds a `WARN:` line on stderr when a figure is above one of its own reference
+limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when the OpenGL stack is mapped, which it
+should not be where a Vulkan driver is installed. The exit code stays 0 unless the measurement
+itself failed. `--cpu <seconds>` adds a second line, the CPU time of all its threads over that many
+seconds after the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic`
+measures the release build of the [synthetic demo](#synthetic-demo) instead of the app, and
+arguments after `--` go to the program, as in `just measure --synthetic --cpu 30 -- --static`.
+`--binary <path>` measures that file and builds nothing, such as the installed `/usr/bin/4x4` or one
+taken out of a package (not with `--synthetic`, which builds the demo); a relative path is taken
+from the repository's directory. `--offline` gives the program a temporary config directory of its
+own, removed afterwards, whose `config.toml` names a closed port on this machine
+(`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting.
+Without it the app reads your `config.toml`, and inside `just virtual`, whose config directory is
+empty, it polls the default address. For example, `just virtual just measure --binary /usr/bin/4x4
+--offline --cpu 60` measures the installed 4x4 off screen and off the network. Measure the app with
+no development 4x4 running in the same session, or inside `just virtual`: otherwise the measured
+start hands over to it and exits. (`just measure` gives the program the development app id, so it
+never hands over to an installed 4x4.)
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS.
 RSS counts every resident page the app maps, including shared driver libraries (`libLLVM`,
@@ -939,6 +951,81 @@ from 31 to 44 %), frame interval p99 17.62 and 17.38 ms with none over 33 ms; th
 closed port had a first frame of 237.5 and 226.5 ms and 16.0 and 15.8 MiB of private memory. The
 one visible cost is about 125 more minor page faults a second (7 and 131) while the demo polls a
 busy daemon, because its answers of a few hundred KiB are now fresh mappings each time.
+
+### Installing (stage 6)
+
+Measured on 2026-11-03 on the same laptop, inside the headless KWin of `just virtual`, with release
+builds; each figure is the median of three runs, each the first start of its own session, with the
+runs of the app and of the package taken in turn. The app (`just virtual just measure --offline
+--cpu 60`) and the binary of the package that `just package` builds from the same commit (see
+[Install](#install)), taken out of the package file with `bsdtar` instead of installed
+(`just virtual just measure --binary <dir>/usr/bin/4x4 --offline --cpu 60`), reached no daemon and
+kept reconnecting to the closed port. The synthetic demo answered from memory with nothing changing
+(`X4_MEASURE_SETTLE_SECONDS=10 just virtual just measure --synthetic --cpu 60 -- --static`); as in
+stage 2, the targets are those of the app with a real daemon, and the demo's column also carries
+the synthetic daemon. The CPU is that of the 60 seconds after the memory figures; "not met" marks
+every cell over its target:
+
+| Metric                     | Target              | App (`target/release`) | Installed build (package) | Demo, 2000 torrents, idle |
+| -------------------------- | ------------------- | ---------------------- | ------------------------- | ------------------------- |
+| First frame                | ≤ 500 ms            | 220 ms                 | 229 ms                    | 239 ms                    |
+| Resident memory (RSS)      | ≤ 100 MiB           | 144.8 MiB (not met)    | 144.4 MiB (not met)       | 164.8 MiB (not met)       |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 62.0 MiB (not met)     | 61.7 MiB (not met)        | 82.2 MiB (not met)        |
+| Unique memory (USS)        | —                   | 51.4 MiB               | 51.2 MiB                  | 71.6 MiB                  |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.8 MiB               | 15.8 MiB                  | 36.2 MiB (not met)        |
+| Threads                    | —                   | 35                     | 35                        | 33                        |
+| CPU over 60 s, one core    | near 0 % when idle  | 0.03 %                 | 0.02 %                    | 0.08 %                    |
+| Binary size                | —                   | 39.6 MiB               | 38.7 MiB                  | 39.1 MiB                  |
+
+- The installed build and the one in `target/release` differ by less than the runs among
+  themselves: the package's first frames were 227 to 317 ms (the slowest at a busy moment of the
+  laptop), those of `target/release` 218 to 229 ms. The package's binary is 0.9 MiB smaller,
+  mostly in its unwind tables (`.eh_frame`) and its code: makepkg builds it with Arch's Rust flags
+  (frame pointers) and shorter source paths (`--remap-path-prefix`).
+- Against stage 5 the app has 0.2 MiB less private memory (16.0 then), as the measurement of the
+  allocator's pin found, and the same first frame (219 and 223 ms then); its PSS and USS are within
+  about 1 MiB of stage 5's two measurements of it (60.9 to 62.0 and 49.3 to 50.6 MiB).
+- With nothing to do, the app takes 0.03 % of one core even while it keeps trying the closed port.
+  The demo's 60 seconds always hold one read of the whole list of 2000 torrents, which comes once a
+  minute; its stage 2 and allocator figures (0.03 %, and 0.00 and 0.03 %) came from 30 second
+  windows, which may miss it.
+- Scrolling 2000 torrents one row per frame (three sessions of `--scroll` with
+  `RUST_LOG=warn,x4_synthetic=info`, 600 intervals each) gave a median interval of 16.67 ms, a 99th
+  percentile of 17.74 ms (17.61 to 17.85 ms) and a longest of 18.57 ms, none over 33 ms on the
+  virtual output's 60 Hz; 43 % are just over 16.7 ms only because a 60 Hz pace jitters around
+  16.67 ms. The demo took 31.9 % of one core over seconds 4 to 12 of the scroll
+  (`X4_MEASURE_SETTLE_SECONDS=4 just virtual just measure --synthetic --cpu 8 -- --scroll`, three
+  sessions, 31.7 to 32.0 %).
+
+Against the goals of the design, in the virtual session: the cold start (at most 0.5 s), the idle
+CPU (near 0) and the smooth scroll of 2000 torrents are met; of the memory targets, only the
+proposed 16 MiB of private memory is met, by 0.2 MiB, while RSS (100 MiB) and the proposed PSS (55
+MiB) are not, as in stages 4 and 5. The release profile is the one asked for: LTO (thin),
+`codegen-units = 1` and `strip` (`[profile.release]` in `Cargo.toml`), and the package installs the
+one binary, `/usr/bin/4x4`. The load on the daemon, at most one or two requests a second with 6
+torrents and the window open, was measured in stage 2 against the owner's daemon (1.4 a second);
+the traffic of the polls on a real daemon has not been measured.
+
+What only the real desktop can show, with 4x4 installed and its real daemon (quit 4x4 before each
+command that starts one, or the new start hands over to it): the start on the real screen, the
+memory and CPU against the real daemon, the requests a second to it, and the scrolling at the real
+screen's pace:
+
+```bash
+# First frame from the application menu: start 4x4 there, then
+grep 'first frame rendered' ~/.local/state/4x4/4x4.$(date -u +%F).log | tail -n 1
+# First frame, memory and idle CPU of the installed 4x4 on the real screen, polling the daemon for
+# about a minute as 4x4 does
+just measure --binary /usr/bin/4x4 --cpu 60
+# Requests over 2 minutes with the window focused; divide the count by 120
+RUST_LOG=warn,x4_app=info,x4_core::service=debug timeout 120 4x4 2>&1 | grep -c 'request answered'
+# Scrolling 2000 made-up torrents (the package has no demo, so it is built here; a window for ~13 s)
+RUST_LOG=warn,x4_synthetic=info cargo run --release --locked -p x4-app --features synthetic \
+    --bin x4-synthetic -- --scroll 2>&1 | grep 'scrolled the table'
+# Private memory before and after adding a large .torrent (several MiB): it should come back to
+# within a few MiB of the first figure
+grep RssAnon /proc/$(pgrep -x 4x4)/status
+```
 
 ## Development
 
