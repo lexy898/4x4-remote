@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use x4_core::launch::{LaunchArg, RejectedArg, classify};
-use x4_core::{AddItem, LoadedItem, MAX_TORRENT_FILE_BYTES, MetainfoError};
+use x4_core::{AddItem, LoadedItem, MAX_TORRENT_FILE_BYTES, MetainfoError, QUEUE_CAP};
 
 /// What a source of adds asks the window for: the toolbar, the keys, the file picker, the
 /// clipboard, a drop, the launch arguments and a second launch all send these, through the one
@@ -39,8 +39,14 @@ pub enum AddRequest {
         /// How many more the source left out.
         left_out: usize,
     },
-    /// Launch arguments 4x4 does not open; the window says so in one notification.
-    Rejected(Vec<RejectedArg>),
+    /// Launch arguments 4x4 does not open; the window says so in one notification, which names
+    /// why the first is refused.
+    Rejected {
+        /// The first of them.
+        first: RejectedArg,
+        /// How many there are, the first included.
+        count: usize,
+    },
     /// Bring the window to the front, as for a second launch that handed its arguments over.
     Raise,
 }
@@ -75,15 +81,23 @@ impl Default for AddRequests {
 }
 
 /// The requests of the launch arguments `args` of a process started in `cwd`, told apart by
-/// [`classify`]: one [`AddRequest::Items`] with the `.torrent` files and magnet links, in their
-/// order, then one [`AddRequest::Rejected`] with the arguments 4x4 does not open; each only when
-/// it has any. The first `--`, which ends the options for a shell or `cargo run`, is skipped.
+/// [`classify`]: the `.torrent` files and magnet links, in their order, then one
+/// [`AddRequest::Rejected`] for the arguments 4x4 does not open; each only when there are any. The
+/// first `--`, which a shell or `cargo run` may pass, is skipped; an argument after it that starts
+/// with `-` is still refused as an option.
+///
+/// The work is bounded by the add dialog's queue, not by the arguments, of which a second launch
+/// may hand over a million: once [`QUEUE_CAP`] items are told apart, which is all the queue holds,
+/// the arguments after them are only counted, as the `left_out` of an [`AddRequest::Capped`]
+/// (an [`AddRequest::Items`] when there are none). A refusal keeps the first and a count.
 pub fn launch_requests<A: AsRef<OsStr>>(
     args: impl IntoIterator<Item = A>,
     cwd: &Path,
 ) -> Vec<AddRequest> {
     let mut items = Vec::new();
-    let mut rejected = Vec::new();
+    let mut left_out = 0;
+    let mut first_rejected = None;
+    let mut rejected = 0;
     let mut options_ended = false;
     for arg in args {
         let arg = arg.as_ref();
@@ -91,15 +105,32 @@ pub fn launch_requests<A: AsRef<OsStr>>(
             options_ended = true;
             continue;
         }
+        // The queue would leave them out all the same; each would join `cwd` to be told apart.
+        if items.len() == QUEUE_CAP {
+            left_out += 1;
+            continue;
+        }
         match classify(arg, cwd) {
             LaunchArg::Magnet(link) => items.push(AddItem::Magnet(Some(link))),
             LaunchArg::File(path) => items.push(AddItem::File(path)),
-            LaunchArg::Rejected(refused) => rejected.push(refused),
+            LaunchArg::Rejected(refused) => {
+                first_rejected.get_or_insert(refused);
+                rejected += 1;
+            }
         }
     }
+    // Only a full queue leaves any out.
+    let items = match (items.is_empty(), left_out) {
+        (true, _) => None,
+        (false, 0) => Some(AddRequest::Items(items)),
+        (false, left_out) => Some(AddRequest::Capped { items, left_out }),
+    };
     [
-        (!items.is_empty()).then_some(AddRequest::Items(items)),
-        (!rejected.is_empty()).then_some(AddRequest::Rejected(rejected)),
+        items,
+        first_rejected.map(|first| AddRequest::Rejected {
+            first,
+            count: rejected,
+        }),
     ]
     .into_iter()
     .flatten()
@@ -219,6 +250,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
 
+    use x4_core::QUEUE_CAP;
     use x4_core::launch::RejectKind;
     use x4_rpc::MagnetLink;
 
@@ -338,14 +370,12 @@ mod tests {
                     AddItem::File("/home/user/show.torrent".into()),
                     AddItem::Magnet(Some(MagnetLink::parse(&link).unwrap())),
                 ]),
-                AddRequest::Rejected(vec![
-                    RejectedArg {
+                AddRequest::Rejected {
+                    first: RejectedArg {
                         kind: RejectKind::Url
                     },
-                    RejectedArg {
-                        kind: RejectKind::Option
-                    },
-                ]),
+                    count: 2,
+                },
             ]
         );
     }
@@ -362,9 +392,12 @@ mod tests {
         );
         assert_eq!(
             launch_requests(["-v"], cwd),
-            [AddRequest::Rejected(vec![RejectedArg {
-                kind: RejectKind::Option
-            }])]
+            [AddRequest::Rejected {
+                first: RejectedArg {
+                    kind: RejectKind::Option
+                },
+                count: 1,
+            }]
         );
         assert_eq!(launch_requests::<&str>([], cwd), []);
     }
@@ -378,11 +411,87 @@ mod tests {
             launch_requests(["--", "a.torrent", "--"], cwd),
             [
                 AddRequest::Items(vec![AddItem::File("/home/user/a.torrent".into())]),
-                AddRequest::Rejected(vec![RejectedArg {
-                    kind: RejectKind::Option
-                }]),
+                AddRequest::Rejected {
+                    first: RejectedArg {
+                        kind: RejectKind::Option
+                    },
+                    count: 1,
+                },
             ],
             "only the first"
+        );
+    }
+
+    #[test]
+    fn a_million_launch_arguments_give_a_queueful_and_count_the_rest() {
+        let args = (0..1_000_000).map(|n| format!("{n}.torrent"));
+
+        let requests = launch_requests(args, Path::new("/home/user"));
+
+        let [AddRequest::Capped { items, left_out }] = requests.as_slice() else {
+            panic!("one capped request, not {} requests", requests.len());
+        };
+        assert_eq!(items.len(), QUEUE_CAP);
+        assert_eq!(*left_out, 1_000_000 - QUEUE_CAP);
+        assert_eq!(
+            items.first(),
+            Some(&AddItem::File("/home/user/0.torrent".into()))
+        );
+        assert_eq!(
+            items.last(),
+            Some(&AddItem::File("/home/user/99.torrent".into()))
+        );
+    }
+
+    #[test]
+    fn what_launch_arguments_build_is_bounded_by_the_queue_and_the_cwd() {
+        // A working directory as long as Linux allows, and many short relative names: each item
+        // joins the two.
+        let cwd = PathBuf::from(format!("/{}", "d".repeat(4000)));
+        let refused = std::iter::repeat_n("-x", 2_000);
+        let files = std::iter::repeat_n("a", 10_000);
+
+        let requests = launch_requests(refused.chain(files), &cwd);
+
+        let [
+            AddRequest::Capped { items, left_out },
+            AddRequest::Rejected { first, count },
+        ] = requests.as_slice()
+        else {
+            panic!(
+                "a capped request and a refusal, not {} requests",
+                requests.len()
+            );
+        };
+        assert_eq!((items.len(), *left_out), (QUEUE_CAP, 10_000 - QUEUE_CAP));
+        assert_eq!(
+            (first.kind, *count),
+            (RejectKind::Option, 2_000),
+            "one refusal and a count"
+        );
+        let built: usize = items
+            .iter()
+            .map(|item| match item {
+                AddItem::File(path) => path.as_os_str().len(),
+                AddItem::Magnet(_) => 0,
+            })
+            .sum();
+        assert_eq!(built, QUEUE_CAP * (cwd.as_os_str().len() + 2));
+    }
+
+    #[test]
+    fn arguments_after_a_full_queue_are_only_counted() {
+        let names: Vec<String> = (0..QUEUE_CAP).map(|n| format!("{n}.torrent")).collect();
+        let args = names.iter().map(String::as_str).chain(["-x", "b.torrent"]);
+
+        let requests = launch_requests(args, Path::new("/home/user"));
+
+        assert!(
+            matches!(
+                requests.as_slice(),
+                [AddRequest::Capped { items, left_out: 2 }] if items.len() == QUEUE_CAP
+            ),
+            "not told apart, so not refused either: {requests:?}"
         );
     }
 

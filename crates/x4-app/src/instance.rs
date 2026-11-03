@@ -7,7 +7,8 @@
 //! desktop gave it to bring a window to the front. Then it waits for the answer ([`Reply`]):
 //! - `ok`: the requests are queued, and the launch exits;
 //! - `closing`, from a 4x4 that is quitting and queued nothing: it tries again, and takes the lock
-//!   itself once that 4x4 has gone;
+//!   itself once that 4x4 has gone. A quitting 4x4 removes its socket first, then answers this to
+//!   the launches still waiting in its queue, and only then lets go of the lock;
 //! - `bad`, or no answer within 2 seconds, from a 4x4 that hangs: it runs on its own and opens a
 //!   window of its own, so that the user's click is never lost.
 //!
@@ -23,9 +24,13 @@
 //! The first 4x4 answers on a thread of its own ([`Listener::serve`]), so that a launch gets its
 //! answer in microseconds whatever the window does. It turns each frame into the requests of its
 //! arguments, then [`AddRequest::Raise`](crate::adding::AddRequest::Raise), which the window shows
-//! in turn. Nothing is added by them: they only fill the add dialog's queue. The tokens are kept in
-//! the frame and logged: gpui-pre 0.3.10 has no way to raise an open window with a token from
-//! another process, so the window asks for its own.
+//! in turn. That work is bounded there, so that the window only ever gets a queueful: the frame
+//! takes at most 4 MiB with a working directory of at most 4096 bytes, and only the first
+//! [`QUEUE_CAP`](x4_core::QUEUE_CAP) items of its arguments are told apart
+//! ([`launch_requests`](crate::adding::launch_requests)); the others are counted. Nothing is added
+//! by them: they only fill the add dialog's queue. The tokens are kept in the frame and logged:
+//! gpui-pre 0.3.10 has no way to raise an open window with a token from another process, so the
+//! window asks for its own.
 //!
 //! Unix only: elsewhere every launch runs on its own.
 

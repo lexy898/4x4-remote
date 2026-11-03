@@ -1388,14 +1388,12 @@ fn rejected_arguments_make_one_notification_and_raise_activates(cx: &mut TestApp
     let window = Window::open(cx);
 
     window.request(
-        AddRequest::Rejected(vec![
-            RejectedArg {
+        AddRequest::Rejected {
+            first: RejectedArg {
                 kind: RejectKind::Url,
             },
-            RejectedArg {
-                kind: RejectKind::Option,
-            },
-        ]),
+            count: 2,
+        },
         cx,
     );
 

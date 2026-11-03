@@ -172,10 +172,9 @@ pub(crate) fn chosen_not_local_text(count: usize) -> SharedString {
     t!("add-chosen-not-local", count = count).into()
 }
 
-/// The one notification of the launch arguments `rejected`, which names why the first is refused;
-/// `None` when there are none.
-pub(crate) fn rejected_text(rejected: &[RejectedArg]) -> Option<SharedString> {
-    let first = rejected.first()?;
+/// The one notification of `count` launch arguments refused, which names why the `first` of them
+/// is.
+pub(crate) fn rejected_text(first: RejectedArg, count: usize) -> SharedString {
     let reason = match first.kind {
         RejectKind::Url => t!("add-rejected-url"),
         RejectKind::Option => t!("add-rejected-option"),
@@ -185,7 +184,7 @@ pub(crate) fn rejected_text(rejected: &[RejectedArg]) -> Option<SharedString> {
         RejectKind::InvalidMagnet(_) => t!("add-rejected-magnet"),
         RejectKind::Other => t!("add-rejected-other"),
     };
-    Some(t!("add-rejected", count = rejected.len(), reason = reason).into())
+    t!("add-rejected", count = count, reason = reason).into()
 }
 
 #[cfg(test)]
@@ -459,7 +458,6 @@ mod tests {
             queue_full_text(5),
             "5 more torrents were left out: at most 100 wait to be added"
         );
-        assert_eq!(rejected_text(&[]), None);
         let rejected = |kind| RejectedArg { kind };
         for (kind, reason) in [
             (
@@ -480,15 +478,13 @@ mod tests {
             (RejectKind::Other, "no name of a file"),
         ] {
             assert_eq!(
-                rejected_text(&[rejected(kind)]).as_deref(),
-                Some(format!("Could not open the item 4x4 was given: it is {reason}").as_str())
+                rejected_text(rejected(kind), 1),
+                format!("Could not open the item 4x4 was given: it is {reason}")
             );
         }
         assert_eq!(
-            rejected_text(&[rejected(RejectKind::Option), rejected(RejectKind::Url)]).as_deref(),
-            Some(
-                "Could not open 2 of the items 4x4 was given; the first is an option, and 4x4 has none"
-            )
+            rejected_text(rejected(RejectKind::Option), 2),
+            "Could not open 2 of the items 4x4 was given; the first is an option, and 4x4 has none"
         );
     }
 }

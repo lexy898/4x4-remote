@@ -12,11 +12,12 @@
 //! the format keeps a file name that is not UTF-8. A key 4x4 does not know is skipped, so that a
 //! newer 4x4 may add some; a frame of another version is refused. A frame takes at most
 //! [`MAX_FRAME_BYTES`], above Linux's default limit of 2 MiB on a program's arguments, so that the
-//! arguments of any real launch fit.
+//! arguments of any real launch fit. Its `cwd` is empty (unknown) or an absolute path of at most
+//! [`MAX_CWD_BYTES`], as `getcwd` gives: each relative argument told apart is joined to it.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{Frame, Reply};
 
@@ -24,6 +25,9 @@ use super::{Frame, Reply};
 pub(crate) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// The most bytes an answer takes.
 pub(crate) const MAX_REPLY_BYTES: usize = 16;
+/// The longest working directory a frame carries: Linux's `PATH_MAX`, which `getcwd` never
+/// exceeds.
+pub(crate) const MAX_CWD_BYTES: usize = 4096;
 
 const MAGIC: &[u8] = b"4x4-open\0";
 const VERSION: &[u8] = b"1\0";
@@ -56,15 +60,20 @@ pub(crate) enum WireError {
     /// There is no `cwd`.
     #[error("the frame has no working directory")]
     NoCwd,
+    /// The `cwd` is relative, or longer than [`MAX_CWD_BYTES`].
+    #[error("the working directory is relative or longer than {MAX_CWD_BYTES} bytes")]
+    BadCwd,
 }
 
 /// `frame` as the bytes a launch sends.
 ///
 /// # Errors
 ///
-/// [`WireError::Nul`] for a value with a NUL byte, and [`WireError::TooLarge`] for a frame of
-/// more than [`MAX_FRAME_BYTES`].
+/// [`WireError::BadCwd`] for a working directory that is relative or too long, [`WireError::Nul`]
+/// for a value with a NUL byte, and [`WireError::TooLarge`] for a frame of more than
+/// [`MAX_FRAME_BYTES`].
 pub(crate) fn encode(frame: &Frame) -> Result<Vec<u8>, WireError> {
+    check_cwd(frame.cwd.as_os_str())?;
     let mut bytes = [MAGIC, VERSION].concat();
     put(&mut bytes, CWD, frame.cwd.as_os_str())?;
     if let Some(token) = &frame.activation_token {
@@ -133,8 +142,19 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Frame, WireError> {
             _ => {}
         }
     }
-    frame.cwd = PathBuf::from(cwd.ok_or(WireError::NoCwd)?);
+    let cwd = cwd.ok_or(WireError::NoCwd)?;
+    check_cwd(&cwd)?;
+    frame.cwd = PathBuf::from(cwd);
     Ok(frame)
+}
+
+/// Whether `cwd` may be a frame's working directory: empty, or absolute and at most
+/// [`MAX_CWD_BYTES`].
+fn check_cwd(cwd: &OsStr) -> Result<(), WireError> {
+    if cwd.len() > MAX_CWD_BYTES || !(cwd.is_empty() || Path::new(cwd).is_absolute()) {
+        return Err(WireError::BadCwd);
+    }
+    Ok(())
 }
 
 /// Sets `slot`, the field `key`, to `value`, unless it was set before.
@@ -253,6 +273,33 @@ mod tests {
         .expect("a frame");
         bytes.resize(MAX_FRAME_BYTES + 1, b'a');
         assert_eq!(decode(&bytes), Err(WireError::TooLarge));
+    }
+
+    #[test]
+    fn a_working_directory_that_is_relative_or_too_long_is_refused() {
+        let at = |cwd: &str| Frame {
+            cwd: cwd.into(),
+            ..Frame::default()
+        };
+        let longest = format!("/{}", "d".repeat(MAX_CWD_BYTES - 1));
+        for fine in ["", "/", longest.as_str()] {
+            let bytes = encode(&at(fine)).expect("a frame");
+            assert_eq!(decode(&bytes), Ok(at(fine)), "{} bytes", fine.len());
+        }
+
+        let too_long = format!("/{}", "d".repeat(MAX_CWD_BYTES));
+        for refused in ["home/user", too_long.as_str()] {
+            assert_eq!(encode(&at(refused)), Err(WireError::BadCwd));
+            let mut bytes = b"4x4-open\x001\x00cwd=".to_vec();
+            bytes.extend_from_slice(refused.as_bytes());
+            bytes.push(0);
+            assert_eq!(
+                decode(&bytes),
+                Err(WireError::BadCwd),
+                "{} bytes",
+                refused.len()
+            );
+        }
     }
 
     #[test]

@@ -194,11 +194,14 @@ impl MainView {
             AddRequest::Capped { items, left_out } => {
                 self.queue_adds(items, left_out, window, cx);
             }
-            AddRequest::Rejected(rejected) => {
-                tracing::info!(count = rejected.len(), "launch arguments were refused");
-                if let Some(text) = rejected_text(&rejected) {
-                    self.add_notice(Notification::warning, text, window, cx);
-                }
+            AddRequest::Rejected { first, count } => {
+                tracing::info!(count, "launch arguments were refused");
+                self.add_notice(
+                    Notification::warning,
+                    rejected_text(first, count),
+                    window,
+                    cx,
+                );
             }
             AddRequest::Raise => self.raise("another launch handed its arguments over", window, cx),
         }

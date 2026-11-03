@@ -392,10 +392,12 @@ for it to close.
 `4x4 Show.torrent 'magnet:?xt=urn:btih:…'`, or that a file manager or a browser opens with it, in
 the add dialog, in their order. A relative path is taken from the folder 4x4 was started in, and a
 `file://` address must name a file on this computer, without a query. Web addresses (`http://`,
-`https://` and the like), bare info hashes, options (anything starting with `-`) and anything else
-are refused, with one notification that counts them and says why the first one was; a first `--`,
-which ends the options, is skipped. From the source tree, `just run 'magnet:?xt=…'` passes them on;
-quote a magnet link, as its `&` means something to the shell.
+`https://` and the like), bare info hashes, options (anything starting with `-`, also after a `--`)
+and anything else are refused, with one notification that counts them and says why the first one
+was; a first `--`, which a shell or `cargo run` may pass, is skipped. At most 100 are taken, as many
+as wait to be added; the notification that some were left out counts the others, which are not
+looked at. From the source tree, `just run 'magnet:?xt=…'` passes them on; quote a magnet link, as
+its `&` means something to the shell.
 
 One 4x4 runs at a time for each user. Starting it again, with or without files and links, hands
 them to the 4x4 that runs already and exits at once: that one offers them in its add dialog, after
@@ -403,14 +405,16 @@ any it is showing, and brings its window to the front. Where the desktop does no
 front, the window asks for your attention instead (a highlighted task bar entry). If the 4x4 that
 runs does not answer within 2 seconds, because it hangs, the new start opens a window of its own
 with them, so a click on a file is never lost; the new start takes the place of a 4x4 that is
-quitting. Debug builds (`just run`) and release builds never hand over to each other, and a 4x4 in
-[`just virtual`](#windows-off-screen) never hands over to the one on your desktop. Without
-`$XDG_RUNTIME_DIR`, every start opens a window of its own and the log says so.
+quitting, also one that quits while the new start waits for it. Debug builds (`just run`) and
+release builds never hand over to each other, and a 4x4 in [`just virtual`](#windows-off-screen)
+never hands over to the one on your desktop. Without `$XDG_RUNTIME_DIR`, every start opens a window
+of its own and the log says so.
 
-[`packaging/linux/io.github.lexy898.FourByFour.desktop`](packaging/linux/io.github.lexy898.FourByFour.desktop)
-is the desktop entry that makes 4x4 the handler for `.torrent` files and `magnet:` links
-(`Exec=4x4 %U`, one process for all the files and links of a launch). Nothing installs it yet;
-packaging will, and 4x4 never makes itself the default handler.
+The desktop entry in `packaging/linux/`,
+[`io.github.lexy898.FourByFour.desktop`](packaging/linux/io.github.lexy898.FourByFour.desktop),
+makes 4x4 the handler for `.torrent` files and `magnet:` links (`Exec=4x4 %U`, one process for all
+the files and links of a launch). Nothing installs it yet; packaging will, and 4x4 never makes
+itself the default handler.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -511,8 +515,9 @@ to `~/.config` and `~/.local/state`):
 While it runs, the first 4x4 also keeps two files in `$XDG_RUNTIME_DIR` (`/run/user/<uid>`), named
 after its app id (with `.Devel` in debug builds): `io.github.lexy898.FourByFour.lock`, which says
 that it runs, and `io.github.lexy898.FourByFour.sock`, the socket later starts hand their files and
-links to. Only you can use them. The socket is removed when 4x4 quits, and one left by a 4x4 that crashed is replaced by
-the next one; the lock file stays and is safe to delete while 4x4 is not running.
+links to. Only you can use them. The socket is removed when 4x4 quits, and one left by a 4x4 that
+crashed is replaced by the next one; the lock file stays and is safe to delete while 4x4 is not
+running.
 
 `config.toml` is optional. It holds the daemon's address; only plain `http://` is supported, and a
 missing key takes the default:

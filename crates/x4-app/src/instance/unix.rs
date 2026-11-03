@@ -63,11 +63,20 @@ struct Socket {
     read: Duration,
 }
 
-/// The lock of the first 4x4 and the path of its socket. Dropping it removes the socket while the
-/// lock is still held, then lets go of the lock.
+/// The lock of the first 4x4, the path of its socket and a second handle of the socket. Dropping
+/// it, while the lock is still held: removes the socket, so that no launch connects any more; then
+/// answers [`Reply::Closing`] to the launches that connected before and that nobody took; then
+/// lets go of the lock. Those launches try again and reach the next 4x4 (or become it), instead of
+/// finding their connection closed without an answer and opening a window of their own.
 #[derive(Debug)]
 struct Held {
     socket_path: PathBuf,
+    /// The socket the launches still waiting are taken from. The thread of [`Listener::serve`]
+    /// has the other handle; once this one is made non-blocking, so is that one, and the thread
+    /// ends.
+    listener: UnixListener,
+    /// How long, in all, the launches still waiting are answered.
+    read: Duration,
     _lock: File,
 }
 
@@ -79,6 +88,46 @@ impl Drop for Held {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
                 tracing::warn!(%error, "the socket of the single instance could not be removed");
+            }
+        }
+        self.turn_away_waiting();
+    }
+}
+
+impl Held {
+    /// Answers [`Reply::Closing`] to each launch waiting in the socket's queue, within
+    /// [`Held::read`] in all.
+    fn turn_away_waiting(&self) {
+        if let Err(error) = self.listener.set_nonblocking(true) {
+            tracing::debug!(%error, "the launches still waiting cannot be answered");
+            return;
+        }
+        let started = Instant::now();
+        loop {
+            let left = self.read.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                tracing::debug!("no more time to answer the launches still waiting");
+                return;
+            }
+            match self.listener.accept() {
+                Ok((mut stream, _)) => {
+                    // The whole frame first: a connection closed before its bytes are read reaches
+                    // the launch as a reset, ahead of the answer.
+                    let read = stream
+                        .set_nonblocking(false)
+                        .and_then(|()| read_until_closed(&mut stream, wire::MAX_FRAME_BYTES, left));
+                    if let Err(error) = read {
+                        tracing::debug!(%error, "a launch still waiting did not send its frame");
+                    }
+                    send_reply(&mut stream, Reply::Closing, left);
+                    tracing::debug!("a launch still waiting was told to try again");
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => {
+                    tracing::debug!(%error, "the launches still waiting cannot be answered");
+                    return;
+                }
             }
         }
     }
@@ -138,9 +187,17 @@ impl Socket {
     /// read timeout and the answer's write.
     fn serve(&self, adds: &async_channel::Sender<AddRequest>) {
         loop {
-            if let Err(error) = self.answer_next_into(adds) {
-                tracing::warn!(%error, "the connection of another launch could not be taken");
-                thread::sleep(ACCEPT_PAUSE);
+            match self.answer_next_into(adds) {
+                Ok(_) => {}
+                // The place was let go of: the socket is non-blocking now (`Held::drop`).
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    tracing::debug!("later launches are no longer answered");
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "the connection of another launch could not be taken");
+                    thread::sleep(ACCEPT_PAUSE);
+                }
             }
         }
     }
@@ -172,15 +229,19 @@ impl Socket {
                 Reply::Bad
             }
         };
-        // A few bytes, which the socket's buffer takes at once; the timeout is for a launch that
-        // went away meanwhile.
-        let answered = stream
-            .set_write_timeout(Some(self.read))
-            .and_then(|()| stream.write_all(wire::reply_bytes(reply)));
-        if let Err(error) = answered {
-            tracing::debug!(%error, "another launch did not wait for the answer");
-        }
+        send_reply(&mut stream, reply, self.read);
         Ok(reply)
+    }
+}
+
+/// Answers `reply` on `stream`, waiting at most `wait`: a few bytes, which the socket's buffer
+/// takes at once; the wait is for a launch that went away meanwhile.
+fn send_reply(stream: &mut UnixStream, reply: Reply, wait: Duration) {
+    let sent = stream
+        .set_write_timeout(Some(wait))
+        .and_then(|()| stream.write_all(wire::reply_bytes(reply)));
+    if let Err(error) = sent {
+        tracing::debug!(%error, "another launch did not wait for the answer");
     }
 }
 
@@ -324,7 +385,7 @@ fn become_primary(
     socket_path: PathBuf,
     read: Duration,
 ) -> Result<Claim, StandaloneReason> {
-    keep_private(lock_path);
+    keep_private(lock_path, "lock");
     match fs::remove_file(&socket_path) {
         Ok(()) => tracing::debug!("the socket an earlier 4x4 left was removed"),
         Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -336,21 +397,52 @@ fn become_primary(
         }
     }
     let listener = UnixListener::bind(&socket_path).map_err(io_failed("bind the socket"))?;
-    keep_private(&socket_path);
+    let held = Held {
+        listener: listener
+            .try_clone()
+            .map_err(io_failed("keep a second handle of the socket"))?,
+        socket_path,
+        read,
+        _lock: lock,
+    };
+    keep_private(&held.socket_path, "socket");
     Ok(Claim::Primary(Listener {
         socket: Socket { listener, read },
-        held: Held {
-            socket_path,
-            _lock: lock,
-        },
+        held,
     }))
 }
 
-/// Makes the file at `path` the user's alone, and sticky. Only the directory's mode keeps others
-/// out of it, so a failure is no reason to run on its own.
-fn keep_private(path: &Path) {
-    if let Err(error) = fs::set_permissions(path, Permissions::from_mode(FILE_MODE)) {
-        tracing::debug!(%error, "the mode of a file of the single instance could not be set");
+/// Makes the file at `path`, the single instance's `which`, the user's alone, and sticky.
+fn keep_private(path: &Path, which: &'static str) {
+    keep_private_with(path, which, |path, mode| {
+        fs::set_permissions(path, Permissions::from_mode(mode))
+    });
+}
+
+/// [`keep_private`], with `set_mode` setting the mode. A mode that cannot be set is a warning, not
+/// a reason to run on its own: the directory, the user's alone, keeps others out. Without the
+/// sticky bit, a clean-up of the runtime directory may remove the file while 4x4 runs (which, for
+/// the lock, could make a second first 4x4), so it is said; the file is then made the user's alone
+/// without it, as a system that refuses the sticky bit on a file still allows that.
+fn keep_private_with(
+    path: &Path,
+    which: &'static str,
+    set_mode: impl Fn(&Path, u32) -> io::Result<()>,
+) {
+    let Err(error) = set_mode(path, FILE_MODE) else {
+        return;
+    };
+    tracing::warn!(
+        %error,
+        file = which,
+        "a file of the single instance cannot be made sticky; a clean-up of the runtime directory may remove it"
+    );
+    if let Err(error) = set_mode(path, FILE_MODE & 0o777) {
+        tracing::warn!(
+            %error,
+            file = which,
+            "a file of the single instance cannot be made the user's alone; only its directory keeps others out"
+        );
     }
 }
 
@@ -415,8 +507,8 @@ mod tests {
     use std::os::unix::fs::FileTypeExt as _;
     use std::sync::{Arc, Barrier, mpsc};
 
-    use x4_core::AddItem;
     use x4_core::launch::{RejectKind, RejectedArg};
+    use x4_core::{AddItem, QUEUE_CAP};
     use x4_rpc::MagnetLink;
 
     use super::super::{claim_with, wire};
@@ -934,12 +1026,176 @@ mod tests {
                     AddItem::File("/home/user/Show.torrent".into()),
                     AddItem::File("/srv/Film ü.torrent".into()),
                 ]),
-                AddRequest::Rejected(vec![RejectedArg {
-                    kind: RejectKind::Url
-                }]),
+                AddRequest::Rejected {
+                    first: RejectedArg {
+                        kind: RejectKind::Url
+                    },
+                    count: 1,
+                },
                 AddRequest::Raise,
             ]
         );
+    }
+
+    #[test]
+    fn a_four_mib_frame_of_tiny_arguments_reaches_the_window_as_a_queueful_and_a_count() {
+        let dir = runtime_dir();
+        let adds = AddRequests::new();
+        let _serving = primary_in(dir.path())
+            .serve(adds.sender.clone())
+            .expect("serving");
+        // As many one-byte arguments as fit a frame: "arg=a\0" each.
+        let args = (wire::MAX_FRAME_BYTES - 64) / 6;
+        let frame = Frame {
+            cwd: "/home/user".into(),
+            args: vec!["a".into(); args],
+            ..Frame::default()
+        };
+        assert!(wire::encode(&frame).expect("a frame").len() <= wire::MAX_FRAME_BYTES);
+
+        let claimed = claim_in(dir.path(), &frame, Timeouts::default());
+
+        assert!(matches!(claimed, Claim::HandedOff), "{claimed:?}");
+        let requests: Vec<_> = std::iter::from_fn(|| adds.receiver.try_recv().ok()).collect();
+        let [AddRequest::Capped { items, left_out }, AddRequest::Raise] = requests.as_slice()
+        else {
+            panic!("a queueful and a raise, not {} requests", requests.len());
+        };
+        assert_eq!((items.len(), *left_out), (QUEUE_CAP, args - QUEUE_CAP));
+    }
+
+    #[test]
+    fn a_frame_that_goes_on_past_four_mib_is_cut_off_while_it_is_read() {
+        let dir = runtime_dir();
+        let listener = primary_in(dir.path());
+        let path = dir.path().join(format!("{APP}.sock"));
+        let mut endless = wire::encode(&launch(&[])).expect("a frame");
+        endless.resize(2 * wire::MAX_FRAME_BYTES, b'a');
+
+        thread::scope(|scope| {
+            let client = scope.spawn(|| {
+                let mut stream = UnixStream::connect(&path).expect("connected");
+                stream.write_all(&endless).map_err(|error| error.kind())
+            });
+            let reply = listener
+                .answer_next(|_| panic!("never delivered"))
+                .expect("connected");
+
+            assert_eq!(reply, Reply::Bad);
+            let written = client.join().expect("no panic");
+            assert!(
+                matches!(
+                    written,
+                    Err(ErrorKind::BrokenPipe | ErrorKind::ConnectionReset)
+                ),
+                "the listener stopped reading after 4 MiB: {written:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_frame_sent_a_byte_at_a_time_is_refused_once_the_read_time_is_up() {
+        let dir = runtime_dir();
+        let listener = primary_in(dir.path());
+        let path = dir.path().join(format!("{APP}.sock"));
+        let read = quick().read;
+        let bytes = wire::encode(&launch(&["a.torrent"])).expect("a frame");
+
+        thread::scope(|scope| {
+            // Each byte comes well within the read time; the whole frame never does.
+            scope.spawn(|| {
+                let mut stream = UnixStream::connect(&path).expect("connected");
+                for byte in bytes.iter().take(30) {
+                    if stream.write_all(&[*byte]).is_err() {
+                        return;
+                    }
+                    thread::sleep(read / 3);
+                }
+            });
+            let began = Instant::now();
+            let reply = listener
+                .answer_next(|_| panic!("never delivered"))
+                .expect("connected");
+
+            assert_eq!(reply, Reply::Bad);
+            assert!(
+                began.elapsed() < read * 3,
+                "the read time is for the whole frame: {:?}",
+                began.elapsed()
+            );
+        });
+    }
+
+    #[test]
+    fn a_mode_that_cannot_be_set_is_a_warning_and_falls_back_to_the_users_alone() {
+        let tried = std::cell::RefCell::new(Vec::new());
+        let no_sticky = |_: &Path, mode: u32| {
+            tried.borrow_mut().push(mode);
+            if mode == 0o1600 {
+                Err(io::Error::from(ErrorKind::InvalidInput))
+            } else {
+                Ok(())
+            }
+        };
+
+        let events = crate::test_log::events_of(|| {
+            keep_private_with(Path::new("/run/user/1000/x.lock"), "lock", no_sticky);
+        });
+
+        assert_eq!(*tried.borrow(), [0o1600, 0o600]);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(
+            events.first().map(|(level, _)| *level),
+            Some(tracing::Level::WARN)
+        );
+
+        let events = crate::test_log::events_of(|| {
+            keep_private_with(Path::new("/run/user/1000/x.sock"), "socket", |_, _| {
+                Err(io::Error::from(ErrorKind::PermissionDenied))
+            });
+        });
+        assert!(
+            events.len() == 2
+                && events
+                    .iter()
+                    .all(|(level, _)| *level == tracing::Level::WARN),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn a_launch_waiting_while_the_first_4x4_quits_is_told_to_try_again() {
+        let dir = runtime_dir();
+        // It never takes the launch: it quits with the launch waiting in its socket's queue.
+        let quitting = primary_in(dir.path());
+        let second = launch(&["a.torrent"]);
+        let timeouts = Timeouts {
+            budget: Duration::from_secs(3),
+            reply: Duration::from_secs(2),
+            retry: Duration::from_millis(200),
+            read: Duration::from_millis(300),
+        };
+        let waiting = {
+            let dir = dir.path().to_path_buf();
+            let frame = second.clone();
+            thread::spawn(move || claim_in(&dir, &frame, timeouts))
+        };
+        // Long enough for the launch to connect and send its frame.
+        thread::sleep(Duration::from_millis(150));
+
+        drop(quitting);
+        // Another launch takes the place at once, before the waiting one tries again.
+        let answered = answer_one(primary_in(dir.path()));
+
+        let claimed = waiting.join().expect("no panic");
+        assert!(
+            matches!(claimed, Claim::HandedOff),
+            "it tries again and hands over to the next 4x4: {claimed:?}"
+        );
+        let (reply, handed) = answered
+            .recv_timeout(Duration::from_secs(5))
+            .expect("answered");
+        assert_eq!((reply, handed), (Reply::Ok, Some(second)));
     }
 
     #[test]
