@@ -118,20 +118,27 @@ default app once after installing:
 just default-handler
 ```
 
-It shows what `application/x-bittorrent` and `x-scheme-handler/magnet` open with now, asks on the
-terminal whether to go on, runs `xdg-mime default` for both and prints what they open with
-afterwards. That writes two lines to `~/.config/mimeapps.list` and nothing else. A browser may ask
-once more the first time it meets a magnet link, offering 4x4 as the system default. The command
-needs 4x4 installed, refuses to run as root, and refuses without a terminal unless `--yes` answers
-the question. If a list for your desktop (such as `~/.config/kde-mimeapps.list`) still names
-another app, it says so and exits 1.
+It shows what `application/x-bittorrent` (`.torrent` files) and `x-scheme-handler/magnet` (magnet
+links) open with now, asks on the terminal whether to go on, runs `xdg-mime default` for both and
+prints what they open with afterwards. `xdg-mime` is the standard tool that records the choice in
+`~/.config/mimeapps.list`, the file where your desktop keeps which app opens which kind of file. It
+adds a line for each of the two types under `[Default Applications]`: two lines. On KDE it also
+adds the two types under `[Added Associations]`, four lines in all, and then runs `kbuildsycoca6`,
+which rebuilds KDE's cache of the installed applications (in `~/.cache`). Nothing else changes. A
+browser may ask once more the first time it meets a magnet link, offering 4x4 as the system
+default. The command needs 4x4 installed, refuses to run as root, and refuses without a terminal
+unless `--yes` answers the question. If a list for your desktop (such as
+`~/.config/kde-mimeapps.list`) still names another app, it says so and exits 1; the lines it wrote
+stay in `mimeapps.list`, and `--undo` removes them.
 
-`just default-handler --undo` gives them back: after asking, it removes exactly the entries the
-first command made and leaves the rest of the file as it was, so both types open with what the
-system picks again (Deluge, for example). It works after uninstalling too, and the entries stay
-in the file until it runs. If you had chosen an app for these types by name before (in System
-Settings), the first command replaced that choice, and the undo cannot bring it back: choose it
-again there, or with `xdg-mime default <app>.desktop <type>`.
+`just default-handler --undo` gives them back: after asking, it removes the entries that name 4x4
+for these two types from those two sections, whoever made them (an entry you made for 4x4 by hand
+goes too). A section header that the first command had to add and that is empty afterwards goes
+as well. The rest of the file stays as it was, byte for byte. Both types then open with what the
+system picks again (Deluge, for example). It works after uninstalling too: the entries stay in the
+file until it runs. If `mimeapps.list` already named another app for either type under
+`[Default Applications]`, the first command replaced that line, and the undo cannot bring it
+back: `xdg-mime default <app>.desktop <type>` sets that app again.
 
 The installed 4x4 and a debug build (`just run`) run side by side. The debug build has its own app
 id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links to the other, and

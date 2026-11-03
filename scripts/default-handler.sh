@@ -9,24 +9,32 @@
 #              writes the user's mimeapps.list; print what each type now opens with. Exits 1 when
 #              the question is not answered with yes, when 4x4 is not installed, or when another
 #              setting still outranks the choice (it names the types).
-#     --undo   ask for confirmation, then remove exactly the entries `xdg-mime default` made for
-#              4x4 from mimeapps.list and print what each type opens with now. It does not need 4x4
-#              to be installed, so it works after uninstalling.
+#     --undo   ask for confirmation, then remove the entries that name 4x4 for the two types from
+#              mimeapps.list and print what each type opens with now. It does not need 4x4 to be
+#              installed, so it works after uninstalling.
 #     --yes    answer the question with yes, for the owner's own scripts and the tests.
 #
 # The question is asked on /dev/tty, so a pipe or a missing terminal can never answer it: without
 # a terminal and without --yes the script refuses. It never runs as root (mimeapps.list is the
-# user's), and it writes nothing but the user's mimeapps.list: the default is set by xdg-mime
-# itself, the undo is a copy of the list without 4x4's lines, moved over it.
+# user's). The only file it changes is the user's mimeapps.list: the default is set by xdg-mime
+# itself (on KDE xdg-mime then also runs kbuildsycoca6, which rebuilds KDE's cache of installed
+# applications in ~/.cache); the undo is a copy of the list without 4x4's entries, moved over it.
 #
-# What `xdg-mime default` writes (xdg-utils 1.1 and 1.2): in [Default Applications], a line
-# `<type>=<desktop file>` for each type, replacing the line the type had; on KDE also, in
-# [Added Associations], the desktop file first in the list of a type that has one or a bare line
-# for a type that has none. The undo takes those lines (and that first place) out and leaves the
-# rest of the file byte for byte, as it was before. A line of [Default Applications] that named
-# another app is gone after the default (xdg-mime replaced it); the undo cannot bring it back:
-# the types then open with what the system picks, and `xdg-mime default <app.desktop> <type>`
-# pins an app again.
+# What `xdg-mime default` writes (xdg-utils 1.1 and 1.2): under [Default Applications], a line
+# `<type>=<desktop file>` for each type, replacing the line the type had: two lines. On KDE 6
+# (xdg-utils 1.2) it also writes under [Added Associations], the desktop file first in the list of
+# a type that has one, or a bare line for a type that has none: two more, four lines in all. A
+# section the list lacks is added at the end of the file (by the generic writer after a blank line).
+#
+# What the undo removes: in those two sections, the entries that name 4x4 for the two types,
+# whoever made them (one the user made by hand goes too), and 4x4 at the front of an
+# [Added Associations] list. A section header it leaves empty as the last section of the file is
+# taken out too, with the blank line before it: a header the command added is always the last
+# section. The rest of the file stays byte for byte, line endings and file mode included. An empty
+# header that stood in the middle of the file stays. A line under [Default Applications] that named
+# another app for these types is gone after the default (xdg-mime replaced it) and the undo cannot
+# bring it back: the types then open with what the system picks, and
+# `xdg-mime default <app.desktop> <type>` pins an app again.
 #
 # Env: HOME, XDG_CONFIG_HOME (where mimeapps.list is), XDG_DATA_HOME and XDG_DATA_DIRS (where
 # the desktop file is looked for), as for xdg-mime.
@@ -131,13 +139,21 @@ is_ours() {
     return 1
 }
 
-# strip_entries <in> <out>: copies the list without the lines `xdg-mime default` made for 4x4. A
-# line is theirs only in the section xdg-mime puts it in and only for one of the types: in
-# [Default Applications] `<type>=<app>` (with or without the closing ";"); in [Added Associations]
-# `<type>=<app>`, or `<type>=<app>;<others>` which gets back `<type>=<others>`. The last line keeps
-# or lacks its newline as it had.
+# is_blank <line>: whether the line has nothing but white space (a CR of a CRLF list included).
+is_blank() {
+    [[ -z ${1//[[:space:]]/} ]]
+}
+
+# strip_entries <in> <out>: copies the list without the entries `xdg-mime default` made for 4x4.
+# An entry is theirs only in the section xdg-mime puts it in and only for one of the two types:
+# under [Default Applications] `<type>=<app>` (with or without the closing ";"); under [Added
+# Associations] `<type>=<app>`, or `<type>=<app>;<others>`, which gets back `<type>=<others>`. A
+# header is recognised by its beginning, as xdg-mime does (a CR or spaces may follow it), and
+# trailing white space after a value is ignored. A section that was left empty as the last one of
+# the file goes, with a blank line before it. The last line keeps or lacks its newline as it had.
 strip_entries() {
-    local line section= mime_type value rest newline
+    local line section='' mime_type value trimmed rest newline header=-1 i drop count
+    local -a out=() ends=() removed=()
     while true; do
         if IFS= read -r line; then
             newline=$'\n'
@@ -148,27 +164,68 @@ strip_entries() {
         fi
         if [[ $line == '['* ]]; then
             section=$line
+            out+=("$line")
+            ends+=("$newline")
+            header=$((${#out[@]} - 1))
+            removed[header]=0
+            continue
         elif [[ $line == *=* ]] && is_ours "${line%%=*}"; then
             mime_type=${line%%=*}
             value=${line#*=}
-            if [[ $section == '[Default Applications]' && ($value == "$app" || $value == "$app;") ]]; then
+            trimmed=${value%"${value##*[![:space:]]}"}
+            if [[ $section == '[Default Applications]'* && ($trimmed == "$app" || $trimmed == "$app;") ]]; then
+                removed[header]=$((removed[header] + 1))
                 continue
             fi
-            if [[ $section == '[Added Associations]' ]]; then
-                if [[ $value == "$app" ]]; then
+            if [[ $section == '[Added Associations]'* ]]; then
+                if [[ $trimmed == "$app" ]]; then
+                    removed[header]=$((removed[header] + 1))
                     continue
                 fi
                 if [[ $value == "$app;"* ]]; then
                     rest=${value#"$app;"}
-                    if [[ -z $rest ]]; then
+                    if is_blank "$rest"; then
+                        removed[header]=$((removed[header] + 1))
                         continue
                     fi
                     line=$mime_type=$rest
                 fi
             fi
         fi
-        printf '%s%s' "$line" "$newline"
-    done <"$1" >"$2"
+        out+=("$line")
+        ends+=("$newline")
+    done <"$1"
+    # The last section, if the removal left nothing in it, was added by the command (or stood
+    # there empty before: the one case this cannot tell apart); then the one before it may be too.
+    while ((${#out[@]} > 0)); do
+        header=-1
+        for ((i = ${#out[@]} - 1; i >= 0; i--)); do
+            if [[ ${out[i]} == '['* ]]; then
+                header=$i
+                break
+            fi
+        done
+        if ((header < 0 || ${removed[header]:-0} == 0)); then
+            break
+        fi
+        for ((i = header + 1; i < ${#out[@]}; i++)); do
+            if ! is_blank "${out[i]}"; then
+                break 2
+            fi
+        done
+        drop=$header
+        count=1
+        if ((header > 0)) && is_blank "${out[header - 1]}"; then
+            drop=$((header - 1))
+            count=2
+        fi
+        out=("${out[@]:0:drop}" "${out[@]:drop+count}")
+        ends=("${ends[@]:0:drop}" "${ends[@]:drop+count}")
+        unset 'removed[header]'
+    done
+    for ((i = 0; i < ${#out[@]}; i++)); do
+        printf '%s%s' "${out[i]}" "${ends[i]}"
+    done >"$2"
 }
 
 if [[ $undo == yes ]]; then

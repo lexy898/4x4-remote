@@ -1953,6 +1953,196 @@ text/plain=kate.desktop
 "
 }
 
+# expect_undo_gives <list before the undo> <list after it>: the undo on a list written as given.
+expect_undo_gives() {
+    printf '%s' "$1" >"$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$2"
+}
+
+# The default, then the undo, on <list> with the real xdg-mime (the writer of this machine's
+# desktop-neutral path): the list must be as it was.
+expect_round_trip() { # <list>
+    printf '%s' "$1" >"$desktop/config/mimeapps.list"
+    run_default_handler --yes
+    expect_status 0
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$1"
+}
+
+# A section that xdg-mime had to add is the last one of the list. Once the undo has emptied it, it
+# takes the header out, and with it the blank line the generic writer puts before a header it adds.
+test_default_handler_undo_removes_a_section_header_the_command_made() {
+    new_desktop
+    expect_round_trip "[Added Associations]
+text/plain=kate.desktop;
+"
+    expect_round_trip "[Removed Associations]
+image/png=gwenview.desktop;
+
+"
+    expect_round_trip "[Default Applications]
+text/plain=kate.desktop
+
+[Removed Associations]
+image/png=gwenview.desktop;
+"
+    rm "$desktop/config/mimeapps.list"
+    run_default_handler --yes
+    expect_status 0
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" ""
+}
+
+# The same, on the lists xdg-mime 1.2.1 wrote on KDE (both headers added, [Added Associations]
+# first and the blank line before [Default Applications]).
+test_default_handler_undo_removes_the_headers_xdg_mime_added_on_kde() {
+    local bt="application/x-bittorrent=$desktop_id" mg="x-scheme-handler/magnet=$desktop_id"
+    new_desktop
+    expect_undo_gives "[Added Associations]
+$bt
+$mg
+
+[Default Applications]
+$bt
+$mg
+" ""
+    expect_undo_gives "[Added Associations]
+text/plain=kate.desktop;
+$bt
+$mg
+
+[Default Applications]
+$bt
+$mg
+" "[Added Associations]
+text/plain=kate.desktop;
+"
+    expect_undo_gives "[Default Applications]
+text/plain=kate.desktop
+$bt
+$mg
+[Added Associations]
+$bt
+$mg
+" "[Default Applications]
+text/plain=kate.desktop
+"
+    expect_undo_gives "[Removed Associations]
+image/png=gwenview.desktop;
+[Added Associations]
+$bt
+$mg
+
+[Default Applications]
+$bt
+$mg
+
+" "[Removed Associations]
+image/png=gwenview.desktop;
+
+"
+}
+
+# A header stays when it was not the last section, or something else is in it.
+test_default_handler_undo_keeps_a_header_that_still_has_something_in_it() {
+    local bt="application/x-bittorrent=$desktop_id"
+    new_desktop
+    expect_undo_gives "[Default Applications]
+$bt
+
+[Removed Associations]
+image/png=gwenview.desktop;
+" "[Default Applications]
+
+[Removed Associations]
+image/png=gwenview.desktop;
+"
+    expect_undo_gives "[Default Applications]
+$bt
+# kept: not an entry
+" "[Default Applications]
+# kept: not an entry
+"
+}
+
+# Real xdg-mime on KDE (xdg-utils 1.2: 1.1 knows no KDE 6 and writes only [Default
+# Applications]) with stand-ins for qtpaths and kbuildsycoca6: four lines in all, two under each header.
+test_default_handler_round_trips_through_the_kde_writer_of_xdg_mime() {
+    local version
+    new_desktop
+    version=$("${desktop_env[@]}" xdg-mime --version | sed -n 's/^xdg-mime //p')
+    if [[ $(printf '1.2\n%s\n' "$version" | sort -V | head -n 1) != 1.2 ]]; then
+        skip "xdg-mime $version writes no [Added Associations] on KDE 6 (1.2 or newer does)"
+        return
+    fi
+    printf '#!/bin/sh\necho "$XDG_CONFIG_HOME"\n' >"$desktop/bin/qtpaths"
+    printf '#!/bin/sh\nexit 0\n' >"$desktop/bin/kbuildsycoca6"
+    chmod +x "$desktop/bin/qtpaths" "$desktop/bin/kbuildsycoca6"
+    desktop_env+=(XDG_CURRENT_DESKTOP=KDE KDE_SESSION_VERSION=6 KDE_FULL_SESSION=true)
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_default_handler --yes
+    expect_status 0
+    [[ $(grep -c "=$desktop_id" "$desktop/config/mimeapps.list") == 4 ]] ||
+        fail "expected four lines of 4x4 on KDE: $(cat "$desktop/config/mimeapps.list")"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    expect_round_trip "[Added Associations]
+text/plain=kate.desktop;
+"
+    expect_round_trip "[Default Applications]
+text/plain=kate.desktop
+"
+    expect_round_trip "[Removed Associations]
+image/png=gwenview.desktop;
+
+"
+    expect_round_trip "[Added Associations]
+application/x-bittorrent=deluge.desktop;
+text/plain=kate.desktop;
+"
+}
+
+# xdg-mime matches a header by its beginning and keeps the lines of a CRLF list as they are.
+test_default_handler_undo_handles_crlf_and_trailing_spaces() {
+    local bt="application/x-bittorrent=$desktop_id" mg="x-scheme-handler/magnet=$desktop_id"
+    local cr=$'\r'
+    new_desktop
+    expect_round_trip "[Added Associations]$cr
+text/plain=kate.desktop;$cr
+$cr
+[Default Applications]$cr
+text/plain=kate.desktop$cr
+"
+    expect_undo_gives "[Added Associations]  $cr
+$bt;deluge.desktop;$cr
+$mg;$cr
+[Default Applications] $cr
+$bt $cr
+$mg;$cr
+text/plain=kate.desktop$cr
+" "[Added Associations]  $cr
+application/x-bittorrent=deluge.desktop;$cr
+[Default Applications] $cr
+text/plain=kate.desktop$cr
+"
+}
+
+test_default_handler_undo_keeps_the_mode_of_the_list() {
+    new_desktop
+    printf '%s' "$mimeapps_with_4x4" >"$desktop/config/mimeapps.list"
+    chmod 640 "$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    [[ $(stat -c %a "$desktop/config/mimeapps.list") == 640 ]] ||
+        fail "the list has mode $(stat -c %a "$desktop/config/mimeapps.list") after the undo, not 640"
+}
+
 test_default_handler_undo_works_after_4x4_is_uninstalled() {
     new_desktop
     printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
@@ -2228,6 +2418,12 @@ cases=(
     default_handler_undo_removes_what_xdg_mime_writes_on_kde
     default_handler_undo_keeps_other_apps_entries_for_the_same_types
     default_handler_undo_keeps_a_missing_final_newline
+    default_handler_undo_removes_a_section_header_the_command_made
+    default_handler_undo_removes_the_headers_xdg_mime_added_on_kde
+    default_handler_undo_keeps_a_header_that_still_has_something_in_it
+    default_handler_round_trips_through_the_kde_writer_of_xdg_mime
+    default_handler_undo_handles_crlf_and_trailing_spaces
+    default_handler_undo_keeps_the_mode_of_the_list
     default_handler_undo_works_after_4x4_is_uninstalled
     default_handler_undo_with_nothing_to_undo_leaves_the_list_alone
     default_handler_undo_edits_the_target_of_a_symlinked_list
