@@ -832,7 +832,7 @@ the demo was measured 15 seconds after its start, 28 seconds for the five files,
 - After a large add, which none of these runs made, glibc may keep some freed memory resident as
   well: the service thread builds the request, the `.torrent` in base64 inside JSON, and its arena
   keeps the freed buffers for the next request (a separate test of the same pattern kept 6.3 MiB
-  after a 16 MiB file); the memory is reused, not lost.
+  after a 16 MiB file); the memory is reused, not lost. Stage 6 below returns it.
 
 The Files tab keeps its tree from one read of the details to the next while the torrent's files
 stay the same, which they do while it downloads: each read every 3 seconds only takes in the
@@ -846,6 +846,28 @@ making the tree and its rows against taking a read into the tree kept:
 | 50 000, four folders deep, long names           | 19.6 ms                | 1.0 ms    |
 | 50 000 in one folder, open                      | 14.0 ms                | 3.1 ms    |
 | 36 000 names crafted to compare slowly, open    | 667 ms                 | 14 ms     |
+
+### The allocator (stage 6)
+
+4x4 fixes glibc's mmap threshold at 128 KiB (`mallopt(M_MMAP_THRESHOLD)`, the first thing `main`
+does, in `4x4` and in the synthetic demo alike), so that every freed buffer of that size or more
+goes back to the system at once; the call is the only `unsafe` in the project, approved by the
+owner, in `crates/x4-app/src/allocator.rs`, and does nothing off Linux with glibc. By default glibc
+raises the threshold to the size of each large block it sees freed, up to 32 MiB, and the next
+allocations of that size come from the arena of the thread that makes them, where `free` keeps
+them; adding a big `.torrent` makes three such buffers on the service thread (the file, its base64
+form, the JSON request). Through the real add path to a local sink, a 16 MiB and then an 8 MiB
+file left 37.6 to 39.6 MiB of private memory resident (five runs) by default, and 0.30 MiB with the
+threshold fixed; `malloc_trim(0)` alone was not reliable and adds nothing once it is fixed. The
+test `freed_large_buffers_go_back_to_the_system` pins the effect. In release builds inside
+`just virtual`, medians of three runs of the synthetic demo (2000 torrents) without and with the
+pin did not differ beyond the noise of the runs: first frame 236 and 237 ms, private memory 36.3
+and 36.2 MiB, CPU while idle 0.00 and 0.03 %, while 513 torrents change on every poll 1.20 and
+1.23 %, and while scrolling a row per frame 34.3 and 32.6 % (the runs without the pin alone swung
+from 31 to 44 %), frame interval p99 17.62 and 17.38 ms with none over 33 ms; the real app over a
+closed port had a first frame of 237.5 and 226.5 ms and 16.0 and 15.8 MiB of private memory. The
+one visible cost is about 125 more minor page faults a second (7 and 131) while the demo polls a
+busy daemon, because its answers of a few hundred KiB are now fresh mappings each time.
 
 ## Development
 

@@ -21,8 +21,8 @@ just test             # tests via nextest
 just test-hooks       # tests for the hook and helper scripts in scripts/
 just test-live        # live tests against the owner's daemon; never part of check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
-just lint-policy      # lint exceptions, workspace lints, dependency direction, the vendored
-                      # gpui-pre-wgpu patch (scripts/lint-policy.sh)
+just lint-policy      # lint exceptions, workspace lints, the one unsafe call, dependency
+                      # direction, the vendored gpui-pre-wgpu patch (scripts/lint-policy.sh)
 just run              # run the app (debug build)
 just release          # optimized build
 just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp
@@ -83,6 +83,12 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 ### Lint exceptions
 - Only `#[expect(clippy::lint_name, reason = "why this case is fine")]` on the smallest possible item.
   `#[allow]` is rejected by lint. Workspace-wide exceptions need a comment in `Cargo.toml`.
+
+### Unsafe code
+- The workspace denies `unsafe_code`. The one exception, approved by the owner, is the `mallopt`
+  call in `crates/x4-app/src/allocator.rs`: a `#[expect(unsafe_code, reason = "...")]` on that
+  statement and a `// SAFETY:` comment above it. Any other `unsafe` needs the owner's explicit
+  approval first; `just lint-policy` rejects an `unsafe_code` exception anywhere else.
 
 ### Logging
 - `tracing` only; `println!`/`eprintln!` are rejected by lint. English messages with structured
@@ -168,6 +174,8 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Agents open app windows only through `just virtual …` (headless KWin, own D-Bus, own XDG and
   runtime dirs); never run KWin, spectacle or test windows against the owner's session bus, XDG
   dirs or screens. Debug builds use the `.Devel` app id.
+- Agents never run `sudo`, `pacman -U`, `makepkg -i`/`-s` or `just default-handler`; installing and
+  changing the default apps is the owner's.
 - Everything in the repository is English.
 
 ## Git

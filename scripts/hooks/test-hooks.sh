@@ -463,7 +463,8 @@ test_check_tools_passes_when_all_present() {
 # A minimal repository layout for lint-policy.sh, plus a stub `cargo` whose `cargo tree`
 # output per crate comes from tree-<crate>.txt next to it, and its stderr from
 # tree-<crate>.stderr if that exists. Each call appends its arguments to cargo-args.txt.
-# Clean by default: x4-app's tree is the vendored crate, and the vendored renderer is patched.
+# Clean by default: x4-app's tree is the vendored crate, the vendored renderer is patched, the
+# workspace denies unsafe_code and the allocator holds the one exception to it.
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
@@ -474,6 +475,11 @@ new_policy_root() {
             "$crate" >"$dir/crates/$crate/src/lib.rs"
         printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
     done
+    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n' >"$dir/Cargo.toml"
+    mkdir -p "$dir/crates/x4-app/src"
+    printf '[package]\nname = "x4-app"\n\n[lints]\nworkspace = true\n' >"$dir/crates/x4-app/Cargo.toml"
+    printf '//! The allocator.\n\n// SAFETY: a call.\n#[expect(unsafe_code, reason = "the owner allowed this")]\nlet taken = unsafe { f() };\n' \
+        >"$dir/crates/x4-app/src/allocator.rs"
     printf 'gpui-pre-wgpu v0.3.10 (%s/vendor/gpui-pre-wgpu)\n' "$dir" >"$dir/tree-x4-app.txt"
     mkdir -p "$dir/vendor/gpui-pre-wgpu/src"
     printf 'fn create_context_vulkan_first() {}\n' >"$dir/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs"
@@ -605,6 +611,62 @@ test_lint_policy_rejects_failed_gpui_pre_wgpu_lookup() {
     expect_status 1
     expect_contains "x4-app: cargo tree failed, cannot check that gpui-pre-wgpu is the vendored copy" \
         "$stderr" stderr
+}
+
+# The one `unsafe` is the owner's: an unsafe_code exception, at any level, only in the allocator.
+test_lint_policy_rejects_an_unsafe_code_exception_elsewhere() {
+    local dir
+    dir=$(new_policy_root)
+    printf '#[expect(unsafe_code, reason = "x")]\nfn g() {}\n' >>"$dir/crates/x4-core/src/lib.rs"
+    printf '#[allow(\n    unsafe_code\n)]\nfn h() {}\n' >"$dir/crates/x4-rpc/src/c.rs"
+    printf '#![forbid(unsafe_code)]\n' >"$dir/crates/x4-rpc/src/d.rs"
+    printf '#[cfg_attr(test, expect(clippy::too_many_lines, unsafe_code))]\nfn i() {}\n' \
+        >"$dir/crates/x4-app/src/other.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "crates/x4-core/src/lib.rs: unsafe_code exception outside crates/x4-app/src/allocator.rs" \
+        "$stderr" stderr
+    expect_contains "crates/x4-rpc/src/c.rs: unsafe_code exception outside" "$stderr" stderr
+    expect_contains "crates/x4-rpc/src/d.rs: unsafe_code exception outside" "$stderr" stderr
+    expect_contains "crates/x4-app/src/other.rs: unsafe_code exception outside" "$stderr" stderr
+    [[ $stderr != *"crates/x4-app/src/allocator.rs:"* ]] || fail "the allocator is the home of the exception, got: $stderr"
+}
+
+test_lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator() {
+    local dir
+    dir=$(new_policy_root)
+    printf '#[expect(unsafe_code, reason = "another")]\nlet again = unsafe { g() };\n' \
+        >>"$dir/crates/x4-app/src/allocator.rs"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "crates/x4-app/src/allocator.rs: 2 unsafe_code exceptions" "$stderr" stderr
+}
+
+test_lint_policy_ignores_unsafe_code_in_comments_and_reasons() {
+    local dir
+    dir=$(new_policy_root)
+    printf '/// Never write `#[allow(unsafe_code)]`.\n// #![forbid(unsafe_code)]\n' \
+        >>"$dir/crates/x4-core/src/lib.rs"
+    printf '#[expect(clippy::too_many_lines, reason = "unsafe_code is not meant")]\nfn j() {}\n' \
+        >>"$dir/crates/x4-core/src/lib.rs"
+    run_policy "$dir"
+    expect_status 0
+}
+
+# `forbid` cannot be overridden, not even by #[expect], so the allocator would not build.
+test_lint_policy_rejects_a_workspace_unsafe_level_other_than_deny() {
+    local dir level
+    dir=$(new_policy_root)
+    for level in forbid warn allow; do
+        printf '[workspace.lints.rust]\nunsafe_code = "%s"\n' "$level" >"$dir/Cargo.toml"
+        run_policy "$dir"
+        expect_status 1
+        expect_contains "Cargo.toml: workspace.lints.rust.unsafe_code is '$level', not deny" "$stderr" stderr
+    done
+    printf '[workspace.lints.rust]\nmissing_docs = "warn"\n' >"$dir/Cargo.toml"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "Cargo.toml: workspace.lints.rust.unsafe_code is 'unset', not deny" "$stderr" stderr
 }
 
 # Canned copies of /proc/<pid>/smaps_rollup, status and maps in a fresh directory, as
@@ -1139,6 +1201,10 @@ cases=(
     lint_policy_rejects_unused_gpui_pre_wgpu_patch
     lint_policy_rejects_unpatched_vendored_gpui_pre_wgpu
     lint_policy_rejects_failed_gpui_pre_wgpu_lookup
+    lint_policy_rejects_an_unsafe_code_exception_elsewhere
+    lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator
+    lint_policy_ignores_unsafe_code_in_comments_and_reasons
+    lint_policy_rejects_a_workspace_unsafe_level_other_than_deny
     measure_report_line_has_every_metric_in_order
     measure_report_line_flags_each_gl_stack_library
     measure_report_line_rejects_unreadable_metrics

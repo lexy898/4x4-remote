@@ -45,6 +45,7 @@ use gpui_kit::{
     point, px,
 };
 use x4_app::adding::{AddRequest, AddRequests, launch_requests};
+use x4_app::allocator::{log_pin, pin_mmap_threshold};
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
@@ -69,9 +70,13 @@ const SELECT_WAIT: Duration = Duration::from_secs(10);
 const PRESS_INTERVAL: Duration = Duration::from_secs(3);
 
 fn main() -> anyhow::Result<()> {
+    // First of all, as in `4x4`, so that the demo measures what the app does: no thread exists
+    // yet, and mallopt is not thread-safe. Logged once logging is up.
+    let mmap_pinned = pin_mmap_threshold();
     let started = Instant::now();
     // The demo writes no files, its log included.
     init_stderr_logging()?;
+    log_pin(mmap_pinned);
     let options = Options::parse(env::args().skip(1))?;
     tracing::info!(
         torrents = TORRENTS,

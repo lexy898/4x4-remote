@@ -68,7 +68,10 @@ ureq = { version = "3.5.0", default-features = false }
 url = { version = "2.5.8", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`: a `forbid` cannot be overridden, not even by `#[expect]`. The one exception,
+# approved by the owner, is the `mallopt` call in crates/x4-app/src/allocator.rs; `just lint-policy`
+# rejects an `unsafe_code` exception anywhere else.
+unsafe_code = "deny"
 missing_docs = "warn"
 unreachable_pub = "warn"
 unused_qualifications = "warn"
@@ -88,6 +91,7 @@ panic = "warn"
 print_stderr = "warn"
 print_stdout = "warn"
 todo = "warn"
+undocumented_unsafe_blocks = "warn"
 unimplemented = "warn"
 unreachable = "warn"
 unused_result_ok = "warn"
