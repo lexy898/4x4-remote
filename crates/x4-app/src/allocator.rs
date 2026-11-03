@@ -3,14 +3,16 @@
 //! By default glibc raises its mmap threshold to the size of every large block that is freed (up
 //! to 32 MiB), and the next allocations of that size come from the arena of the thread that makes
 //! them, where `free` keeps them resident. Adding a big `.torrent` makes such buffers: the file,
-//! its base64 form and the JSON body of the request, on the service thread. Measured through the
-//! real add path, a 16 MiB and then an 8 MiB add kept 37.6 to 39.6 MiB of private memory after they
-//! were done; with the threshold fixed they keep 0.30 MiB. Fixing it also turns off the dynamic
-//! adjustment of the trim threshold, so the heap's free top is returned as well.
+//! read on a short-lived reader thread, then its base64 form and the JSON body of the request on
+//! the long-lived service thread, whose arena keeps them. Measured through the real add path, a
+//! 16 MiB and then an 8 MiB add kept 37.6 to 39.6 MiB of private memory after they were done; with
+//! the threshold fixed they keep 0.30 MiB. Fixing it also turns off the dynamic adjustment of the
+//! trim threshold, so the heap's free top is returned as well.
 //!
 //! This is the project's only `unsafe`, approved by the owner: `mallopt` is a C function with no
-//! safe wrapper. `malloc_trim` and `M_ARENA_MAX` were measured and add nothing once the threshold
-//! is fixed.
+//! safe wrapper. `malloc_trim` adds nothing once the threshold is fixed. `M_ARENA_MAX=1` would save
+//! about 8 MiB more private memory at all times, but it costs CPU in the synthetic demo (about 0.7
+//! points while it polls a busy daemon, about 17 while it scrolls), so it is not set.
 
 use std::ffi::c_int;
 

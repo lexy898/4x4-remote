@@ -944,19 +944,23 @@ goes back to the system at once; the call is the only `unsafe` in the project, a
 owner, in `crates/x4-app/src/allocator.rs`, and does nothing off Linux with glibc. By default glibc
 raises the threshold to the size of each large block it sees freed, up to 32 MiB, and the next
 allocations of that size come from the arena of the thread that makes them, where `free` keeps
-them; adding a big `.torrent` makes three such buffers on the service thread (the file, its base64
-form, the JSON request). Through the real add path to a local sink, a 16 MiB and then an 8 MiB
-file left 37.6 to 39.6 MiB of private memory resident (five runs) by default, and 0.30 MiB with the
-threshold fixed; `malloc_trim(0)` alone was not reliable and adds nothing once it is fixed. The
-test `freed_large_buffers_go_back_to_the_system` pins the effect. In release builds inside
+them; adding a big `.torrent` makes three such buffers: the file, read on a short-lived reader
+thread, then its base64 form and the JSON body of the request on the long-lived service thread.
+Through the real add path to a local sink, a 16 MiB and then an 8 MiB file left 37.6 to 39.6 MiB of
+private memory resident (five runs) by default, and 0.30 MiB with the threshold fixed;
+`malloc_trim(0)` alone was not reliable and adds nothing once it is fixed. `M_ARENA_MAX=1` would
+save about 8 MiB more private memory, but it costs CPU in the demo (about 0.7 points while it polls
+a busy daemon, about 17 while it scrolls), so it is not set. The test
+`freed_large_buffers_go_back_to_the_system` pins the effect. In release builds inside
 `just virtual`, medians of three runs of the synthetic demo (2000 torrents) without and with the
-pin did not differ beyond the noise of the runs: first frame 236 and 237 ms, private memory 36.3
-and 36.2 MiB, CPU while idle 0.00 and 0.03 %, while 513 torrents change on every poll 1.20 and
-1.23 %, and while scrolling a row per frame 34.3 and 32.6 % (the runs without the pin alone swung
-from 31 to 44 %), frame interval p99 17.62 and 17.38 ms with none over 33 ms; the real app over a
-closed port had a first frame of 237.5 and 226.5 ms and 16.0 and 15.8 MiB of private memory. The
-one visible cost is about 125 more minor page faults a second (7 and 131) while the demo polls a
-busy daemon, because its answers of a few hundred KiB are now fresh mappings each time.
+pin did not differ beyond the noise of the runs: first frame (median of nine starts) 236 and 237 ms,
+private memory 36.3 and 36.2 MiB, CPU while idle 0.00 and 0.03 %, while 513 torrents change on
+every poll 1.20 and 1.23 %, and while scrolling a row per frame 34.3 and 32.6 % (the runs without
+the pin alone swung from 31 to 44 %), frame interval p99 17.62 and 17.38 ms with none over 33 ms;
+the real app over a closed port (four sessions each) had a first frame of 237.5 and 226.5 ms and
+16.0 and 15.8 MiB of private memory. The one visible cost is about 125 more minor page faults a
+second (7 and 131) while the demo polls a busy daemon, because its answers of a few hundred KiB are
+now fresh mappings each time.
 
 ### Installing (stage 6)
 
