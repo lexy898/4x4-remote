@@ -757,6 +757,7 @@ impl Render for MainView {
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(content))
             .child(status_bar)
+            // Last, so that it is painted over the content (`drop_target`).
             .child(drop_highlight_layer(WINDOW_DROP_TARGET, px(0.)))
     }
 }

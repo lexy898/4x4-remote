@@ -656,6 +656,7 @@ impl Render for AddDialog {
             .child(self.heading(cx))
             .children(form)
             .child(self.buttons(cx))
+            // Last, so that it is painted over the content (`drop_target`).
             .child(drop_highlight_layer(
                 DIALOG_DROP_TARGET,
                 cx.theme().radius_lg,

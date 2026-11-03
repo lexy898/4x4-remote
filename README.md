@@ -355,9 +355,11 @@ offers the torrents in the add dialog:
   app bring the window to the front, so that the keys go to the add dialog.
 
 4x4 reads the clipboard only when you ask it to, and no more magnet links of it than can wait to be
-added (see below). While a menu, the speed limits or a dialog is open, `Ctrl+O`, `Ctrl+U` and
-`Ctrl+V` do nothing, and holding one of them down acts once. One file dialog is open at a time, for
-as long as it stays open: Add file or `Ctrl+O` meanwhile says "The file dialog is open already".
+added (see below): the lines that look like magnet links after the 100th link taken, or after the
+200th such line read (copies of one link and broken links count), are left out and counted. While a
+menu, the speed limits or a dialog is open, `Ctrl+O`, `Ctrl+U` and `Ctrl+V` do nothing, and holding
+one of them down acts once. One file dialog is open at a time, for as long as it stays open: Add
+file or `Ctrl+O` meanwhile says "The file dialog is open already".
 
 The add dialog shows the torrents to add, one at a time; nothing is added until you press Add. A
 `.torrent` file is read only when its turn comes, and one that cannot be offered is skipped with a

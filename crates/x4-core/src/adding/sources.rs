@@ -5,7 +5,8 @@
 //!
 //! Nothing here reads a file: whether a `.torrent` exists, and what it is, is checked when its turn
 //! in the queue comes. The clipboard may hold any amount of text, so no more magnet links are
-//! parsed than the queue can hold ([`QUEUE_CAP`]); the lines after them are only counted.
+//! parsed than the queue can hold ([`QUEUE_CAP`]), and no more lines than twice that; the lines
+//! after them are only counted.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -56,9 +57,10 @@ fn is_torrent_file_name(path: &Path) -> bool {
 pub struct ClipboardItems<T> {
     /// What the lines give, each once, in their order.
     pub items: Vec<T>,
-    /// How many lines after the first [`QUEUE_CAP`] items look like magnet links (they start with
-    /// `magnet:?`, in any case). They are left out unparsed, so a line among them that is a
-    /// duplicate, or no link the daemon can add, counts too.
+    /// How many lines after the first [`QUEUE_CAP`] items, or after twice that many lines were
+    /// parsed, look like magnet links (they start with `magnet:?`, in any case). They are left out
+    /// unparsed, so a line among them that is a duplicate, or no link the daemon can add, counts
+    /// too.
     pub left_out: usize,
 }
 
@@ -76,18 +78,26 @@ impl<T> Default for ClipboardItems<T> {
 /// links. Empty lines and lines that are no magnet link the daemon can add are left out. 4x4's
 /// own "Copy magnet link" writes one link per line.
 ///
-/// Once [`QUEUE_CAP`] links are taken, the other lines are not parsed: those that look like magnet
-/// links are only counted ([`ClipboardItems::left_out`]), so a clipboard of millions of lines
-/// costs one pass over its text.
+/// Only lines that look like magnet links are parsed, and no more of them than twice
+/// [`QUEUE_CAP`]: once [`QUEUE_CAP`] links are taken, or twice that many lines were tried, the
+/// other lines that look like magnet links are only counted ([`ClipboardItems::left_out`]). So a
+/// clipboard of millions of lines costs one pass over its text, even when its lines are copies of
+/// one link, which never fill the queue.
 #[must_use]
 pub fn clipboard_magnets(text: &str) -> ClipboardItems<MagnetLink> {
     let mut magnets = ClipboardItems::default();
+    let mut parsed = 0;
     for line in text.lines().map(str::trim) {
-        if magnets.items.len() == QUEUE_CAP {
-            if looks_like_magnet_link(line) {
-                magnets.left_out += 1;
-            }
-        } else if let Ok(link) = MagnetLink::parse(line)
+        // `MagnetLink::parse` takes no other line.
+        if !looks_like_magnet_link(line) {
+            continue;
+        }
+        if magnets.items.len() == QUEUE_CAP || parsed == PARSED_LINES {
+            magnets.left_out += 1;
+            continue;
+        }
+        parsed += 1;
+        if let Ok(link) = MagnetLink::parse(line)
             && !magnets.items.contains(&link)
         {
             magnets.items.push(link);
@@ -95,6 +105,10 @@ pub fn clipboard_magnets(text: &str) -> ClipboardItems<MagnetLink> {
     }
     magnets
 }
+
+/// The most lines of the clipboard that are parsed as magnet links: twice what the queue holds,
+/// room for duplicates and for lines that are no link the daemon can add.
+const PARSED_LINES: usize = 2 * QUEUE_CAP;
 
 /// Whether `line` starts as a magnet link does, `magnet:?` in any case; nothing more is checked.
 fn looks_like_magnet_link(line: &str) -> bool {
@@ -277,6 +291,31 @@ mod tests {
         let items = magnet_form_items(Some(&lines.join("\n")));
         assert_eq!(items.items.len(), QUEUE_CAP);
         assert_eq!(items.left_out, 5);
+    }
+
+    #[test]
+    fn no_more_lines_are_parsed_than_twice_what_the_queue_holds() {
+        // A million copies of one link: each was parsed, as a duplicate never fills the queue,
+        // and that took 0.4 s of the window's thread. Past the lines tried, those that look like
+        // magnet links are counted unparsed, so the count tells how many were parsed.
+        let copies = format!("{}\n", numbered_link(0)).repeat(1_000_000);
+
+        let magnets = clipboard_magnets(&copies);
+
+        assert_eq!(magnets.items.len(), 1);
+        assert_eq!(magnets.left_out, 1_000_000 - 2 * QUEUE_CAP);
+
+        // Lines that look like links and are none are tried too; text that does not look like a
+        // link is not, and neither counts.
+        let mut lines = vec!["magnet:?xt=urn:btih:nothex".to_owned(); 2 * QUEUE_CAP - 1];
+        lines.extend(std::iter::repeat_n("not a link".to_owned(), 50));
+        lines.extend([numbered_link(1), numbered_link(2)]);
+        let magnets = clipboard_magnets(&lines.join("\n"));
+        assert_eq!(
+            magnets.items,
+            [MagnetLink::parse(&numbered_link(1)).unwrap()]
+        );
+        assert_eq!(magnets.left_out, 1, "the second link, past the lines tried");
     }
 
     #[test]
