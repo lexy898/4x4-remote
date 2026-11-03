@@ -1,6 +1,6 @@
-//! What the window does once the daemon has answered an add: which folder joins the folders used
-//! lately, which torrent to select, whether the dialog moves on or keeps the form, and what the
-//! notification says.
+//! What the window does once the daemon has answered an add, or the service has stopped before it
+//! did: which folder joins the folders used lately, which torrent to select, whether the dialog
+//! moves on or keeps the form, and what the notification says.
 
 use x4_rpc::{DownloadDir, HashString};
 
@@ -36,6 +36,12 @@ pub enum AddNotice {
     },
     /// The daemon has not confirmed the add of `name` in time; it may still come.
     Unconfirmed {
+        /// The torrent's name.
+        name: String,
+    },
+    /// The service stopped before the daemon answered the add of `name`, which may have been
+    /// added all the same.
+    ServiceStopped {
         /// The torrent's name.
         name: String,
     },
@@ -104,6 +110,21 @@ pub fn add_outcome(sent: &SentAdd, result: Result<Added, AddError>) -> AddOutcom
                 error,
             }),
         },
+    }
+}
+
+/// What follows when the service stops before the daemon has answered `sent`: nothing is
+/// remembered and nothing waited for, as no list will come; a notification says that the service
+/// stopped, and the dialog moves on.
+#[must_use]
+pub fn stopped_outcome(sent: &SentAdd) -> AddOutcome {
+    AddOutcome {
+        remember: None,
+        select: None,
+        form: FormStep::Advance,
+        notice: Some(AddNotice::ServiceStopped {
+            name: sent.name.clone(),
+        }),
     }
 }
 
@@ -193,6 +214,23 @@ mod tests {
                 select: Some(sent.hash.clone()),
                 form: FormStep::Advance,
                 notice: Some(AddNotice::Unconfirmed {
+                    name: "Show".to_owned(),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_service_that_stops_before_the_answer_says_so_and_moves_on() {
+        let sent = sent(Some("/data/shows"));
+
+        assert_eq!(
+            stopped_outcome(&sent),
+            AddOutcome {
+                remember: None,
+                select: None,
+                form: FormStep::Advance,
+                notice: Some(AddNotice::ServiceStopped {
                     name: "Show".to_owned(),
                 }),
             }

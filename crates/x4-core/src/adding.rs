@@ -14,8 +14,9 @@
 //! - [`folder_picks`] lists the folders the folder field offers; [`FormDefaults`] gives each form
 //!   of a run its folder and "Start immediately"; [`FreeSpaceCache`] decides when the free space
 //!   of the folder is asked for and keeps the answers.
-//! - [`add_outcome`] says what follows the daemon's answer to an add (an [`AddOutcome`]), and a
-//!   [`PendingSelection`] waits for the torrent to select once it is listed.
+//! - [`add_outcome`] says what follows the daemon's answer to an add (an [`AddOutcome`]), and
+//!   [`stopped_outcome`] what follows when the service stops before it; a [`PendingSelection`]
+//!   waits for the torrent to select once it is listed.
 //!
 //! Nothing here sends anything: the app sends the request of an [`AddCheck::Ready`] only when the
 //! user presses Add.
@@ -33,6 +34,6 @@ pub use defaults::{FormDefaults, TakenDefaults};
 pub use folders::{MAX_FOLDER_PICKS, folder_picks};
 pub use form::{AddCheck, AddForm, LoadedItem, LoadedTorrent, NoChoiceReason};
 pub use free_space::{FREE_SPACE_DELAY, FreeSpaceCache, FreeSpaceFollow};
-pub use outcome::{AddNotice, AddOutcome, FormStep, SentAdd, add_outcome};
+pub use outcome::{AddNotice, AddOutcome, FormStep, SentAdd, add_outcome, stopped_outcome};
 pub use queue::{AddItem, AddQueue, QUEUE_CAP};
 pub use selection::{PENDING_SELECTION_LIFE, PendingSelection, Reveal};

@@ -20,7 +20,7 @@
 //! [`add_outcome`] says what follows: the folder to remember, the torrent to select, whether the
 //! dialog moves on or keeps the form, and the notification. Cancel while an add is out skips the
 //! torrent all the same, and its answer still counts; when the service stops, the adds still out
-//! are taken as not confirmed.
+//! say so ([`stopped_outcome`]).
 //!
 //! The torrent to select waits in x4-core's [`PendingSelection`] until a snapshot lists it; it is
 //! then selected, once, with the filter and the search cleared if they would hide it. Any change of
@@ -34,8 +34,8 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{App, AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
 use x4_core::{
-    Action, ActionId, AddError, AddItem, AddNotice, AddQueue, Added, Command, FormStep, LoadedItem,
-    PendingSelection, SentAdd, add_outcome,
+    Action, ActionId, AddError, AddItem, AddNotice, AddOutcome, AddQueue, Added, Command, FormStep,
+    LoadedItem, PendingSelection, SentAdd, add_outcome, stopped_outcome,
 };
 use x4_rpc::{HashString, TorrentAdd};
 
@@ -225,12 +225,14 @@ impl MainView {
         }
     }
 
-    /// The service has stopped, so the adds still out will never be answered: they are taken as
-    /// not confirmed, so that the dialog does not wait for them for good.
+    /// The service has stopped, so the adds still out will never be answered: each says so, in
+    /// the order they were sent, and the dialog does not wait for them for good.
     pub(super) fn adds_service_stopped(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let out: Vec<ActionId> = self.adds.out.keys().copied().collect();
-        for id in out {
-            self.add_finished(id, Err(AddError::Unconfirmed), window, cx);
+        let mut out: Vec<(ActionId, SentAdd)> = self.adds.out.drain().collect();
+        out.sort_by_key(|(id, _)| id.0);
+        for (id, sent) in out {
+            tracing::warn!(torrent = %sent.hash, "the service stopped before the add was answered");
+            self.follow_outcome(id, stopped_outcome(&sent), window, cx);
         }
     }
 
@@ -248,12 +250,23 @@ impl MainView {
             return;
         };
         log_answer(&sent, &result);
+        self.follow_outcome(id, add_outcome(&sent, result), window, cx);
+    }
+
+    /// Does what `outcome` says follows the add `id`: remembers the folder, says what became of
+    /// the add, waits for the torrent to select, and moves the dialog on or keeps its form.
+    fn follow_outcome(
+        &mut self,
+        id: ActionId,
+        outcome: AddOutcome,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         let shown = self
             .adds
             .dialog
             .as_ref()
             .is_some_and(|(dialog, _)| dialog.read(cx).waiting() == Some(id));
-        let outcome = add_outcome(&sent, result);
         if let Some(folder) = &outcome.remember {
             self.ui.add.remember(folder);
             self.ui_changed(cx);
@@ -265,6 +278,7 @@ impl MainView {
         if let Some(notice) = &outcome.notice {
             let kind = match notice {
                 AddNotice::Failed { .. } => Notification::error,
+                AddNotice::ServiceStopped { .. } => Notification::warning,
                 AddNotice::Duplicate { .. } | AddNotice::Unconfirmed { .. } => Notification::info,
             };
             self.add_notice(kind, add_notice_text(notice), window, cx);

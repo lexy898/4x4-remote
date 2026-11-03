@@ -127,6 +127,7 @@ pub(crate) fn add_notice_text(notice: &AddNotice) -> SharedString {
     match notice {
         AddNotice::Duplicate { name } => add_duplicate_text(name),
         AddNotice::Unconfirmed { name } => add_unconfirmed_text(name),
+        AddNotice::ServiceStopped { name } => t!("add-service-stopped", name = name).into(),
         AddNotice::Failed { name, error } => add_failure_text(name, error),
     }
 }
@@ -377,6 +378,12 @@ mod tests {
         assert_eq!(
             add_unconfirmed_text("Show"),
             "The server has not confirmed Show yet; it shows in the list once it is added"
+        );
+        assert_eq!(
+            add_notice_text(&AddNotice::ServiceStopped {
+                name: "Show".to_owned()
+            }),
+            "The service stopped before the server confirmed Show; it may have been added"
         );
         assert_eq!(
             add_failure_text("Show", &AddError::Unconfirmed),

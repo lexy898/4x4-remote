@@ -755,6 +755,9 @@ add-file-invalid = the server would refuse it as broken
 # $name: the torrent's name.
 add-duplicate = { $name } is in the list already
 add-unconfirmed = The server has not confirmed { $name } yet; it shows in the list once it is added
+# When the part of 4x4 that talks to the server stops while it adds a torrent; $name: the
+# torrent's name.
+add-service-stopped = The service stopped before the server confirmed { $name }; it may have been added
 # $name: the torrent's name; $reason: one of the connection-reason-* messages,
 # add-failed-not-connected, or the server's own text.
 add-failed = Could not add { $name }: { $reason }

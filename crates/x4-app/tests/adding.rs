@@ -1620,7 +1620,7 @@ fn adds_still_out_when_the_service_stops_are_not_confirmed(cx: &mut TestAppConte
 
     assert_eq!(
         window.last_notice(cx).as_deref(),
-        Some("The server has not confirmed Show yet; it shows in the list once it is added")
+        Some("The service stopped before the server confirmed Show; it may have been added")
     );
     assert!(!window.dialog_open(cx), "it moved on from the torrent sent");
 }
