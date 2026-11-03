@@ -36,7 +36,7 @@ just package          # the Arch package of the committed master under ~/.cache/
 just default-handler  # make the installed 4x4 the default app for .torrent files and magnet links
                       # (--undo gives them back); the owner's only: agents never run it
 just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
-                      # and HOME (cargo keeps the owner's ~/.cargo)
+                      # and HOME (cargo and rustup keep the owner's ~/.cargo and ~/.rustup)
 just demo-synthetic   # the main window over 2000 made-up torrents, no network
                       # (--static, --scroll, --select N)
 just update           # update dependencies, then run the full gate

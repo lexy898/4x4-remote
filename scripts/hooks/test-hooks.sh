@@ -1208,6 +1208,7 @@ virtual_dir=
 virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY|HOME)='
 new_virtual_env() {
     virtual_dir=$(mktemp -d "$tmp_root/virtual.XXXXXX")
+    virtual_caller_env=()
     mkdir -p "$virtual_dir/bin" "$virtual_dir/home/.config/fontconfig" "$virtual_dir/tmp"
     printf '[General]\nColorScheme=Owner\n' >"$virtual_dir/home/.config/kdeglobals"
     printf '<fontconfig/>\n' >"$virtual_dir/home/.config/fontconfig/fonts.conf"
@@ -1233,14 +1234,17 @@ EOF
 }
 
 # run_virtual <command...>: the helper with the fakes first on PATH, in the fake home, with the
-# owner's XDG dirs left to their defaults and the owner's displays, X authority and runtime dir set
-# as on a desktop.
+# owner's XDG dirs, cargo's and rustup's homes left to their defaults (CI sets CARGO_HOME) and the
+# owner's displays, X authority and runtime dir set as on a desktop. The assignments in
+# virtual_caller_env come last, so a case can set or override any of them.
+virtual_caller_env=()
 run_virtual() {
     mkdir -p "$virtual_dir/owner-runtime"
     run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
-        -u X4_VIRTUAL_KEEP PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" \
-        TMPDIR="$virtual_dir/tmp" DISPLAY=:0 XAUTHORITY="$virtual_dir/home/.Xauthority" \
-        WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$virtual_dir/owner-runtime" \
+        -u X4_VIRTUAL_KEEP -u CARGO_HOME -u RUSTUP_HOME PATH="$virtual_dir/bin:$PATH" \
+        HOME="$virtual_dir/home" TMPDIR="$virtual_dir/tmp" DISPLAY=:0 \
+        XAUTHORITY="$virtual_dir/home/.Xauthority" WAYLAND_DISPLAY=wayland-0 \
+        XDG_RUNTIME_DIR="$virtual_dir/owner-runtime" "${virtual_caller_env[@]}" \
         "$BASH" "$virtual_session" "$@"
 }
 
@@ -1312,35 +1316,54 @@ test_virtual_session_keeps_the_owner_display_and_runtime_dir_away() {
 # Some programs write to ~/.config or ~/.local/share by fixed paths, not through the XDG dirs (KDE's
 # update scripts, which a session's first Plasma start runs, do): the session's HOME is its own,
 # with ~/.config, ~/.local/share, ~/.local/state and ~/.cache leading to its XDG dirs, while cargo
-# still finds the owner's registry and a CARGO_HOME the caller set stays.
+# and rustup still find the owner's registry and toolchains, and homes the caller set for them stay.
 test_virtual_session_gives_the_command_a_home_of_its_own() {
     local seen session_home
     new_virtual_env
-    run_virtual bash -c 'echo "home=$HOME"; echo "cargo=$CARGO_HOME"
+    run_virtual bash -c 'echo "home=$HOME"; echo "cargo=$CARGO_HOME"; echo "rustup=$RUSTUP_HOME"
         mkdir -p "$HOME/.local/share/monitor" && echo page >"$HOME/.local/share/monitor/a.page"
         echo changed >"$HOME/.config/kdeglobals"
+        echo state >"$HOME/.local/state/s"; echo cache >"$HOME/.cache/c"
         [[ -f $XDG_DATA_HOME/monitor/a.page ]] && echo "data shared"
         [[ $(<"$XDG_CONFIG_HOME/kdeglobals") == changed ]] && echo "config shared"
-        [[ -d $HOME/.local/state && -d $HOME/.cache ]] && echo "state and cache there"'
+        [[ -f $XDG_STATE_HOME/s && -f $XDG_CACHE_HOME/c ]] && echo "state and cache shared"'
     expect_status 0
     session_home=$(sed -n 's/^home=//p' <<<"$stdout")
     [[ $session_home == "$virtual_dir/tmp/x4-virtual."*/home ]] ||
         fail "the command's HOME is not the session's: '$session_home'"
     expect_contains "cargo=$virtual_dir/home/.cargo" "$stdout" "the command's CARGO_HOME"
+    expect_contains "rustup=$virtual_dir/home/.rustup" "$stdout" "the command's RUSTUP_HOME"
     expect_contains "data shared" "$stdout" "~/.local/share in the session"
     expect_contains "config shared" "$stdout" "~/.config in the session"
-    expect_contains "state and cache there" "$stdout" "~/.local/state and ~/.cache in the session"
-    [[ ! -e $virtual_dir/home/.local/share/monitor ]] || fail "the command wrote into the owner's home"
+    expect_contains "state and cache shared" "$stdout" "~/.local/state and ~/.cache in the session"
+    [[ ! -e $virtual_dir/home/.local/share/monitor ]] ||
+        fail "the command wrote into the owner's home"
     [[ $(<"$virtual_dir/home/.config/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
         fail "the owner's kdeglobals changed"
     for seen in dbus-run-session kwin_wayland; do
         expect_contains "HOME=$session_home" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
     done
-    run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
-        PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" TMPDIR="$virtual_dir/tmp" \
-        CARGO_HOME=/opt/cargo "$BASH" "$virtual_session" bash -c 'echo "cargo=$CARGO_HOME"'
+    virtual_caller_env=(CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup)
+    run_virtual bash -c 'echo "cargo=$CARGO_HOME rustup=$RUSTUP_HOME"'
     expect_status 0
-    expect_contains "cargo=/opt/cargo" "$stdout" "a CARGO_HOME the caller set"
+    expect_contains "cargo=/opt/cargo rustup=/opt/rustup" "$stdout" "homes the caller set"
+}
+
+# Under a relative TMPDIR the session's dir, its HOME and the links in it are still absolute, so
+# they hold wherever the command changes to.
+test_virtual_session_makes_a_relative_tmpdir_absolute() {
+    local before=$PWD
+    new_virtual_env
+    virtual_caller_env=(TMPDIR=tmp)
+    cd "$virtual_dir"
+    run_virtual bash -c 'cd /; echo "home=$HOME"
+        [[ -d $HOME/.config && -d $HOME/.local/share ]] && echo "links hold"'
+    cd "$before"
+    expect_status 0
+    expect_contains "home=$virtual_dir/tmp/x4-virtual." "$stdout" "the command's HOME"
+    expect_contains "links hold" "$stdout" "the links of the session's HOME"
+    [[ -z $(ls -A "$virtual_dir/tmp") ]] ||
+        fail "the session dir was left behind: $(ls -A "$virtual_dir/tmp")"
 }
 
 # A fontconfig dir and a kdeglobals that are symlinks (into a dotfiles repository, say) are copied
@@ -2660,6 +2683,7 @@ cases=(
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
     virtual_session_keeps_the_owner_display_and_runtime_dir_away
     virtual_session_gives_the_command_a_home_of_its_own
+    virtual_session_makes_a_relative_tmpdir_absolute
     virtual_session_copies_linked_settings_as_files
     virtual_session_keeps_arguments_with_spaces
     virtual_session_names_a_missing_tool

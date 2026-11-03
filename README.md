@@ -1081,10 +1081,11 @@ directories of its own, runtime directory included, and without your desktop's `
 windows it opens show on no monitor, take no focus and leave the desktop's settings alone;
 `spectacle -b -n -f -o /tmp/shot.png` inside it captures the virtual screen. `HOME` is the
 session's own as well, because some programs write by fixed paths under it rather than through the
-XDG directories (KDE's update scripts, run when Plasma first starts in a session, do); cargo keeps
-your `~/.cargo`. Whatever the session started is stopped when it ends. For example, `just virtual just measure --offline` measures the app
-without a window on your screens and without reaching your daemon. It needs KDE Plasma
-(`kwin_wayland` and `dbus-run-session`) and works nowhere else.
+XDG directories (KDE's update scripts, run when Plasma first starts in a session, do); cargo and
+rustup keep your `~/.cargo` and `~/.rustup`. Whatever the session started is stopped when it ends.
+For example, `just virtual just measure --offline` measures the app without a window on your
+screens and without reaching your daemon. It needs KDE Plasma (`kwin_wayland` and
+`dbus-run-session`) and works nowhere else.
 
 ### Synthetic demo
 
