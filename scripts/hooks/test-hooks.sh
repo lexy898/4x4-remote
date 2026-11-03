@@ -1350,11 +1350,11 @@ test_virtual_session_gives_the_command_a_home_of_its_own() {
 }
 
 # Under a relative TMPDIR the session's dir, its HOME and the links in it are still absolute, so
-# they hold wherever the command changes to.
+# they hold wherever the command changes to; a CDPATH that makes cd print the dir changes nothing.
 test_virtual_session_makes_a_relative_tmpdir_absolute() {
     local before=$PWD
     new_virtual_env
-    virtual_caller_env=(TMPDIR=tmp)
+    virtual_caller_env=(TMPDIR=tmp CDPATH=.)
     cd "$virtual_dir"
     run_virtual bash -c 'cd /; echo "home=$HOME"
         [[ -d $HOME/.config && -d $HOME/.local/share ]] && echo "links hold"'

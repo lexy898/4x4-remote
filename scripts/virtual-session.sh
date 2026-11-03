@@ -40,8 +40,8 @@ rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
 
 root=$(mktemp -d "${TMPDIR:-/tmp}/x4-virtual.XXXXXX")
 # Absolute, also under a relative TMPDIR: HOME and the links below must not depend on the current
-# directory.
-root=$(cd "$root" && pwd)
+# directory. Without CDPATH, which could send cd elsewhere and make it print the dir.
+root=$(CDPATH='' cd -- "$root" && pwd)
 # KWin's socket, in the session's runtime dir.
 socket=x4-virtual-$$
 
