@@ -206,7 +206,8 @@ impl AddDialog {
             )
     }
 
-    /// The line under the field: the free space of its folder, once known.
+    /// The line under the field: the free space of its folder, once known, on one line (cut short
+    /// with an ellipsis; screen readers read it whole). The dialog keeps the room of the line.
     pub(super) fn free_space_line(
         &self,
         cx: &Context<'_, Self>,
@@ -216,7 +217,7 @@ impl AddDialog {
         Some(
             div()
                 .id("add-free-space")
-                .text_xs()
+                .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .aria_label(text.clone())
                 .child(text)
