@@ -240,12 +240,8 @@ fn indices_and_actions_carry_the_index_of_the_entry_not_its_position() {
     );
 }
 
-/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
-/// after them, in a shuffled order: 8.9 MB of names, within the budget.
-pub(super) fn names_crafted_to_compare_slowly() -> Vec<String> {
-    let mut names: Vec<String> = (0..14_000)
-        .map(|n| format!("{}{n}", "a1".repeat(300)))
-        .collect();
+/// `names` in a shuffled order, the same every time.
+fn shuffled(mut names: Vec<String>) -> Vec<String> {
     let mut seed: u64 = 42;
     for at in (1..names.len()).rev() {
         seed = seed
@@ -255,6 +251,114 @@ pub(super) fn names_crafted_to_compare_slowly() -> Vec<String> {
         names.swap(at, other);
     }
     names
+}
+
+/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
+/// after them, in a shuffled order: 8.9 MB of names, within the budget.
+pub(super) fn names_crafted_to_compare_slowly() -> Vec<String> {
+    shuffled(
+        (0..14_000)
+            .map(|n| format!("{}{n}", "a1".repeat(300)))
+            .collect(),
+    )
+}
+
+/// The tree of the files `T/<name>` for each of `names`, and how long it took to make.
+fn timed_tree_of(names: &[String]) -> (FileTree, std::time::Duration) {
+    let paths: Vec<String> = names.iter().map(|name| format!("T/{name}")).collect();
+    let files: Vec<super::Spec<'_>> = paths
+        .iter()
+        .map(|path| (path.as_str(), 1, 0, true, Normal))
+        .collect();
+    let crafted = details_of(&files);
+    let start = std::time::Instant::now();
+    let tree = FileTree::new(&crafted);
+    (tree, start.elapsed())
+}
+
+/// `count` names of `letter` `times` times and each its own number, in a shuffled order.
+fn alike_but_for_a_number(letter: &str, times: usize, count: u32) -> Vec<String> {
+    shuffled(
+        (0..count)
+            .map(|n| format!("{}{n}", letter.repeat(times)))
+            .collect(),
+    )
+}
+
+/// `count` names of `times` letters, `lower` or `upper` by the bits of each name's own number in
+/// the first 16, in a shuffled order.
+fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32, count: u32) -> Vec<String> {
+    shuffled(
+        (0..count)
+            .map(|n| {
+                (0..times)
+                    .map(|bit| {
+                        if bit < 16 && (n >> bit) & 1 == 1 {
+                            upper
+                        } else {
+                            lower
+                        }
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// Whether names beyond ASCII that took `beyond` were ordered as fast as names alike in the same
+/// way in ASCII that took `ascii`: no more than 1.3 times as long, a margin for a busy machine,
+/// and under 0.5 s in a release build.
+fn as_fast_as_in_ascii(beyond: std::time::Duration, ascii: std::time::Duration) -> bool {
+    beyond < ascii * 13 / 10
+        && (cfg!(debug_assertions) || beyond < std::time::Duration::from_millis(500))
+}
+
+/// Asserts that a tree of `beyond`, names beyond ASCII, is made as fast as one of `ascii`, names
+/// alike in the same way in ASCII, in the best of three tries: other tests may take the machine
+/// from one of the two.
+fn assert_ordered_as_fast_as_in_ascii(beyond: &[String], ascii: &[String]) {
+    let mut tries = Vec::new();
+    while tries.len() < 3 {
+        let (tree, beyond) = timed_tree_of(beyond);
+        let (_, ascii) = timed_tree_of(ascii);
+        assert!(!tree.is_too_large());
+        tries.push((beyond, ascii));
+        if as_fast_as_in_ascii(beyond, ascii) {
+            break;
+        }
+    }
+
+    // Some 0.7 to 1 times as long in a debug build, and 0.6 to 0.75 times, some 0.2 s, in a
+    // release one.
+    assert!(
+        tries
+            .iter()
+            .any(|&(beyond, ascii)| as_fast_as_in_ascii(beyond, ascii)),
+        "{tries:?}, beyond ASCII and in ASCII"
+    );
+}
+
+#[test]
+fn names_beyond_ascii_alike_but_for_a_number_are_ordered_as_fast_as_in_ascii() {
+    // "é" 128 times, 256 bytes, and a number: each comparison folded every letter of both names
+    // to lower case. A tree of 36 000 of them took 2 s in a release build, at every read of the
+    // details, and 1.8 times as long as one of "a" 256 times in a debug build.
+    assert_ordered_as_fast_as_in_ascii(
+        &alike_but_for_a_number("é", 128, 36_000),
+        &alike_but_for_a_number("a", 256, 36_000),
+    );
+}
+
+#[test]
+fn names_beyond_ascii_alike_but_for_their_case_are_ordered_as_fast_as_in_ascii() {
+    // 128 letters, 256 bytes, "é" or "É" by the bits of a number in the first 16: each comparison
+    // folded every letter of both names, and again for the tie of their case. A tree of 36 000
+    // of them took 3.8 s in a release build, at every read of the details, and 1.9 times as long
+    // as one of "a" or "A" 256 times in a debug build.
+    assert_ordered_as_fast_as_in_ascii(
+        &alike_but_for_their_case(['é', 'É'], 128, 36_000),
+        &alike_but_for_their_case(['a', 'A'], 256, 36_000),
+    );
 }
 
 #[test]

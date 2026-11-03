@@ -1137,12 +1137,9 @@ fn a_torrent_of_50_000_paths_the_tree_shows_alike_loads_in_bounded_time() {
     assert!(clicked < std::time::Duration::from_secs(10), "{clicked:?}");
 }
 
-/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
-/// after them, in a shuffled order: a `.torrent` of 8.9 MB, whose tree fits in the budget.
-fn names_crafted_to_compare_slowly() -> Arc<[u8]> {
-    let mut names: Vec<Vec<String>> = (0..14_000)
-        .map(|n| vec![format!("{}{n}", "a1".repeat(300))])
-        .collect();
+/// A `.torrent` named "T" of a file for each of `names`, in a shuffled order, the same every time.
+fn shuffled_torrent(names: impl Iterator<Item = String>) -> Arc<[u8]> {
+    let mut names: Vec<Vec<String>> = names.map(|name| vec![name]).collect();
     let mut seed: u64 = 42;
     for at in (1..names.len()).rev() {
         seed = seed
@@ -1151,6 +1148,100 @@ fn names_crafted_to_compare_slowly() -> Arc<[u8]> {
         names.swap(at, usize::try_from(seed >> 33).unwrap() % (at + 1));
     }
     folder_torrent("T", &names)
+}
+
+/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
+/// after them, in a shuffled order: a `.torrent` of 8.9 MB, whose tree fits in the budget.
+fn names_crafted_to_compare_slowly() -> Arc<[u8]> {
+    shuffled_torrent((0..14_000).map(|n| format!("{}{n}", "a1".repeat(300))))
+}
+
+/// A `.torrent` of 14 000 files, each named by `letter` `times` times and its own number.
+fn alike_but_for_a_number(letter: &str, times: usize) -> Arc<[u8]> {
+    shuffled_torrent((0..14_000).map(|n| format!("{}{n}", letter.repeat(times))))
+}
+
+/// A `.torrent` of 14 000 files, each named by `times` letters, `lower` or `upper` by the bits of
+/// its own number in the first 16.
+fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32) -> Arc<[u8]> {
+    shuffled_torrent((0..14_000_u32).map(|n| {
+        (0..times)
+            .map(|bit| {
+                if bit < 16 && (n >> bit) & 1 == 1 {
+                    upper
+                } else {
+                    lower
+                }
+            })
+            .collect()
+    }))
+}
+
+/// The form of `bytes` and how long it took to load.
+fn timed_load(bytes: Arc<[u8]>) -> (AddForm, std::time::Duration) {
+    let start = std::time::Instant::now();
+    let form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+    (form, start.elapsed())
+}
+
+/// Whether a torrent of names beyond ASCII that took `beyond` to load loaded as fast as one of
+/// names alike in the same way in ASCII that took `ascii`: in no more than 1.3 times as long, a
+/// margin for a busy machine, and under 0.5 s in a release build.
+fn as_fast_as_in_ascii(beyond: std::time::Duration, ascii: std::time::Duration) -> bool {
+    beyond < ascii * 13 / 10
+        && (cfg!(debug_assertions) || beyond < std::time::Duration::from_millis(500))
+}
+
+/// Asserts that `beyond`, a torrent of names beyond ASCII, loads as fast as `ascii`, one of names
+/// alike in the same way in ASCII, in the best of three tries: other tests may take the machine
+/// from one of the two.
+fn assert_loads_as_fast_as_in_ascii(beyond: &Arc<[u8]>, ascii: &Arc<[u8]>) {
+    let mut tries = Vec::new();
+    while tries.len() < 3 {
+        let (form, beyond) = timed_load(Arc::clone(beyond));
+        let (_, ascii) = timed_load(Arc::clone(ascii));
+        assert_eq!(form.choice_unavailable(), None);
+        tries.push((beyond, ascii));
+        if as_fast_as_in_ascii(beyond, ascii) {
+            break;
+        }
+    }
+
+    // Some 0.7 to 1 times as long in a debug build, and 0.6 to 0.75 times, some 0.1 s, in a
+    // release one.
+    assert!(
+        tries
+            .iter()
+            .any(|&(beyond, ascii)| as_fast_as_in_ascii(beyond, ascii)),
+        "{tries:?}, beyond ASCII and in ASCII"
+    );
+}
+
+#[test]
+fn a_torrent_of_names_beyond_ascii_alike_but_for_a_number_loads_as_fast_as_in_ascii() {
+    // "é" 128 times, 256 bytes, and a number: each comparison folded every letter of both names
+    // to lower case. 14 000 of them took 1.1 s to load in a release build, and 1.8 times as long
+    // as "a" 256 times in a debug build.
+    assert_loads_as_fast_as_in_ascii(
+        &alike_but_for_a_number("é", 128),
+        &alike_but_for_a_number("a", 256),
+    );
+}
+
+#[test]
+fn a_torrent_of_names_beyond_ascii_alike_but_for_their_case_loads_as_fast_as_in_ascii() {
+    // 128 letters, 256 bytes, "é" or "É" by the bits of a number in the first 16: each comparison
+    // folded every letter of both names, and again for the tie of their case. 14 000 of them
+    // took 2.2 s to load in a release build, and 2 times as long as "a" or "A" 256 times in a
+    // debug build.
+    assert_loads_as_fast_as_in_ascii(
+        &alike_but_for_their_case(['é', 'É'], 128),
+        &alike_but_for_their_case(['a', 'A'], 256),
+    );
 }
 
 #[test]

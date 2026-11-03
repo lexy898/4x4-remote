@@ -232,8 +232,10 @@ at once, also while the daemon is not connected, and give the keys back to the t
 
 The Files tab shows the torrent's files as a tree: the torrent's own folder first, open, and in each
 folder the folders before the files, by name, with numbers in their natural order ("E2" before
-"E10"). Names that agree in their first 32 runs of digits or of other characters, or in their first
-256 bytes, which real names do not, are ordered by the rest character by character. Padding files, which some torrents carry only to line their pieces up, are hidden. Each row
+"E10"). Names that agree in their first 32 runs of digits or of other characters, in their first 256
+bytes, or in their first 64 characters that UTF-8 writes in three bytes or more (those of Chinese
+and Japanese among them), which real names do not, are ordered by the rest character by character.
+Padding files, which some torrents carry only to line their pieces up, are hidden. Each row
 has the arrow that opens and closes a folder, a checkbox for whether it is downloaded (a dash for a
 folder where only some of its files are), the name, the size, the progress, and the priority, Low,
 Normal or High ("Mixed" for a folder whose files differ), which a click on it changes. A change to a
