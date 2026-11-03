@@ -2,10 +2,12 @@
 //! queue of what waits, the add dialog for its head, the adds sent and what became of them.
 //!
 //! Every source sends an [`AddRequest`] into one channel, which [`MainView::listen_for_adds`]
-//! pumps on the UI thread; a drop on the dialog hands its files over directly. The items join
-//! x4-core's [`AddQueue`], which holds at most [`QUEUE_CAP`](x4_core::QUEUE_CAP); what it has no
-//! room for is counted in a notification. Launch arguments 4x4 does not open make one
-//! notification, and a second launch raises the window.
+//! pumps on the UI thread: the sources outside the window into the channel the app made at
+//! startup, those inside it into [`MainView::add_requests`], the sender of that same channel. A
+//! drop on the dialog hands its files over directly. The items join x4-core's [`AddQueue`], which
+//! holds at most [`QUEUE_CAP`](x4_core::QUEUE_CAP); what it has no room for is counted in a
+//! notification. Launch arguments 4x4 does not open make one notification, and a second launch
+//! raises the window.
 //!
 //! The head of the queue is read off the UI thread when its turn comes: a `.torrent` file only
 //! once `stat` says it is a regular file within the limit (the `adding` module of the crate). A
@@ -40,7 +42,7 @@ use x4_core::{
 use x4_rpc::{HashString, TorrentAdd};
 
 use super::MainView;
-use crate::adding::{self, AddDialog, AddDialogEvent, AddRequest, LoadError, load};
+use crate::adding::{self, AddDialog, AddDialogEvent, AddRequest, AddRequests, LoadError, load};
 use crate::i18n::{add_notice_text, load_failure_text, queue_full_text, rejected_text};
 use crate::search::clear_search;
 use crate::torrent_table::{SelectionChange, change_selection};
@@ -78,6 +80,8 @@ pub(super) struct Adds {
     selection_mark: u64,
     /// What the newest notification about an add said.
     last_notice: Option<SharedString>,
+    /// The sender of the channel `listener` pumps, for the sources of adds inside the window.
+    requests: async_channel::Sender<AddRequest>,
     /// The pump of the requests; dropping it stops listening.
     listener: Option<Task<()>>,
     /// The look, after the window was asked to come to the front, whether it did.
@@ -95,6 +99,8 @@ impl Default for Adds {
             pending: PendingSelection::default(),
             selection_mark: 0,
             last_notice: None,
+            // A channel nobody listens to, until the view listens to one of its own.
+            requests: AddRequests::new().sender,
             listener: None,
             raise: None,
         }
@@ -124,20 +130,25 @@ struct Reading {
 }
 
 impl MainView {
-    /// Takes the requests that arrive on `adds` from now on, on the UI thread, until the channel
-    /// closes or the window does. The sources of adds (the toolbar, the keys, the file picker, the
-    /// clipboard, a drop, the launch arguments and a second launch) send into it.
+    /// Takes the requests that arrive on the channel `adds` from now on, on the UI thread, until
+    /// the window closes, and keeps its sender for the sources inside the window
+    /// ([`MainView::add_requests`]). The sources of adds (the toolbar, the keys, the file picker,
+    /// the clipboard, a drop, the launch arguments and a second launch) send into it. The view
+    /// listens to a channel of its own from the start; the app hands it the one of
+    /// [`Startup::adds`](crate::app::Startup::adds) when it launches.
     ///
-    /// The view has one receiver: a later call replaces the one before, which is no longer
-    /// listened to.
+    /// The view has one channel: a later call replaces the one before, whose receiver is no
+    /// longer listened to.
     pub fn listen_for_adds(
         &mut self,
-        adds: async_channel::Receiver<AddRequest>,
+        adds: AddRequests,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        let AddRequests { sender, receiver } = adds;
+        self.adds.requests = sender;
         self.adds.listener = Some(cx.spawn_in(window, async move |view, cx| {
-            while let Ok(request) = adds.recv().await {
+            while let Ok(request) = receiver.recv().await {
                 if view
                     .update_in(cx, |view, window, cx| {
                         view.take_add_request(request, window, cx);
@@ -149,6 +160,15 @@ impl MainView {
             }
             tracing::debug!("no more requests to add torrents will come");
         }));
+    }
+
+    /// The sender of the channel the window takes its requests to add torrents from: the sources
+    /// of adds inside the window (the toolbar, the keys, the clipboard, a drop) send into it, so
+    /// that every request goes the one way. It is the channel of the last
+    /// [`MainView::listen_for_adds`].
+    #[must_use]
+    pub fn add_requests(&self) -> &async_channel::Sender<AddRequest> {
+        &self.adds.requests
     }
 
     /// What the newest notification about a torrent to add said: a file that cannot be offered,

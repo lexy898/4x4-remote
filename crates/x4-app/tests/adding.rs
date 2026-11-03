@@ -205,8 +205,8 @@ struct Window {
 }
 
 impl Window {
-    /// Opens the window, active, with animations off and the state `ui`, and lets it listen for
-    /// add requests. The daemon is connected, with the session and no torrents.
+    /// Opens the window, active, with animations off and the state `ui`, and sends add requests
+    /// into the window's own channel. The daemon is connected, with the session and no torrents.
     fn open_with(ui: &UiState, cx: &mut TestAppContext) -> Self {
         let window = Self::open_unlisted(ui, cx);
         window.send(Vec::new(), cx);
@@ -221,7 +221,6 @@ impl Window {
     fn open_unlisted(ui: &UiState, cx: &mut TestAppContext) -> Self {
         let (events, events_rx) = async_channel::unbounded();
         let (commands_tx, commands) = crossbeam_channel::unbounded();
-        let (adds, adds_rx) = async_channel::unbounded();
         cx.update(|cx| cx.set_reduce_motion(true));
         let (handle, view) = cx
             .update(|cx| {
@@ -229,11 +228,10 @@ impl Window {
                 app::open_main_window(events_rx, commands_tx, None, ui, cx)
             })
             .expect("the main window opens");
-        cx.update_window(handle, |_, window, cx| {
-            window.activate_window();
-            view.update(cx, |view, cx| view.listen_for_adds(adds_rx, window, cx));
-        })
-        .expect("the window is open");
+        cx.update_window(handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
+        // The window's own channel, which its sources inside send into.
+        let adds = cx.update(|cx| view.read(cx).add_requests().clone());
         cx.run_until_parked();
         Self {
             handle,

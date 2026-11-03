@@ -298,7 +298,7 @@ pub fn launch(
             if let Some(problem) = config_problem {
                 view.show_config_problem(problem, cx);
             }
-            view.listen_for_adds(adds.receiver, window, cx);
+            view.listen_for_adds(adds, window, cx);
         });
     })?;
     Ok((window, view))
@@ -585,6 +585,28 @@ mod tests {
             window.render_frame(cx);
             assert_eq!(window.find("add-title").label(), Some("Add torrent"));
             assert!(window.try_find("add-link").is_some(), "the magnet form");
+        })
+        .expect("the window is open");
+    }
+
+    #[gpui_kit::test]
+    fn the_sources_inside_the_window_send_into_the_startup_channel(cx: &mut TestAppContext) {
+        let startup = failed_start(None);
+        let outside = startup.adds.sender.clone();
+        let (window, view) = launched(startup, cx);
+        let inside = cx.update(|cx| view.read(cx).add_requests().clone());
+
+        assert!(inside.same_channel(&outside), "one channel, the startup's");
+        assert_eq!(outside.receiver_count(), 1, "which the window drains");
+        inside
+            .send_blocking(AddRequest::Items(vec![AddItem::Magnet(None)]))
+            .expect("the window listens");
+        cx.run_until_parked();
+
+        assert!(outside.is_empty(), "taken");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("add-title").label(), Some("Add torrent"));
         })
         .expect("the window is open");
     }

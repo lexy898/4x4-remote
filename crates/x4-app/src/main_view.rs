@@ -82,6 +82,7 @@ use x4_core::{
 use x4_rpc::HashString;
 
 use crate::actions::PendingActions;
+use crate::adding::AddRequests;
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
 use crate::details_panel::DetailsPanel;
@@ -296,6 +297,7 @@ impl MainView {
         };
         // The service starts out assuming a visible window; tell it how the window opened.
         view.report_visibility(window);
+        view.listen_for_adds(AddRequests::new(), window, cx);
         view
     }
 
