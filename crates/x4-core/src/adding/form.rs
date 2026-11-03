@@ -29,8 +29,9 @@ impl LoadedItem {
     ///
     /// No tree is made when the daemon could number the files otherwise, or when the list is too
     /// large to choose from ([`NoChoiceReason`]); the torrent is then added with all its files.
-    /// A list of half a million files, or a crafted one of folders nested thousands deep, costs
-    /// little beyond its parse.
+    /// Making the tree takes no more than about [`TREE_BUDGET`](crate::TREE_BUDGET) beyond the
+    /// parse, the copy of the files it is made from included, however many files there are and
+    /// however deep and long their paths go.
     ///
     /// # Errors
     ///
@@ -126,8 +127,8 @@ pub enum NoChoiceReason {
     Ambiguous,
     /// The list of files is too large to choose from: more than
     /// [`MAX_CHOOSABLE_FILES`](crate::MAX_CHOOSABLE_FILES) files, or a tree that would take
-    /// more than [`TREE_BUDGET`](crate::TREE_BUDGET), as for files nested hundreds of folders
-    /// deep ([`FileTree::is_too_large`]).
+    /// more than [`TREE_BUDGET`](crate::TREE_BUDGET) with the copy of the files it is made from,
+    /// as for files nested hundreds of folders deep ([`FileTree::is_too_large`]).
     TooLarge,
 }
 

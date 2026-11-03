@@ -731,8 +731,9 @@ fn assert_offered_with_all_files(bytes: &Arc<[u8]>) {
     // The bound only says it ends: half a million files take some 3 s in a debug build.
     assert!(elapsed < std::time::Duration::from_secs(60), "{elapsed:?}");
     if let (true, Some(parsed), Some(after)) = (measured, peak_parsed, peak_kib()) {
-        // At most the budget of a tree that was given up, 32 MiB. A tree of 500 000 files would
-        // take some 250 MiB, and copying their entries for it alone 40.
+        // At most the budget of a tree that was given up, 32 MiB, in which the copy of the files
+        // it is made from counts too. A tree of 500 000 files would take some 250 MiB, and
+        // copying their entries for it alone 40.
         assert!(
             after.saturating_sub(parsed) < 40 * 1024,
             "{parsed} KiB after the parse, {after} KiB after the form"
@@ -833,20 +834,55 @@ fn up_to_50_000_files_can_be_chosen_from() {
 }
 
 #[test]
+fn a_torrent_of_padding_files_deep_in_its_folders_is_offered_with_all_files() {
+    // One file 2 000 folders deep and 4 140 padding files beside it: 16.7 MB. Each padding
+    // file would join the list of every folder above it, 8 million indices.
+    let deep = "a/".repeat(2_000);
+    let mut paths = vec![vec![format!("{deep}f")]];
+    paths.extend((0..4_140).map(|n| vec![format!("{deep}_____padding_file_{n}")]));
+
+    assert_offered_with_all_files(&folder_torrent("T", &paths));
+}
+
+#[test]
+fn a_torrent_of_many_files_under_a_deep_folder_is_offered_with_all_files() {
+    // 40 000 files 180 folders deep, 15.6 MB. Each file would join the list of every folder
+    // above it, 7 million indices.
+    let deep = "a/".repeat(180);
+    let paths: Vec<Vec<String>> = (0..40_000).map(|n| vec![format!("{deep}f{n}")]).collect();
+
+    assert_offered_with_all_files(&folder_torrent("T", &paths));
+}
+
+#[test]
+fn a_torrent_of_long_paths_is_offered_with_all_files_without_copying_them() {
+    // 50 000 files in a folder whose name is 1 280 bytes. The `.torrent` names the folder once,
+    // but each path the parser makes holds it, 64 MB, and a copy of them for a tree would take as
+    // much again.
+    let paths: Vec<Vec<String>> = (0..50_000).map(|n| vec![n.to_string()]).collect();
+
+    assert_offered_with_all_files(&folder_torrent(&"N".repeat(1_280), &paths));
+}
+
+#[test]
 fn a_torrent_of_50_000_paths_the_tree_shows_alike_loads_in_bounded_time() {
     // The parser keeps "a//a" and "a/a" apart, and the tree shows both as "a/a": these are 50 000
-    // copies of one path 17 folders deep, each under a key with its own suffix. Finding each
+    // copies of one path 9 folders deep, each under a key with its own suffix. Finding each
     // suffix by trying them all from the first took minutes, and as long again for each click.
-    let paths: Vec<Vec<String>> = (0..50_000_u32)
+    let paths: Vec<Vec<String>> = (0..50_000_usize)
         .map(|n| {
-            let path: String = std::iter::once("a")
-                .chain((0..16).map(|bit| if (n >> bit) & 1 == 1 { "//a" } else { "/a" }))
-                .collect();
+            let mut path = "a".to_owned();
+            for digit in 0..8 {
+                // One to four slashes before each "a", by the digits of `n` in base 4.
+                let slashes = (n >> (2 * digit)) & 3;
+                path.push_str(&"/".repeat(slashes + 1));
+                path.push('a');
+            }
             vec![path]
         })
         .collect();
     let bytes = folder_torrent("T", &paths);
-    let shown = format!("T/{}", ["a"; 17].join("/"));
+    let shown = format!("T/{}", ["a"; 9].join("/"));
     let start = std::time::Instant::now();
 
     let mut form = AddForm::new(

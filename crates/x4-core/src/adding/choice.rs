@@ -5,7 +5,7 @@ use std::sync::Arc;
 use x4_rpc::{FilePriority, HashString};
 
 use crate::details::FileEntry;
-use crate::files::{FileTree, MAX_CHOOSABLE_FILES, NodeKey};
+use crate::files::{FileTree, MAX_CHOOSABLE_FILES, NodeKey, TREE_BUDGET};
 use crate::metainfo::MetaFile;
 
 /// Which files of a `.torrent` are wanted, and the tree that shows them.
@@ -24,18 +24,29 @@ impl FileChoice {
     /// The tree of the files of the torrent `hash` as a form starts: every file wanted. It is made
     /// when the torrent is loaded; `None` when the list is too large to choose from
     /// ([`FileTree::is_too_large`]).
+    ///
+    /// The tree is made from a copy of the files, which counts against [`TREE_BUDGET`] with it, so
+    /// that loading a torrent takes no more than that beyond its parse. A list whose copy alone
+    /// would take more is refused before it is made.
     pub(super) fn first_tree(hash: HashString, files: &[MetaFile]) -> Option<Arc<FileTree>> {
         // The tree would give up on them too, but only after their entries were copied: half a
         // million paths, some 40 MiB.
         if files.len() > MAX_CHOOSABLE_FILES {
             return None;
         }
+        // 50 000 paths in a folder with a long name take 64 MB, as many as the parse.
+        let copy = files.iter().fold(0_usize, |bytes, file| {
+            bytes
+                .saturating_add(size_of::<FileEntry>())
+                .saturating_add(file.path.len())
+        });
+        let budget = TREE_BUDGET.checked_sub(copy)?;
         let entries: Vec<FileEntry> = files
             .iter()
             .enumerate()
             .map(|(index, file)| entry(index, file.path.clone(), file.length))
             .collect();
-        let tree = FileTree::of_files(hash, &entries);
+        let tree = FileTree::of_files_within(hash, &entries, budget);
         (!tree.is_too_large()).then(|| Arc::new(tree))
     }
 
@@ -67,6 +78,7 @@ impl FileChoice {
                 file.wanted = wanted;
             }
         }
+        // The tree costs what the first one did, which fitted with the copy of the files besides.
         self.tree = Arc::new(FileTree::of_files(self.tree.hash().clone(), &self.files));
     }
 
