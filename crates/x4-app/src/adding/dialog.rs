@@ -51,7 +51,7 @@ use gpui_kit::{
     FocusHandle, Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
     KeyUpEvent, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
-    px,
+    px, rems,
 };
 use x4_core::{
     ActionId, AddCheck, AddForm, AddItem, FormDefaults, FreeSpaceAnswer, FreeSpaceCache,
@@ -68,6 +68,12 @@ use crate::keymap::ADD_DIALOG_CONTEXT;
 
 /// The width of the dialog.
 const DIALOG_WIDTH: f32 = 640.;
+/// The height of a line of the heading, in rems: the room it keeps while it names nothing yet (a
+/// magnet form whose link is still being typed), so that the dialog does not grow once it does.
+const HEADING_LINE: f32 = 1.375;
+/// The height of the line under the folder, in rems: one line, kept while the free space of the
+/// folder typed is not known yet, so that the dialog does not jump as the answers come.
+const FREE_SPACE_LINE: f32 = 1.25;
 /// The id of the layer that highlights the dialog while files are dragged over it.
 const DIALOG_DROP_TARGET: &str = "add-dialog-drop-target";
 
@@ -472,6 +478,8 @@ impl AddDialog {
             .total_size()
             .map(|size| size_text(human_size(size)));
         h_flex()
+            .min_h(rems(HEADING_LINE))
+            .line_height(rems(HEADING_LINE))
             .gap_3()
             .items_baseline()
             .children(name.map(|name| {
@@ -522,7 +530,9 @@ impl AddDialog {
         })
     }
 
-    /// The line that says why Add is disabled, with the Show button of a torrent in the list.
+    /// The line that says why Add is disabled, with the Show button of a torrent in the list. It
+    /// stands beside the buttons, in the room the footer has anyway, so that a reason coming or
+    /// going does not change the height of the dialog.
     fn reason_line(&self, cx: &mut Context<'_, Self>) -> Option<Div> {
         if self.waiting.is_some() || self.shown.is_none() {
             return None;
@@ -534,6 +544,8 @@ impl AddDialog {
         };
         Some(
             h_flex()
+                .flex_1()
+                .min_w_0()
                 .gap_3()
                 .items_center()
                 .child(
@@ -553,8 +565,7 @@ impl AddDialog {
         )
     }
 
-    /// The form of the torrent shown: the link, the folder, the files, "Start immediately" and why
-    /// Add is disabled.
+    /// The form of the torrent shown: the link, the folder, the files and "Start immediately".
     fn form_part(&self, window: &Window, cx: &mut Context<'_, Self>) -> Option<Div> {
         let shown = self.shown.as_ref()?;
         let link = shown.form.is_magnet().then(|| self.link_part(cx));
@@ -574,7 +585,13 @@ impl AddDialog {
                                 .child(folder_label),
                         )
                         .child(self.folder_row(cx))
-                        .children(self.free_space_line(cx)),
+                        .child(
+                            div()
+                                .h(rems(FREE_SPACE_LINE))
+                                .text_xs()
+                                .line_height(rems(FREE_SPACE_LINE))
+                                .children(self.free_space_line(cx)),
+                        ),
                 )
                 .children(files)
                 .child(
@@ -584,13 +601,12 @@ impl AddDialog {
                         .on_click(cx.listener(|dialog, start: &bool, _, cx| {
                             dialog.start_clicked(*start, cx);
                         })),
-                )
-                .children(self.reason_line(cx)),
+                ),
         )
     }
 
-    /// Cancel, or Skip while a file is read, and Add, which is enabled while the check is ready
-    /// and no add is out. The repeats of a held key press neither.
+    /// Why Add is disabled, then Cancel, or Skip while a file is read, and Add, which is enabled
+    /// while the check is ready and no add is out. The repeats of a held key press neither.
     fn buttons(&self, cx: &mut Context<'_, Self>) -> Div {
         let ready = matches!(self.check, AddCheck::Ready(_)) && self.waiting.is_none();
         let confirm = if self.waiting.is_some() {
@@ -613,6 +629,7 @@ impl AddDialog {
             })
             .child(
                 DialogFooter::new()
+                    .children(self.reason_line(cx))
                     .child(
                         Button::new("add-cancel")
                             .label(cancel)

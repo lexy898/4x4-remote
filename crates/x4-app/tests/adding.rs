@@ -53,6 +53,7 @@ const CANCEL: &str = "add-cancel";
 /// The parts of a row of a file list.
 const WANTED: &str = "file-wanted";
 const ROW_SIZE: &str = "file-size";
+const ROW_NAME: &str = "file-name";
 const PROGRESS: &str = "file-progress";
 const PRIORITY: &str = "file-priority";
 /// The id of an open menu, and of a notification.
@@ -2380,4 +2381,107 @@ fn a_drop_after_a_key_press_still_lands(cx: &mut TestAppContext) {
     assert!(!window.dialog_open(cx));
     window.drop_files(STATUS_BAR_DOT, &[&film], cx);
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+}
+
+/// A `.torrent` of the one file `name` of `length` bytes.
+fn file_torrent(name: &str, length: u64) -> Vec<u8> {
+    let mut info = format!("d6:lengthi{length}e4:name").into_bytes();
+    info.extend(string(name.as_bytes()));
+    info.extend_from_slice(format!("12:piece lengthi{PIECE}e6:pieces").as_bytes());
+    info.extend(pieces(length));
+    info.push(b'e');
+    let mut torrent = b"d4:info".to_vec();
+    torrent.extend(info);
+    torrent.push(b'e');
+    torrent
+}
+
+/// Where the dialog, its heading, Add and the name in each row at `rows` are drawn.
+fn layout(
+    window: &Window,
+    rows: &[&str],
+    cx: &mut TestAppContext,
+) -> Vec<gpui_kit::Bounds<gpui_kit::Pixels>> {
+    let mut drawn = vec![window.bounds(DIALOG, cx), window.bounds(CONFIRM, cx)];
+    for path in rows {
+        let row = row(path);
+        drawn.push(window.act(cx, |window, _| {
+            window.within(FILES).within(row).find(ROW_NAME).bounds()
+        }));
+    }
+    drawn
+}
+
+#[gpui_kit::test]
+fn choosing_files_neither_resizes_the_dialog_nor_moves_a_row(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.request_torrent("film.torrent", &file_torrent("Film.mkv", MIB), cx);
+    let still = layout(&window, &["Film.mkv"], cx);
+    window.click_wanted("Film.mkv", cx);
+    assert_eq!(
+        window.label(REASON, cx).as_deref(),
+        Some("Choose at least one file")
+    );
+    assert_eq!(layout(&window, &["Film.mkv"], cx), still, "nothing wanted");
+    window.click_wanted("Film.mkv", cx);
+    assert_eq!(layout(&window, &["Film.mkv"], cx), still, "wanted again");
+    window.press("escape", cx);
+
+    // The last row of a list is drawn whole, so a click on it scrolls nothing.
+    window.request_torrent("show.torrent", &show(), cx);
+    let rows = ["Show", "Show/Sample", "Show/a.mkv", "Show/b.mkv"];
+    let still = layout(&window, &rows, cx);
+    for path in rows.iter().rev() {
+        window.click_wanted(path, cx);
+        assert_eq!(layout(&window, &rows, cx), still, "{path}");
+    }
+}
+
+#[gpui_kit::test]
+fn typing_a_folder_keeps_the_dialog_still(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.request_torrent("show.torrent", &show(), cx);
+    assert!(window.shown(FREE_SPACE, cx));
+    let still = layout(&window, &[], cx);
+
+    window.retype(FOLDER, "/data/new", cx);
+    assert_eq!(window.label(FREE_SPACE, cx), None, "nothing known yet");
+    assert_eq!(layout(&window, &[], cx), still, "no free space shown");
+    Window::wait(500, cx);
+    window.send_event(
+        Event::FreeSpace {
+            path: dir("/data/new"),
+            answer: FreeSpaceAnswer::Missing {
+                parent: Some(dir(
+                    "/data/a/folder/whose/name/is/long/enough/to/fill/the/line",
+                )),
+                free: Some(3 << 30),
+            },
+        },
+        cx,
+    );
+    assert!(window.shown(FREE_SPACE, cx));
+    assert_eq!(layout(&window, &[], cx), still, "a long answer");
+
+    window.retype(FOLDER, "data/new", cx);
+    assert_eq!(
+        window.label(REASON, cx).as_deref(),
+        Some("The folder must be a full path on the server, from /")
+    );
+    assert_eq!(layout(&window, &[], cx), still, "a reason");
+}
+
+#[gpui_kit::test]
+fn a_magnet_form_keeps_its_height_as_the_link_is_typed(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.request(AddRequest::Items(vec![AddItem::Magnet(None)]), cx);
+    assert!(!window.shown(NAME, cx));
+    let still = layout(&window, &[], cx);
+
+    window.type_text("https://example.org/film.torrent", cx);
+    assert_eq!(layout(&window, &[], cx), still, "not a link");
+    let typed = magnet('c', Some("Typed"));
+    window.retype(LINK, typed.as_str(), cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Typed"));
+    assert_eq!(layout(&window, &[], cx), still, "a link with a name");
 }

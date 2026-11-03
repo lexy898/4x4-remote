@@ -32,6 +32,10 @@ const MIN_ROWS: f32 = 3.;
 const MAX_ROWS: f32 = 12.;
 /// The room the rest of the dialog takes, with the margins around it, which the list leaves free.
 const ROOM_AROUND: f32 = 420.;
+/// The width of the list's border (`border_1`). The border takes room inside the list's height,
+/// so the list is that much taller on each side: a list of rows that fit then shows each row whole,
+/// and the cursor on its last row scrolls nothing.
+const BORDER: f32 = 1.;
 
 /// The file list of the add dialog: the tree on screen, the folders open and the cursor.
 pub(super) struct FileChoiceList {
@@ -80,13 +84,14 @@ impl FileChoiceList {
     }
 }
 
-/// The height of a list of `rows` rows in a window `viewport_height` high: all of them when they
-/// fit, between [`MIN_ROWS`] and [`MAX_ROWS`] otherwise, within what the rest of the dialog leaves.
+/// The height of a list of `rows` rows in a window `viewport_height` high, with its border: all of
+/// them when they fit, between [`MIN_ROWS`] and [`MAX_ROWS`] otherwise, within what the rest of the
+/// dialog leaves.
 fn list_height(rows: usize, viewport_height: Pixels) -> Pixels {
     let room = (f32::from(viewport_height) - ROOM_AROUND)
         .clamp(MIN_ROWS * ROW_HEIGHT, MAX_ROWS * ROW_HEIGHT);
     let wanted = f32::from(u16::try_from(rows).unwrap_or(u16::MAX)) * ROW_HEIGHT;
-    px(wanted.min(room).max(ROW_HEIGHT))
+    px(wanted.min(room).max(ROW_HEIGHT) + 2. * BORDER)
 }
 
 impl AddDialog {
@@ -209,13 +214,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_list_is_as_high_as_its_rows_within_what_the_window_leaves() {
+    fn the_list_is_as_high_as_its_rows_and_its_border_within_what_the_window_leaves() {
         let row = px(ROW_HEIGHT);
-        assert_eq!(list_height(1, px(800.)), row);
-        assert_eq!(list_height(4, px(800.)), row * 4.);
-        assert_eq!(list_height(0, px(800.)), row, "never nothing");
-        assert_eq!(list_height(2000, px(600.)), px(600. - ROOM_AROUND));
-        assert_eq!(list_height(2000, px(3000.)), row * MAX_ROWS);
-        assert_eq!(list_height(2000, px(300.)), row * MIN_ROWS);
+        let border = px(2. * BORDER);
+        assert_eq!(list_height(1, px(800.)), row + border);
+        assert_eq!(list_height(4, px(800.)), row * 4. + border);
+        assert_eq!(list_height(0, px(800.)), row + border, "never nothing");
+        assert_eq!(list_height(2000, px(600.)), px(600. - ROOM_AROUND) + border);
+        assert_eq!(list_height(2000, px(3000.)), row * MAX_ROWS + border);
+        assert_eq!(list_height(2000, px(300.)), row * MIN_ROWS + border);
     }
 }

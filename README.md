@@ -398,9 +398,11 @@ no choice of files either, as its files are known only once its metadata has com
 immediately" starts as the daemon's setting for new torrents; without it, the torrent is added
 paused.
 
-Add stays disabled, with the reason under the form, until a file is wanted, the folder is a full
-path on the server without `.` or `..`, the magnet link is valid and the daemon is connected; for a
-torrent in the list already, Show selects it instead. Add sends the torrent once and says "Adding…"
+Add stays disabled, with the reason beside the buttons, until a file is wanted, the folder is a
+full path on the server without `.` or `..`, the magnet link is valid and the daemon is connected;
+for a torrent in the list already, Show selects it instead. The dialog keeps its size while you
+choose files, type a folder or paste a link: the reason, the free space and the name take room
+that is already there. Add sends the torrent once and says "Adding…"
 until the daemon answers. The dialog then shows the next torrent or closes, and the new torrent is
 selected as soon as it is in the list, with the filter and the search cleared if they would hide it.
 A torrent the daemon has already is selected, with a notification; one whose add the daemon does not
