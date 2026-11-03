@@ -2103,6 +2103,28 @@ image/png=gwenview.desktop;
 "
 }
 
+# A list with content but no section header at all: once the cleanup has taken every header the
+# command added, none is left to look at.
+test_default_handler_undo_works_on_a_list_without_any_section_header() {
+    local bt="application/x-bittorrent=$desktop_id"
+    new_desktop
+    expect_round_trip "# comment only
+"
+    expect_round_trip "
+"
+    expect_round_trip "
+
+"
+    expect_round_trip "text/plain=kate.desktop
+"
+    expect_undo_gives "# kept
+
+[Default Applications]
+$bt
+" "# kept
+"
+}
+
 # A header stays when it was not the last section, or something else is in it.
 test_default_handler_undo_keeps_a_header_that_still_has_something_in_it() {
     local bt="application/x-bittorrent=$desktop_id"
@@ -2498,6 +2520,7 @@ cases=(
     default_handler_undo_keeps_a_missing_final_newline
     default_handler_undo_removes_a_section_header_the_command_made
     default_handler_undo_removes_the_headers_xdg_mime_added_on_kde
+    default_handler_undo_works_on_a_list_without_any_section_header
     default_handler_undo_keeps_a_header_that_still_has_something_in_it
     default_handler_round_trips_through_the_kde_writer_of_xdg_mime
     default_handler_undo_handles_crlf_and_trailing_spaces

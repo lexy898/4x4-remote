@@ -205,7 +205,9 @@ strip_entries() {
                 break
             fi
         done
-        if ((header < 0 || ${removed[header]:-0} == 0)); then
+        # Two tests, not one: `${removed[header]}` is expanded before a `||` could skip it, and an
+        # index of -1 is an error.
+        if ((header < 0)) || ((${removed[header]:-0} == 0)); then
             break
         fi
         for ((i = header + 1; i < ${#out[@]}; i++)); do
