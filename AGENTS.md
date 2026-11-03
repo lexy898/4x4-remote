@@ -97,8 +97,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 ### Unsafe code
 - The workspace denies `unsafe_code`. The one exception, approved by the owner, is the `mallopt`
   call in `crates/x4-app/src/allocator.rs`: a `#[expect(unsafe_code, reason = "...")]` on that
-  statement and a `// SAFETY:` comment above it. Any other `unsafe` needs the owner's explicit
-  approval first; `just lint-policy` rejects an `unsafe_code` exception anywhere else.
+  `let` statement and a `// SAFETY:` comment above it. Any other `unsafe` needs the owner's explicit
+  approval first; `just lint-policy` rejects an `unsafe_code` exception anywhere else, and one in
+  the allocator that does not sit on a `let` (on a whole function it would cover more calls).
 
 ### Logging
 - `tracing` only; `println!`/`eprintln!` are rejected by lint. English messages with structured

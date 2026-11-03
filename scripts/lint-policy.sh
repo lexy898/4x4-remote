@@ -10,7 +10,9 @@
 #   (e) the gpui-pre-wgpu patch is applied: x4-app builds the vendored copy in
 #       vendor/gpui-pre-wgpu, not the registry crate, and that copy is patched (see its PATCHED.md)
 #   (f) the one `unsafe`: an `unsafe_code` lint attribute only in crates/x4-app/src/allocator.rs, at
-#       most once, and the workspace level of `unsafe_code` is `deny` (`forbid` cannot be excepted)
+#       most once, as an `#[expect]` on a `let` (not on a whole function or module, where more
+#       unsafe calls would pass), and the workspace level of `unsafe_code` is `deny` (`forbid`
+#       cannot be excepted)
 #
 # Prints one line per violation (file or crate, and the rule) and exits 1 if there is any.
 # Usage: scripts/lint-policy.sh [repository root] (default: the repository of this script).
@@ -64,6 +66,13 @@ for file in "${rust_files[@]}"; do
         violation "$file" "unsafe_code exception outside $unsafe_home; the owner approved one unsafe call, there"
     elif ((unsafe_attributes > 1)); then
         violation "$file" "$unsafe_attributes unsafe_code exceptions; the owner approved one unsafe call"
+    elif ((unsafe_attributes == 1)); then
+        # The attribute covers what it is put on, so it goes on the statement of the one call. The
+        # reasons are stripped first, so that a `]` in one does not end the attribute early.
+        stripped=$(strip_reasons <<<"$flat")
+        if ! grep -qE '#[[:space:]]*\[[[:space:]]*expect[[:space:]]*\([^]]*\bunsafe_code\b[^]]*\][[:space:]]*let[[:space:]]' <<<"$stripped"; then
+            violation "$file" "the unsafe_code exception must be an #[expect] on the let of the one unsafe call"
+        fi
     fi
 done
 

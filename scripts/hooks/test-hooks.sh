@@ -725,6 +725,45 @@ test_lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator() {
     expect_contains "crates/x4-app/src/allocator.rs: 2 unsafe_code exceptions" "$stderr" stderr
 }
 
+# The owner approved one unsafe call, and the exception sits on the `let` that makes it. On a whole
+# function or module it would cover every unsafe call in them, and a second one would pass.
+test_lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let() {
+    local dir form
+    dir=$(new_policy_root)
+    local -a forms=(
+        $'#[expect(unsafe_code, reason = "x")]\npub fn pin() {\n    let taken = unsafe { f() };\n    unsafe { g() };\n}\n'
+        $'#[expect(unsafe_code, reason = "x")]\nmod inner {\n    pub fn pin() { let taken = unsafe { f() }; }\n}\n'
+        $'#[expect(unsafe_code, reason = "x")]\nunsafe { f() };\n'
+        $'#[allow(unsafe_code)]\nlet taken = unsafe { f() };\n'
+        $'#[cfg_attr(test, expect(unsafe_code))]\nlet taken = unsafe { f() };\n'
+        $'#[expect(clippy::too_many_lines, reason = "unsafe_code is not meant")]\nlet decoy = 1;\n#[expect(unsafe_code)]\nfn pin() {}\n'
+    )
+    for form in "${forms[@]}"; do
+        printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
+        run_policy "$dir"
+        expect_status 1
+        expect_contains "crates/x4-app/src/allocator.rs: the unsafe_code exception must be an #[expect] on the let of the one unsafe call" \
+            "$stderr" "stderr with: $form"
+    done
+}
+
+# What stays allowed: comments between the attribute and the `let`, an attribute over several
+# lines, and a `]` or the word `let` inside the reason.
+test_lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout() {
+    local dir form
+    dir=$(new_policy_root)
+    local -a forms=(
+        $'// SAFETY: a call.\n#[expect(unsafe_code, reason = "x")]\n// the call\nlet taken = unsafe { f() };\n'
+        $'#[expect(\n    unsafe_code,\n    reason = "no safe wrapper [exists]; let it be"\n)]\nlet taken = unsafe { f() };\n'
+        $'#[expect(unsafe_code)] let taken = unsafe { f() };\n'
+    )
+    for form in "${forms[@]}"; do
+        printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
+        run_policy "$dir"
+        expect_status 0
+    done
+}
+
 test_lint_policy_ignores_unsafe_code_in_comments_and_reasons() {
     local dir
     dir=$(new_policy_root)
@@ -2483,6 +2522,8 @@ cases=(
     lint_policy_rejects_failed_gpui_pre_wgpu_lookup
     lint_policy_rejects_an_unsafe_code_exception_elsewhere
     lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator
+    lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let
+    lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout
     lint_policy_ignores_unsafe_code_in_comments_and_reasons
     lint_policy_rejects_a_workspace_unsafe_level_other_than_deny
     measure_report_line_has_every_metric_in_order
