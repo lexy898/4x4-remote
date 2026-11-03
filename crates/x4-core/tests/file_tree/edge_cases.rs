@@ -276,20 +276,23 @@ fn timed_tree_of(names: &[String]) -> (FileTree, std::time::Duration) {
     (tree, start.elapsed())
 }
 
-/// `count` names of `letter` `times` times and each its own number, in a shuffled order.
-fn alike_but_for_a_number(letter: &str, times: usize, count: u32) -> Vec<String> {
+/// The names of each crafted shape that a tree is made of.
+const CRAFTED: u32 = 36_000;
+
+/// [`CRAFTED`] names of `letter` `times` times and each its own number, in a shuffled order.
+fn alike_but_for_a_number(letter: &str, times: usize) -> Vec<String> {
     shuffled(
-        (0..count)
+        (0..CRAFTED)
             .map(|n| format!("{}{n}", letter.repeat(times)))
             .collect(),
     )
 }
 
-/// `count` names of `times` letters, `lower` or `upper` by the bits of each name's own number in
-/// the first 16, in a shuffled order.
-fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32, count: u32) -> Vec<String> {
+/// [`CRAFTED`] names of `times` letters, `lower` or `upper` by the bits of each name's own
+/// number in the first 16, in a shuffled order.
+fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32) -> Vec<String> {
     shuffled(
-        (0..count)
+        (0..CRAFTED)
             .map(|n| {
                 (0..times)
                     .map(|bit| {
@@ -305,60 +308,124 @@ fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32, count: u32) -
     )
 }
 
-/// Whether names beyond ASCII that took `beyond` were ordered as fast as names alike in the same
-/// way in ASCII that took `ascii`: no more than 1.3 times as long, a margin for a busy machine,
-/// and under 0.5 s in a release build.
-fn as_fast_as_in_ascii(beyond: std::time::Duration, ascii: std::time::Duration) -> bool {
-    beyond < ascii * 13 / 10
-        && (cfg!(debug_assertions) || beyond < std::time::Duration::from_millis(500))
+/// [`CRAFTED`] names of `times` letters, each `lower` or `upper` at random.
+fn in_random_case([lower, upper]: [char; 2], times: usize) -> Vec<String> {
+    let mut seed: u64 = 7;
+    (0..CRAFTED)
+        .map(|_| {
+            (0..times)
+                .map(|_| {
+                    seed = seed
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    if seed >> 63 == 1 { upper } else { lower }
+                })
+                .collect()
+        })
+        .collect()
 }
 
-/// Asserts that a tree of `beyond`, names beyond ASCII, is made as fast as one of `ascii`, names
-/// alike in the same way in ASCII, in the best of three tries: other tests may take the machine
-/// from one of the two.
-fn assert_ordered_as_fast_as_in_ascii(beyond: &[String], ascii: &[String]) {
-    let mut tries = Vec::new();
-    while tries.len() < 3 {
-        let (tree, beyond) = timed_tree_of(beyond);
-        let (_, ascii) = timed_tree_of(ascii);
-        assert!(!tree.is_too_large());
-        tries.push((beyond, ascii));
-        if as_fast_as_in_ascii(beyond, ascii) {
-            break;
-        }
-    }
+/// [`CRAFTED`] names of 120 `İ`, of which each of the first 16 is `i̇` (`i` and a combining dot
+/// above, which `İ` folds into) by the bits of the name's own number, in a shuffled order.
+fn dotted_i_by_bits() -> Vec<String> {
+    shuffled(
+        (0..CRAFTED)
+            .map(|n| {
+                (0..120)
+                    .map(|bit| {
+                        if bit < 16 && (n >> bit) & 1 == 1 {
+                            "i\u{307}"
+                        } else {
+                            "İ"
+                        }
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
 
-    // Some 0.7 to 1 times as long in a debug build, and 0.6 to 0.75 times, some 0.2 s, in a
-    // release one.
-    assert!(
-        tries
-            .iter()
-            .any(|&(beyond, ascii)| as_fast_as_in_ascii(beyond, ascii)),
-        "{tries:?}, beyond ASCII and in ASCII"
-    );
+/// [`CRAFTED`] names of `İ` or `i̇` by the parity of their own number, then `é` 120 times and the
+/// number, in a shuffled order.
+fn dotted_i_first() -> Vec<String> {
+    shuffled(
+        (0..CRAFTED)
+            .map(|n| {
+                let first = if n % 2 == 0 { "İ" } else { "i\u{307}" };
+                format!("{first}{}{n}", "é".repeat(120))
+            })
+            .collect(),
+    )
+}
+
+/// Asserts that a tree of `names`, crafted to compare slowly, is made within `most` in a release
+/// build, at one try.
+///
+/// The work of each comparison is bounded by counts, in the unit tests of the order of names; a
+/// time depends on the machine and on what else runs on it, so these checks are run by hand,
+/// never in CI, and in a release build: a debug one takes several times as long.
+fn assert_made_within(names: &[String], most: std::time::Duration) {
+    let (tree, took) = timed_tree_of(names);
+    assert!(!tree.is_too_large());
+    assert!(took < most, "{took:?}, at most {most:?}");
 }
 
 #[test]
-fn names_beyond_ascii_alike_but_for_a_number_are_ordered_as_fast_as_in_ascii() {
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_beyond_ascii_alike_but_for_a_number_is_made_in_time() {
     // "é" 128 times, 256 bytes, and a number: each comparison folded every letter of both names
-    // to lower case. A tree of 36 000 of them took 2 s in a release build, at every read of the
-    // details, and 1.8 times as long as one of "a" 256 times in a debug build.
-    assert_ordered_as_fast_as_in_ascii(
-        &alike_but_for_a_number("é", 128, 36_000),
-        &alike_but_for_a_number("a", 256, 36_000),
+    // to lower case, and a tree of 36 000 of them took 2 s, at every read of the details.
+    assert_made_within(
+        &alike_but_for_a_number("é", 128),
+        std::time::Duration::from_millis(500),
     );
 }
 
 #[test]
-fn names_beyond_ascii_alike_but_for_their_case_are_ordered_as_fast_as_in_ascii() {
-    // 128 letters, 256 bytes, "é" or "É" by the bits of a number in the first 16: each comparison
-    // folded every letter of both names, and again for the tie of their case. A tree of 36 000
-    // of them took 3.8 s in a release build, at every read of the details, and 1.9 times as long
-    // as one of "a" or "A" 256 times in a debug build.
-    assert_ordered_as_fast_as_in_ascii(
-        &alike_but_for_their_case(['é', 'É'], 128, 36_000),
-        &alike_but_for_their_case(['a', 'A'], 256, 36_000),
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_beyond_ascii_alike_but_for_their_case_is_made_in_time() {
+    // 128 letters, "é" or "É" by the bits of a number in the first 16: each comparison folded
+    // every letter of both names, and again for the tie of their case; 3.8 s for 36 000.
+    assert_made_within(
+        &alike_but_for_their_case(['é', 'É'], 128),
+        std::time::Duration::from_millis(500),
     );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_beyond_ascii_in_random_case_is_made_in_time() {
+    // 128 letters, "é" or "É" at random: every letter may differ.
+    assert_made_within(
+        &in_random_case(['é', 'É'], 128),
+        std::time::Duration::from_millis(1_000),
+    );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_fullwidth_names_in_random_case_is_made_in_time() {
+    // 85 fullwidth letters, "ａ" or "Ａ" at random, 255 bytes: each letter of three bytes is
+    // looked up in Unicode's tables, for the first 64 of each name.
+    assert_made_within(
+        &in_random_case(['ａ', 'Ａ'], 85),
+        std::time::Duration::from_millis(1_500),
+    );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_that_differ_at_a_dotted_capital_i_is_made_in_time() {
+    // Two names that differ at an "İ" fold the rest of both: through Unicode's tables, letter by
+    // letter, a tree of 36 000 took 1.5 s.
+    assert_made_within(&dotted_i_by_bits(), std::time::Duration::from_millis(1_000));
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_that_start_with_a_dotted_capital_i_or_not_is_made_in_time() {
+    // "İ" or "i̇" and then 120 letters beyond ASCII, which two names of either kind fold all of.
+    assert_made_within(&dotted_i_first(), std::time::Duration::from_millis(600));
 }
 
 #[test]

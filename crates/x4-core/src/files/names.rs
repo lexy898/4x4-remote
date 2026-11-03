@@ -44,9 +44,10 @@ const NATURAL_BYTES: usize = 256;
 /// The most characters that UTF-8 writes in three bytes or four at the start of a name that are
 /// compared in their natural order and without case; the rest of the name, from the next such
 /// character on, is compared byte by byte. Folding one of them to lower case takes a search of
-/// Unicode's tables, some 25 ns, where the characters of one byte or two take a few
-/// ([`lower_case`]); so the letters of Latin, Greek, Cyrillic and the like are bounded by
-/// [`NATURAL_BYTES`] alone.
+/// Unicode's tables, some 25 ns, where the characters of one byte or two take a few, on every
+/// path ([`lower_case`], [`folded`]); so the letters of Latin, Greek, Cyrillic and the like are
+/// bounded by [`NATURAL_BYTES`] alone, and a comparison searches the tables for no more than this
+/// many characters of each name.
 ///
 /// The bound is each name's, not each comparison's, so the order stays total: a bound on what
 /// two names fold between them would order three names in a circle, and a sort may panic then.
@@ -62,12 +63,14 @@ const SLOWLY_FOLDED_CHARACTERS: usize = 64;
 /// Only the first [`NATURAL_RUNS`] runs of digits and of other characters, within the first
 /// [`NATURAL_BYTES`] of a name and before its 65th character of three bytes or more
 /// ([`SLOWLY_FOLDED_CHARACTERS`]), compare that way; the rest of it compares byte by byte. Of
-/// those, only the characters where two names differ are folded to lower case. So one
+/// those, only the characters where two names differ are folded to lower case, and, where they
+/// differ at an `İ`, which folds into two characters, the rest of that run of text. So one
 /// comparison takes a bounded time, however long the names: 14 000 crafted names of 600 runs
 /// each, or of 128 letters beyond ASCII each, took seconds to sort. The order stays total and
 /// the same for the same names, and real names, shorter than the bounds, are ordered as if
 /// there were none.
 pub(super) fn name_order(a: &str, b: &str) -> Ordering {
+    counted_comparison();
     let (head_a, head_b) = (head(a), head(b));
     let tie = match natural_order((a, head_a), (b, head_b)) {
         Natural::Decided(order) => return order,
@@ -176,9 +179,60 @@ fn within_slowly_folded_characters(head: &str) -> &str {
     head
 }
 
-/// The characters of `text` in lower case.
-fn folded(text: &str) -> impl Iterator<Item = char> {
-    text.chars().flat_map(char::to_lowercase)
+/// The characters of `text` in lower case, as [`char::to_lowercase`] gives them.
+///
+/// Each character is folded through [`lower_case`], so that Unicode's tables are searched only
+/// for the characters of three bytes or more, which a [`head`] bounds. `İ`, the one character
+/// whose lower case is several, is folded by hand: it is where [`folded_order`] has to fold the
+/// rest of two texts, and searching for every character of the rest took 2.5 µs a comparison.
+fn folded(text: &str) -> Folded<'_> {
+    Folded {
+        chars: text.chars(),
+        next: None,
+        last: None,
+    }
+}
+
+/// The capital I with a dot above, the one character whose lower case is several: `i` and a
+/// combining dot above.
+const CAPITAL_I_WITH_DOT: char = '\u{130}';
+
+/// The characters of a text in lower case ([`folded`]).
+struct Folded<'a> {
+    chars: std::str::Chars<'a>,
+    /// The characters of the lower case of the last character read that are still to come: a
+    /// lower case of [`char::to_lowercase`] is never more than three.
+    next: Option<char>,
+    last: Option<char>,
+}
+
+impl Iterator for Folded<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        if let Some(next) = self.next.take() {
+            self.next = self.last.take();
+            return Some(next);
+        }
+        let c = self.chars.next()?;
+        counted_fold();
+        Some(match lower_case(c) {
+            Some(lower) => lower,
+            None if c == CAPITAL_I_WITH_DOT => {
+                self.next = Some('\u{307}');
+                'i'
+            }
+            // Not reached with the Unicode of this Rust; a newer one may fold another character
+            // so.
+            None => {
+                counted_lookup();
+                let mut lower = c.to_lowercase();
+                let first = lower.next().unwrap_or(c);
+                (self.next, self.last) = (lower.next(), lower.next());
+                first
+            }
+        })
+    }
 }
 
 /// How `a` and `b` compare in lower case: as their [`folded`] characters do.
@@ -186,7 +240,7 @@ fn folded(text: &str) -> impl Iterator<Item = char> {
 /// The bytes that are alike, the same or ASCII letters that differ only in case, are skipped,
 /// since they fold alike. Only the characters where the texts differ otherwise are decoded and
 /// folded, one pair at a time, up to the next pair that is the same. A character that folds into
-/// several, such as `İ`, shifts the rest, which then compares as a whole.
+/// several, `İ`, shifts the rest, which then compares as a whole, folded through the same table.
 fn folded_order(a: &str, b: &str) -> Ordering {
     if a == b {
         return Ordering::Equal;
@@ -213,6 +267,8 @@ fn folded_order(a: &str, b: &str) -> Ordering {
             if x == y {
                 break;
             }
+            counted_fold();
+            counted_fold();
             let (Some(lower_x), Some(lower_y)) = (lower_case(x), lower_case(y)) else {
                 return folded(from_a).cmp(folded(from_b));
             };
@@ -238,11 +294,12 @@ fn lower_case(c: char) -> Option<char> {
     let index = u32::from(c)
         .checked_sub(TWO_BYTES_START)
         .and_then(|index| usize::try_from(index).ok());
-    match index.and_then(|index| two_byte_lower_cases().get(index)) {
+    if let Some(&lower) = index.and_then(|index| two_byte_lower_cases().get(index)) {
         // No character of the table has the lower case U+0000, which marks several.
-        Some(&lower) => (lower != '\0').then_some(lower),
-        None => one_character(c.to_lowercase()),
+        return (lower != '\0').then_some(lower);
     }
+    counted_lookup();
+    one_character(c.to_lowercase())
 }
 
 /// The first character that UTF-8 writes in two bytes.
@@ -376,8 +433,65 @@ fn number_order(a: &str, b: &str) -> Ordering {
     a.len().cmp(&b.len()).then_with(|| a.cmp(b))
 }
 
+/// Counts a comparison of two names, in the tests of this crate ([`work`]).
+fn counted_comparison() {
+    #[cfg(test)]
+    work::add(|work| work.comparisons += 1);
+}
+
+/// Counts a lower case looked up through [`char::to_lowercase`], a search of Unicode's tables, in
+/// the tests of this crate ([`work`]).
+fn counted_lookup() {
+    #[cfg(test)]
+    work::add(|work| work.to_lowercase += 1);
+}
+
+/// Counts a character folded to lower case, in the tests of this crate ([`work`]).
+fn counted_fold() {
+    #[cfg(test)]
+    work::add(|work| work.folded += 1);
+}
+
+/// The work that comparing names does on a thread, counted in the tests of this crate, so that
+/// they bound it per comparison: a count is the same on a busy machine, where a time is not.
+/// Outside those tests nothing is counted, and the counting functions are empty.
+#[cfg(test)]
+pub(super) mod work {
+    use std::cell::Cell;
+
+    /// What comparing names did.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub(in crate::files) struct Work {
+        /// Comparisons of two names ([`name_order`](super::name_order)).
+        pub(in crate::files) comparisons: usize,
+        /// Lower cases looked up through [`char::to_lowercase`].
+        pub(in crate::files) to_lowercase: usize,
+        /// Characters folded to lower case.
+        pub(in crate::files) folded: usize,
+    }
+
+    thread_local! {
+        static WORK: Cell<Work> = Cell::new(Work::default());
+    }
+
+    /// The work counted on this thread so far.
+    pub(in crate::files) fn so_far() -> Work {
+        WORK.with(Cell::get)
+    }
+
+    /// Counts `change` on this thread.
+    pub(super) fn add(change: impl FnOnce(&mut Work)) {
+        WORK.with(|work| {
+            let mut counted = work.get();
+            change(&mut counted);
+            work.set(counted);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::work::Work;
     use super::*;
 
     fn parts(path: &str) -> std::str::Split<'_, char> {
@@ -694,8 +808,13 @@ mod tests {
         window.chars().filter(|c| c.len_utf8() >= 3).count() <= SLOWLY_FOLDED_CHARACTERS
     }
 
+    /// The characters of `text` in lower case, as Unicode gives them, one by one.
+    fn unicode_folded(text: &str) -> impl Iterator<Item = char> {
+        text.chars().flat_map(char::to_lowercase)
+    }
+
     /// The order as it was before the characters of three bytes or more were bounded: every
-    /// character of the first 256 bytes folded, through [`folded`].
+    /// character of the first 256 bytes folded, as Unicode folds it.
     fn previous_order(a: &str, b: &str) -> Ordering {
         fn head(name: &str) -> &str {
             name.get(..name.floor_char_boundary(NATURAL_BYTES))
@@ -714,7 +833,7 @@ mod tests {
                 };
                 let order = match (run_a, run_b) {
                     (Run::Digits(x), Run::Digits(y)) => number_order(x, y),
-                    (Run::Text(x), Run::Text(y)) => folded(x).cmp(folded(y)),
+                    (Run::Text(x), Run::Text(y)) => unicode_folded(x).cmp(unicode_folded(y)),
                     (Run::Digits(_), Run::Text(_)) => Ordering::Less,
                     (Run::Text(_), Run::Digits(_)) => Ordering::Greater,
                 };
@@ -727,7 +846,7 @@ mod tests {
             after(a, rest_a).cmp(&after(b, rest_b))
         }
         natural(a, b)
-            .then_with(|| folded(head(a)).cmp(folded(head(b))))
+            .then_with(|| unicode_folded(head(a)).cmp(unicode_folded(head(b))))
             .then_with(|| a.cmp(b))
     }
 
@@ -739,6 +858,9 @@ mod tests {
         for start in ["\u{212a}", "k", "K"] {
             names.push(format!("{start}{runs}{}", "x".repeat(300)));
         }
+        // Names that differ at an `İ`, and fold alike there or not.
+        names.extend(dotted_i_by_bits().into_iter().step_by(97));
+        names.extend(dotted_i_first().into_iter().step_by(97));
         let mut ties = 0;
         for a in &names {
             assert!(within_the_bounds(a), "{a:?}");
@@ -787,6 +909,13 @@ mod tests {
                     .collect(),
             );
         }
+        // Names that differ at an `İ` and fold alike there, or differ further on.
+        let by_bits = dotted_i_by_bits();
+        let first = dotted_i_first();
+        for n in [0, 1, 2, 3, 5, 1_024, 1_999] {
+            names.push(by_bits[n].clone());
+            names.push(first[n].clone());
+        }
         names
     }
 
@@ -820,9 +949,195 @@ mod tests {
             let lower: Vec<char> = c.to_lowercase().collect();
             let expected = (lower.len() == 1).then(|| lower[0]);
             assert_eq!(lower_case(c), expected, "{c:?}");
+            assert_eq!(folded(&c.to_string()).collect::<Vec<_>>(), lower, "{c:?}");
         }
         assert_eq!(two_byte_lower_cases().len(), 0x780);
         assert_eq!(lower_case('İ'), None, "two characters");
+    }
+
+    #[test]
+    fn only_the_capital_i_with_a_dot_has_a_lower_case_of_several_characters() {
+        // So [`folded`] folds it by hand, and looks up no other character in Unicode's tables
+        // but those the table of two-byte letters does not hold. A new version of Unicode that
+        // gives another character such a lower case fails here.
+        let several: Vec<char> = (0..=u32::from(char::MAX))
+            .filter_map(char::from_u32)
+            .filter(|c| c.to_lowercase().len() > 1)
+            .collect();
+        assert_eq!(several, ['İ']);
+        assert_eq!('İ'.to_lowercase().collect::<String>(), "i\u{307}");
+    }
+
+    /// `names` in a shuffled order, the same every time.
+    fn shuffled(mut names: Vec<String>) -> Vec<String> {
+        let mut seed: u64 = 42;
+        for at in (1..names.len()).rev() {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let other = usize::try_from(seed >> 33).unwrap() % (at + 1);
+            names.swap(at, other);
+        }
+        names
+    }
+
+    /// The number of names of each crafted shape that is sorted.
+    const CRAFTED: u32 = 2_000;
+
+    /// [`CRAFTED`] names of `letter` `times` times and each its own number.
+    fn alike_but_for_a_number(letter: &str, times: usize) -> Vec<String> {
+        (0..CRAFTED)
+            .map(|n| format!("{}{n}", letter.repeat(times)))
+            .collect()
+    }
+
+    /// [`CRAFTED`] names of `times` letters, `lower` or `upper` by the bits of each name's own
+    /// number in the first 16.
+    fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32) -> Vec<String> {
+        (0..CRAFTED)
+            .map(|n| {
+                (0..times)
+                    .map(|bit| {
+                        if bit < 16 && (n >> bit) & 1 == 1 {
+                            upper
+                        } else {
+                            lower
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// [`CRAFTED`] names of `times` letters, each `lower` or `upper` at random.
+    fn in_random_case([lower, upper]: [char; 2], times: usize) -> Vec<String> {
+        let mut seed: u64 = 7;
+        (0..CRAFTED)
+            .map(|_| {
+                (0..times)
+                    .map(|_| {
+                        seed = seed
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1_442_695_040_888_963_407);
+                        if seed >> 63 == 1 { upper } else { lower }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// [`CRAFTED`] names of `lower` or `upper` by the parity of their own number, `times` times,
+    /// and the number: two names of either kind differ in case at every letter.
+    fn in_one_case_or_the_other([lower, upper]: [char; 2], times: usize) -> Vec<String> {
+        (0..CRAFTED)
+            .map(|n| {
+                let letter = if n % 2 == 0 { lower } else { upper };
+                format!("{}{n}", String::from(letter).repeat(times))
+            })
+            .collect()
+    }
+
+    /// [`CRAFTED`] names of 120 `İ`, of which each of the first 16 is `i̇` (`i` and a combining
+    /// dot above, which `İ` folds into) by the bits of the name's own number: two names differ at
+    /// an `İ`, and fold alike there.
+    fn dotted_i_by_bits() -> Vec<String> {
+        (0..CRAFTED)
+            .map(|n| {
+                (0..120)
+                    .map(|bit| {
+                        if bit < 16 && (n >> bit) & 1 == 1 {
+                            "i\u{307}"
+                        } else {
+                            "İ"
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// [`CRAFTED`] names of `İ` or `i̇` by the parity of their own number, then `é` 120 times
+    /// and the number: two names of either kind differ at their first character.
+    fn dotted_i_first() -> Vec<String> {
+        (0..CRAFTED)
+            .map(|n| {
+                let first = if n % 2 == 0 { "İ" } else { "i\u{307}" };
+                format!("{first}{}{n}", "é".repeat(120))
+            })
+            .collect()
+    }
+
+    /// The most work that one comparison did while `names` were sorted, shuffled.
+    fn most_work_per_comparison(names: Vec<String>) -> Work {
+        let mut names = shuffled(names);
+        let mut most = Work::default();
+        names.sort_by(|a, b| {
+            let before = work::so_far();
+            let order = name_order(a, b);
+            let after = work::so_far();
+            most.comparisons = most.comparisons.max(after.comparisons - before.comparisons);
+            most.to_lowercase = most
+                .to_lowercase
+                .max(after.to_lowercase - before.to_lowercase);
+            most.folded = most.folded.max(after.folded - before.folded);
+            order
+        });
+        most
+    }
+
+    #[test]
+    fn a_comparison_of_crafted_names_does_bounded_work() {
+        // Each shape, with the most characters a comparison of two of them folds and the most
+        // lower cases it looks up in Unicode's tables. Before the bounds, a comparison of two
+        // names folded every character of both, and again for the tie of their case: some 30 µs
+        // each, and seconds for a sort of 36 000 names, at every read of the details.
+        let shapes: [(&str, Vec<String>, usize, usize); 9] = [
+            // Alike in their first 256 bytes, which are skipped.
+            ("ASCII", alike_but_for_a_number("a", 256), 0, 0),
+            ("é128", alike_but_for_a_number("é", 128), 0, 0),
+            // 600 runs, of which 32 compare naturally, each alike.
+            ("a1×300", alike_but_for_a_number("a1", 300), 0, 0),
+            // Only where they differ, in their first 16 letters.
+            (
+                "é/É by bits",
+                alike_but_for_their_case(['é', 'É'], 128),
+                32,
+                0,
+            ),
+            // Every letter may differ, and each is looked up in a table of two-byte letters.
+            ("é/É at random", in_random_case(['é', 'É'], 128), 256, 0),
+            // Three bytes each, so looked up in Unicode's tables: the first 64 of the 85 of each
+            // name, 255 bytes, and the rest byte by byte.
+            (
+                "Ａ/ａ at random",
+                in_random_case(['ａ', 'Ａ'], 85),
+                2 * SLOWLY_FOLDED_CHARACTERS,
+                2 * SLOWLY_FOLDED_CHARACTERS,
+            ),
+            // Every letter differs, and only the first 64 of each name fold.
+            (
+                "Ａ or ａ throughout",
+                in_one_case_or_the_other(['ａ', 'Ａ'], 85),
+                2 * SLOWLY_FOLDED_CHARACTERS,
+                2 * SLOWLY_FOLDED_CHARACTERS,
+            ),
+            // `İ` folds into two characters, so the rest of both names folds, through the table.
+            ("İ by bits", dotted_i_by_bits(), 2 * NATURAL_BYTES, 0),
+            ("İ first", dotted_i_first(), 2 * NATURAL_BYTES, 0),
+        ];
+        for (shape, names, folded, to_lowercase) in shapes {
+            let most = most_work_per_comparison(names);
+
+            assert_eq!(most.comparisons, 1, "{shape}");
+            assert!(most.folded <= folded, "{shape}: {most:?}");
+            assert!(most.to_lowercase <= to_lowercase, "{shape}: {most:?}");
+            // However the names are crafted.
+            assert!(most.folded <= 2 * NATURAL_BYTES, "{shape}: {most:?}");
+            assert!(
+                most.to_lowercase <= 2 * SLOWLY_FOLDED_CHARACTERS,
+                "{shape}: {most:?}"
+            );
+        }
     }
 
     #[test]
