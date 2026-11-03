@@ -82,12 +82,57 @@ run *args:
 release:
     cargo build -p x4-app --release --locked
 
+# Build the Arch package of the committed master branch (never the working tree or another branch) under ~/.cache/4x4-pkg and print its path; install it with `sudo pacman -U <path>`.
+package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Everything built comes from the local master branch, its PKGBUILD as well as its sources;
+    # without them, nothing is written. A directory that git cannot read as a repository (a copy
+    # without .git, or one git refuses) must not look like a master without the PKGBUILD.
+    if ! git rev-parse --git-dir >/dev/null; then
+        echo "just package builds the local master branch of the checkout it is in, which is not a" \
+            "git repository (git's message is above)" >&2
+        exit 1
+    fi
+    if ! git cat-file -e refs/heads/master:packaging/arch/PKGBUILD 2>/dev/null; then
+        echo "just package builds the local master branch, which has no packaging/arch/PKGBUILD:" \
+            "merge the branch that adds it into master, then run git switch master && git pull," \
+            "then just package" >&2
+        exit 1
+    fi
+    commit=$(git log -1 --format='%h %s' refs/heads/master)
+    echo "building master: $commit"
+    repo="{{justfile_directory()}}"
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/4x4-pkg"
+    mkdir -p "$cache/build" "$cache/sources" "$cache/packages"
+    # makepkg rewrites pkgver= in the PKGBUILD it runs, so it runs a copy, and master's, as the
+    # sources it builds are.
+    git show refs/heads/master:packaging/arch/PKGBUILD >"$cache/PKGBUILD"
+    # makepkg refuses a source mirror made from another checkout (this one moved, or a clone), and
+    # the working copy made from that mirror cannot follow this checkout's commits: both go, and the
+    # build starts over.
+    mirror=$cache/sources/4x4
+    origin=$(git config --file "$mirror/config" --get remote.origin.url 2>/dev/null || true)
+    if [[ -d $mirror && $origin != "file://$repo" ]]; then
+        echo "the source mirror in $cache was made from another checkout; starting over"
+        rm -rf "$mirror" "$cache/build/4x4-git/src"
+    fi
+    cd "$cache"
+    export X4_REPO="$repo" BUILDDIR="$cache/build" SRCDEST="$cache/sources" PKGDEST="$cache/packages"
+    makepkg --force
+    makepkg --packagelist
+
+# Make 4x4 the default app for .torrent files and magnet links, after asking on the terminal; `--undo` gives them back, `--yes` answers the question. The owner runs it; agents never do.
+[positional-arguments]
+default-handler *args:
+    scripts/default-handler.sh "$@"
+
 # The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N), `--extend K` (then Shift+Down K times), `--right-click` (then right-click row N), `--press KEY` (press a key, repeatable, one every 3 s).
 demo-synthetic *args:
     RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
         cargo run -p x4-app --features synthetic --bin x4-synthetic --locked -- {{args}}
 
-# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `-- <args>`.
+# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `--binary <path>` (measure that file, build nothing), `--offline` (a config of a closed port, so no daemon is reached), `-- <args>`.
 [positional-arguments]
 measure *args:
     scripts/measure.sh "$@"

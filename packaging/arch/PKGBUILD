@@ -1,0 +1,75 @@
+# Maintainer: lexy898
+#
+# Builds 4x4 from a local checkout: the commit at the tip of its master branch, never the working
+# tree. Run it through `just package` (from the checkout), which sets X4_REPO and keeps every
+# build file under ~/.cache/4x4-pkg; install the result with `sudo pacman -U <file>`.
+
+pkgname=4x4-git
+# makepkg replaces this with what pkgver() prints, in the copy of this file that it runs.
+pkgver=0.1.0.r229.g927ee24
+pkgrel=1
+pkgdesc='Native desktop client for a remote Transmission daemon'
+arch=('x86_64')
+url='https://github.com/lexy898/4x4'
+license=('MIT OR Apache-2.0')
+depends=(
+  glibc
+  libgcc
+  hicolor-icon-theme
+  libxcb
+  libxkbcommon
+  libxkbcommon-x11
+  vulkan-icd-loader
+  wayland
+)
+makedepends=(cargo git fontconfig freetype2)
+optdepends=(
+  'vulkan-driver: draw through Vulkan; without one 4x4 falls back to OpenGL and uses more memory'
+  'xdg-desktop-portal-impl: the file dialog for .torrent files'
+)
+provides=(4x4)
+conflicts=(4x4)
+# !lto: makepkg's -flto would reach the C shim wayland-backend compiles, and rust-lld cannot link
+# GCC's LTO objects; Cargo's own LTO ([profile.release]) still applies. !debug: the release
+# profile strips the binary, so a -debug package would be empty.
+options=(!lto !debug)
+source=("4x4::git+file://${X4_REPO:?run makepkg through just package, which sets X4_REPO}#branch=master")
+b2sums=('SKIP')
+
+# The workspace version, then the number of commits and the commit: 0.1.0.r229.g927ee24. The
+# count only grows while master is never rewritten, so every new build is an upgrade for pacman.
+pkgver() {
+  cd 4x4
+  local version
+  version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+  if [[ -z $version ]]; then
+    echo "no version in [workspace.package] of Cargo.toml" >&2
+    return 1
+  fi
+  printf '%s.r%s.g%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd 4x4
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target host-tuple
+}
+
+build() {
+  cd 4x4
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # The panic locations in the binary would otherwise hold the build dir under ~/.cache/4x4-pkg
+  # and the path of cargo's registry in the builder's home.
+  export RUSTFLAGS+=" --remap-path-prefix=$srcdir=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/cargo"
+  # Only the app: the `synthetic` feature and its x4-synthetic demo stay out.
+  cargo build --frozen --release -p x4-app --bin 4x4
+}
+
+package() {
+  cd 4x4
+  install -Dm755 target/release/4x4 "$pkgdir/usr/bin/4x4"
+  install -Dm644 packaging/linux/io.github.lexy898.FourByFour.desktop -t "$pkgdir/usr/share/applications/"
+  install -Dm644 packaging/linux/io.github.lexy898.FourByFour.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps/"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

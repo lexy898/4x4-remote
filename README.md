@@ -5,8 +5,8 @@ in Rust.
 
 ## Status
 
-Early development — stage 5, adding. The window connects to the daemon set in `config.toml` and
-shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
+Early development — stage 6, installation. The window connects to the daemon set in `config.toml`
+and shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
 state, with live counts, and a search box finds them by name. The status bar shows the total
 download and upload speeds, the free space and the state of the connection; it switches the
 alternative speed limits and sets the global download and upload limits. The window remembers its
@@ -22,7 +22,9 @@ height and its tab are remembered too. Torrents are added from `.torrent` files,
 desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
 that picks the folder on the server (with its free space and the folders used lately), the files to
 download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
-file or a link, hands them to the 4x4 that runs.
+file or a link, hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built
+from this checkout and shows in the application menu with its icon; one command makes it the
+default app for `.torrent` files and magnet links, and undoes that again (see [Install](#install)).
 
 ## What it will do
 
@@ -72,6 +74,86 @@ just run
 
 The second command installs the system libraries the GUI toolkit builds and links against; Wayland
 and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
+
+## Install
+
+On Arch Linux, 4x4 installs as the package `4x4-git`, built from the local `master` branch of this
+checkout, so build it after what you want is merged into `master`:
+
+```bash
+git switch master
+git pull
+just package
+sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
+```
+
+`just package` builds the package with `makepkg` (from `packaging/arch/PKGBUILD`) and prints the
+path of the file it made as its last line; that file is what `pacman -U` installs. The version
+names the commit it was built from, such as `0.1.0.r231.g1a2b3c4` (the workspace version, the
+number of commits and the commit). The build needs the tools and libraries of
+[Build from source](#build-from-source); makepkg names any package that is missing, and
+`just package` never installs anything itself. The first build takes about four minutes.
+Everything it makes stays in `~/.cache/4x4-pkg` (crates come from cargo's own cache, `~/.cargo`):
+the build dir keeps the compiled crates, about 2 GiB, so later builds are faster, and all of it is
+safe to delete.
+
+The package is always built from the commits of the local `master` branch: not from the working
+tree, so uncommitted changes are left out, and not from the branch checked out; the first line
+`just package` prints names the commit it builds. While `master` has no `packaging/arch/PKGBUILD`,
+`just package` stops before it writes anything and says to merge and pull first; outside a git
+repository (a copy of the files without `.git`) it stops the same way, with git's message. After the
+checkout has moved to another directory, the next build starts over from it and takes the full
+four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
+`/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
+application menu with its icon at once, without logging out.
+
+To update, run the same four commands again; pacman replaces the installed version.
+
+To uninstall, first run `just default-handler --undo` if you made 4x4 the default app for
+`.torrent` files and magnet links (described below), then `sudo pacman -R 4x4-git`. Your
+`config.toml`, `state.toml` and logs stay (see [Files and logs](#files-and-logs)). The build files
+in `~/.cache/4x4-pkg`, about 2 GiB, can be deleted: `rm -rf ~/.cache/4x4-pkg`.
+
+To open `.torrent` files and magnet links with 4x4, in Dolphin and in a browser, make it their
+default app once after installing:
+
+```bash
+just default-handler
+```
+
+It shows what `application/x-bittorrent` (`.torrent` files) and `x-scheme-handler/magnet` (magnet
+links) open with now, asks on the terminal whether to go on, runs `xdg-mime default` for both and
+prints what they open with afterwards. `xdg-mime` is the standard tool that records the choice in
+`~/.config/mimeapps.list`, the file where your desktop keeps which app opens which kind of file. It
+adds a line for each of the two types under `[Default Applications]`: two lines. On KDE it also
+adds the two types under `[Added Associations]`, four lines in all, and then runs `kbuildsycoca6`,
+which rebuilds KDE's cache of the installed applications (in `~/.cache`). Nothing else changes. A
+browser may ask once more the first time it meets a magnet link, offering 4x4 as the system
+default. The command needs 4x4 installed, refuses to run as root, and refuses without a terminal
+unless `--yes` answers the question. If a list for your desktop (such as
+`~/.config/kde-mimeapps.list`) still names another app, it says so and exits 1; the lines it wrote
+stay in `mimeapps.list`, and `--undo` removes them.
+
+`just default-handler --undo` gives them back: after asking, it removes the entries that name 4x4
+for these two types from those two sections, whoever made them (an entry you made for 4x4 by hand
+goes too). A section header that the first command had to add and that is empty afterwards goes
+as well. The rest of the file stays as it was, byte for byte. Both types then open with what the
+system picks again (Deluge, for example). It works after uninstalling too: the entries stay in the
+file until it runs. If `mimeapps.list` already named another app for either type under
+`[Default Applications]`, the first command replaced that line, and the undo cannot bring it
+back: `xdg-mime default <app>.desktop <type>` sets that app again.
+
+The installed 4x4 and a debug build (`just run`) run side by side. The debug build has its own app
+id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links to the other, and
+window rules for the one never catch the other. But both read the same `config.toml` and write the
+same `state.toml` and log: whichever saves last decides the window size, columns and filter the next
+start remembers.
+
+The icon, a rose under a resin dome, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
+installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small
+sizes would be installed under the same name into `16x16/apps`, `22x22/apps`, `24x24/apps` and
+`32x32/apps` of `hicolor` too, four more `install` lines in the PKGBUILD's `package()`; KDE takes
+the icon of a fixed size when one matches the size it draws, and the scalable one for every other.
 
 ## The main window
 
@@ -440,10 +522,11 @@ of its own and the log says so.
 The desktop entry in `packaging/linux/`,
 [`io.github.lexy898.FourByFour.desktop`](packaging/linux/io.github.lexy898.FourByFour.desktop),
 offers 4x4 as a handler for `.torrent` files and `magnet:` links (`Exec=4x4 %U`, one process for all
-the files and links of a launch). Nothing installs or registers it yet, so today no file manager or
-browser opens them with 4x4: start it with them, or drop them on its window. Stage 6, packaging,
-will install it and offer to make 4x4 the handler for `.torrent` files and magnet links; 4x4 never
-makes itself the default handler without asking.
+the files and links of a launch). The package installs it (see [Install](#install)), so file
+managers and browsers list 4x4 among the apps for them; `just default-handler` makes it their
+default and `just default-handler --undo` gives them back. 4x4 never makes itself the default
+handler without asking. From the source tree, without the package, start it with them or drop them
+on its window.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -600,19 +683,28 @@ the message `number-decimal-separator` (a dot in English).
 ## Performance
 
 `just measure` builds the release binary, starts it with a temporary state directory (so its
-`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`), waits 5
-seconds and prints one line: the time to the first rendered frame, then the memory as proportional
-(`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident (`rss_mib`) size, the
-thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and the binary size. It adds
-a `WARN:` line on stderr when a figure is above one of its own reference limits (16 MiB private
-memory, 55 MiB PSS, 120 MiB RSS) or when the OpenGL stack is mapped, which it should not be where a
-Vulkan driver is installed. The exit code stays 0 unless the measurement itself failed.
-`--cpu <seconds>` adds a second line, the CPU time of all its threads over that many seconds after
-the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic` measures the release
-build of the [synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to
-the program, as in `just measure --synthetic --cpu 30 -- --static`. Measure the app with no
-development 4x4 running in the same session, or inside `just virtual`: otherwise the measured start
-hands over to it and exits.
+`state.toml` and its log go there and are removed afterwards; it still reads `config.toml`, unless
+`--offline`), waits 5 seconds and prints one line: the time to the first rendered frame, then the
+memory as proportional (`pss_mib`), unique (`uss_mib`), anonymous (`rss_anon_mib`) and resident
+(`rss_mib`) size, the thread count, whether Mesa's OpenGL stack is loaded (`gl_stack_mapped`) and
+the binary size. It adds a `WARN:` line on stderr when a figure is above one of its own reference
+limits (16 MiB private memory, 55 MiB PSS, 120 MiB RSS) or when the OpenGL stack is mapped, which it
+should not be where a Vulkan driver is installed. The exit code stays 0 unless the measurement
+itself failed. `--cpu <seconds>` adds a second line, the CPU time of all its threads over that many
+seconds after the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic`
+measures the release build of the [synthetic demo](#synthetic-demo) instead of the app, and
+arguments after `--` go to the program, as in `just measure --synthetic --cpu 30 -- --static`.
+`--binary <path>` measures that file and builds nothing, such as the installed `/usr/bin/4x4` or one
+taken out of a package (not with `--synthetic`, which builds the demo); a relative path is taken
+from the repository's directory. `--offline` gives the program a temporary config directory of its
+own, removed afterwards, whose `config.toml` names a closed port on this machine
+(`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting.
+Without it the app reads your `config.toml`, and inside `just virtual`, whose config directory is
+empty, it polls the default address, which is your daemon's (`192.168.1.5`). For example,
+`just virtual just measure --binary /usr/bin/4x4 --offline --cpu 60` measures the installed 4x4 off
+screen and off the network. Measure the app with no development 4x4 running in the same session, or
+inside `just virtual`: otherwise the measured start hands over to it and exits. (`just measure`
+gives the program the development app id, so it never hands over to an installed 4x4.)
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS.
 RSS counts every resident page the app maps, including shared driver libraries (`libLLVM`,
@@ -832,7 +924,7 @@ the demo was measured 15 seconds after its start, 28 seconds for the five files,
 - After a large add, which none of these runs made, glibc may keep some freed memory resident as
   well: the service thread builds the request, the `.torrent` in base64 inside JSON, and its arena
   keeps the freed buffers for the next request (a separate test of the same pattern kept 6.3 MiB
-  after a 16 MiB file); the memory is reused, not lost.
+  after a 16 MiB file); the memory is reused, not lost. Stage 6 below returns it.
 
 The Files tab keeps its tree from one read of the details to the next while the torrent's files
 stay the same, which they do while it downloads: each read every 3 seconds only takes in the
@@ -846,6 +938,112 @@ making the tree and its rows against taking a read into the tree kept:
 | 50 000, four folders deep, long names           | 19.6 ms                | 1.0 ms    |
 | 50 000 in one folder, open                      | 14.0 ms                | 3.1 ms    |
 | 36 000 names crafted to compare slowly, open    | 667 ms                 | 14 ms     |
+
+### The allocator (stage 6)
+
+4x4 fixes glibc's mmap threshold at 128 KiB (`mallopt(M_MMAP_THRESHOLD)`, the first thing `main`
+does, in `4x4` and in the synthetic demo alike), so that every freed buffer of that size or more
+goes back to the system at once; the call is the only `unsafe` in the project, approved by the
+owner, in `crates/x4-app/src/allocator.rs`, and does nothing off Linux with glibc. By default glibc
+raises the threshold to the size of each large block it sees freed, up to 32 MiB, and the next
+allocations of that size come from the arena of the thread that makes them, where `free` keeps
+them; adding a big `.torrent` makes three such buffers: the file, read on a short-lived reader
+thread, then its base64 form and the JSON body of the request on the long-lived service thread.
+Through the real add path to a local sink, a 16 MiB and then an 8 MiB file left 37.6 to 39.6 MiB of
+private memory resident (five runs) by default, and 0.30 MiB with the threshold fixed;
+`malloc_trim(0)` alone was not reliable and adds nothing once it is fixed. `M_ARENA_MAX=1` would
+save about 8 MiB more private memory, but it costs CPU in the demo (about 0.7 points while it polls
+a busy daemon, about 17 while it scrolls), so it is not set. The test
+`freed_large_buffers_go_back_to_the_system` pins the effect. In release builds inside
+`just virtual`, medians of three runs of the synthetic demo (2000 torrents) without and with the
+pin did not differ beyond the noise of the runs: first frame (median of nine starts) 236 and 237 ms,
+private memory 36.3 and 36.2 MiB, CPU while idle 0.00 and 0.03 %, while 513 torrents change on
+every poll 1.20 and 1.23 %, and while scrolling a row per frame 34.3 and 32.6 % (the runs without
+the pin alone swung from 31 to 44 %), frame interval p99 17.62 and 17.38 ms with none over 33 ms;
+the real app over a closed port (four sessions each) had a first frame of 237.5 and 226.5 ms and
+16.0 and 15.8 MiB of private memory. The one visible cost is about 125 more minor page faults a
+second (7 and 131) while the demo polls a busy daemon, because its answers of a few hundred KiB are
+now fresh mappings each time.
+
+### Installing (stage 6)
+
+Measured on 2026-11-03 on the same laptop, inside the headless KWin of `just virtual`, with release
+builds; each figure is the median of three runs, each the first start of its own session, with the
+runs of the app and of the package taken in turn. The app (`just virtual just measure --offline
+--cpu 60`) and the binary of the package that `just package` builds from the same commit (see
+[Install](#install)), taken out of the package file with `bsdtar` instead of installed
+(`just virtual just measure --binary <dir>/usr/bin/4x4 --offline --cpu 60`), reached no daemon and
+kept reconnecting to the closed port. The synthetic demo answered from memory with nothing changing
+(`X4_MEASURE_SETTLE_SECONDS=10 just virtual just measure --synthetic --cpu 60 -- --static`); as in
+stage 2, the targets are those of the app with a real daemon, and the demo's column also carries
+the synthetic daemon. The CPU is that of the 60 seconds after the memory figures; "not met" marks
+every cell over its target:
+
+| Metric                     | Target              | App (`target/release`) | Installed build (package) | Demo, 2000 torrents, idle |
+| -------------------------- | ------------------- | ---------------------- | ------------------------- | ------------------------- |
+| First frame                | ≤ 500 ms            | 220 ms                 | 229 ms                    | 239 ms                    |
+| Resident memory (RSS)      | ≤ 100 MiB           | 144.8 MiB (not met)    | 144.4 MiB (not met)       | 164.8 MiB (not met)       |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 62.0 MiB (not met)     | 61.7 MiB (not met)        | 82.2 MiB (not met)        |
+| Unique memory (USS)        | —                   | 51.4 MiB               | 51.2 MiB                  | 71.6 MiB                  |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.8 MiB               | 15.8 MiB                  | 36.2 MiB (not met)        |
+| Threads                    | —                   | 35                     | 35                        | 33                        |
+| CPU over 60 s, one core    | near 0 % when idle  | 0.03 %                 | 0.02 %                    | 0.08 %                    |
+| Binary size                | —                   | 39.6 MiB               | 38.7 MiB                  | 39.1 MiB                  |
+
+- The installed build and the one in `target/release` differ by less than the runs among
+  themselves: the package's first frames were 227 to 317 ms (the 317 ms start is an outlier of
+  unknown cause), those of `target/release` 218 to 229 ms. The package's binary is 0.9 MiB smaller,
+  mostly in its unwind tables (`.eh_frame`) and its code; makepkg builds it with Arch's Rust flags
+  and `--remap-path-prefix`, and which of them makes the difference was not isolated.
+- Against stage 5 the app has 0.2 MiB less private memory (16.0 then), as the measurement of the
+  allocator's pin found, and the same first frame (219 and 223 ms then); its PSS and USS are within
+  about 1 MiB of stage 5's two measurements of it (60.9 to 62.0 and 49.3 to 50.6 MiB).
+- With nothing to do, the app takes 0.03 % of one core even while it keeps trying the closed port.
+  The demo's 60 seconds always hold one read of the whole list of 2000 torrents, which comes once a
+  minute; its stage 2 and allocator figures (0.03 %, and 0.00 and 0.03 %) came from 30 second
+  windows, which may miss it.
+- Scrolling 2000 torrents one row per frame (three sessions of `--scroll` with
+  `RUST_LOG=warn,x4_synthetic=info`, 600 intervals each) gave a median interval of 16.67 ms, a 99th
+  percentile of 17.74 ms (17.61 to 17.85 ms) and a longest of 18.57 ms, none over 33 ms on the
+  virtual output's 60 Hz; 43 % are just over 16.7 ms only because a 60 Hz pace jitters around
+  16.67 ms. The demo took 31.9 % of one core over seconds 4 to 12 of the scroll
+  (`X4_MEASURE_SETTLE_SECONDS=4 just virtual just measure --synthetic --cpu 8 -- --scroll`, three
+  sessions, 31.7 to 32.0 %).
+
+Against the goals of the design, in the virtual session: the cold start (at most 0.5 s), the idle
+CPU (near 0) and the smooth scroll of 2000 torrents are met; of the memory targets, only the
+proposed 16 MiB of private memory is met, by 0.2 MiB, while RSS (100 MiB) and the proposed PSS (55
+MiB) are not, as in stages 4 and 5. The release profile is the one asked for: LTO (thin),
+`codegen-units = 1` and `strip` (`[profile.release]` in `Cargo.toml`), and the package installs the
+one binary, `/usr/bin/4x4`. The load on the daemon, at most one or two requests a second with 6
+torrents and the window open, was measured in stage 2 against the owner's daemon (1.4 a second);
+the traffic of the polls on a real daemon has not been measured.
+
+What only the real desktop can show, with 4x4 installed and its real daemon (quit 4x4 before each
+command that starts one, or the new start hands over to it): the start on the real screen, the
+memory and CPU against the real daemon, the requests a second to it, and the scrolling at the real
+screen's pace. Each command says whether it contacts your daemon:
+
+```bash
+# First frame from the application menu: start 4x4 there, then read its log. Local, no network
+grep 'first frame rendered' ~/.local/state/4x4/4x4.$(date -u +%F).log | tail -n 1
+# First frame, memory and idle CPU of the installed 4x4 on the real screen. Contacts your daemon:
+# it polls it for about a minute, as 4x4 does
+just measure --binary /usr/bin/4x4 --cpu 60
+# Requests over 2 minutes with the window focused; divide the count by 120. Contacts your daemon
+# for 2 minutes, with your real window and state
+RUST_LOG=warn,x4_app=info,x4_core::service=debug timeout 120 4x4 2>&1 | grep -c 'request answered'
+# Scrolling 2000 made-up torrents (the package has no demo, so it is built here, from the checkout;
+# a window for ~13 s). No network
+RUST_LOG=warn,x4_synthetic=info cargo run --release --locked -p x4-app --features synthetic \
+    --bin x4-synthetic -- --scroll 2>&1 | grep 'scrolled the table'
+# Private memory before and after adding a large .torrent (several MiB): it should come back to
+# within a few MiB of the first figure. With no debug build (just run) going, as its process is
+# named 4x4 too. Adding contacts your daemon and adds that torrent to it for real: untick "Start
+# immediately" in the add dialog, and afterwards remove it with "Remove from list…", which keeps
+# files (there are none)
+grep RssAnon /proc/$(pgrep -x 4x4)/status
+```
 
 ## Development
 
@@ -874,9 +1072,9 @@ the newest, and it redraws only when what it shows has changed, so an idle daemo
 directories of its own, runtime directory included, and without your desktop's `DISPLAY`, so the
 windows it opens show on no monitor, take no focus and leave the desktop's settings alone;
 `spectacle -b -n -f -o /tmp/shot.png` inside it captures the virtual screen. Whatever the session
-started is stopped when it ends. For example, `just virtual just measure` measures the app without a
-window on your screens. It needs KDE Plasma (`kwin_wayland` and `dbus-run-session`) and works
-nowhere else.
+started is stopped when it ends. For example, `just virtual just measure --offline` measures the app
+without a window on your screens and without reaching your daemon. It needs KDE Plasma
+(`kwin_wayland` and `dbus-run-session`) and works nowhere else.
 
 ### Synthetic demo
 

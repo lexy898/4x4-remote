@@ -21,12 +21,20 @@ just test             # tests via nextest
 just test-hooks       # tests for the hook and helper scripts in scripts/
 just test-live        # live tests against the owner's daemon; never part of check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
-just lint-policy      # lint exceptions, workspace lints, dependency direction, the vendored
-                      # gpui-pre-wgpu patch (scripts/lint-policy.sh)
+just lint-policy      # lint exceptions, workspace lints, the one unsafe call, dependency
+                      # direction, the vendored gpui-pre-wgpu patch (scripts/lint-policy.sh)
 just run              # run the app (debug build)
 just release          # optimized build
 just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp
-                      # state dir; --synthetic measures the demo; run it inside `just virtual`
+                      # state dir; --synthetic measures the demo, --binary <path> a built file;
+                      # agents run it inside `just virtual` and measure the app with --offline (the
+                      # session's config dir is empty, so the app would poll the owner's daemon)
+just package          # the Arch package of the committed master under ~/.cache/4x4-pkg; prints its
+                      # path (installing it is the owner's). Agents run it only from a scratch
+                      # clone, with XDG_CACHE_HOME under ~/.cache/x4-scratch, never in the owner's
+                      # cache
+just default-handler  # make the installed 4x4 the default app for .torrent files and magnet links
+                      # (--undo gives them back); the owner's only: agents never run it
 just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
 just demo-synthetic   # the main window over 2000 made-up torrents, no network
                       # (--static, --scroll, --select N)
@@ -41,11 +49,13 @@ just setup            # enable git hooks and verify required tools
 - `README.md` reflects every user-visible change.
 - Hooks enforce this. `.claude/settings.json` formats each edited `.rs` file; a guard hook refuses
   Bash commands that bypass the gates (`git commit --no-verify` or `-n`, `git push --no-verify`,
-  changing `core.hooksPath`, writing to `target/.agent-hooks`); and an agent may not finish while
-  `just check-fast` is red. The Stop hook skips the check when nothing it depends on changed since
-  the last green run, and gives up after 3 blocked stops on the same state — then tell the owner
-  that the checks are still red. `.githooks/pre-commit` runs `just pre-commit`. Never bypass them
-  (`--no-verify`, disabling hooks, weakening hook scripts or lints to get green).
+  changing `core.hooksPath`, writing to `target/.agent-hooks`) and commands that change the
+  owner's default apps (`just default-handler`, `scripts/default-handler.sh`, `xdg-mime default`;
+  see Hard Rules); and an agent may not finish while `just check-fast` is red. The Stop hook skips
+  the check when nothing it depends on changed since the last green run, and gives up after 3
+  blocked stops on the same state — then tell the owner that the checks are still red.
+  `.githooks/pre-commit` runs `just pre-commit`. Never bypass them (`--no-verify`, disabling
+  hooks, weakening hook scripts or lints to get green).
 - After a toolchain upgrade brings new lints, fix them in a dedicated `chore:` commit.
 
 ## Architecture
@@ -83,6 +93,13 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 ### Lint exceptions
 - Only `#[expect(clippy::lint_name, reason = "why this case is fine")]` on the smallest possible item.
   `#[allow]` is rejected by lint. Workspace-wide exceptions need a comment in `Cargo.toml`.
+
+### Unsafe code
+- The workspace denies `unsafe_code`. The one exception, approved by the owner, is the `mallopt`
+  call in `crates/x4-app/src/allocator.rs`: a `#[expect(unsafe_code, reason = "...")]` on that
+  `let` statement and a `// SAFETY:` comment above it. Any other `unsafe` needs the owner's explicit
+  approval first; `just lint-policy` rejects an `unsafe_code` exception anywhere else, and one in
+  the allocator that does not sit on a `let` (on a whole function it would cover more calls).
 
 ### Logging
 - `tracing` only; `println!`/`eprintln!` are rejected by lint. English messages with structured
@@ -168,6 +185,10 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Agents open app windows only through `just virtual …` (headless KWin, own D-Bus, own XDG and
   runtime dirs); never run KWin, spectacle or test windows against the owner's session bus, XDG
   dirs or screens. Debug builds use the `.Devel` app id.
+- Agents never run `sudo`, `pacman -U`, `makepkg -i`/`-s` or `just default-handler`; installing and
+  changing the default apps is the owner's. The guard hook refuses `just default-handler`,
+  `scripts/default-handler.sh` and `xdg-mime default` (reading with `xdg-mime query default` is
+  fine); tests run the script only in a throwaway desktop (see `test-hooks.sh`).
 - Everything in the repository is English.
 
 ## Git

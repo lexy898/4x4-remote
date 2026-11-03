@@ -9,6 +9,10 @@
 #       gpui-kit, anyhow or x4-app, and x4-rpc never depends on x4-core
 #   (e) the gpui-pre-wgpu patch is applied: x4-app builds the vendored copy in
 #       vendor/gpui-pre-wgpu, not the registry crate, and that copy is patched (see its PATCHED.md)
+#   (f) the one `unsafe`: an `unsafe_code` lint attribute only in crates/x4-app/src/allocator.rs, at
+#       most once, as an `#[expect]` on a `let` (not on a whole function or module, where more
+#       unsafe calls would pass), and the workspace level of `unsafe_code` is `deny` (`forbid`
+#       cannot be excepted)
 #
 # Prints one line per violation (file or crate, and the rule) and exits 1 if there is any.
 # Usage: scripts/lint-policy.sh [repository root] (default: the repository of this script).
@@ -24,7 +28,13 @@ violation() { # <file or crate> <rule>
     failures=$((failures + 1))
 }
 
+# The reason text may say anything; only the lint names count.
+strip_reasons() {
+    sed -E 's/reason[[:space:]]*=[[:space:]]*"([^"\\]|\\.)*"//g'
+}
+
 groups='all|pedantic|nursery|restriction|style|complexity|perf|suspicious|correctness|cargo'
+unsafe_home=crates/x4-app/src/allocator.rs
 
 # (a) and (b). Attributes may span lines, so each file is flattened to one line first;
 # whole-line comments (including doc comments) are dropped so examples in docs do not count.
@@ -37,12 +47,33 @@ for file in "${rust_files[@]}"; do
     done < <(grep -oE '#![[:space:]]*\[[[:space:]]*(allow|expect|cfg_attr[[:space:]]*\([^]]*(allow|expect))[[:space:]]*\([^]]*\]' <<<"$flat" || true)
     while IFS= read -r attribute; do
         [[ -n $attribute ]] || continue
-        # The reason text may say anything; only the lint names count.
-        names=$(sed -E 's/reason[[:space:]]*=[[:space:]]*"([^"\\]|\\.)*"//g' <<<"$attribute")
+        names=$(strip_reasons <<<"$attribute")
         if grep -qE "clippy::($groups)\\b|\\bwarnings\\b" <<<"$names"; then
             violation "$file" "lint exception for a whole lint group or for warnings in $attribute; name the single lint"
         fi
     done < <(grep -oE '#!?[[:space:]]*\[[[:space:]]*(allow|expect|cfg_attr)[[:space:]]*\([^]]*\]' <<<"$flat" || true)
+    # (f) Any level counts: a `forbid` or `deny` of unsafe_code beside the workspace's would be
+    # another place that decides about unsafe code.
+    unsafe_attributes=0
+    while IFS= read -r attribute; do
+        [[ -n $attribute ]] || continue
+        names=$(strip_reasons <<<"$attribute")
+        if grep -qE '\bunsafe_code\b' <<<"$names"; then
+            unsafe_attributes=$((unsafe_attributes + 1))
+        fi
+    done < <(grep -oE '#!?[[:space:]]*\[[[:space:]]*(allow|expect|warn|deny|forbid|cfg_attr)[[:space:]]*\([^]]*\]' <<<"$flat" || true)
+    if ((unsafe_attributes > 0)) && [[ $file != "$unsafe_home" ]]; then
+        violation "$file" "unsafe_code exception outside $unsafe_home; the owner approved one unsafe call, there"
+    elif ((unsafe_attributes > 1)); then
+        violation "$file" "$unsafe_attributes unsafe_code exceptions; the owner approved one unsafe call"
+    elif ((unsafe_attributes == 1)); then
+        # The attribute covers what it is put on, so it goes on the statement of the one call. The
+        # reasons are stripped first, so that a `]` in one does not end the attribute early.
+        stripped=$(strip_reasons <<<"$flat")
+        if ! grep -qE '#[[:space:]]*\[[[:space:]]*expect[[:space:]]*\([^]]*\bunsafe_code\b[^]]*\][[:space:]]*let[[:space:]]' <<<"$stripped"; then
+            violation "$file" "the unsafe_code exception must be an #[expect] on the let of the one unsafe call"
+        fi
+    fi
 done
 
 # (c)
@@ -105,6 +136,12 @@ check_vendored_patch() {
 }
 
 check_vendored_patch
+
+# (f) `forbid` cannot be overridden, not even by #[expect], so the workspace level is `deny`.
+unsafe_level=$(taplo get -f Cargo.toml workspace.lints.rust.unsafe_code 2>/dev/null || true)
+if [[ $unsafe_level != deny ]]; then
+    violation Cargo.toml "workspace.lints.rust.unsafe_code is '${unsafe_level:-unset}', not deny (the one unsafe call needs #[expect], which a forbid rejects, and any other level lets more unsafe in)"
+fi
 
 if ((failures > 0)); then
     echo "lint-policy: $failures violation(s); see AGENTS.md (Code Style, Architecture, Dependencies)" >&2

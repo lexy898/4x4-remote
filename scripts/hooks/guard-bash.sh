@@ -8,6 +8,12 @@
 #     (what `just setup` runs), including `git -c core.hooksPath=...`
 #   - writes to or removal of the Stop hook state in target/.agent-hooks
 #     (`>`/`>>` redirections, tee, rm, mv, cp, touch and similar)
+#   - changing the owner's default apps (AGENTS.md, Hard Rules): `just ... default-handler`,
+#     running scripts/default-handler.sh (directly, with bash/sh, or sourced), `xdg-mime default`
+#     (`xdg-mime query default` is a read and stays allowed). These get their own advice: ask the
+#     owner to run it. `bash -n scripts/default-handler.sh` (a syntax check) is allowed; so is
+#     reading about it. `just --show default-handler` is refused too, a false block that costs
+#     nothing: the agent reads the justfile.
 # Everything else exits 0 silently. Mentions inside quoted arguments, heredoc bodies and
 # read-only commands (`grep no-verify`, `cat target/.agent-hooks/last-green`) are allowed:
 # the command is split into words and simple commands roughly the way the shell does it,
@@ -16,18 +22,23 @@
 # ones (`\$(`, `\``) and the body of a heredoc with a quoted delimiter are plain text.
 #
 # This is a guard against mistakes and shortcuts, not a sandbox: a determined workaround
-# (an alias, a script file, an encoded string) is not detected.
+# (an alias, a variable, a script file, an encoded string) is not detected.
 set -euo pipefail
 shopt -s extglob
 export LC_ALL=C
 
 advice='Fix the failing check instead; if it cannot be fixed, stop and tell the owner (AGENTS.md, Definition of Done).'
+owner_advice='Installing and changing the default apps is the owner'\''s (AGENTS.md, Hard Rules): stop and ask the owner to run `just default-handler` themselves.'
 max_depth=6
 
-block() { # <reason>
+block() { # <reason> [<advice>]
     echo "guard-bash: blocked: $1" >&2
-    echo "$advice" >&2
+    echo "${2:-$advice}" >&2
     exit 2
+}
+
+block_default_apps() { # <reason>
+    block "$1" "$owner_advice"
 }
 
 # --- Lexer --------------------------------------------------------------------------------
@@ -467,7 +478,7 @@ strip_wrappers() { # <word...>
             '!' | '{' | '}' | if | then | elif | else | do | while | until | fi | done | time | command | builtin | exec | nohup)
                 ARGV=("${ARGV[@]:1}")
                 ;;
-            env | nice | timeout | stdbuf | xargs | sudo | doas)
+            env | nice | timeout | stdbuf | xargs | sudo | doas | setsid)
                 ARGV=("${ARGV[@]:1}")
                 while ((${#ARGV[@]} > 0)); do
                     case ${ARGV[0]} in
@@ -524,13 +535,59 @@ judge_simple() { # <depth> <word...> (redirections are judged by the caller)
             done
             ;;
         bash | sh | zsh | dash | ksh)
+            # Options first: `-c` runs its argument as shell text; `-n` (a syntax check) runs
+            # nothing; `-o`, `-O` (alone or ending a cluster such as `-euo`) and `--rcfile` take
+            # the next word, which is not the script.
+            local noexec=0 command_string=0
             for ((i = 1; i < ${#argv[@]}; i++)); do
                 if [[ ${argv[i]} =~ ^-[A-Za-z]*c[A-Za-z]*$ ]]; then
                     judge_text "$((depth + 1))" "${argv[i + 1]:-}"
+                    command_string=1
                     break
+                fi
+                if [[ ${argv[i]} =~ ^-[A-Za-z]*n[A-Za-z]*$ ]]; then
+                    noexec=1
+                fi
+                if [[ ${argv[i]} =~ ^[-+][A-Za-z]*[oO]$ || ${argv[i]} == --rcfile || ${argv[i]} == --init-file ]]; then
+                    i=$((i + 1))
+                    continue
                 fi
                 [[ ${argv[i]} == -* ]] || break
             done
+            # Then any word that names the script: the option arguments above are not always known.
+            if ((!command_string && !noexec)); then
+                for ((i = 1; i < ${#argv[@]}; i++)); do
+                    if [[ ${argv[i]##*/} == default-handler.sh ]]; then
+                        block_default_apps "running scripts/default-handler.sh changes the owner's default apps"
+                    fi
+                done
+            fi
+            ;;
+        source | .)
+            local sourced=${argv[1]:-}
+            if [[ ${sourced##*/} == default-handler.sh ]]; then
+                block_default_apps "sourcing scripts/default-handler.sh changes the owner's default apps"
+            fi
+            ;;
+        default-handler.sh)
+            block_default_apps "scripts/default-handler.sh changes the owner's default apps"
+            ;;
+        just)
+            for arg in "${argv[@]:1}"; do
+                if [[ $arg == default-handler ]]; then
+                    block_default_apps "just default-handler changes the owner's default apps"
+                fi
+            done
+            ;;
+        xdg-mime)
+            local sets_default=0 reads=0
+            for arg in "${argv[@]:1}"; do
+                [[ $arg == default ]] && sets_default=1
+                [[ $arg == query ]] && reads=1
+            done
+            if ((sets_default && !reads)); then
+                block_default_apps "xdg-mime default changes the owner's default apps"
+            fi
             ;;
         eval) judge_text "$((depth + 1))" "${argv[*]:1}" ;;
     esac
