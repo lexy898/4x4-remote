@@ -20,13 +20,10 @@
 //! the daemon is connected and the torrent is still the one the panel is about. Nothing changes on
 //! screen until the next read shows what the daemon did.
 //!
-//! The list is our own `uniform_list`, which builds only the rows in sight, inside the key context
-//! `FileList` (the `keys` module). A press anywhere in it gives it the keyboard focus, so that the
+//! The list is the shared file list ([`file_list`](crate::file_list)), with every column: the size,
+//! the progress and the priority. A press anywhere in it gives it the keyboard focus, so that the
 //! keys work in it after any click, a click on the switch included; the rows are not tab stops,
 //! the list is.
-
-mod keys;
-mod rows;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -34,19 +31,18 @@ use std::sync::Arc;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, FocusHandle, InteractiveElement as _, IntoElement, MouseDownEvent,
-    ParentElement as _, Pixels, Role, ScrollStrategy, StatefulInteractiveElement as _, Styled as _,
-    TestSupportExt as _, UniformListScrollHandle, Window, div, px, uniform_list,
+    AnyElement, App, Context, FocusHandle, InteractiveElement as _, IntoElement,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
+    UniformListScrollHandle, Window, div,
 };
 use x4_core::{FileRow, FileTree, FileTreeView, NodeKey, Torrent, TorrentDetails};
 use x4_rpc::FilePriority;
 
 use super::{DetailsPanel, DetailsPanelEvent};
 use crate::actions::FileRequest;
+use crate::file_list::{self, Columns, Drawn, FileListHost, file_row};
 use crate::i18n::t;
-use crate::keymap::FILE_LIST_CONTEXT;
 use crate::theme::state_color;
-use rows::{Drawn, ROW_HEIGHT, file_row};
 
 /// The element id of the file list.
 const FILE_LIST_ID: &str = "file-list";
@@ -133,40 +129,14 @@ impl FilesTab {
         drawn: Option<&FileTree>,
         change: impl FnOnce(&mut FileTreeView, &FileTree),
     ) -> bool {
-        let Some(tree) = self.tree.clone() else {
-            return false;
-        };
-        if drawn.is_some_and(|drawn| drawn.hash() != tree.hash()) {
-            return false;
-        }
-        let cursor_before = self.view.cursor(&tree).cloned();
-        change(&mut self.view, &tree);
-        let rows = self.view.rows(&tree);
-        let cursor = self.view.cursor(&tree).cloned();
-        let changed = rows != self.rows || cursor != cursor_before;
-        self.rows = rows;
-        let out_of_sight = cursor
-            .as_ref()
-            .and_then(|cursor| self.rows.iter().position(|row| &row.key == cursor))
-            .filter(|&index| !self.in_sight(index));
-        if let Some(index) = out_of_sight {
-            self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
-        }
-        changed || out_of_sight.is_some()
-    }
-
-    /// Whether the row at `index` is wholly in sight, in the list as it was last laid out.
-    /// Before its first layout the list shows nothing yet to scroll, so every row counts as in
-    /// sight.
-    fn in_sight(&self, index: usize) -> bool {
-        let state = self.scroll.0.borrow();
-        let height = state.base_handle.bounds().size.height;
-        if height <= Pixels::ZERO {
-            return true;
-        }
-        let top = -state.base_handle.offset().y;
-        let row_top = px(ROW_HEIGHT) * index;
-        row_top >= top && row_top + px(ROW_HEIGHT) <= top + height
+        file_list::change_view(
+            self.tree.as_deref(),
+            &mut self.view,
+            &mut self.rows,
+            &self.scroll,
+            drawn,
+            change,
+        )
     }
 
     /// The tree on screen and the row of it the cursor is on, if any.
@@ -179,18 +149,8 @@ impl FilesTab {
     /// How many rows Page Up and Page Down move the cursor by: the rows in sight, less the one
     /// that is usually cut off at an edge, and at least one.
     fn page_step(&self) -> isize {
-        let height = self.scroll.0.borrow().base_handle.bounds().size.height;
-        rows_in(height).saturating_sub(1).max(1)
+        file_list::page_step(&self.scroll)
     }
-}
-
-/// How many whole rows fit in `height`.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "a list is a few thousand pixels high at most, far within an isize"
-)]
-fn rows_in(height: Pixels) -> isize {
-    (f32::from(height) / ROW_HEIGHT).floor().max(0.) as isize
 }
 
 impl DetailsPanel {
@@ -251,34 +211,40 @@ impl DetailsPanel {
 
     /// The list of files and folders, with its keys.
     fn file_list(&self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let list = div()
-            .id(FILE_LIST_ID)
-            .test_support()
-            .track_focus(&self.files.focus)
-            .key_context(FILE_LIST_CONTEXT)
-            .role(Role::Tree)
-            .aria_label(t!("files-list"))
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            // In the capture phase, before a checkbox or a priority button can keep the focus
-            // where it was: after any click in the list, the keys work in it, and a priority
-            // menu gives the focus back to it when it closes.
-            .capture_any_mouse_down(cx.listener(|panel, _: &MouseDownEvent, window, cx| {
-                panel.focus_file_list(window, cx);
-            }));
-        keys::on_file_keys(list, &self.key_repeats, cx).child(
-            uniform_list(
-                "file-rows",
-                self.files.rows.len(),
-                cx.processor(|panel, range: Range<usize>, _window, cx| panel.file_rows(range, cx)),
-            )
-            .track_scroll(&self.files.scroll)
-            .size_full(),
+        file_list::file_list(
+            FILE_LIST_ID,
+            t!("files-list").into(),
+            self.files.rows.len(),
+            &self.files.focus,
+            &self.files.scroll,
+            &self.key_repeats,
+            cx,
         )
+        .flex_1()
+        .min_h_0()
+        .w_full()
     }
 
-    /// The rows of the list at `range`, as drawn now; each takes the tree of this frame.
+    /// Hands `request` to the main view, which sends it if it can go; nothing for `None`, which
+    /// is what a tree builds for a row without files.
+    fn ask(request: Option<FileRequest>, cx: &mut Context<'_, Self>) {
+        if let Some(request) = request {
+            cx.emit(DetailsPanelEvent::Files(request));
+        } else {
+            tracing::debug!("the row reaches no files; nothing asked");
+        }
+    }
+}
+
+/// The Files tab's list: its checkboxes and priorities ask the main view to change the torrent's
+/// files, as the tree that was drawn builds the change.
+impl FileListHost for DetailsPanel {
+    fn file_list_focus(&self) -> &FocusHandle {
+        &self.files.focus
+    }
+
+    /// The rows of the list at `range`, as drawn now; each takes the tree of this frame. Their
+    /// controls act only while the daemon is connected, and the bars take the torrent's color.
     fn file_rows(&mut self, range: Range<usize>, cx: &mut Context<'_, Self>) -> Vec<AnyElement> {
         let Some(tree) = self.files.tree.clone() else {
             return Vec::new();
@@ -292,6 +258,11 @@ impl DetailsPanel {
                 .torrent
                 .as_ref()
                 .map_or(theme.primary, |torrent| state_color(torrent.state, theme)),
+            columns: Columns {
+                size: true,
+                progress: true,
+                priority: true,
+            },
         };
         self.files
             .rows
@@ -302,24 +273,6 @@ impl DetailsPanel {
             .collect()
     }
 
-    /// Gives the keyboard focus to the file list.
-    fn focus_file_list(&self, window: &mut Window, cx: &mut App) {
-        window.focus(&self.files.focus, cx);
-    }
-
-    /// Hands `request` to the main view, which sends it if it can go; nothing for `None`, which
-    /// is what a tree builds for a row without files.
-    fn ask(request: Option<FileRequest>, cx: &mut Context<'_, Self>) {
-        if let Some(request) = request {
-            cx.emit(DetailsPanelEvent::Files(request));
-        } else {
-            tracing::debug!("the row reaches no files; nothing asked");
-        }
-    }
-
-    /// Changes the open folders or the cursor with `change`, and draws the list again if that
-    /// changed what it shows or the cursor's row is to be scrolled into sight; for a click, only
-    /// when the tree of its frame (`drawn`) is of the same torrent.
     fn change_file_view(
         &mut self,
         drawn: Option<&FileTree>,
@@ -331,42 +284,12 @@ impl DetailsPanel {
         }
     }
 
-    /// A click on the row `key` of `tree`, a tree drawn: the cursor goes there.
-    pub(super) fn click_file_row(
-        &mut self,
-        tree: &FileTree,
-        key: &NodeKey,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.change_file_view(Some(tree), |view, tree| view.set_cursor(tree, key), cx);
+    fn file_page_step(&self) -> isize {
+        self.files.page_step()
     }
 
-    /// A click on the expander of the folder `key` of `tree`: opens or closes it, and puts the
-    /// cursor on it.
-    pub(super) fn click_expander(
-        &mut self,
-        tree: &FileTree,
-        key: &NodeKey,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.change_file_view(
-            Some(tree),
-            |view, tree| {
-                view.toggle_expanded(tree, key);
-                view.set_cursor(tree, key);
-            },
-            cx,
-        );
-    }
-
-    /// A click on the checkbox of the row `key` of `tree`, a tree drawn: the cursor goes there,
-    /// and the tree builds the change.
-    pub(super) fn click_wanted(
-        &mut self,
-        tree: &FileTree,
-        key: &NodeKey,
-        cx: &mut Context<'_, Self>,
-    ) {
+    /// The cursor goes to the row, and the tree builds the change.
+    fn click_wanted(&mut self, tree: &FileTree, key: &NodeKey, cx: &mut Context<'_, Self>) {
         self.click_file_row(tree, key, cx);
         Self::ask(
             tree.toggle_wanted_action(key)
@@ -375,9 +298,20 @@ impl DetailsPanel {
         );
     }
 
-    /// A choice of `priority` from the menu of the row `key` of `tree`, the tree drawn when the
-    /// menu opened.
-    pub(super) fn choose_priority(
+    /// As the tree on screen builds it.
+    fn toggle_cursor_wanted(&mut self, cx: &mut Context<'_, Self>) {
+        let Some((tree, key)) = self.files.at_cursor() else {
+            return;
+        };
+        Self::ask(
+            tree.toggle_wanted_action(&key)
+                .and_then(FileRequest::of_files),
+            cx,
+        );
+    }
+
+    /// The cursor goes to the row, and the tree drawn when the menu opened builds the change.
+    fn choose_priority(
         &mut self,
         tree: &FileTree,
         key: &NodeKey,
@@ -387,6 +321,18 @@ impl DetailsPanel {
         self.click_file_row(tree, key, cx);
         Self::ask(
             tree.priority_action(key, priority)
+                .and_then(FileRequest::of_files),
+            cx,
+        );
+    }
+
+    /// As the tree on screen builds it.
+    fn step_cursor_priority(&mut self, up: bool, cx: &mut Context<'_, Self>) {
+        let Some((tree, key)) = self.files.at_cursor() else {
+            return;
+        };
+        Self::ask(
+            tree.step_priority_action(&key, up)
                 .and_then(FileRequest::of_files),
             cx,
         );

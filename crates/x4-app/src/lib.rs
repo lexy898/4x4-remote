@@ -5,7 +5,8 @@
 //! [`main_view::MainView`]. The view pumps the service's events without blocking the UI thread,
 //! and lays out a toolbar (the `toolbar` module) with the search box (the `search` module), the
 //! filter sidebar (the `sidebar` module), the torrent table ([`torrent_table`]), the details panel
-//! under it (the `details_panel` module) and the status bar (the `status_bar` module); the
+//! under it (the `details_panel` module), whose Files tab draws the shared list of a torrent's
+//! files (the `file_list` module), and the status bar (the `status_bar` module); the
 //! `theme` module holds the light and dark theme and the colors of states, and the `icons` module
 //! the icons beyond gpui-component's own. [`actions`] holds what
 //! can be done to the selected torrents, the `context_menu` module the menu of a right-click on
@@ -26,6 +27,7 @@ pub mod app;
 mod clipboard;
 mod context_menu;
 mod details_panel;
+mod file_list;
 mod files;
 mod i18n;
 mod icons;
