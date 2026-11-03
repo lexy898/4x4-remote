@@ -196,7 +196,7 @@ fn synthetic_add_parses_metainfo_and_honours_paused_and_unwanted() {
     let before = counts(&mut client).len();
     recently_active(&mut client);
 
-    // Paused, into a folder of its own, without file 1 (the padding), file 2 and a file past the end.
+    // Paused, into a folder of its own, without file 2, file 3 and a file past the end.
     let request = TorrentAdd {
         download_dir: Some(dir("/data/shows")),
         paused: true,
@@ -697,4 +697,53 @@ fn synthetic_free_space_errors_for_unknown_folders() {
             "{params}: no sizes without a path to measure"
         );
     }
+}
+
+#[test]
+fn synthetic_free_space_answers_for_the_parents_of_known_folders() {
+    let mut client = client(Activity::Static);
+
+    // The folders above the session's folder are there, as on a real disk.
+    for parent in ["/", "/data", "/data/"] {
+        let space = client
+            .free_space(parent)
+            .expect("a parent of a known folder");
+        assert_eq!(
+            (space.path.as_str(), space.size_bytes, space.total_size),
+            (parent, 800 << 30, 1 << 40)
+        );
+    }
+    // Beside it and below it, nothing is.
+    for missing in [
+        "/data/other",
+        "/data/torrents/sub",
+        "/dat",
+        "/data/torrentsx",
+    ] {
+        assert!(
+            client.free_space(missing).is_err(),
+            "{missing} is neither a known folder nor a parent of one"
+        );
+    }
+
+    // The parents of a torrent's folder are there while the torrent is.
+    let content = single_torrent("Movie.mkv", MIB);
+    let request = TorrentAdd {
+        download_dir: Some(dir("/srv/media/new")),
+        ..add(metainfo(&content))
+    };
+    let added = add_new(&mut client, &request);
+    for parent in ["/srv", "/srv/media", "/srv/media/new"] {
+        assert!(client.free_space(parent).is_ok(), "{parent} is there");
+    }
+    client
+        .torrent_remove(&selection(&[&added.hash]), RemoveData::Keep)
+        .expect("removed");
+    for parent in ["/srv", "/srv/media", "/srv/media/new"] {
+        assert!(
+            client.free_space(parent).is_err(),
+            "{parent} goes with the last torrent below it"
+        );
+    }
+    assert!(client.free_space("/").is_ok(), "the root stays");
 }

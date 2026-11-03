@@ -2,11 +2,12 @@
 //!
 //! What a torrent's files are (their names, sizes and pieces) follows from its [`Plan`] and its id
 //! alone, so it is the same on every run (`layout`). A torrent a client added has the files its
-//! metainfo lists, or none while it is a magnet link without its metadata. The state that changes is made when a read or
-//! a `torrent_set` first needs it: which files are wanted, with which priority, and which pieces
-//! are present. It starts from how much of the torrent the daemon says is left, and from then
-//! on the pieces are the truth: a download adds pieces, from the start of the torrent when it is
-//! sequential and scattered when it is not, and what is left follows from them.
+//! metainfo lists, or none while it is a magnet link without its metadata. The state that changes
+//! is made when a read or a `torrent_set` first needs it: which files are wanted, with which
+//! priority, and which pieces are present. It starts from how much of the torrent the daemon says
+//! is left, and from then on the pieces are the truth: a download adds pieces, from the start of
+//! the torrent when it is sequential and scattered when it is not, and what is left follows from
+//! them.
 //!
 //! All sizes are whole KiB and a piece is a power of two of at least 64 KiB, so the sizes the list
 //! reports (in KiB) agree exactly with what the pieces hold. The file lists of a `torrent_set` are
