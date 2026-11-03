@@ -27,6 +27,7 @@ use x4_core::{
 use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
+use crate::adding::AddRequests;
 use crate::files::{FilesError, read_config, read_ui_state};
 use crate::icons::AppAssets;
 use crate::keymap::{Quit, key_bindings};
@@ -62,6 +63,9 @@ pub struct Startup {
     /// Why `config.toml` is not used, if it is not. The window shows it until the user
     /// dismisses it.
     pub config_problem: Option<ConfigProblem>,
+    /// The channel of the requests to add torrents. The window takes its receiver; the sources
+    /// outside it send into clones of its sender, taken before the start.
+    pub adds: AddRequests,
 }
 
 impl Startup {
@@ -85,6 +89,7 @@ impl Startup {
             state_writable,
             state_path,
             config_problem: None,
+            adds: AddRequests::new(),
         }
     }
 
@@ -253,7 +258,8 @@ fn load_ui_state(path: &Path) -> (UiState, bool) {
 
 /// Opens the main window for `startup`, at the remembered size and maximized if it was. A service
 /// that could not start, and a config problem, are shown in the status bar. The window saves its
-/// UI state to `startup.state_path` if it may. Call [`init`] first.
+/// UI state to `startup.state_path` if it may, and takes the requests to add torrents that arrive
+/// on `startup.adds`. Call [`init`] first.
 ///
 /// # Errors
 ///
@@ -269,6 +275,7 @@ pub fn launch(
         state_writable: _,
         state_path: _,
         config_problem,
+        adds,
     } = startup;
     let (events, commands, service) = match service {
         Ok(service) => (service.events().clone(), service.commands(), Some(service)),
@@ -283,14 +290,17 @@ pub fn launch(
     };
     let failed = service.is_none();
     let (window, view) = open_window(events, commands, service, &ui, state_file, cx)?;
-    view.update(cx, |view, cx| {
-        if failed {
-            view.service_failed(cx);
-        }
-        if let Some(problem) = config_problem {
-            view.show_config_problem(problem, cx);
-        }
-    });
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            if failed {
+                view.service_failed(cx);
+            }
+            if let Some(problem) = config_problem {
+                view.show_config_problem(problem, cx);
+            }
+            view.listen_for_adds(adds.receiver, window, cx);
+        });
+    })?;
     Ok((window, view))
 }
 
@@ -404,11 +414,12 @@ mod tests {
     use gpui_kit::test::TestWindowExt as _;
     use x4_core::test_support::torrent;
     use x4_core::{
-        ConnectionState, DisplayState, Filter, Snapshot, TextPosition, ThemeChoice, Torrent,
-        WindowState,
+        AddItem, ConnectionState, DisplayState, Filter, Snapshot, TextPosition, ThemeChoice,
+        Torrent, WindowState,
     };
 
     use super::*;
+    use crate::adding::AddRequest;
 
     /// A start whose service could not be started, with `config_problem`.
     fn failed_start(config_problem: Option<ConfigProblem>) -> Startup {
@@ -418,6 +429,7 @@ mod tests {
             state_writable: false,
             state_path: None,
             config_problem,
+            adds: AddRequests::new(),
         }
     }
 
@@ -555,6 +567,24 @@ mod tests {
             window.click("config-problem-dismiss", cx);
             window.render_frame(cx);
             assert!(window.try_find("config-problem").is_none());
+        })
+        .expect("the window is open");
+    }
+
+    #[gpui_kit::test]
+    fn a_request_sent_into_the_startup_channel_opens_the_add_dialog(cx: &mut TestAppContext) {
+        let startup = failed_start(None);
+        let adds = startup.adds.sender.clone();
+        let (window, _) = launched(startup, cx);
+
+        adds.send_blocking(AddRequest::Items(vec![AddItem::Magnet(None)]))
+            .expect("the window listens");
+        cx.run_until_parked();
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("add-title").label(), Some("Add torrent"));
+            assert!(window.try_find("add-link").is_some(), "the magnet form");
         })
         .expect("the window is open");
     }

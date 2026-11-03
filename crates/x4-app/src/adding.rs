@@ -12,6 +12,6 @@ mod file_choice;
 mod folder_field;
 mod requests;
 
-pub(crate) use dialog::{AddDialog, AddDialogEvent, Outgoing, is_magnet, open};
-pub use requests::AddRequest;
+pub(crate) use dialog::{AddDialog, AddDialogEvent, open};
+pub use requests::{AddRequest, AddRequests};
 pub(crate) use requests::{LoadError, load};

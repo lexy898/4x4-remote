@@ -15,8 +15,9 @@ use std::time::Duration;
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, ElementId, Entity, Focusable as _, InputEvent as _,
-    KeyDownEvent, KeyUpEvent, Keystroke, OperatingSystem, TestAppContext,
+    AnyWindowHandle, App, AppContext as _, ElementId, Entity, ExternalPaths, FileDropEvent,
+    Focusable as _, InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke, OperatingSystem,
+    TestAppContext,
 };
 use x4_app::adding::AddRequest;
 use x4_app::app;
@@ -438,6 +439,25 @@ impl Window {
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)
         });
+    }
+
+    /// Drops files at `paths` on the element `id`, as from a file manager.
+    fn drop_files(&self, id: &'static str, paths: &[&Path], cx: &mut TestAppContext) {
+        let paths = ExternalPaths(paths.iter().map(|path| path.to_path_buf()).collect());
+        self.act(cx, |window, cx| {
+            let position = window.find(id).bounds().center();
+            window.dispatch_event(
+                FileDropEvent::Entered { position, paths }.to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
+        });
+    }
+
+    /// Stops the service: the channel of its events closes, as when its thread ends.
+    fn stop_service(&mut self, cx: &mut TestAppContext) {
+        self.events = async_channel::unbounded().0;
+        cx.run_until_parked();
     }
 
     /// Lets `millis` milliseconds pass.
@@ -1257,7 +1277,8 @@ fn an_unreadable_or_oversized_file_is_skipped_with_a_notification(cx: &mut TestA
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
     assert_eq!(
         window.label(TITLE, cx).as_deref(),
-        Some("Add torrent (6 of 6)")
+        Some("Add torrent"),
+        "the files that could not be offered are not counted"
     );
     window.press("escape", cx);
     for (file, reason) in [
@@ -1375,6 +1396,113 @@ fn the_dialog_keeps_the_focus_held_key_from_the_table(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_users_own_choice_ends_the_wait_for_the_new_torrent(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let content = show();
+    let hash = hash_of(&content);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Err(AddError::Unconfirmed), cx);
+
+    // A click on a row while the torrent is not there yet is the user's choice, which stands.
+    window.click(("row", 0_usize), cx);
+    window.send(vec![other.clone(), listed("Show", &hash)], cx);
+    assert_eq!(window.selected(cx), std::slice::from_ref(&other.hash));
+
+    // So is a filter chosen meanwhile, and a search typed: neither is cleared.
+    let film = folder_torrent("Film", &[(&["film.mkv"], MIB)]);
+    let film_hash = hash_of(&film);
+    window.request_torrent("film.torrent", &film, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Err(AddError::Unconfirmed), cx);
+    let paused = Filter::ALL
+        .iter()
+        .position(|filter| *filter == Filter::Paused)
+        .expect("the sidebar lists every filter");
+    window.click(("filter-count", paused), cx);
+    window.send(
+        vec![
+            other.clone(),
+            listed("Show", &hash),
+            listed("Film", &film_hash),
+        ],
+        cx,
+    );
+    assert_eq!(window.view_state(cx).filter, Filter::Paused);
+    assert_eq!(window.selected(cx), []);
+
+    window.request_torrent(
+        "again.torrent",
+        &folder_torrent("Again", &[(&["a"], MIB)]),
+        cx,
+    );
+    window.click(CONFIRM, cx);
+    let (id, add) = window.sent_add();
+    let AddSource::Metainfo(bytes) = &add.source else {
+        panic!("a .torrent goes as its content: {add:?}");
+    };
+    let again = hash_of(bytes);
+    window.finish(id, Err(AddError::Unconfirmed), cx);
+    window.click("search", cx);
+    window.type_text("zzz", cx);
+    window.send(
+        vec![
+            other,
+            listed("Show", &hash),
+            listed("Film", &film_hash),
+            listed("Again", &again),
+        ],
+        cx,
+    );
+    assert_eq!(window.view_state(cx).search, "zzz");
+    assert_eq!(window.selected(cx), []);
+}
+
+#[gpui_kit::test]
+fn the_wait_for_the_new_torrent_ends_after_the_next_full_list(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let content = show();
+    let hash = hash_of(&content);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Err(AddError::Unconfirmed), cx);
+
+    // Two minutes: a full list has been read since, without it.
+    Window::wait(121_000, cx);
+    window.send(vec![other.clone(), listed("Show", &hash)], cx);
+
+    assert_eq!(window.selected(cx), []);
+}
+
+#[gpui_kit::test]
+fn files_dropped_anywhere_on_the_dialog_join_the_queue(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.request_torrent("show.torrent", &show(), cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let music = window.file("music.torrent", &folder_torrent("Music", &[(&["b"], MIB)]));
+
+    window.drop_files(CONFIRM, &[&film], cx);
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
+    );
+    window.drop_files(TITLE, &[&music], cx);
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 3)")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
+    assert_eq!(window.sent_adds(), [], "a drop only queues");
+}
+
+#[gpui_kit::test]
 fn a_held_enter_adds_once_even_after_the_answer(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     let first = window.file("first.torrent", &folder_torrent("First", &[(&["a"], MIB)]));
@@ -1461,4 +1589,21 @@ fn a_folder_typed_before_the_session_is_kept(cx: &mut TestAppContext) {
     assert_eq!(window.checked(START, cx), Some(true));
     window.click(CONFIRM, cx);
     assert_eq!(window.sent_add().1.download_dir, Some(dir("/data/mine")));
+}
+
+#[gpui_kit::test]
+fn adds_still_out_when_the_service_stops_are_not_confirmed(cx: &mut TestAppContext) {
+    let mut window = Window::open(cx);
+    window.request_torrent("show.torrent", &show(), cx);
+    window.click(CONFIRM, cx);
+    let _ = window.sent_add();
+    assert_eq!(window.label(CONFIRM, cx).as_deref(), Some("Adding…"));
+
+    window.stop_service(cx);
+
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("The server has not confirmed Show yet; it shows in the list once it is added")
+    );
+    assert!(!window.dialog_open(cx), "it moved on from the torrent sent");
 }

@@ -9,64 +9,127 @@
 //!
 //! The head of the queue is read off the UI thread when its turn comes: a `.torrent` file only
 //! once `stat` says it is a regular file within the limit (the `adding` module of the crate). A
-//! file that cannot be offered is skipped with a notification that names it and the reason. The
-//! dialog opens for a head that has been read, unless another dialog is open: the queue then
-//! waits until that dialog closes, which tells the view ([`MainView::dialog_closed`]).
+//! file that cannot be offered is skipped with a notification that names it and the reason, and
+//! does not count in the run. The dialog opens for a head that has been read, or after
+//! [`READ_GRACE`] for one whose read takes longer, to say so and let the user skip it: a read that
+//! never ends never holds the queue, and its thread is abandoned. While another dialog is open,
+//! the queue waits until that dialog closes, which tells the view ([`MainView::dialog_closed`]).
 //!
 //! Nothing is added without the user's Add. Add sends the dialog's request once and keeps it until
-//! the service answers ([`Event::AddFinished`](x4_core::Event::AddFinished)):
-//! - added: the folder it was sent to joins the folders used lately (none for the session's own
-//!   folder), the torrent is selected once it shows, and the dialog moves on;
-//! - a torrent the daemon had already: a notification names it, and it is selected;
-//! - not confirmed in time: a notification says so, and the torrent is selected if it shows;
-//! - a failure: a notification says why, and the form stays, to be sent again.
+//! the service answers ([`Event::AddFinished`](x4_core::Event::AddFinished)); x4-core's
+//! [`add_outcome`] says what follows: the folder to remember, the torrent to select, whether the
+//! dialog moves on or keeps the form, and the notification. Cancel while an add is out skips the
+//! torrent all the same, and its answer still counts; when the service stops, the adds still out
+//! are taken as not confirmed.
 //!
-//! Cancel while an add is out skips the torrent all the same, and its answer still counts.
-//!
-//! The torrent to select is kept by its hash until a snapshot lists it. The filter goes back to
-//! All and the search is cleared if they would hide it; then it is selected, once, so that a later
-//! choice of the user stands.
+//! The torrent to select waits in x4-core's [`PendingSelection`] until a snapshot lists it; it is
+//! then selected, once, with the filter and the search cleared if they would hide it. Any change of
+//! the selection, the filter or the search by the user ends the wait, and so does the next full
+//! list.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
-use x4_core::{Action, ActionId, AddError, AddItem, AddQueue, Added, Command, LoadedItem};
-use x4_rpc::HashString;
+use gpui_kit::{App, AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
+use x4_core::{
+    Action, ActionId, AddError, AddItem, AddNotice, AddQueue, Added, Command, FormStep, LoadedItem,
+    PendingSelection, SentAdd, add_outcome,
+};
+use x4_rpc::{HashString, TorrentAdd};
 
 use super::MainView;
-use crate::adding::{self, AddDialog, AddDialogEvent, AddRequest, LoadError, Outgoing, load};
-use crate::i18n::{
-    add_duplicate_text, add_failure_text, add_unconfirmed_text, load_failure_text, queue_full_text,
-    rejected_text,
-};
+use crate::adding::{self, AddDialog, AddDialogEvent, AddRequest, LoadError, load};
+use crate::i18n::{add_notice_text, load_failure_text, queue_full_text, rejected_text};
 use crate::search::clear_search;
 use crate::torrent_table::{SelectionChange, change_selection};
 
+/// How long the head of the queue may take to read before the dialog opens to say so, with Skip.
+const READ_GRACE: Duration = Duration::from_millis(300);
+/// How long the window may take to come to the front when asked, before it asks for the user's
+/// attention instead: the system may refuse to raise it, or do so a little later.
+const RAISE_GRACE: Duration = Duration::from_millis(250);
+
+/// How the head of the queue is read, off the UI thread.
+pub(super) type ReadItem = fn(AddItem, &App) -> Task<Result<LoadedItem, LoadError>>;
+
+/// Reads `item` on the background executor. A read that never ends keeps its thread there.
+fn read_in_background(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
+    cx.background_executor().spawn(async move { load(item) })
+}
+
 /// What the main view keeps of the torrents to add.
-#[derive(Default)]
 pub(super) struct Adds {
     /// What waits to be added; the head is the dialog's.
     queue: AddQueue,
     /// The open add dialog, and its events.
     dialog: Option<(Entity<AddDialog>, Subscription)>,
-    /// The head being read, and the reading; dropping it cancels the reading.
-    reading: Option<(AddItem, Task<()>)>,
+    /// The head being read.
+    reading: Option<Reading>,
+    /// How the head is read.
+    read: ReadItem,
     /// The adds sent and not answered yet, by their ids.
-    out: HashMap<ActionId, Outgoing>,
+    out: HashMap<ActionId, SentAdd>,
     /// The torrent to select once a snapshot lists it.
-    pending_selection: Option<HashString>,
+    pending: PendingSelection,
+    /// How many changes of the selection the table had when the wait for the torrent to select
+    /// began; another one is the user's.
+    selection_mark: u64,
     /// What the newest notification about an add said.
     last_notice: Option<SharedString>,
     /// The pump of the requests; dropping it stops listening.
     listener: Option<Task<()>>,
+    /// The look, after the window was asked to come to the front, whether it did.
+    raise: Option<Task<()>>,
+}
+
+impl Default for Adds {
+    fn default() -> Self {
+        Self {
+            queue: AddQueue::default(),
+            dialog: None,
+            reading: None,
+            read: read_in_background,
+            out: HashMap::new(),
+            pending: PendingSelection::default(),
+            selection_mark: 0,
+            last_notice: None,
+            listener: None,
+            raise: None,
+        }
+    }
+}
+
+impl Adds {
+    /// Ends the wait for a torrent to select: the user has changed the filter or the search.
+    pub(super) fn view_changed_by_user(&mut self) {
+        if self.pending.waiting().is_some() {
+            tracing::debug!("the user changed the view; the added torrent will not be selected");
+            self.pending.cancel();
+        }
+    }
+}
+
+/// The head of the queue being read: the read, and the wait before the dialog says so.
+struct Reading {
+    /// The item read.
+    item: AddItem,
+    /// When the read began, on the executor's clock.
+    began: Instant,
+    /// The read; dropping it lets go of its answer.
+    _read: Task<()>,
+    /// The wait before the dialog opens to say that the item is being read.
+    slow: Option<Task<()>>,
 }
 
 impl MainView {
     /// Takes the requests that arrive on `adds` from now on, on the UI thread, until the channel
     /// closes or the window does. The sources of adds (the toolbar, the keys, the file picker, the
     /// clipboard, a drop, the launch arguments and a second launch) send into it.
+    ///
+    /// The view has one receiver: a later call replaces the one before, which is no longer
+    /// listened to.
     pub fn listen_for_adds(
         &mut self,
         adds: async_channel::Receiver<AddRequest>,
@@ -119,18 +182,15 @@ impl MainView {
                     self.add_notice(Notification::warning, text, window, cx);
                 }
             }
-            AddRequest::Raise => {
-                tracing::debug!("the window is raised for another launch");
-                window.activate_window();
-                window.request_attention();
-            }
+            AddRequest::Raise => self.raise(window, cx),
         }
     }
 
-    /// Handles Cancel and Escape in the add dialog: skips the torrent shown, and shows the next
-    /// one or closes the dialog. An add of it that is out still counts when it is answered.
+    /// Handles Cancel, Skip and Escape in the add dialog: skips the torrent shown, or the file
+    /// being read, and shows the next one or closes the dialog. An add of it that is out still
+    /// counts when it is answered.
     pub(crate) fn cancel_add(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        tracing::debug!("the torrent shown in the add dialog was skipped");
+        tracing::debug!("the torrent of the add dialog was skipped");
         self.skip_add(window, cx);
     }
 
@@ -153,7 +213,29 @@ impl MainView {
         self.apply_pending_selection(window, cx);
     }
 
-    /// Takes the service's answer `result` to the add `id`.
+    /// Ends the wait for a torrent to select if the user has changed the selection since it began.
+    pub(super) fn follow_selection_for_adds(&mut self, cx: &App) {
+        if self.adds.pending.waiting().is_some()
+            && self.table.read(cx).delegate().selection_changes() != self.adds.selection_mark
+        {
+            tracing::debug!(
+                "the user changed the selection; the added torrent will not be selected"
+            );
+            self.adds.pending.cancel();
+        }
+    }
+
+    /// The service has stopped, so the adds still out will never be answered: they are taken as
+    /// not confirmed, so that the dialog does not wait for them for good.
+    pub(super) fn adds_service_stopped(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let out: Vec<ActionId> = self.adds.out.keys().copied().collect();
+        for id in out {
+            self.add_finished(id, Err(AddError::Unconfirmed), window, cx);
+        }
+    }
+
+    /// Takes the service's answer `result` to the add `id`, and does what x4-core's
+    /// [`add_outcome`] says follows.
     pub(super) fn add_finished(
         &mut self,
         id: ActionId,
@@ -161,63 +243,42 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(outgoing) = self.adds.out.remove(&id) else {
+        let Some(sent) = self.adds.out.remove(&id) else {
             tracing::warn!(id = id.0, "an add finished that this window did not start");
             return;
         };
+        log_answer(&sent, &result);
         let shown = self
             .adds
             .dialog
             .as_ref()
             .is_some_and(|(dialog, _)| dialog.read(cx).waiting() == Some(id));
-        match result {
-            Ok(Added {
-                hash,
-                name,
-                duplicate,
-            }) => {
-                let name = if name.is_empty() {
-                    outgoing.name.clone()
-                } else {
-                    name
-                };
-                if duplicate {
-                    tracing::info!(torrent = %hash, "the daemon had the torrent already");
-                    self.add_notice(Notification::info, add_duplicate_text(&name), window, cx);
-                } else {
-                    tracing::info!(torrent = %hash, "torrent added");
-                    self.remember_folder(&outgoing, cx);
-                }
-                self.adds.pending_selection = Some(hash);
-                if shown {
-                    self.skip_add(window, cx);
-                }
+        let outcome = add_outcome(&sent, result);
+        if let Some(folder) = &outcome.remember {
+            self.ui.add.remember(folder);
+            self.ui_changed(cx);
+            if let Some((dialog, _)) = &self.adds.dialog {
+                let history = self.ui.add.recent_folders.clone();
+                dialog.update(cx, |dialog, cx| dialog.set_history(history, cx));
             }
-            Err(AddError::Unconfirmed) => {
-                tracing::warn!(torrent = %outgoing.hash, "the daemon has not confirmed the add yet");
-                self.add_notice(
-                    Notification::info,
-                    add_unconfirmed_text(&outgoing.name),
-                    window,
-                    cx,
-                );
-                self.adds.pending_selection = Some(outgoing.hash);
-                if shown {
-                    self.skip_add(window, cx);
-                }
-            }
-            Err(error) => {
-                tracing::error!(torrent = %outgoing.hash, "the torrent could not be added");
-                // The daemon's text may name a folder on the server.
-                tracing::debug!(%error, "why the torrent could not be added");
-                self.add_notice(
-                    Notification::error,
-                    add_failure_text(&outgoing.name, &error),
-                    window,
-                    cx,
-                );
-                if shown && let Some((dialog, _)) = &self.adds.dialog {
-                    dialog.update(cx, |dialog, cx| dialog.set_waiting(None, cx));
+        }
+        if let Some(notice) = &outcome.notice {
+            let kind = match notice {
+                AddNotice::Failed { .. } => Notification::error,
+                AddNotice::Duplicate { .. } | AddNotice::Unconfirmed { .. } => Notification::info,
+            };
+            self.add_notice(kind, add_notice_text(notice), window, cx);
+        }
+        if let Some(hash) = outcome.select {
+            self.wait_to_select(hash, cx);
+        }
+        if shown {
+            match outcome.form {
+                FormStep::Advance => self.skip_add(window, cx),
+                FormStep::Keep => {
+                    if let Some((dialog, _)) = &self.adds.dialog {
+                        dialog.update(cx, |dialog, cx| dialog.set_waiting(None, cx));
+                    }
                 }
             }
         }
@@ -238,18 +299,31 @@ impl MainView {
         }
     }
 
-    /// Remembers the folder `outgoing` was sent to among the folders used lately: the very folder
-    /// of the request, and none when it named none (the session's own).
-    fn remember_folder(&mut self, outgoing: &Outgoing, cx: &mut Context<'_, Self>) {
-        let Some(folder) = &outgoing.add.download_dir else {
-            return;
-        };
-        self.ui.add.remember(folder);
-        self.ui_changed(cx);
-        if let Some((dialog, _)) = &self.adds.dialog {
-            let history = self.ui.add.recent_folders.clone();
-            dialog.update(cx, |dialog, cx| dialog.set_history(history, cx));
-        }
+    /// Brings the window to the front, and asks for the user's attention if it has not come by
+    /// [`RAISE_GRACE`].
+    fn raise(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        tracing::debug!("the window is raised for another launch");
+        window.activate_window();
+        self.adds.raise = Some(cx.spawn_in(window, async move |_, cx| {
+            cx.background_executor().timer(RAISE_GRACE).await;
+            let looked = cx.update(|window, _| {
+                if !window.is_window_active() {
+                    tracing::debug!("the window did not come to the front; asking for attention");
+                    window.request_attention();
+                }
+            });
+            if let Err(error) = looked {
+                tracing::debug!(%error, "the window closed before it came to the front");
+            }
+        }));
+    }
+
+    /// Waits for `hash` to be listed, to select it, from now on.
+    fn wait_to_select(&mut self, hash: HashString, cx: &App) {
+        self.adds
+            .pending
+            .wait_for(hash, cx.background_executor().now());
+        self.adds.selection_mark = self.table.read(cx).delegate().selection_changes();
     }
 
     /// Moves on from the head of the queue, after it was added or skipped.
@@ -267,19 +341,26 @@ impl MainView {
             return;
         };
         let position = self.adds.queue.position();
+        let reads = self.reads(&head);
         if let Some((dialog, _)) = &self.adds.dialog {
-            if dialog.read(cx).shows(&head) {
-                dialog.update(cx, |dialog, cx| dialog.set_position(position, cx));
+            let shows = dialog.read(cx).shows(&head);
+            dialog.update(cx, |dialog, cx| {
+                if shows || reads {
+                    dialog.set_position(position, cx);
+                } else {
+                    dialog.reading(position, cx);
+                }
+            });
+            if shows {
                 return;
-            }
-            if !self.reads(&head) {
-                dialog.update(cx, |dialog, cx| dialog.reading(position, cx));
             }
         } else if window.has_active_dialog(cx) {
             tracing::debug!("another dialog is open; the torrents to add wait");
             return;
         }
-        if !self.reads(&head) {
+        if reads {
+            self.watch_slow_read(window, cx);
+        } else {
             self.read_head(head, window, cx);
         }
     }
@@ -289,30 +370,70 @@ impl MainView {
         self.adds
             .reading
             .as_ref()
-            .is_some_and(|(reading, _)| reading == item)
+            .is_some_and(|reading| &reading.item == item)
     }
 
     /// Reads `item`, the head of the queue, off the UI thread, and offers it once it is read.
+    /// Without a dialog open, the dialog opens after [`READ_GRACE`] to say that it is being read.
     fn read_head(&mut self, item: AddItem, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let reading = (self.adds.read)(item.clone(), cx);
         let read = item.clone();
         let task = cx.spawn_in(window, async move |view, cx| {
-            let given = read.clone();
-            let loaded = cx
-                .background_executor()
-                .spawn(async move { load(given) })
-                .await;
+            let loaded = reading.await;
             if let Err(error) = view.update_in(cx, |view, window, cx| {
                 view.head_read(read, loaded, window, cx);
             }) {
                 tracing::debug!(%error, "a torrent to add was read after the window closed");
             }
         });
-        self.adds.reading = Some((item, task));
+        self.adds.reading = Some(Reading {
+            item,
+            began: cx.background_executor().now(),
+            _read: task,
+            slow: None,
+        });
+        if self.adds.dialog.is_none() {
+            self.watch_slow_read(window, cx);
+        }
+    }
+
+    /// Opens the add dialog to say that the head is being read, with Skip, once it has been read
+    /// for [`READ_GRACE`]: now, if that time has passed, as behind another dialog that has just
+    /// closed, or when it comes.
+    fn watch_slow_read(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let now = cx.background_executor().now();
+        let Some(reading) = &mut self.adds.reading else {
+            return;
+        };
+        let item = reading.item.clone();
+        let left = READ_GRACE.saturating_sub(now.saturating_duration_since(reading.began));
+        if left.is_zero() {
+            self.read_is_slow(&item, window, cx);
+            return;
+        }
+        reading.slow = Some(cx.spawn_in(window, async move |view, cx| {
+            cx.background_executor().timer(left).await;
+            if let Err(error) = view.update_in(cx, |view, window, cx| {
+                view.read_is_slow(&item, window, cx);
+            }) {
+                tracing::debug!(%error, "a slow read outlived the window");
+            }
+        }));
+    }
+
+    /// Opens the dialog to say that `item` is being read, with Skip, if it still is and nothing
+    /// else is shown.
+    fn read_is_slow(&mut self, item: &AddItem, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if !self.reads(item) || self.adds.dialog.is_some() || window.has_active_dialog(cx) {
+            return;
+        }
+        tracing::info!("a torrent file takes long to read; the dialog offers to skip it");
+        self.open_add_dialog(None, window, cx);
     }
 
     /// Offers `item`, read as `loaded`, if it is still the head of the queue: in the dialog, which
-    /// opens for it unless another dialog is open. A file that cannot be offered is skipped with a
-    /// notification.
+    /// opens for it unless another dialog is open. A file that cannot be offered is dropped from
+    /// the run with a notification.
     fn head_read(
         &mut self,
         item: AddItem,
@@ -343,7 +464,8 @@ impl MainView {
                         cx,
                     );
                 }
-                self.skip_add(window, cx);
+                self.adds.queue.drop_unreadable();
+                self.advance_adds(window, cx);
                 return;
             }
         };
@@ -355,16 +477,15 @@ impl MainView {
         } else if window.has_active_dialog(cx) {
             tracing::debug!("another dialog opened meanwhile; the torrents to add wait");
         } else {
-            self.open_add_dialog(item, loaded, position, window, cx);
+            self.open_add_dialog(Some((item, loaded)), window, cx);
         }
     }
 
-    /// Opens the add dialog for `item`, read as `loaded`, at `position` in the queue.
+    /// Opens the add dialog for the head of the queue: `read`, the item and what was read of it,
+    /// or `None` to say that it is being read.
     fn open_add_dialog(
         &mut self,
-        item: AddItem,
-        loaded: LoadedItem,
-        position: Option<(usize, usize)>,
+        read: Option<(AddItem, LoadedItem)>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -375,11 +496,13 @@ impl MainView {
         let dialog = cx.new(|cx| AddDialog::new(repeats, history, snapshot, connected, window, cx));
         let events = cx.subscribe_in(&dialog, window, Self::on_add_dialog_event);
         self.adds.dialog = Some((dialog.clone(), events));
-        dialog.update(cx, |dialog, cx| {
-            dialog.show(item, loaded, position, window, cx);
+        let position = self.adds.queue.position();
+        dialog.update(cx, |dialog, cx| match read {
+            Some((item, loaded)) => dialog.show(item, loaded, position, window, cx),
+            None => dialog.reading(position, cx),
         });
         tracing::debug!("the add dialog opens");
-        adding::open(dialog, cx.weak_entity(), window, cx);
+        adding::open(dialog, window, cx);
     }
 
     /// Closes the add dialog, if it is open.
@@ -399,12 +522,18 @@ impl MainView {
         cx: &mut Context<'_, Self>,
     ) {
         match event {
-            AddDialogEvent::Add(outgoing) => self.send_add(dialog, outgoing.clone(), window, cx),
+            AddDialogEvent::Add { add, sent } => {
+                self.send_add(dialog, add.as_ref().clone(), sent.clone(), window, cx);
+            }
             AddDialogEvent::Show(hash) => {
                 tracing::debug!(torrent = %hash, "the torrent in the list is shown");
-                self.adds.pending_selection = Some(hash.clone());
+                self.wait_to_select(hash.clone(), cx);
                 self.apply_pending_selection(window, cx);
                 self.skip_add(window, cx);
+            }
+            AddDialogEvent::Skip => self.cancel_add(window, cx),
+            AddDialogEvent::Dropped(items) => {
+                self.take_add_request(AddRequest::Items(items.clone()), window, cx);
             }
             AddDialogEvent::AskFreeSpace(folder) => {
                 tracing::debug!(
@@ -422,27 +551,31 @@ impl MainView {
         }
     }
 
-    /// Sends `outgoing`, the add of the torrent `dialog` shows, and keeps it until it is answered.
-    /// If the service has stopped, it is answered at once as not connected.
+    /// Sends `add`, the request of the torrent `dialog` shows, and keeps `sent` until it is
+    /// answered. If the service has stopped, it is answered at once as not connected.
     fn send_add(
         &mut self,
         dialog: &Entity<AddDialog>,
-        outgoing: Outgoing,
+        add: TorrentAdd,
+        sent: SentAdd,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         let id = self.pending.next_id();
         tracing::info!(
-            torrent = %outgoing.hash,
-            magnet = adding::is_magnet(&outgoing.add),
-            paused = outgoing.add.paused,
-            unwanted = outgoing.add.files_unwanted.len(),
+            torrent = %sent.hash,
+            magnet = matches!(add.source, x4_rpc::AddSource::Magnet(_)),
+            paused = add.paused,
+            unwanted = add.files_unwanted.len(),
             "torrent add sent"
         );
         dialog.update(cx, |dialog, cx| dialog.set_waiting(Some(id), cx));
-        let action = Action::Add(outgoing.add.clone());
-        self.adds.out.insert(id, outgoing);
-        if self.commands.send(Command::Run(id, action)).is_err() {
+        self.adds.out.insert(id, sent);
+        if self
+            .commands
+            .send(Command::Run(id, Action::Add(add)))
+            .is_err()
+        {
             tracing::warn!("the service has stopped; the add was not sent");
             self.add_finished(id, Err(AddError::NotConnected), window, cx);
         }
@@ -451,31 +584,29 @@ impl MainView {
     /// Selects the torrent that waits to be selected, once a snapshot lists it, after the filter
     /// and the search that would hide it are cleared.
     fn apply_pending_selection(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(hash) = self.adds.pending_selection.clone() else {
+        if self.adds.pending.waiting().is_none() {
+            return;
+        }
+        let Some(snapshot) = self.last_snapshot.clone() else {
             return;
         };
-        let revealing = {
-            let Some(torrent) = self.last_snapshot.as_ref().and_then(|snapshot| {
-                snapshot
-                    .torrents
-                    .iter()
-                    .find(|torrent| torrent.hash == hash)
-            }) else {
-                return;
-            };
-            self.view.revealing(torrent)
+        let now = cx.background_executor().now();
+        let Some(reveal) = self.adds.pending.follow(&snapshot, &self.view, now) else {
+            if self.adds.pending.waiting().is_none() {
+                tracing::debug!("the added torrent did not show in time; it is not selected");
+            }
+            return;
         };
-        self.adds.pending_selection = None;
-        if let Some(view) = revealing {
+        if let Some(view) = reveal.view {
             tracing::debug!("the filter and the search are cleared to show the added torrent");
             if view.search != self.view.search {
                 clear_search(&self.search, window, cx);
             }
             self.set_view(view, cx);
         }
-        tracing::debug!(torrent = %hash, "the added torrent is selected");
+        tracing::debug!(torrent = %reveal.hash, "the added torrent is selected");
         self.table.update(cx, |table, cx| {
-            change_selection(table, SelectionChange::Click(hash), cx);
+            change_selection(table, SelectionChange::Click(reveal.hash), cx);
         });
     }
 
@@ -492,3 +623,24 @@ impl MainView {
         self.adds.last_notice = Some(text);
     }
 }
+
+/// Logs the daemon's answer `result` to `sent`. The daemon's text of a refusal may name a folder
+/// on the server, so it goes to the debug log only.
+fn log_answer(sent: &SentAdd, result: &Result<Added, AddError>) {
+    match result {
+        Ok(added) if added.duplicate => {
+            tracing::info!(torrent = %added.hash, "the daemon had the torrent already");
+        }
+        Ok(added) => tracing::info!(torrent = %added.hash, "torrent added"),
+        Err(AddError::Unconfirmed) => {
+            tracing::warn!(torrent = %sent.hash, "the daemon has not confirmed the add");
+        }
+        Err(error) => {
+            tracing::error!(torrent = %sent.hash, "the torrent could not be added");
+            tracing::debug!(%error, "why the torrent could not be added");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

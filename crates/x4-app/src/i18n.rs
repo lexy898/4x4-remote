@@ -40,8 +40,8 @@ use crate::clipboard::MagnetFailure;
 use crate::speed_limits::LimitFeedback;
 
 pub(crate) use adding::{
-    add_duplicate_text, add_failure_text, add_reason_text, add_title_text, add_unconfirmed_text,
-    free_space_line_text, load_failure_text, no_choice_text, queue_full_text, rejected_text,
+    add_notice_text, add_reason_text, add_title_text, free_space_line_text, load_failure_text,
+    no_choice_text, queue_full_text, rejected_text,
 };
 pub(crate) use details::{
     created_text, details_placeholder_text, error_texts, pieces_text, size_with_wanted_text,

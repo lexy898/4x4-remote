@@ -352,6 +352,9 @@ impl MainView {
         if view == self.view {
             return;
         }
+        if view.filter != self.view.filter || view.search != self.view.search {
+            self.adds.view_changed_by_user();
+        }
         self.ui.filter = view.filter;
         self.ui.sort = SortState {
             key: view.sort_key,

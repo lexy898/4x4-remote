@@ -46,6 +46,12 @@ pub(crate) enum SelectionChange {
 }
 
 impl TorrentTable {
+    /// How many times [`change_selection`](Self::change_selection) has changed the selection; a
+    /// new count tells that it has changed since the count was read.
+    pub(crate) fn selection_changes(&self) -> u64 {
+        self.selection_changes
+    }
+
     /// Applies `change` to the selection; returns whether the selection changed. A click on a
     /// torrent the rows do not show changes nothing.
     pub(crate) fn change_selection(&mut self, change: SelectionChange) -> bool {
@@ -75,7 +81,11 @@ impl TorrentTable {
             SelectionChange::All => selection.select_all(rows),
             SelectionChange::Nothing => selection.clear(),
         }
-        *selection != before
+        let changed = *selection != before;
+        if changed {
+            self.selection_changes = self.selection_changes.wrapping_add(1);
+        }
+        changed
     }
 }
 

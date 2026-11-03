@@ -45,7 +45,7 @@ use gpui_kit::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point,
     point, px,
 };
-use x4_app::adding::AddRequest;
+use x4_app::adding::{AddRequest, AddRequests};
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
@@ -93,12 +93,14 @@ fn main() -> anyhow::Result<()> {
         state_writable: false,
         state_path: None,
         config_problem: None,
+        adds: AddRequests::new(),
     };
+    let adds = startup.adds.sender.clone();
     let scroll = options.scroll;
     let cwd = env::current_dir()?;
     app::run_driven(started, startup, move |window, view, cx| {
         if !options.add.is_empty() {
-            ask_to_add(window, &view, &options.add, &cwd, cx);
+            ask_to_add(&adds, &options.add, &cwd);
         }
         if options.select.is_some() || !options.press.is_empty() {
             drive_when_listed(window, view.clone(), options, cx);
@@ -157,24 +159,10 @@ fn drive_when_listed(
     .detach();
 }
 
-/// Asks the main window `window`, whose view is `view`, to add `args`, told apart as launch
+/// Asks the main window, through its channel `adds`, to add `args`, told apart as launch
 /// arguments run in `cwd` are: the `.torrent` files and magnet links in one request, the rest in
 /// another, which the window shows as one notification.
-fn ask_to_add(
-    window: AnyWindowHandle,
-    view: &Entity<MainView>,
-    args: &[String],
-    cwd: &Path,
-    cx: &mut App,
-) {
-    let (adds, requests) = async_channel::unbounded();
-    let listening = window.update(cx, |_, window, cx| {
-        view.update(cx, |view, cx| view.listen_for_adds(requests, window, cx));
-    });
-    if let Err(error) = listening {
-        tracing::error!(%error, "the window cannot take torrents to add");
-        return;
-    }
+fn ask_to_add(adds: &async_channel::Sender<AddRequest>, args: &[String], cwd: &Path) {
     let (items, rejected) = add_requests(args, cwd);
     tracing::info!(
         items = items.len(),

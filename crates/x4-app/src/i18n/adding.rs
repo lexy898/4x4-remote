@@ -11,8 +11,8 @@
 use gpui_kit::SharedString;
 use x4_core::launch::{RejectKind, RejectedArg};
 use x4_core::{
-    AddCheck, AddError, FreeSpaceAnswer, MAX_TORRENT_FILE_BYTES, MetainfoError, NoChoiceReason,
-    QUEUE_CAP, human_size,
+    AddCheck, AddError, AddNotice, FreeSpaceAnswer, MAX_TORRENT_FILE_BYTES, MetainfoError,
+    NoChoiceReason, QUEUE_CAP, human_size,
 };
 use x4_rpc::{DownloadDirError, MAX_DOWNLOAD_DIR_BYTES, MAX_MAGNET_BYTES, MagnetError};
 
@@ -122,19 +122,28 @@ pub(crate) fn load_failure_text(file: &str, error: &LoadError) -> SharedString {
     t!("add-file-failed", file = file, reason = reason).into()
 }
 
+/// What the notification `notice` about an answered add says.
+pub(crate) fn add_notice_text(notice: &AddNotice) -> SharedString {
+    match notice {
+        AddNotice::Duplicate { name } => add_duplicate_text(name),
+        AddNotice::Unconfirmed { name } => add_unconfirmed_text(name),
+        AddNotice::Failed { name, error } => add_failure_text(name, error),
+    }
+}
+
 /// The notification of a torrent the daemon had already, named `name`.
-pub(crate) fn add_duplicate_text(name: &str) -> SharedString {
+fn add_duplicate_text(name: &str) -> SharedString {
     t!("add-duplicate", name = name).into()
 }
 
 /// The notification of an add of `name` that the daemon did not confirm in time.
-pub(crate) fn add_unconfirmed_text(name: &str) -> SharedString {
+fn add_unconfirmed_text(name: &str) -> SharedString {
     t!("add-unconfirmed", name = name).into()
 }
 
 /// The notification of an add of `name` that failed with `error`. An add that is not confirmed
 /// is no failure ([`add_unconfirmed_text`]); it gets the same words here all the same.
-pub(crate) fn add_failure_text(name: &str, error: &AddError) -> SharedString {
+fn add_failure_text(name: &str, error: &AddError) -> SharedString {
     let reason: String = match error {
         AddError::Unconfirmed => return add_unconfirmed_text(name),
         AddError::NotConnected => t!("add-failed-not-connected"),
@@ -346,6 +355,25 @@ mod tests {
     #[test]
     fn what_became_of_an_add_names_the_torrent() {
         assert_eq!(add_duplicate_text("Show"), "Show is in the list already");
+        assert_eq!(
+            add_notice_text(&AddNotice::Duplicate {
+                name: "Show".to_owned()
+            }),
+            add_duplicate_text("Show")
+        );
+        assert_eq!(
+            add_notice_text(&AddNotice::Unconfirmed {
+                name: "Show".to_owned()
+            }),
+            add_unconfirmed_text("Show")
+        );
+        assert_eq!(
+            add_notice_text(&AddNotice::Failed {
+                name: "Show".to_owned(),
+                error: AddError::NotConnected
+            }),
+            add_failure_text("Show", &AddError::NotConnected)
+        );
         assert_eq!(
             add_unconfirmed_text("Show"),
             "The server has not confirmed Show yet; it shows in the list once it is added"

@@ -69,8 +69,18 @@ impl AddQueue {
         }
     }
 
+    /// Drops the head, which could not be read or is no torrent: unlike [`skip`](Self::skip), it
+    /// is not counted in the run, as the user never saw it. Nothing happens when nothing waits.
+    pub fn drop_unreadable(&mut self) {
+        self.waiting.pop_front();
+        if self.waiting.is_empty() {
+            self.done = 0;
+        }
+    }
+
     /// Where the head is in the current run, for a title such as "Add torrent (2 of 5)": its
     /// number, counted from 1, and how many items the run has, those done and those waiting.
+    /// Items dropped as unreadable do not count.
     /// `None` when nothing waits; the next item then starts a new run.
     #[must_use]
     pub fn position(&self) -> Option<(usize, usize)> {
@@ -147,6 +157,33 @@ mod tests {
         queue.skip();
         assert_eq!(queue.push(vec![file(7)]), 0);
         assert_eq!(queue.position(), Some((1, 1)));
+    }
+
+    #[test]
+    fn an_unreadable_item_is_not_counted_in_the_run() {
+        let mut queue = AddQueue::default();
+        assert_eq!(queue.push(vec![file(1), file(2), file(3), magnet('a')]), 0);
+        assert_eq!(queue.position(), Some((1, 4)));
+
+        queue.skip();
+        queue.drop_unreadable();
+        assert_eq!(queue.head(), Some(&file(3)));
+        assert_eq!(
+            queue.position(),
+            Some((2, 3)),
+            "the one skipped counts, not the unreadable"
+        );
+        queue.drop_unreadable();
+        assert_eq!(queue.position(), Some((2, 2)));
+        queue.drop_unreadable();
+        assert_eq!(queue.position(), None);
+
+        // The run ends with the queue, whatever ended it.
+        assert_eq!(queue.push(vec![file(4)]), 0);
+        assert_eq!(queue.position(), Some((1, 1)));
+        queue.drop_unreadable();
+        queue.drop_unreadable();
+        assert_eq!(queue.position(), None);
     }
 
     #[test]

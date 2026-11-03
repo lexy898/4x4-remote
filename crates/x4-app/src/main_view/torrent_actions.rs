@@ -85,6 +85,7 @@ impl MainView {
             cx.notify();
         }
         self.follow_details(cx);
+        self.follow_selection_for_adds(cx);
     }
 
     /// Carries out `request` on the selected torrents that the list shows now, if they allow it;

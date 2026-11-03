@@ -84,6 +84,9 @@ pub struct TorrentTable {
     columns: Vec<ColumnState>,
     /// The selected torrents, which stay selected wherever a new snapshot puts them.
     selection: Selection,
+    /// How many times [`change_selection`](Self::change_selection) has changed the selection:
+    /// the user's clicks and keys, and the selection of an added torrent.
+    selection_changes: u64,
     /// The sort order of the rows, which the header of its column marks.
     sort: (SortKey, SortDirection),
     /// What the table says when it has no rows.
@@ -121,6 +124,7 @@ impl TorrentTable {
             rows: Arc::new([]),
             columns,
             selection: Selection::default(),
+            selection_changes: 0,
             sort,
             empty: EmptyTable::Waiting,
             stale: false,

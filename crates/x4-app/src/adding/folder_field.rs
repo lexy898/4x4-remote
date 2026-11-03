@@ -7,15 +7,10 @@
 //! Enter and Escape. Picking one sets the field and gives the keys back to it; Escape closes only
 //! the menu.
 //!
-//! The free space is read from the daemon only while the dialog is open, and sparingly: half a
-//! second after the last edit ([`FREE_SPACE_DELAY`]), only for a folder the daemon could use, and
-//! only when the dialog knows nothing about it yet. Every answer is kept for its folder while the
-//! dialog is open, so going back to a folder asks nothing again; an answer for a folder the field
-//! has left is dropped. An unknown answer is forgotten when the daemon comes back, and asked for
-//! again. The session's own folder starts with the free space the snapshot has for it.
-
-use std::collections::HashMap;
-use std::time::Duration;
+//! The free space is read from the daemon only while the dialog is open, and sparingly, as
+//! x4-core's [`FreeSpaceCache`](x4_core::FreeSpaceCache) decides: [`FREE_SPACE_DELAY`] after the
+//! last edit, and only for a folder it knows nothing about yet. The line under the field shows
+//! what is known of the folder in it.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -28,28 +23,25 @@ use gpui_kit::{
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
     Task, TestSupportExt as _, Window, div,
 };
-use x4_core::{FreeSpaceAnswer, Snapshot, folder_picks};
+use x4_core::FREE_SPACE_DELAY;
 use x4_rpc::DownloadDir;
 
 use super::dialog::{AddDialog, AddDialogEvent};
 use crate::i18n::{free_space_line_text, t};
 use crate::keymap::{FOLDER_FIELD_CONTEXT, OpenFolderHistory};
 
-/// How long after the last edit of the folder its free space is asked for.
-pub(super) const FREE_SPACE_DELAY: Duration = Duration::from_millis(500);
-
-/// The folder field, its history and what is known of the free space of its folders.
+/// The folder field, its history and the folders it offers.
 pub(super) struct FolderField {
     /// The text of the field.
     pub(super) input: Entity<InputState>,
     /// The folders torrents were added to lately, the newest first, as the window remembers them.
-    history: Vec<String>,
+    pub(super) history: Vec<String>,
+    /// The folders offered, made again only when what they come from changes.
+    pub(super) picks: Vec<String>,
     /// The menu of the folders offered while it is open.
     menu: Option<Entity<PopupMenu>>,
     /// The menu's going away, which closes it here too; dropping it stops listening.
     menu_dismissed: Option<Subscription>,
-    /// What the daemon said about each folder asked about while the dialog is open.
-    answers: HashMap<DownloadDir, FreeSpaceAnswer>,
     /// The wait after the last edit, before the free space is asked for; dropping it cancels it.
     wait: Option<Task<()>>,
 }
@@ -60,52 +52,11 @@ impl FolderField {
         Self {
             input,
             history,
+            picks: Vec::new(),
             menu: None,
             menu_dismissed: None,
-            answers: HashMap::new(),
             wait: None,
         }
-    }
-
-    /// Keeps the free space that `snapshot` has for the session's folder, so that it is not asked
-    /// for again.
-    pub(super) fn keep_session_free_space(&mut self, snapshot: &Snapshot) {
-        if let (Some(session), Some(bytes)) = (&snapshot.session, snapshot.free_space_bytes)
-            && let Ok(folder) = DownloadDir::new(&session.download_dir)
-        {
-            self.answers.insert(folder, FreeSpaceAnswer::Free { bytes });
-        }
-    }
-
-    /// Offers `history` as the folders used lately.
-    pub(super) fn set_history(&mut self, history: Vec<String>) {
-        self.history = history;
-    }
-
-    /// What is known of the free space of `folder`.
-    pub(super) fn answer(&self, folder: &DownloadDir) -> Option<&FreeSpaceAnswer> {
-        self.answers.get(folder)
-    }
-
-    /// Keeps `answer` about `folder`, if the field shows that folder now (`current`).
-    pub(super) fn answered(
-        &mut self,
-        current: Option<&DownloadDir>,
-        folder: DownloadDir,
-        answer: FreeSpaceAnswer,
-    ) -> bool {
-        if current != Some(&folder) {
-            tracing::debug!("the free space of a folder the field has left; dropped");
-            return false;
-        }
-        self.answers.insert(folder, answer);
-        true
-    }
-
-    /// Forgets the answers that said nothing, as the daemon is back.
-    pub(super) fn forget_unknown(&mut self) {
-        self.answers
-            .retain(|_, answer| *answer != FreeSpaceAnswer::Unknown);
     }
 }
 
@@ -114,9 +65,7 @@ impl AddDialog {
     /// for once the user stops typing.
     pub(super) fn folder_edited(&mut self, cx: &mut Context<'_, Self>) {
         let text = self.folder.input.read(cx).value().to_string();
-        if let Some(shown) = &mut self.shown {
-            shown.form.set_folder(text);
-        }
+        self.take_folder(text);
         self.recheck();
         self.folder.wait = Some(cx.spawn(async move |dialog, cx| {
             cx.background_executor().timer(FREE_SPACE_DELAY).await;
@@ -131,10 +80,7 @@ impl AddDialog {
     /// the daemon could use or the dialog knows about it already.
     pub(super) fn ask_free_space(&mut self, cx: &mut Context<'_, Self>) {
         self.folder.wait = None;
-        let Some(folder) = self.current_folder() else {
-            return;
-        };
-        if self.folder.answer(&folder).is_none() {
+        if let Some(folder) = self.space.question(self.current_folder().as_ref()) {
             cx.emit(AddDialogEvent::AskFreeSpace(folder));
         }
     }
@@ -149,7 +95,7 @@ impl AddDialog {
     /// Opens the menu of the folders offered, from the button or Alt+Down, with the folder of the
     /// field checked; the menu takes the keys.
     pub(super) fn open_history(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let picks = self.folder_picks();
+        let picks = self.folder.picks.clone();
         if picks.is_empty() || self.folder.menu.is_some() {
             return;
         }
@@ -203,25 +149,13 @@ impl AddDialog {
         self.folder_edited(cx);
     }
 
-    /// The folders the field offers now.
-    fn folder_picks(&self) -> Vec<String> {
-        let snapshot = self.snapshot.as_deref();
-        folder_picks(
-            snapshot
-                .and_then(|snapshot| snapshot.session.as_ref())
-                .map(|session| session.download_dir.as_str()),
-            &self.folder.history,
-            snapshot.map_or(&[], |snapshot| snapshot.torrents.as_slice()),
-        )
-    }
-
     /// The field with the button of its history, in the key context `FolderField`.
     pub(super) fn folder_row(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         let open = self.folder.menu.clone();
         // The popover moves the focus into what it tracks once it opens: the menu, which then
         // takes the keys.
         let menu_focus = open.as_ref().map(|menu| menu.focus_handle(cx));
-        let has_picks = !self.folder_picks().is_empty();
+        let has_picks = !self.folder.picks.is_empty();
         let dialog = cx.weak_entity();
         let button = Button::new("add-folder-history")
             .ghost()
@@ -259,7 +193,10 @@ impl AddDialog {
                                 dialog.close_history(window, cx);
                             }
                         }) {
-                            tracing::debug!(%error, "the folder history changed after the dialog closed");
+                            tracing::debug!(
+                                %error,
+                                "the folder history changed after the dialog closed"
+                            );
                         }
                     })
                     .content(move |_, _, _| match &open {
@@ -275,7 +212,7 @@ impl AddDialog {
         cx: &Context<'_, Self>,
     ) -> Option<impl IntoElement + use<>> {
         let folder = self.current_folder()?;
-        let text = free_space_line_text(self.folder.answer(&folder)?);
+        let text = free_space_line_text(self.space.answer(&folder)?);
         Some(
             div()
                 .id("add-free-space")

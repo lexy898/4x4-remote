@@ -29,6 +29,9 @@ gpui-kit = "=0.8.1"
 # Fluent messages for every user-visible string; `fl!` checks ids and arguments at compile time.
 i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
 i18n-embed-fl = "0.10.1"
+# `O_NONBLOCK` for opening a .torrent file, so that a FIFO swapped in after the first look never
+# blocks the open. gpui already pulls it in.
+libc = "0.2.191"
 # Embeds the .ftl files into the binary (read from disk in debug builds).
 rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }

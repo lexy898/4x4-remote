@@ -47,6 +47,10 @@ tracing-subscriber.workspace = true
 x4-core.workspace = true
 x4-rpc.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# `O_NONBLOCK` for opening a .torrent file (the `adding` module).
+libc.workspace = true
+
 [dev-dependencies]
 fluent-syntax.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }

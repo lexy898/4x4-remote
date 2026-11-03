@@ -4,10 +4,13 @@
 //! A `.torrent` file is untrusted: it may be a FIFO that never ends, a device, a directory, or a
 //! file of gigabytes. It is read only once `stat` says it is a regular file of at most
 //! [`MAX_TORRENT_FILE_BYTES`], and never more than that is read, even from a file that grows
-//! meanwhile. Reading and parsing take a while for a large or hostile file, so the main view runs
-//! them on the background executor, never on the UI thread.
+//! meanwhile. It is opened with `O_NONBLOCK`, so that a FIFO swapped in after the first look
+//! opens at once, and is then turned away as no regular file. Reading and parsing take a while for
+//! a large or hostile file, so the main view runs them on the background executor, never on the UI
+//! thread. A read that never ends, as on a network file system that hangs, keeps its thread: the
+//! main view lets the user skip it, and the thread is abandoned.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,6 +31,33 @@ pub enum AddRequest {
     Rejected(Vec<RejectedArg>),
     /// Bring the window to the front, as for a second launch that handed its arguments over.
     Raise,
+}
+
+/// The one channel of [`AddRequest`]s into the main window. The app makes it at startup
+/// ([`Startup::adds`](crate::app::Startup::adds)): the sources outside the window, such as the
+/// launch arguments and a second launch, send into clones of `sender`, and the window takes
+/// `receiver` ([`MainView::listen_for_adds`](crate::main_view::MainView::listen_for_adds)).
+#[derive(Debug, Clone)]
+pub struct AddRequests {
+    /// Where the sources send their requests.
+    pub sender: async_channel::Sender<AddRequest>,
+    /// What the window takes them from.
+    pub receiver: async_channel::Receiver<AddRequest>,
+}
+
+impl AddRequests {
+    /// A new channel, with no request in it.
+    #[must_use]
+    pub fn new() -> Self {
+        let (sender, receiver) = async_channel::unbounded();
+        Self { sender, receiver }
+    }
+}
+
+impl Default for AddRequests {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Why a `.torrent` file cannot be offered in the add dialog.
@@ -111,10 +141,15 @@ fn check_metadata(metadata: &std::fs::Metadata) -> Result<(), LoadError> {
 
 /// The content of the regular file at `path`, of at most [`MAX_TORRENT_FILE_BYTES`].
 fn read_at_most(path: &Path) -> Result<Arc<[u8]>, LoadError> {
-    let file = File::open(path)?;
+    let file = open_without_waiting(path)?;
     // It may have been replaced since the first look.
-    check_metadata(&file.metadata()?)?;
-    let mut bytes = Vec::new();
+    let metadata = file.metadata()?;
+    check_metadata(&metadata)?;
+    // Room for the whole file and the one byte that would tell it grew: one allocation.
+    let room = usize::try_from(metadata.len())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let mut bytes = Vec::with_capacity(room);
     file.take(MAX_TORRENT_FILE_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)?;
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -122,6 +157,15 @@ fn read_at_most(path: &Path) -> Result<Arc<[u8]>, LoadError> {
         return Err(LoadError::TooLarge { size });
     }
     Ok(Arc::from(bytes))
+}
+
+/// Opens the file at `path` for reading, without waiting on a FIFO for a writer.
+fn open_without_waiting(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    options.open(path)
 }
 
 #[cfg(test)]
@@ -200,6 +244,20 @@ mod tests {
 
         // Opening it would wait for a writer forever.
         assert_eq!(read_torrent(fifo).err(), Some(LoadError::NotAFile));
+    }
+
+    #[test]
+    fn a_fifo_opens_without_waiting_and_is_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo.torrent");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+
+        // As if it had been swapped in after the first look: opened, and turned away.
+        assert_eq!(read_at_most(&fifo).err(), Some(LoadError::NotAFile));
     }
 
     #[test]

@@ -711,6 +711,8 @@ add-confirm = Add
 # On the Add button while the server adds the torrent.
 add-adding = Adding…
 add-cancel = Cancel
+# In place of Cancel while the file of a torrent is read: moves on without it.
+add-skip = Skip
 # Selects the torrent that is in the list already.
 add-show = Show
 # Why Add is disabled, on one line under the form.

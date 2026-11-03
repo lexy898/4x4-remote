@@ -64,6 +64,7 @@ pub(super) async fn pump(
     }
     if let Err(error) = view.update_in(cx, |view, window, cx| {
         view.service_stopped(cx);
+        view.adds_service_stopped(window, cx);
         view.follow_adds(window, cx);
     }) {
         tracing::debug!(%error, "the service stopped after the window closed");
