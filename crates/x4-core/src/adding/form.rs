@@ -125,9 +125,9 @@ pub enum NoChoiceReason {
     /// could leave out the wrong ones ([`ParsedTorrent::files`] is `None`).
     Ambiguous,
     /// The list of files is too large to choose from: more than
-    /// [`MAX_CHOOSABLE_FILES`](crate::MAX_CHOOSABLE_FILES) files, or a tree whose keys would
-    /// take more than [`TREE_KEY_BUDGET`](crate::TREE_KEY_BUDGET), as for folders nested
-    /// thousands deep ([`FileTree::is_too_large`]).
+    /// [`MAX_CHOOSABLE_FILES`](crate::MAX_CHOOSABLE_FILES) files, or a tree that would take
+    /// more than [`TREE_BUDGET`](crate::TREE_BUDGET), as for files nested hundreds of folders
+    /// deep ([`FileTree::is_too_large`]).
     TooLarge,
 }
 

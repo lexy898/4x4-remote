@@ -13,12 +13,28 @@ use crate::details::{FileEntry, TorrentDetails};
 use crate::playable::Playable;
 use builder::Builder;
 
-/// The most bytes the keys of a [`FileTree`]'s nodes may take together: 16 MiB.
+/// The most memory a [`FileTree`] may take, as it is counted while the tree is made: 32 MiB.
 ///
-/// A node's key is its whole path, so a deep path costs the square of its depth, and a crafted
-/// torrent of a few tens of KB could otherwise take hundreds of MiB. Real trees take far less:
-/// 5000 files four folders deep, with long names, take well under 1 MiB.
-pub const TREE_KEY_BUDGET: usize = 16 * 1024 * 1024;
+/// Each folder and file counts some 300 bytes for itself, and the bytes of its key, which is its
+/// whole path, and of its name. Each file is in the list of files of its own node and of every
+/// folder above it, and a padding file in those of the shown folders above it; each index a list
+/// has room for counts 8 bytes. So a deep path costs the square of its depth in keys, and a file
+/// deep down its depth in lists: without a bound, a crafted torrent of a few MB would take
+/// hundreds of MiB. The count is close to what a
+/// tree takes. Real trees count far less: 5000 files four folders deep, with long names, some
+/// 3 MiB, and 50 000 files in one folder some 17.
+pub const TREE_BUDGET: usize = 32 * 1024 * 1024;
+
+/// What a folder or a file counts against [`TREE_BUDGET`] besides the bytes of its key and its
+/// name and its list of files: the node, its place in the map of keys and in the list of its
+/// folder, and the allocations of its key and its name. About what one takes.
+const NODE_COST: usize = 320;
+
+/// What a folder counts besides: its list of entries and its place in the map of folders.
+const FOLDER_COST: usize = 96;
+
+/// What each index a list of files has room for counts.
+const INDEX_COST: usize = size_of::<usize>();
 
 /// The most files a [`FileTree`] is made for, padding files included: 50 000.
 ///
@@ -55,7 +71,8 @@ pub struct FileTree {
     /// The nodes at the first level, in display order.
     top: Vec<usize>,
     by_key: HashMap<NodeKey, usize>,
-    /// Whether the keys would have taken more than [`TREE_KEY_BUDGET`]: the tree is then empty.
+    /// Whether the tree would have taken more than [`TREE_BUDGET`] or had more than
+    /// [`MAX_CHOOSABLE_FILES`] files: it is then empty.
     too_large: bool,
 }
 
@@ -98,46 +115,43 @@ impl FileTree {
     /// [`new`](Self::new), is made the same way. A file whose path is empty is shown, without a
     /// name, like any other.
     ///
-    /// A tree of more than [`MAX_CHOOSABLE_FILES`] files, or whose keys would take more than
-    /// [`TREE_KEY_BUDGET`] bytes, is not made: the tree is empty, and
-    /// [`is_too_large`](Self::is_too_large) says so. Too many files are refused before any work,
-    /// and making the tree stops as soon as the budget is spent, so the time and memory stay
-    /// bounded however many files there are and however deep their paths go.
+    /// A tree of more than [`MAX_CHOOSABLE_FILES`] files, or that would take more than
+    /// [`TREE_BUDGET`], is not made: the tree is empty, and [`is_too_large`](Self::is_too_large)
+    /// says so. Too many files are refused before any work, and making the tree stops as soon as
+    /// the budget is spent, so the time and memory stay bounded however many files there are and
+    /// however deep their paths go.
     #[must_use]
     pub fn of_files(hash: HashString, files: &[FileEntry]) -> Self {
-        Self::of_files_within(hash, files, TREE_KEY_BUDGET)
+        Self::of_files_within(hash, files, TREE_BUDGET)
     }
 
-    /// [`of_files`](Self::of_files) with a budget of `budget` bytes for the keys.
+    /// [`of_files`](Self::of_files) within a budget of `budget` bytes instead of
+    /// [`TREE_BUDGET`].
     pub(crate) fn of_files_within(hash: HashString, files: &[FileEntry], budget: usize) -> Self {
         if files.len() > MAX_CHOOSABLE_FILES {
             return Self::too_large(hash);
         }
         let mut builder = Builder::new(budget);
+        // The padding files themselves, not their parts, which for one deep down are thousands.
         let mut padding = Vec::new();
         for entry in files {
             if builder.over_budget() {
                 break;
             }
-            let mut parts: Vec<&str> = entry
-                .name
-                .split('/')
-                .filter(|part| !part.is_empty())
-                .collect();
-            if parts.is_empty() {
-                // A file without a name still is a file the user can see and act on.
-                parts.push("");
-            }
+            let parts = parts_of(&entry.name);
             if is_padding(&parts) {
-                padding.push((entry.index, parts));
+                padding.push(entry);
             } else {
                 builder.add_file(entry, &parts);
             }
         }
         // Padding files join the lists of the folders that are shown, which exist only once all
         // other files have been added.
-        for (index, parts) in &padding {
-            builder.add_padding(*index, parts);
+        for entry in padding {
+            if builder.over_budget() {
+                break;
+            }
+            builder.add_padding(entry.index, &parts_of(&entry.name));
         }
         builder.finish(hash)
     }
@@ -167,9 +181,9 @@ impl FileTree {
     }
 
     /// Whether the tree was not made because it would be too large: it has more than
-    /// [`MAX_CHOOSABLE_FILES`] files, or its keys would have taken more than [`TREE_KEY_BUDGET`]
-    /// bytes, as for folders nested very deeply. Such a tree is empty, and the Files tab says the
-    /// list is too large to show.
+    /// [`MAX_CHOOSABLE_FILES`] files, or it would have taken more than [`TREE_BUDGET`], as for
+    /// folders nested very deeply. Such a tree is empty, and the Files tab says the list is too
+    /// large to show.
     #[must_use]
     pub fn is_too_large(&self) -> bool {
         self.too_large
@@ -289,6 +303,16 @@ impl FileTree {
     }
 }
 
+/// The components of `path`, without empty ones; a path without any is one file without a name.
+fn parts_of(path: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        // A file without a name still is a file the user can see and act on.
+        parts.push("");
+    }
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use x4_rpc::FilePriority::Normal;
@@ -300,12 +324,20 @@ mod tests {
         HashString::parse(&"ab".repeat(20)).unwrap()
     }
 
+    /// The bytes a list of `len` indices has room for, grown one index at a time as the tree
+    /// grows it.
+    fn list_bytes(len: usize) -> usize {
+        let mut list = Vec::new();
+        for index in 0..len {
+            list.reserve(1);
+            list.push(index);
+        }
+        list.capacity() * INDEX_COST
+    }
+
     #[test]
-    fn the_budget_counts_the_bytes_of_every_key_once() {
-        assert_eq!(TREE_KEY_BUDGET, 16 * 1024 * 1024);
-        // The keys: "T" (1 byte), "T/a" (3), "T/b" (3), "T/s" and "T/s/c" (3 and 5), and last
-        // the repeat of "T/a", whose key is "T/a\01" (5, more than its path); the padding file
-        // makes no node. 20 bytes.
+    fn the_budget_counts_every_node_with_its_key_and_name_and_list() {
+        assert_eq!(TREE_BUDGET, 32 * 1024 * 1024);
         let files = details(
             &hash(),
             &[
@@ -317,8 +349,13 @@ mod tests {
             ],
         )
         .files;
+        // Six nodes, two of them folders; the padding file makes none. Their keys: "T" (1 byte),
+        // "T/a" (3), "T/b" (3), "T/s" and "T/s/c" (3 and 5), and last the repeat of "T/a", whose
+        // key is "T/a\01" (5, more than its path): 20 bytes. Their names: 6 bytes. Their lists of
+        // files: five indices in that of "T", the padding file's last, and one in each other.
+        let cost = 6 * NODE_COST + 2 * FOLDER_COST + 20 + 6 + list_bytes(5) + 5 * list_bytes(1);
 
-        let within = FileTree::of_files_within(hash(), &files, 20);
+        let within = FileTree::of_files_within(hash(), &files, cost);
         assert!(!within.is_too_large());
         assert_eq!(
             within
@@ -327,7 +364,7 @@ mod tests {
             Some(vec![0, 1, 2, 3, 4])
         );
 
-        let over = FileTree::of_files_within(hash(), &files, 19);
+        let over = FileTree::of_files_within(hash(), &files, cost - 1);
         assert!(over.is_too_large());
         assert!(over.is_empty(), "nothing of it is kept");
         assert_eq!(over.hash(), &hash());

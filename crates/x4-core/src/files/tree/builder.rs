@@ -8,7 +8,7 @@ use x4_rpc::{FilePriority, HashString};
 
 use super::super::names::name_order;
 use super::super::{NodeKey, PriorityView, WantedState};
-use super::{FileTree, Node};
+use super::{FOLDER_COST, FileTree, INDEX_COST, NODE_COST, Node};
 use crate::details::FileEntry;
 use crate::playable::Playable;
 
@@ -63,10 +63,13 @@ impl Node {
 /// A folder is made when the first shown file below it is added, so a folder that holds only
 /// padding files never exists. The parent of a node always has a smaller index than the node.
 ///
-/// The keys of the nodes may take `budget` bytes together. Each key is its node's whole path, so
-/// a deep path costs the square of its depth: 20 000 folders one in the other, 40 KB of names,
-/// would take some 400 MiB. Once the next key would pass the budget, the builder makes no more
-/// nodes and [`finish`](Self::finish) gives a tree that is too large to show.
+/// The tree may take `budget` bytes, as the builder counts them: [`NODE_COST`] and the bytes of
+/// the key and the name for each node, [`FOLDER_COST`] more for a folder, and [`INDEX_COST`] for
+/// each index a list of files has room for. Each key is its node's whole path, so a deep path costs the
+/// square of its depth: 20 000 folders one in the other, 40 KB of names, would take some 400 MiB.
+/// Each file is in the list of every folder above it, so 40 000 files 180 folders deep would take
+/// 60 MiB of lists. Once the next cost would pass the budget, the builder adds nothing more and
+/// [`finish`](Self::finish) gives a tree that is too large to show.
 pub(super) struct Builder<'a> {
     nodes: Vec<Node>,
     top: Vec<usize>,
@@ -75,15 +78,15 @@ pub(super) struct Builder<'a> {
     by_key: HashMap<NodeKey, usize>,
     /// For each path that was taken, the suffix its next copy tries first.
     suffixes: HashMap<NodeKey, usize>,
-    /// The bytes of the keys made so far. A node and `by_key` share the bytes of its key.
-    key_bytes: usize,
+    /// The bytes counted so far. A node and `by_key` share the bytes of its key.
+    spent: usize,
     budget: usize,
-    /// Whether a key did not fit in the budget.
+    /// Whether a cost did not fit in the budget.
     over_budget: bool,
 }
 
 impl<'a> Builder<'a> {
-    /// A builder whose keys may take `budget` bytes together.
+    /// A builder of a tree that may take `budget` bytes.
     pub(super) fn new(budget: usize) -> Self {
         Self {
             nodes: Vec::new(),
@@ -91,13 +94,13 @@ impl<'a> Builder<'a> {
             folders: HashMap::new(),
             by_key: HashMap::new(),
             suffixes: HashMap::new(),
-            key_bytes: 0,
+            spent: 0,
             budget,
             over_budget: false,
         }
     }
 
-    /// Whether a key did not fit in the budget: nothing more is added, and the tree is too large.
+    /// Whether a cost did not fit in the budget: nothing more is added, and the tree is too large.
     pub(super) fn over_budget(&self) -> bool {
         self.over_budget
     }
@@ -138,6 +141,9 @@ impl<'a> Builder<'a> {
             },
             priority: PriorityView::One(entry.priority),
         };
+        if !self.room_for_index(leaf) {
+            return;
+        }
         if let Some(node) = self.nodes.get_mut(leaf) {
             node.absorb(&shown);
             // Only a file that is being downloaded has a use for a prefix to play, and only once
@@ -147,6 +153,9 @@ impl<'a> Builder<'a> {
         }
         let mut above = parent;
         while let Some(index) = above {
+            if !self.room_for_index(index) {
+                return;
+            }
             let Some(folder) = self.nodes.get_mut(index) else {
                 break;
             };
@@ -156,7 +165,8 @@ impl<'a> Builder<'a> {
     }
 
     /// Adds the index of a padding file to the folders above it that exist. The ones that do not
-    /// are folders of padding only, which are not shown.
+    /// are folders of padding only, which are not shown. Nothing more is added once the budget is
+    /// spent.
     pub(super) fn add_padding(&mut self, index: usize, parts: &[&'a str]) {
         let Some((_, folder_parts)) = parts.split_last() else {
             return;
@@ -166,6 +176,9 @@ impl<'a> Builder<'a> {
             let Some(&folder) = self.folders.get(&(parent, part)) else {
                 return;
             };
+            if !self.room_for_index(folder) {
+                return;
+            }
             if let Some(node) = self.nodes.get_mut(folder) {
                 node.files.push(index);
             }
@@ -173,8 +186,37 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Counts `cost` bytes; `false`, with nothing counted and the budget marked spent, when they
+    /// do not fit in it.
+    fn charge(&mut self, cost: usize) -> bool {
+        match self.spent.checked_add(cost) {
+            Some(spent) if !self.over_budget && spent <= self.budget => {
+                self.spent = spent;
+                true
+            }
+            _ => {
+                self.over_budget = true;
+                false
+            }
+        }
+    }
+
+    /// Makes room for one more index in the list of files of the node `index`, and counts the
+    /// room the list grew by: `false` when that did not fit in the budget, or there is no such
+    /// node. A list grows by doubling, so its room is counted, not its indices: 2 000 lists of 725
+    /// indices, in which a padding file deep down is, take the room of 1 024 indices each.
+    fn room_for_index(&mut self, index: usize) -> bool {
+        let Some(node) = self.nodes.get_mut(index) else {
+            return false;
+        };
+        let before = node.files.capacity();
+        node.files.reserve(1);
+        let grown = node.files.capacity().saturating_sub(before);
+        self.charge(grown.saturating_mul(INDEX_COST))
+    }
+
     /// Adds an empty node under `parent` (or at the first level) and returns its index; `None`,
-    /// with nothing added, when its key does not fit in the budget.
+    /// with nothing added, when it does not fit in the budget.
     fn add_node(
         &mut self,
         parent: Option<usize>,
@@ -182,20 +224,20 @@ impl<'a> Builder<'a> {
         path: &str,
         is_folder: bool,
     ) -> Option<usize> {
-        // A key is never shorter than its path, so a path that cannot fit is refused before its
-        // key is made; the exact count below takes the suffix of a repeated path into account.
-        if self.over_budget || self.budget.saturating_sub(self.key_bytes) < path.len() {
-            self.over_budget = true;
+        // A key is never shorter than its path, so a node that cannot fit is refused before its
+        // key is made; the suffix of a repeated path is counted once the key is.
+        let own = if is_folder {
+            NODE_COST.saturating_add(FOLDER_COST)
+        } else {
+            NODE_COST
+        };
+        if !self.charge(own.saturating_add(path.len()).saturating_add(name.len())) {
             return None;
         }
         let index = self.nodes.len();
         let key = self.unique_key(path);
-        match self.key_bytes.checked_add(key.as_str().len()) {
-            Some(total) if total <= self.budget => self.key_bytes = total,
-            _ => {
-                self.over_budget = true;
-                return None;
-            }
+        if !self.charge(key.as_str().len().saturating_sub(path.len())) {
+            return None;
         }
         self.by_key.insert(key.clone(), index);
         self.nodes.push(Node::new(key, name, parent, is_folder));

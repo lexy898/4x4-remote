@@ -1,14 +1,12 @@
-//! A torrent whose file tree would take too much memory: more than 50 000 files, or keys beyond
+//! A torrent whose file tree would take too much memory: more than 50 000 files, or a tree beyond
 //! the budget (every node is keyed by its whole path, so a deep path costs the square of its
-//! depth). Such a tree is not made; the Files tab says the list is too large instead. Real
-//! torrents stay far below both.
+//! depth, and every file is in the list of each folder above it). Such a tree is not made; the
+//! Files tab says the list is too large instead. Real torrents stay far below both.
 
 use std::time::{Duration, Instant};
 
 use x4_core::test_support::details;
-use x4_core::{
-    FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, TREE_KEY_BUDGET, TorrentDetails,
-};
+use x4_core::{FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, TREE_BUDGET, TorrentDetails};
 use x4_rpc::FilePriority::Normal;
 
 use super::{hash, indices, key, open_all};
@@ -39,12 +37,12 @@ fn assert_refused_cheaply(details: &TorrentDetails) {
     assert!(tree.is_too_large());
     assert!(tree.is_empty());
     assert_eq!(FileTreeView::new(&tree).rows(&tree), Vec::new());
-    // Some 25 ms in a release build and 400 ms in a debug one; the bound only says it ends.
+    // At most some 150 ms in a release build and 1 s in a debug one; the bound only says it ends.
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     if let (true, Some(before), Some(after)) = (measured, peak_before, peak_kib()) {
-        // The budget and the nodes around it, far from the hundreds of MiB of a whole tree.
+        // The budget, 32 MiB, far from the hundreds of MiB of a whole tree.
         assert!(
-            after.saturating_sub(before) < 64 * 1024,
+            after.saturating_sub(before) < 40 * 1024,
             "{before} KiB to {after} KiB"
         );
     }
@@ -111,7 +109,7 @@ fn a_real_shaped_tree_is_not_affected() {
         .iter()
         .map(|row| row.key.as_str().len())
         .sum();
-    assert!(key_bytes < TREE_KEY_BUDGET / 16, "{key_bytes}");
+    assert!(key_bytes < TREE_BUDGET / 32, "{key_bytes}");
     assert!(tree.contains(&NodeKey::new("A Long Running Show/Season 19/Disc 4")));
 }
 
@@ -171,4 +169,36 @@ fn a_path_listed_50_000_times_is_shown_in_bounded_time() {
     assert_eq!(indices(&tree, "T/a\u{0}50000"), None);
     // Some 30 ms in a release build; the bound only says it ends.
     assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+}
+
+#[test]
+fn padding_files_deep_in_the_folders_are_too_large_to_show() {
+    // One file 2 000 folders deep, and 4 140 padding files beside it. Each padding file joins
+    // the list of every folder above it: 8 million indices, more than 60 MiB.
+    let deep = "a/".repeat(2_000);
+    let mut paths = vec![format!("T/{deep}f")];
+    paths.extend((0..4_140).map(|n| format!("T/{deep}_____padding_file_{n}")));
+
+    assert_refused_cheaply(&details_at(&paths));
+}
+
+#[test]
+fn many_files_under_a_deep_folder_are_too_large_to_show() {
+    // 40 000 files 180 folders deep. Each file joins the list of every folder above it: 7
+    // million indices.
+    let deep = "a/".repeat(180);
+    let paths: Vec<String> = (0..40_000).map(|n| format!("T/{deep}f{n}")).collect();
+
+    assert_refused_cheaply(&details_at(&paths));
+}
+
+#[test]
+fn many_short_chains_of_folders_are_too_large_to_show() {
+    // 50 000 files, each under its own chain of 14 folders: 750 000 nodes, some 300 MiB, though
+    // their keys alone would fit.
+    let paths: Vec<String> = (0..MAX_CHOOSABLE_FILES)
+        .map(|n| format!("x{n}/{}f", "a/".repeat(13)))
+        .collect();
+
+    assert_refused_cheaply(&details_at(&paths));
 }

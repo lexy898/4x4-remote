@@ -731,10 +731,10 @@ fn assert_offered_with_all_files(bytes: &Arc<[u8]>) {
     // The bound only says it ends: half a million files take some 3 s in a debug build.
     assert!(elapsed < std::time::Duration::from_secs(60), "{elapsed:?}");
     if let (true, Some(parsed), Some(after)) = (measured, peak_parsed, peak_kib()) {
-        // At most the key budget of a tree that was given up (17 MiB for the deep path). A tree
-        // of 500 000 files would take some 250 MiB, and copying their entries for it alone 40.
+        // At most the budget of a tree that was given up, 32 MiB. A tree of 500 000 files would
+        // take some 250 MiB, and copying their entries for it alone 40.
         assert!(
-            after.saturating_sub(parsed) < 32 * 1024,
+            after.saturating_sub(parsed) < 40 * 1024,
             "{parsed} KiB after the parse, {after} KiB after the form"
         );
     }
@@ -784,7 +784,7 @@ fn a_torrent_of_many_deep_chains_is_offered_with_all_files() {
 
 #[test]
 fn a_torrent_of_500_000_tiny_files_is_offered_with_all_files() {
-    // 14 MB, within the 16 MiB a file may have; the keys of its tree would fit their budget.
+    // 14 MB, within the 16 MiB a file may have.
     let paths: Vec<Vec<String>> = (0..500_000).map(|n| vec![n.to_string()]).collect();
     let bytes = folder_torrent("T", &paths);
     drop(paths);

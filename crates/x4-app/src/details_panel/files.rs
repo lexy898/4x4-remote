@@ -8,8 +8,8 @@
 //! open and the cursor, which outlives the tree and is fitted to each new one with
 //! [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
 //! metadata has no files yet, and the tab says so instead of the list; so it does for a file list
-//! too large to show ([`FileTree::is_too_large`]): more than 50 000 files, or folders nested
-//! thousands deep.
+//! too large to show ([`FileTree::is_too_large`]): more than 50 000 files, or files nested
+//! hundreds of folders deep.
 //! Before the details come it shows the switch and "—", as the General tab does for what only the
 //! details know.
 //!

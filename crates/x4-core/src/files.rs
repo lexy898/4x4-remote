@@ -7,9 +7,9 @@
 //! the files below it: their size and the bytes done, whether they are wanted ([`WantedState`])
 //! and at which priority ([`PriorityView`]). The torrent's own top folder is the first level.
 //! Padding files (BEP 47), which only align the pieces, are hidden, but a folder's actions reach
-//! them with the rest of its files. A tree of more than [`MAX_CHOOSABLE_FILES`] files, or whose
-//! keys would take more than [`TREE_KEY_BUDGET`], is not made ([`FileTree::is_too_large`]), so a
-//! list of files, crafted or merely huge, cannot take hundreds of MiB.
+//! them with the rest of its files. A tree of more than [`MAX_CHOOSABLE_FILES`] files, or that
+//! would take more than [`TREE_BUDGET`], is not made ([`FileTree::is_too_large`]), so a list of
+//! files, crafted or merely huge, cannot take hundreds of MiB.
 //!
 //! A [`FileTreeView`] is the part that the user changes: which folders are open and where the
 //! keyboard cursor is. It lists the visible [`FileRow`]s in order, folders first and then by name
@@ -30,7 +30,7 @@ mod names;
 mod tree;
 mod view;
 
-pub use tree::{FileTree, MAX_CHOOSABLE_FILES, TREE_KEY_BUDGET};
+pub use tree::{FileTree, MAX_CHOOSABLE_FILES, TREE_BUDGET};
 pub use view::{FileRow, FileTreeView, RowKind};
 
 /// The identity of a node of a [`FileTree`]: its path inside the torrent, `/`-separated.

@@ -247,8 +247,8 @@ that a file can be played while it downloads. A change shows once the daemon's n
 moment later, not before. While the daemon is not connected, the checkboxes, the priorities and the
 switch are disabled. Until the details have come, the tab says "—" under the switch. A magnet link
 has no files until its metadata has come; the tab says so, and the switch can be set already. A
-file list that would take too much memory to show, of more than 50 000 files or of folders nested
-thousands of levels deep, is not drawn: the tab says the list is too large to show.
+file list that would take too much memory to show, such as one of more than 50 000 files or of
+files nested hundreds of folders deep, is not drawn: the tab says the list is too large to show.
 
 A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
 Home and End move between the rows, Left closes a folder or goes to the folder around the row, Right
