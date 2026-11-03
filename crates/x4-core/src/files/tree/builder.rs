@@ -62,18 +62,45 @@ impl Node {
 ///
 /// A folder is made when the first shown file below it is added, so a folder that holds only
 /// padding files never exists. The parent of a node always has a smaller index than the node.
-#[derive(Default)]
+///
+/// The keys of the nodes may take `budget` bytes together. Each key is its node's whole path, so
+/// a deep path costs the square of its depth: 20 000 folders one in the other, 40 KB of names,
+/// would take some 400 MiB. Once the next key would pass the budget, the builder makes no more
+/// nodes and [`finish`](Self::finish) gives a tree that is too large to show.
 pub(super) struct Builder<'a> {
     nodes: Vec<Node>,
     top: Vec<usize>,
     /// The folder with this name in this folder (or at the first level).
     folders: HashMap<(Option<usize>, &'a str), usize>,
     by_key: HashMap<NodeKey, usize>,
+    /// The bytes of the keys made so far. A node and `by_key` share the bytes of its key.
+    key_bytes: usize,
+    budget: usize,
+    /// Whether a key did not fit in the budget.
+    over_budget: bool,
 }
 
 impl<'a> Builder<'a> {
+    /// A builder whose keys may take `budget` bytes together.
+    pub(super) fn new(budget: usize) -> Self {
+        Self {
+            nodes: Vec::new(),
+            top: Vec::new(),
+            folders: HashMap::new(),
+            by_key: HashMap::new(),
+            key_bytes: 0,
+            budget,
+            over_budget: false,
+        }
+    }
+
+    /// Whether a key did not fit in the budget: nothing more is added, and the tree is too large.
+    pub(super) fn over_budget(&self) -> bool {
+        self.over_budget
+    }
+
     /// Adds a file that is shown, with the folders above it. `parts` are the components of its
-    /// path, the last one its name.
+    /// path, the last one its name. Nothing is added once the budget is spent.
     pub(super) fn add_file(&mut self, entry: &FileEntry, parts: &[&'a str]) {
         let Some((&name, folder_parts)) = parts.split_last() else {
             return;
@@ -84,12 +111,17 @@ impl<'a> Builder<'a> {
             push_component(&mut path, part);
             let folder = match self.folders.get(&(parent, part)) {
                 Some(&folder) => folder,
-                None => self.add_node(parent, part, &path, true),
+                None => match self.add_node(parent, part, &path, true) {
+                    Some(folder) => folder,
+                    None => return,
+                },
             };
             parent = Some(folder);
         }
         push_component(&mut path, name);
-        let leaf = self.add_node(parent, name, &path, false);
+        let Some(leaf) = self.add_node(parent, name, &path, false) else {
+            return;
+        };
 
         let done = entry.bytes_completed.min(entry.length);
         let shown = Shown {
@@ -138,16 +170,30 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Adds an empty node under `parent` (or at the first level) and returns its index.
+    /// Adds an empty node under `parent` (or at the first level) and returns its index; `None`,
+    /// with nothing added, when its key does not fit in the budget.
     fn add_node(
         &mut self,
         parent: Option<usize>,
         name: &'a str,
         path: &str,
         is_folder: bool,
-    ) -> usize {
+    ) -> Option<usize> {
+        // A key is never shorter than its path, so a path that cannot fit is refused before its
+        // key is made; the exact count below takes the suffix of a repeated path into account.
+        if self.over_budget || self.budget.saturating_sub(self.key_bytes) < path.len() {
+            self.over_budget = true;
+            return None;
+        }
         let index = self.nodes.len();
         let key = self.unique_key(path);
+        match self.key_bytes.checked_add(key.as_str().len()) {
+            Some(total) if total <= self.budget => self.key_bytes = total,
+            _ => {
+                self.over_budget = true;
+                return None;
+            }
+        }
         self.by_key.insert(key.clone(), index);
         self.nodes.push(Node::new(key, name, parent, is_folder));
         match parent.and_then(|parent| self.nodes.get_mut(parent)) {
@@ -157,7 +203,7 @@ impl<'a> Builder<'a> {
         if is_folder {
             self.folders.insert((parent, name), index);
         }
-        index
+        Some(index)
     }
 
     /// The key for a node at `path`. A path that is taken (the daemon lists a path twice, or a
@@ -173,8 +219,18 @@ impl<'a> Builder<'a> {
         key
     }
 
-    /// Orders every folder's entries and the first level, and sorts the file lists.
+    /// Orders every folder's entries and the first level, and sorts the file lists; or, once
+    /// the budget is spent, gives an empty tree that says it is too large.
     pub(super) fn finish(mut self, hash: HashString) -> FileTree {
+        if self.over_budget {
+            return FileTree {
+                hash,
+                nodes: Vec::new(),
+                top: Vec::new(),
+                by_key: HashMap::new(),
+                too_large: true,
+            };
+        }
         for node in &mut self.nodes {
             node.files.sort_unstable();
         }
@@ -194,6 +250,7 @@ impl<'a> Builder<'a> {
             nodes: self.nodes,
             top: self.top,
             by_key: self.by_key,
+            too_large: false,
         }
     }
 }

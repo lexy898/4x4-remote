@@ -7,8 +7,10 @@
 //! when the tab opens and lets it go when the tab closes), and a [`FileTreeView`] with the folders
 //! open and the cursor, which outlives the tree and is fitted to each new one with
 //! [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
-//! metadata has no files yet, and the tab says so instead of the list; before the details come it
-//! shows the switch and "—", as the General tab does for what only the details know.
+//! metadata has no files yet, and the tab says so instead of the list; so it does for a file list
+//! too large to show ([`FileTree::is_too_large`]), such as one of folders nested thousands deep.
+//! Before the details come it shows the switch and "—", as the General tab does for what only the
+//! details know.
 //!
 //! Every change of files is built by the tree that was drawn: a click takes the tree of its frame,
 //! a key the tree on screen, and the tree's own `toggle_wanted_action`, `priority_action` and
@@ -213,6 +215,7 @@ impl DetailsPanel {
         let body = match &self.files.tree {
             // The details have not come yet; they come within a moment.
             None => note("files-pending", t!("details-pending")),
+            Some(tree) if tree.is_too_large() => note("files-too-large", t!("files-too-large")),
             Some(tree) if tree.is_empty() => note("files-no-metadata", t!("files-no-metadata")),
             Some(_) => self.file_list(window, cx).into_any_element(),
         };

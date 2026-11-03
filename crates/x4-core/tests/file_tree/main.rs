@@ -1,10 +1,11 @@
 //! The file tree of the details panel, through the public API the Files tab uses: what the rows
 //! show and which files an action on a row reaches (`structure`, and `edge_cases` for odd torrents),
-//! the actions the tree builds itself (`actions`), the tree of a bare list of files and
-//! the wanted toggle as data (`entries`), how the cursor and the open folders are moved
-//! (`navigation`), and what survives a refresh (`refresh`).
+//! the actions the tree builds itself (`actions`), the tree of a bare list of files and the wanted
+//! toggle as data (`entries`), a tree too large to make (`budget`), how the cursor and the open
+//! folders are moved (`navigation`), and what survives a refresh (`refresh`).
 
 mod actions;
+mod budget;
 mod edge_cases;
 mod entries;
 mod navigation;

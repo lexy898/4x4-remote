@@ -651,6 +651,9 @@ tracker-problem-scrape-timed-out = Tracker { $host } sends no peer counts: conne
 files-sequential = Download in order (sequential)
 # What the tab says instead of the files of a magnet link, before its metadata has come.
 files-no-metadata = The file list arrives with the torrent's metadata
+# What the tab says instead of a file list that would take too much memory to show, such as one
+# of folders nested thousands of levels deep.
+files-too-large = This torrent's file list is too large to show
 # The name of the list of files and folders, for screen readers.
 files-list = Files
 # The name of the checkbox of a file or folder, for screen readers. $name: its name.
