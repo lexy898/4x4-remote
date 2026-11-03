@@ -2,7 +2,8 @@
 //!
 //! - An [`AddQueue`] holds what the user asked to add, as [`AddItem`]s: paths and magnet links,
 //!   never the contents of a file. Its head is the one shown.
-//! - The app reads the head's `.torrent` file and core parses it: a [`LoadedItem`].
+//! - The app reads the head's `.torrent` file and core parses it: a [`LoadedItem`], whose
+//!   [`LoadedTorrent`] keeps the parse together with the bytes it was made from.
 //! - An [`AddForm`] is the dialog for that item: the folder, "Start immediately" and, for a
 //!   `.torrent`, the choice of files through the same [`FileTree`](crate::FileTree) as the
 //!   details panel.
@@ -19,5 +20,5 @@ mod form;
 mod queue;
 
 pub use folders::{MAX_FOLDER_PICKS, folder_picks};
-pub use form::{AddCheck, AddForm, LoadedItem};
+pub use form::{AddCheck, AddForm, LoadedItem, LoadedTorrent};
 pub use queue::{AddItem, AddQueue, QUEUE_CAP};

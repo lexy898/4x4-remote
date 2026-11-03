@@ -15,36 +15,10 @@ use crate::snapshot::Snapshot;
 
 /// The head of the [`AddQueue`](super::AddQueue) once it is read: the app reads a `.torrent`
 /// file, and [`LoadedItem::torrent`] parses it.
-///
-/// Its `Debug` shows a `.torrent` by its path, hash and length: its content names the trackers,
-/// whose addresses can carry passkeys.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LoadedItem {
     /// A `.torrent` file, read and parsed.
-    ///
-    /// It is made only by [`LoadedItem::torrent`], so `parsed` is always the parse of `bytes`:
-    /// the files the user leaves out are counted in the very bytes that are sent. Another crate
-    /// cannot pair a parse with other bytes:
-    ///
-    /// ```compile_fail,E0639
-    /// # use std::sync::Arc;
-    /// # fn pair(parsed: x4_core::ParsedTorrent) -> x4_core::LoadedItem {
-    /// x4_core::LoadedItem::Torrent {
-    ///     path: "/home/user/t.torrent".into(),
-    ///     parsed,
-    ///     bytes: Arc::from(&b"other bytes"[..]),
-    /// }
-    /// # }
-    /// ```
-    #[non_exhaustive]
-    Torrent {
-        /// The file it was read from.
-        path: PathBuf,
-        /// What `bytes` hold, as the daemon will read them.
-        parsed: ParsedTorrent,
-        /// The content of the file, exactly as parsed. It is sent as it is.
-        bytes: Arc<[u8]>,
-    },
+    Torrent(LoadedTorrent),
     /// A magnet link; `None` for the magnet form with an empty link, which the user fills in.
     Magnet(Option<MagnetLink>),
 }
@@ -58,29 +32,74 @@ impl LoadedItem {
     /// The [`MetainfoError`] of [`parse_torrent`] when the daemon could not add the file.
     pub fn torrent(path: PathBuf, bytes: Arc<[u8]>) -> Result<Self, MetainfoError> {
         let parsed = parse_torrent(&bytes)?;
-        Ok(Self::Torrent {
+        Ok(Self::Torrent(LoadedTorrent {
             path,
             parsed,
             bytes,
-        })
+        }))
     }
 }
 
-impl fmt::Debug for LoadedItem {
+/// A `.torrent` file, read and parsed by [`LoadedItem::torrent`], which alone makes one.
+///
+/// Its fields cannot be set from outside, so the parse is always that of the bytes: the files
+/// the user leaves out are counted in the very bytes that are sent. Another crate can neither
+/// pair a parse with other bytes nor change the bytes afterwards:
+///
+/// ```compile_fail,E0451
+/// # use std::sync::Arc;
+/// # fn pair(parsed: x4_core::ParsedTorrent) -> x4_core::LoadedTorrent {
+/// x4_core::LoadedTorrent {
+///     path: "/home/user/t.torrent".into(),
+///     parsed,
+///     bytes: Arc::from(&b"other bytes"[..]),
+/// }
+/// # }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use std::sync::Arc;
+/// # fn swap(torrent: &mut x4_core::LoadedTorrent) {
+/// torrent.bytes = Arc::from(&b"other bytes"[..]);
+/// # }
+/// ```
+///
+/// Its `Debug` shows it by its path, hash and length: its content names the trackers, whose
+/// addresses can carry passkeys.
+#[derive(Clone)]
+pub struct LoadedTorrent {
+    path: PathBuf,
+    parsed: ParsedTorrent,
+    bytes: Arc<[u8]>,
+}
+
+impl LoadedTorrent {
+    /// The file it was read from.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// What the bytes hold, as the daemon will read them.
+    #[must_use]
+    pub fn parsed(&self) -> &ParsedTorrent {
+        &self.parsed
+    }
+
+    /// The content of the file, exactly as parsed; it is sent as it is.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl fmt::Debug for LoadedTorrent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Torrent {
-                path,
-                parsed,
-                bytes,
-            } => f
-                .debug_struct("Torrent")
-                .field("path", path)
-                .field("hash", &parsed.hash)
-                .field("len", &bytes.len())
-                .finish_non_exhaustive(),
-            Self::Magnet(link) => f.debug_tuple("Magnet").field(link).finish(),
-        }
+        f.debug_struct("LoadedTorrent")
+            .field("path", &self.path)
+            .field("hash", &self.parsed.hash)
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -141,11 +160,11 @@ impl AddForm {
     #[must_use]
     pub fn new(item: LoadedItem, folder: String, start: bool) -> Self {
         let source = match item {
-            LoadedItem::Torrent {
+            LoadedItem::Torrent(LoadedTorrent {
                 path,
                 parsed,
                 bytes,
-            } => Source::Torrent {
+            }) => Source::Torrent {
                 path,
                 name: parsed.name,
                 choice: parsed
@@ -166,8 +185,11 @@ impl AddForm {
     /// The tree of the files to choose from, whose checkboxes show the choice: `None` for a
     /// magnet link, whose files are known only once its metadata arrives, and for a `.torrent`
     /// that can be added only with all its files.
+    ///
+    /// The tree is shared, so the dialog can keep it for the rows it draws. A click makes a new
+    /// one; a tree kept stays as it was drawn.
     #[must_use]
-    pub fn tree(&self) -> Option<&FileTree> {
+    pub fn tree(&self) -> Option<&Arc<FileTree>> {
         match &self.source {
             Source::Torrent {
                 choice: Some(choice),

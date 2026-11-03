@@ -128,7 +128,8 @@ pub use action::{
     Action, ActionError, ActionId, AddError, Added, Direction, FileChange, FileTarget,
 };
 pub use adding::{
-    AddCheck, AddForm, AddItem, AddQueue, LoadedItem, MAX_FOLDER_PICKS, QUEUE_CAP, folder_picks,
+    AddCheck, AddForm, AddItem, AddQueue, LoadedItem, LoadedTorrent, MAX_FOLDER_PICKS, QUEUE_CAP,
+    folder_picks,
 };
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};

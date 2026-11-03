@@ -1,5 +1,7 @@
 //! The files of a `.torrent` the user chooses to download, before anything is sent.
 
+use std::sync::Arc;
+
 use x4_rpc::{FilePriority, HashString};
 
 use crate::details::FileEntry;
@@ -9,12 +11,13 @@ use crate::metainfo::MetaFile;
 /// Which files of a `.torrent` are wanted, and the tree that shows them.
 ///
 /// Each file keeps the index the daemon will give it: its position in the parse. The tree is made
-/// again from the files after each change, so its checkboxes always show the choice.
+/// again from the files after each change, so its checkboxes always show the choice; a tree handed
+/// out before stays as it was, like the details panel's tree of an older read.
 pub(super) struct FileChoice {
     /// The files at the daemon's indices (`files[i].index == i`), as the tree is made from:
     /// nothing downloaded, the normal priority, and wanted as chosen.
     files: Vec<FileEntry>,
-    tree: FileTree,
+    tree: Arc<FileTree>,
 }
 
 impl FileChoice {
@@ -33,12 +36,12 @@ impl FileChoice {
                 playable_from_start: 0,
             })
             .collect();
-        let tree = FileTree::of_files(hash, &files);
+        let tree = Arc::new(FileTree::of_files(hash, &files));
         Self { files, tree }
     }
 
     /// The tree that shows the files and the choice.
-    pub(super) fn tree(&self) -> &FileTree {
+    pub(super) fn tree(&self) -> &Arc<FileTree> {
         &self.tree
     }
 
@@ -54,7 +57,7 @@ impl FileChoice {
                 file.wanted = wanted;
             }
         }
-        self.tree = FileTree::of_files(self.tree.hash().clone(), &self.files);
+        self.tree = Arc::new(FileTree::of_files(self.tree.hash().clone(), &self.files));
     }
 
     /// The indices of the files not wanted, in ascending order, each once and each less than the

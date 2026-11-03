@@ -42,7 +42,7 @@ fn loaded(files: Option<&[(&str, u64)]>) -> LoadedItem {
             })
             .collect()
     });
-    LoadedItem::Torrent {
+    LoadedItem::Torrent(LoadedTorrent {
         path: PathBuf::from(PATH),
         parsed: ParsedTorrent {
             name: "T".to_owned(),
@@ -53,7 +53,7 @@ fn loaded(files: Option<&[(&str, u64)]>) -> LoadedItem {
             files,
         },
         bytes: content(),
-    }
+    })
 }
 
 fn form_of(files: &[(&str, u64)]) -> AddForm {
@@ -386,6 +386,31 @@ fn a_magnet_form_never_sends_unwanted_files() {
 }
 
 #[test]
+fn the_tree_can_be_kept_while_the_form_changes() {
+    let mut form = form_of(&[("T/a", 1), ("T/b", 1)]);
+    let drawn = Arc::clone(form.tree().unwrap());
+
+    form.toggle_wanted(&key("T/a"));
+
+    // The tree drawn stays as it was drawn; the form has a new one with the choice.
+    let now = form.tree().unwrap();
+    assert!(!Arc::ptr_eq(&drawn, now));
+    assert_eq!(
+        drawn.wanted_toggle(&key("T/a")).map(|(_, wanted)| wanted),
+        Some(false),
+        "wanted when it was drawn"
+    );
+    assert_eq!(
+        now.wanted_toggle(&key("T/a")).map(|(_, wanted)| wanted),
+        Some(true)
+    );
+    // A key that changes nothing keeps the tree.
+    let before = Arc::clone(form.tree().unwrap());
+    form.toggle_wanted(&key("T/none"));
+    assert!(Arc::ptr_eq(&before, form.tree().unwrap()));
+}
+
+#[test]
 fn a_torrent_already_in_the_list_is_named_not_sent() {
     let present = Torrent {
         hash: hash(),
@@ -575,10 +600,12 @@ fn a_loaded_torrent_holds_the_parse_of_its_own_bytes() {
 
     let item = LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(&bytes)).unwrap();
 
-    let LoadedItem::Torrent { parsed, .. } = &item else {
+    let LoadedItem::Torrent(torrent) = &item else {
         panic!("a torrent");
     };
-    assert_eq!(*parsed, parse_torrent(&bytes).unwrap());
+    assert_eq!(*torrent.parsed(), parse_torrent(&bytes).unwrap());
+    assert_eq!(torrent.bytes(), &*bytes);
+    assert_eq!(torrent.path(), Path::new(PATH));
     let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
     assert_eq!(ready(&form).source, AddSource::Metainfo(Arc::clone(&bytes)));
     assert_eq!(form.name(), Some("a.bin"));
