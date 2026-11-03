@@ -4,6 +4,8 @@
 //! toggle as data (`entries`), a tree too large to make (`budget`), how the cursor and the open
 //! folders are moved (`navigation`), and what survives a refresh (`refresh`).
 
+use std::sync::Arc;
+
 mod actions;
 mod budget;
 mod edge_cases;
@@ -34,7 +36,7 @@ fn details_of(files: &[Spec<'_>]) -> TorrentDetails {
 }
 
 fn tree_of(files: &[Spec<'_>]) -> FileTree {
-    FileTree::new(&details_of(files))
+    FileTree::new(&Arc::new(details_of(files)))
 }
 
 fn key(path: &str) -> NodeKey {

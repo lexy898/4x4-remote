@@ -1,6 +1,8 @@
 //! Torrents with odd paths, a lot of files, or data that disagrees with itself: the tree must
 //! still name the right files and never an empty list.
 
+use std::sync::Arc;
+
 use x4_core::{Action, FileTree, FileTreeView, PriorityView, RowKind, WantedState, human_size};
 use x4_rpc::FilePriority::{High, Low, Normal};
 
@@ -107,7 +109,7 @@ fn a_large_torrent_keeps_every_index_exactly_once_and_in_order() {
         })
         .collect();
 
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details));
     let rows = open_all(&tree).rows(&tree);
 
     assert_eq!(indices(&tree, "T"), Some((0..2_000).collect()));
@@ -133,7 +135,7 @@ fn every_row_names_a_non_empty_list_of_files_that_exist() {
         ("T/sub/deep/c.mkv", 1, 0, true, Normal),
         ("T/sub/deep/_____padding_file_6", 1, 0, true, Normal),
     ]);
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details.clone()));
 
     for row in open_all(&tree).rows(&tree) {
         let indices = tree
@@ -208,7 +210,7 @@ fn indices_and_actions_carry_the_index_of_the_entry_not_its_position() {
     for (file, index) in details.files.iter_mut().zip([10, 20, 30, 25]) {
         file.index = index;
     }
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details));
 
     assert_eq!(indices(&tree, "T"), Some(vec![10, 20, 25, 30]));
     assert_eq!(indices(&tree, "T/sub"), Some(vec![20, 25, 30]));
@@ -270,7 +272,7 @@ fn timed_tree_of(names: &[String]) -> (FileTree, std::time::Duration) {
         .iter()
         .map(|path| (path.as_str(), 1, 0, true, Normal))
         .collect();
-    let crafted = details_of(&files);
+    let crafted = Arc::new(details_of(&files));
     let start = std::time::Instant::now();
     let tree = FileTree::new(&crafted);
     (tree, start.elapsed())
@@ -440,7 +442,7 @@ fn names_crafted_to_compare_slowly_are_ordered_in_bounded_time() {
         .iter()
         .map(|path| (path.as_str(), 1, 0, true, Normal))
         .collect();
-    let crafted = details_of(&files);
+    let crafted = Arc::new(details_of(&files));
     let start = std::time::Instant::now();
 
     let tree = FileTree::new(&crafted);

@@ -6,7 +6,10 @@
 //! the panel's torrent while the tab is open (the panel keeps the newest details, makes the tree
 //! when the tab opens and lets it go when the tab closes), and a [`FileTreeView`] with the folders
 //! open and the cursor, which outlives the tree and is fitted to each new one with
-//! [`FileTreeView::retain`]; the rows are what the view lists. A magnet link without
+//! [`FileTreeView::retain`]; the rows are what the view lists. A read that lists the same files,
+//! as the reads of a torrent's progress do every few seconds, keeps the tree's folders and files
+//! ([`FileTree::refreshed`]): only the first read after the tab opens sorts the names, which for
+//! 50 000 files takes tens of milliseconds of the window's thread. A magnet link without
 //! metadata has no files yet, and the tab says so instead of the list; so it does for a file list
 //! too large to show ([`FileTree::is_too_large`]): more than 50 000 files, or files nested
 //! hundreds of folders deep.
@@ -49,11 +52,9 @@ const FILE_LIST_ID: &str = "file-list";
 
 /// What the Files tab shows and what the user has done to it.
 pub(super) struct FilesTab {
-    /// The tree drawn: of the details of the panel's torrent; `None` until they come, while the
-    /// panel is about no single torrent or hidden, and while another tab is open.
+    /// The tree drawn: of the details of the panel's torrent, which it keeps; `None` until they
+    /// come, while the panel is about no single torrent or hidden, and while another tab is open.
     tree: Option<Arc<FileTree>>,
-    /// The details `tree` was made from, so that the same details make no new tree.
-    made_from: Option<Arc<TorrentDetails>>,
     /// The folders open and the cursor.
     view: FileTreeView,
     /// The rows of `tree` that `view` shows, in order.
@@ -69,7 +70,6 @@ impl FilesTab {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             tree: None,
-            made_from: None,
             view: FileTreeView::default(),
             rows: Vec::new(),
             focus: cx.focus_handle().tab_stop(true),
@@ -84,6 +84,7 @@ impl FilesTab {
 
     /// Takes `details`, those of the panel's torrent, or `None` while it has none: makes their
     /// tree, unless it was made from them already, and fits the open folders and the cursor to it.
+    /// The tree of details that list the files of the tree drawn keeps its folders and files.
     /// Returns whether the tab shows something else now.
     pub(super) fn follow(&mut self, details: Option<&Arc<TorrentDetails>>) -> bool {
         let Some(details) = details else {
@@ -92,17 +93,21 @@ impl FilesTab {
             return changed;
         };
         if self
-            .made_from
+            .tree
             .as_ref()
-            .is_some_and(|made_from| Arc::ptr_eq(made_from, details))
+            .is_some_and(|tree| tree.is_made_from(details))
         {
             return false;
         }
-        let tree = Arc::new(FileTree::new(details));
+        let tree = self
+            .tree
+            .as_ref()
+            .and_then(|tree| tree.refreshed(details))
+            .unwrap_or_else(|| FileTree::new(details));
+        let tree = Arc::new(tree);
         self.view.retain(&tree);
         self.rows = self.view.rows(&tree);
         self.tree = Some(tree);
-        self.made_from = Some(Arc::clone(details));
         true
     }
 
@@ -112,7 +117,6 @@ impl FilesTab {
     /// tree of the same torrent keeps them.
     pub(super) fn leave(&mut self) {
         self.tree = None;
-        self.made_from = None;
         drop(std::mem::take(&mut self.rows));
     }
 

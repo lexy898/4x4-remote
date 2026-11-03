@@ -824,6 +824,19 @@ the five files, and the app after 5 seconds:
   skipped, and 31.5 MiB after five: each skipped file's bytes and tree are freed, and the next one
   reuses the memory.
 
+The Files tab keeps its tree from one read of the details to the next while the torrent's files
+stay the same, which they do while it downloads: each read every 3 seconds only takes in the
+progress, the priorities and which files are wanted, and the names are sorted once, when the tab
+opens on the torrent. Measured on the same laptop in release builds of x4-core, the best of three,
+making the tree and its rows against taking a read into the tree kept:
+
+| Files of the torrent                            | Tree made at each read | Tree kept |
+| ----------------------------------------------- | ---------------------- | --------- |
+| 5000, four folders deep, long names             | 1.95 ms                | 0.05 ms   |
+| 50 000, four folders deep, long names           | 19.6 ms                | 1.0 ms    |
+| 50 000 in one folder, open                      | 14.0 ms                | 3.1 ms    |
+| 36 000 names crafted to compare slowly, open    | 667 ms                 | 14 ms     |
+
 ## Development
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and

@@ -1,6 +1,8 @@
 //! The tree made from a bare list of files, as the add dialog makes it from a `.torrent`, and the
 //! wanted toggle as data, which the dialog applies to its own choice of files.
 
+use std::sync::Arc;
+
 use x4_core::test_support::details;
 use x4_core::{
     Action, FileTree, NodeKey, PriorityView, RowKind, TorrentDetails, WantedState, human_size,
@@ -150,7 +152,7 @@ fn the_details_tree_is_unchanged_by_the_new_constructor() {
         file.playable_from_start = 4;
     }
     // The comparison covers the progress too: the first file has a prefix to play.
-    let tree = FileTree::new(&downloading);
+    let tree = FileTree::new(&Arc::new(downloading.clone()));
     let rows = open_all(&tree).rows(&tree);
     assert!(rows.iter().any(|row| row.playable.is_some()));
     assert!(rows.iter().any(|row| row.percent > 0));
@@ -164,6 +166,7 @@ fn the_details_tree_is_unchanged_by_the_new_constructor() {
         ),
     ];
     for (label, details) in cases {
+        let details = Arc::new(details);
         let from_details = FileTree::new(&details);
         let from_files = FileTree::of_files(details.hash.clone(), &details.files);
 

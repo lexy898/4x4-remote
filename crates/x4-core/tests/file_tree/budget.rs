@@ -3,6 +3,8 @@
 //! depth, and every file is in the list of each folder above it). Such a tree is not made; the
 //! Files tab says the list is too large instead. Real torrents stay far below both.
 
+use std::sync::Arc;
+
 use std::time::{Duration, Instant};
 
 use x4_core::test_support::details;
@@ -26,14 +28,14 @@ fn peak_kib() -> Option<u64> {
 }
 
 /// Makes the tree of `details` and asserts that it is refused within bounded time and memory.
-fn assert_refused_cheaply(details: &TorrentDetails) {
+fn assert_refused_cheaply(details: &Arc<TorrentDetails>) {
     // The budget, 32 MiB, far from the hundreds of MiB of a whole tree.
     assert_refused_within(details, 40 * 1024);
 }
 
 /// Makes the tree of `details` and asserts that it is refused within bounded time, and that its
 /// peak memory grows by less than `most_kib`.
-fn assert_refused_within(details: &TorrentDetails, most_kib: u64) {
+fn assert_refused_within(details: &Arc<TorrentDetails>, most_kib: u64) {
     let measured = restart_peak();
     let peak_before = peak_kib();
     let start = Instant::now();
@@ -59,7 +61,7 @@ fn a_deep_path_is_too_large_to_show() {
     // About 40 KB of names: 20 000 folders, one in the other. The whole tree would take some
     // 400 MiB of keys.
     let path = "a/".repeat(20_000) + "f";
-    let deep = details(&hash(), &[(path.as_str(), 5, 0, true, Normal)]);
+    let deep = Arc::new(details(&hash(), &[(path.as_str(), 5, 0, true, Normal)]));
 
     assert_refused_cheaply(&deep);
     assert_eq!(indices(&FileTree::new(&deep), "a"), None);
@@ -71,7 +73,7 @@ fn a_path_of_millions_of_folders_is_too_large_to_show() {
     // 8 million folders, one in the other, in 16 MB of path. Splitting the path into its parts
     // before counting anything took 128 MiB for the list of parts alone.
     let path = format!("T/{}f", "a/".repeat(8_000_000));
-    let deep = details(&hash(), &[(path.as_str(), 5, 0, true, Normal)]);
+    let deep = Arc::new(details(&hash(), &[(path.as_str(), 5, 0, true, Normal)]));
 
     // Given up once its folders are counted, before a single node is made: making nodes until the
     // budget ran out took the 32 MiB of the budget.
@@ -89,9 +91,9 @@ fn many_deep_chains_that_part_near_the_top_are_too_large() {
         .map(|path| (path.as_str(), 1, 0, true, Normal))
         .collect();
 
-    assert_refused_cheaply(&details(&hash(), &files));
+    assert_refused_cheaply(&Arc::new(details(&hash(), &files)));
     // Three of them fit.
-    let fewer = FileTree::new(&details(&hash(), files.get(..3).unwrap()));
+    let fewer = FileTree::new(&Arc::new(details(&hash(), files.get(..3).unwrap())));
     assert!(!fewer.is_too_large());
     assert_eq!(indices(&fewer, "T"), Some(vec![0, 1, 2]));
 }
@@ -114,7 +116,7 @@ fn a_real_shaped_tree_is_not_affected() {
         .map(|path| (path.as_str(), 1 << 30, 0, true, Normal))
         .collect();
 
-    let tree = FileTree::new(&details(&hash(), &files));
+    let tree = FileTree::new(&Arc::new(details(&hash(), &files)));
 
     assert!(!tree.is_too_large());
     assert_eq!(
@@ -132,13 +134,13 @@ fn a_real_shaped_tree_is_not_affected() {
 }
 
 /// The details of `count` files, `T/0` to `T/{count - 1}`.
-fn numbered(count: usize) -> TorrentDetails {
+fn numbered(count: usize) -> Arc<TorrentDetails> {
     let paths: Vec<String> = (0..count).map(|n| format!("T/{n}")).collect();
     let files: Vec<(&str, u64, u64, bool, x4_rpc::FilePriority)> = paths
         .iter()
         .map(|path| (path.as_str(), 1, 0, true, Normal))
         .collect();
-    details(&hash(), &files)
+    Arc::new(details(&hash(), &files))
 }
 
 #[test]
@@ -157,12 +159,12 @@ fn more_than_50_000_files_are_too_large_to_show() {
 }
 
 /// The details of the files at `paths`, each one byte long and wanted.
-fn details_at(paths: &[String]) -> TorrentDetails {
+fn details_at(paths: &[String]) -> Arc<TorrentDetails> {
     let files: Vec<(&str, u64, u64, bool, x4_rpc::FilePriority)> = paths
         .iter()
         .map(|path| (path.as_str(), 1, 0, true, Normal))
         .collect();
-    details(&hash(), &files)
+    Arc::new(details(&hash(), &files))
 }
 
 #[test]

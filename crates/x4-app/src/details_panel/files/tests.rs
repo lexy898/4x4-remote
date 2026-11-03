@@ -23,13 +23,10 @@ fn read(hash: &HashString) -> Arc<TorrentDetails> {
     ))
 }
 
-/// The details the tree of the Files tab was made from, if it has one.
-fn made_from(
-    panel: WindowHandle<DetailsPanel>,
-    cx: &mut TestAppContext,
-) -> Option<Arc<TorrentDetails>> {
+/// The tree of the Files tab, if it has one.
+fn tree_of(panel: WindowHandle<DetailsPanel>, cx: &mut TestAppContext) -> Option<Arc<FileTree>> {
     panel
-        .update(cx, |panel, _, _| panel.files.made_from.clone())
+        .update(cx, |panel, _, _| panel.files.tree.clone())
         .expect("the panel is open")
 }
 
@@ -49,7 +46,7 @@ fn made_from_read(
     read: &Arc<TorrentDetails>,
     cx: &mut TestAppContext,
 ) -> bool {
-    made_from(panel, cx).is_some_and(|made_from| Arc::ptr_eq(&made_from, read))
+    tree_of(panel, cx).is_some_and(|tree| tree.is_made_from(read))
 }
 
 #[gpui_kit::test]
@@ -163,8 +160,84 @@ fn at_the_second_episode(
     held
 }
 
+/// The progress of the row at `path` of the Files tab of `panel`, in whole percent.
+fn percent_of(panel: WindowHandle<DetailsPanel>, path: &str, cx: &mut TestAppContext) -> u8 {
+    panel
+        .update(cx, |panel, _, _| {
+            panel
+                .files
+                .rows
+                .iter()
+                .find(|row| row.key.as_str() == path)
+                .map(|row| row.percent)
+        })
+        .expect("the panel is open")
+        .expect("the row is listed")
+}
+
+#[gpui_kit::test]
+fn a_read_of_the_same_files_keeps_the_tree_its_rows_and_the_cursor(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let show = torrent("a");
+    let before = at_the_second_episode(panel, &show, cx);
+    let first = tree_of(panel, cx).expect("a tree");
+
+    // The next read of the progress lists the same files: the tree is not made again, and shows
+    // what the read says.
+    let progressed = Arc::new(details(
+        &show.hash,
+        &[
+            ("Show/Season 1/E01.mkv", 1024, 512, true, FilePriority::High),
+            (
+                "Show/Season 1/E02.mkv",
+                1024,
+                0,
+                false,
+                FilePriority::Normal,
+            ),
+            ("Show/info.nfo", 1, 1, true, FilePriority::Normal),
+        ],
+    ));
+    change(panel, cx, |panel, cx| {
+        panel.take_details(Arc::clone(&progressed), cx);
+    });
+
+    let second = tree_of(panel, cx).expect("a tree");
+    assert!(second.shares_files_with(&first), "not made again");
+    assert!(second.is_made_from(&progressed));
+    assert_eq!(held(panel, cx), before);
+    assert_eq!(percent_of(panel, "Show/Season 1/E01.mkv", cx), 50);
+
+    // A read in which a file has another name lists other files: a new tree, fitted to them.
+    let renamed = Arc::new(details(
+        &show.hash,
+        &[
+            ("Show/Season 1/E01.mkv", 1024, 512, true, FilePriority::High),
+            (
+                "Show/Season 1/E02 (fixed).mkv",
+                1024,
+                0,
+                false,
+                FilePriority::Normal,
+            ),
+            ("Show/info.nfo", 1, 1, true, FilePriority::Normal),
+        ],
+    ));
+    change(panel, cx, |panel, cx| panel.take_details(renamed, cx));
+
+    let third = tree_of(panel, cx).expect("a tree");
+    assert!(!third.shares_files_with(&second));
+    let (_, rows, cursor) = held(panel, cx);
+    assert!(rows.contains(&"Show/Season 1/E02 (fixed).mkv".to_owned()));
+    assert_eq!(
+        cursor.as_deref(),
+        Some("Show/Season 1"),
+        "the folder that is left"
+    );
+}
+
 /// What the panel keeps of the reads it was given: whether it has details, a General model and a
-/// tree (or the details a tree was made from), and how many rows its Files tab has room for.
+/// tree, which keeps the details it was made from, and how many rows its Files tab has room for.
 fn kept(panel: WindowHandle<DetailsPanel>, cx: &mut TestAppContext) -> (bool, bool, bool, usize) {
     panel
         .update(cx, |panel, _, _| {
@@ -172,7 +245,7 @@ fn kept(panel: WindowHandle<DetailsPanel>, cx: &mut TestAppContext) -> (bool, bo
             (
                 panel.details.is_some(),
                 panel.general.is_some(),
-                files.tree.is_some() || files.made_from.is_some(),
+                files.tree.is_some(),
                 files.rows.capacity(),
             )
         })
@@ -286,7 +359,7 @@ fn no_details_leave_no_room_kept_for_the_rows(cx: &mut TestAppContext) {
     assert!(tab.follow(None));
 
     assert_eq!(tab.rows.capacity(), 0, "the room of 2001 rows is let go");
-    assert!(tab.tree.is_none() && tab.made_from.is_none());
+    assert!(tab.tree.is_none());
 }
 
 /// Draws the window of `panel`.
@@ -379,14 +452,14 @@ fn the_tree_is_made_only_while_the_files_tab_is_shown(cx: &mut TestAppContext) {
         panel.show(DetailsTarget::One(film.hash.clone()), Some(&film), cx);
         panel.take_details(Arc::clone(&first), cx);
     });
-    assert!(made_from(panel, cx).is_none(), "no tree on the General tab");
+    assert!(tree_of(panel, cx).is_none(), "no tree on the General tab");
 
     // The progress is read again every few seconds; on the General tab that makes no tree.
     let second = read(&film.hash);
     change(panel, cx, |panel, cx| {
         panel.take_details(Arc::clone(&second), cx);
     });
-    assert!(made_from(panel, cx).is_none(), "still none");
+    assert!(tree_of(panel, cx).is_none(), "still none");
 
     // The Files tab makes it from the newest read, and again from each newer one.
     change(panel, cx, |panel, cx| {
@@ -407,7 +480,7 @@ fn the_tree_is_made_only_while_the_files_tab_is_shown(cx: &mut TestAppContext) {
     change(panel, cx, |panel, cx| {
         panel.take_details(Arc::clone(&fourth), cx);
     });
-    assert!(made_from(panel, cx).is_none(), "none on General");
+    assert!(tree_of(panel, cx).is_none(), "none on General");
     change(panel, cx, |panel, cx| {
         panel.set_tab(DetailsTab::Files, cx);
     });

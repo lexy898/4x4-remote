@@ -1,26 +1,14 @@
-//! How a [`FileTree`] is grown from the flat list of files: one node per folder and file, the
-//! sums of each folder, the padding files in the lists of the folders shown, and every folder's
-//! entries in display order.
+//! How the folders and files of a [`FileTree`](super::FileTree) are grown from the flat list of
+//! files: one node per folder and file, the sizes of each folder, the padding files in the lists
+//! of the folders shown, and every folder's entries in display order. What a read says of them is
+//! taken afterwards, for this read and for later ones of the same files.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use x4_rpc::{FilePriority, HashString};
-
+use super::super::NodeKey;
 use super::super::names::name_order;
-use super::super::{NodeKey, PriorityView, WantedState};
-use super::{FOLDER_COST, FileTree, INDEX_COST, NODE_COST, Node, Shape, parts};
+use super::{FILE_NODE_COST, FOLDER_COST, INDEX_COST, NODE_COST, Node, Shape, parts};
 use crate::details::FileEntry;
-use crate::playable::Playable;
-
-/// What a shown file adds to every folder above it.
-struct Shown {
-    index: usize,
-    size: u64,
-    done: u64,
-    wanted: WantedState,
-    priority: PriorityView,
-}
 
 impl Node {
     fn new(key: NodeKey, name: &str, parent: Option<usize>, is_folder: bool) -> Self {
@@ -31,41 +19,26 @@ impl Node {
             children: Vec::new(),
             is_folder,
             size: 0,
-            done: 0,
-            // Replaced by the first file that is added; a node exists only for a shown file.
-            priority: PriorityView::One(FilePriority::Normal),
             files: Vec::new(),
-            playable: None,
         }
     }
 
-    /// Adds a shown file to the sums of this folder, whose wanted state is `wanted`.
-    fn absorb(&mut self, wanted: &mut WantedState, file: &Shown) {
-        if self.files.is_empty() {
-            *wanted = file.wanted;
-            self.priority = file.priority;
-        } else {
-            if *wanted != file.wanted {
-                *wanted = WantedState::Mixed;
-            }
-            if self.priority != file.priority {
-                self.priority = PriorityView::Mixed;
-            }
-        }
-        self.size = self.size.saturating_add(file.size);
-        self.done = self.done.saturating_add(file.done);
-        self.files.push(file.index);
+    /// Adds a shown file of `size` bytes, at `index`, to this folder or file.
+    fn absorb(&mut self, index: usize, size: u64) {
+        self.size = self.size.saturating_add(size);
+        self.files.push(index);
     }
 }
 
-/// Grows the tree one file at a time.
+/// Grows the folders and files one file at a time.
 ///
 /// A folder is made when the first shown file below it is added, so a folder that holds only
 /// padding files never exists. The parent of a node always has a smaller index than the node.
 ///
 /// The tree may take `budget` bytes, as the builder counts them: [`NODE_COST`] and the bytes of
 /// the key and the name for each node, [`FOLDER_COST`] more for a folder, [`INDEX_COST`] for
-/// each index a list of files has room for, and the room of the path being walked. Each key is
+/// each index a list of files has room for, [`FILE_NODE_COST`] for each file of the list, and the
+/// room of the path being walked. Each key is
 /// its node's whole path, so a deep path costs the square of its depth: 20 000 folders one in the
 /// other, 40 KB of names, would take some 400 MiB. Each file is in the list of every folder above
 /// it, so 40 000 files 180 folders deep would take 60 MiB of lists. Once the next cost would pass
@@ -73,9 +46,9 @@ impl Node {
 /// large to show.
 pub(super) struct Builder<'a> {
     nodes: Vec<Node>,
-    /// The wanted state of each node, at its index.
-    wanted: Vec<WantedState>,
     top: Vec<usize>,
+    /// The node of each file of the list, at its place in it.
+    file_nodes: Vec<Option<usize>>,
     /// The folder with this name in this folder (or at the first level).
     folders: HashMap<(Option<usize>, &'a str), usize>,
     by_key: HashMap<NodeKey, usize>,
@@ -92,12 +65,12 @@ pub(super) struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    /// A builder of a tree that may take `budget` bytes.
-    pub(super) fn new(budget: usize) -> Self {
-        Self {
+    /// A builder of a tree of a list of `files` files that may take `budget` bytes.
+    pub(super) fn new(budget: usize, files: usize) -> Self {
+        let mut builder = Self {
             nodes: Vec::new(),
-            wanted: Vec::new(),
             top: Vec::new(),
+            file_nodes: Vec::new(),
             folders: HashMap::new(),
             by_key: HashMap::new(),
             suffixes: HashMap::new(),
@@ -105,7 +78,11 @@ impl<'a> Builder<'a> {
             spent: 0,
             budget,
             over_budget: false,
+        };
+        if builder.charge(files.saturating_mul(FILE_NODE_COST)) {
+            builder.file_nodes = vec![None; files];
         }
+        builder
     }
 
     /// Whether a cost did not fit in the budget: nothing more is added, and the tree is too large.
@@ -113,15 +90,15 @@ impl<'a> Builder<'a> {
         self.over_budget
     }
 
-    /// Adds a file that is shown, with the folders above it: the components of its path, the
-    /// last one its name. A path without any is a file without a name, which the user still sees
-    /// and acts on. Nothing is added once the budget is spent.
+    /// Adds a file that is shown, the one at `place` in the list, with the folders above it: the
+    /// components of its path, the last one its name. A path without any is a file without a
+    /// name, which the user still sees and acts on. Nothing is added once the budget is spent.
     ///
     /// Each folder of a path is a node of its own, which takes at least [`NODE_COST`] and
     /// [`FOLDER_COST`]. A path with more folders than the budget holds of those spends the budget
     /// at once, when its components have been counted and before anything is made: 8 million
     /// folders in a path of 16 MB would otherwise be split into a list of parts of 128 MiB.
-    pub(super) fn add_file(&mut self, entry: &'a FileEntry) {
+    pub(super) fn add_file(&mut self, place: usize, entry: &'a FileEntry) {
         let folders = parts(&entry.name).count().saturating_sub(1);
         if folders > self.budget / (NODE_COST + FOLDER_COST) {
             self.over_budget = true;
@@ -129,12 +106,12 @@ impl<'a> Builder<'a> {
         }
         let mut path = std::mem::take(&mut self.path);
         path.clear();
-        self.add_file_at(entry, &mut path);
+        self.add_file_at(place, entry, &mut path);
         self.path = path;
     }
 
     /// [`add_file`](Self::add_file), with `path`, empty, as the buffer of the path walked.
-    fn add_file_at(&mut self, entry: &'a FileEntry, path: &mut String) {
+    fn add_file_at(&mut self, place: usize, entry: &'a FileEntry, path: &mut String) {
         let mut rest = parts(&entry.name).peekable();
         let mut parent = None;
         let mut name = "";
@@ -158,41 +135,20 @@ impl<'a> Builder<'a> {
         let Some(leaf) = self.add_node(parent, name, path, false) else {
             return;
         };
+        if let Some(slot) = self.file_nodes.get_mut(place) {
+            *slot = Some(leaf);
+        }
 
-        let done = entry.bytes_completed.min(entry.length);
-        let shown = Shown {
-            index: entry.index,
-            size: entry.length,
-            done,
-            wanted: if entry.wanted {
-                WantedState::All
-            } else {
-                WantedState::None
-            },
-            priority: PriorityView::One(entry.priority),
-        };
-        if !self.room_for_index(leaf) {
-            return;
-        }
-        if let (Some(node), Some(wanted)) = (self.nodes.get_mut(leaf), self.wanted.get_mut(leaf)) {
-            node.absorb(wanted, &shown);
-            // Only a file that is being downloaded has a use for a prefix to play, and only once
-            // some of it plays: "0 B" would say nothing. Whether it is wanted is up to the row.
-            node.playable = (done < entry.length && entry.playable_from_start > 0)
-                .then(|| Playable::of(entry.playable_from_start, entry.length));
-        }
-        let mut above = parent;
-        while let Some(index) = above {
+        let mut at = Some(leaf);
+        while let Some(index) = at {
             if !self.room_for_index(index) {
                 return;
             }
-            let (Some(folder), Some(wanted)) =
-                (self.nodes.get_mut(index), self.wanted.get_mut(index))
-            else {
+            let Some(node) = self.nodes.get_mut(index) else {
                 break;
             };
-            folder.absorb(wanted, &shown);
-            above = folder.parent;
+            node.absorb(entry.index, entry.length);
+            at = node.parent;
         }
     }
 
@@ -301,7 +257,6 @@ impl<'a> Builder<'a> {
         }
         self.by_key.insert(key.clone(), index);
         self.nodes.push(Node::new(key, name, parent, is_folder));
-        self.wanted.push(WantedState::All);
         match parent.and_then(|parent| self.nodes.get_mut(parent)) {
             Some(parent) => parent.children.push(index),
             None => self.top.push(index),
@@ -336,11 +291,11 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Orders every folder's entries and the first level, and sorts the file lists; or, once
-    /// the budget is spent, gives an empty tree that says it is too large.
-    pub(super) fn finish(mut self, hash: HashString) -> FileTree {
+    /// Orders every folder's entries and the first level, and sorts the file lists; `None` once
+    /// the budget is spent, for a tree that is too large.
+    pub(super) fn finish(mut self) -> Option<Shape> {
         if self.over_budget {
-            return FileTree::too_large(hash);
+            return None;
         }
         for node in &mut self.nodes {
             node.files.sort_unstable();
@@ -356,16 +311,12 @@ impl<'a> Builder<'a> {
             }
         }
         sort_entries(&self.nodes, &mut self.top);
-        FileTree {
-            hash,
-            shape: Arc::new(Shape {
-                nodes: self.nodes,
-                top: self.top,
-                by_key: self.by_key,
-            }),
-            wanted: self.wanted,
-            too_large: false,
-        }
+        Some(Shape {
+            nodes: self.nodes,
+            top: self.top,
+            by_key: self.by_key,
+            file_nodes: self.file_nodes,
+        })
     }
 }
 
