@@ -1205,7 +1205,7 @@ test_measure_without_offline_keeps_the_callers_config_dir() {
 # sees to <dir>/<tool>.txt. Also an owner's home with a kdeglobals, and an empty TMPDIR for the
 # session's directory.
 virtual_dir=
-virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY)='
+virtual_seen='^(XDG_[A-Z_]+|WAYLAND_DISPLAY|DISPLAY|XAUTHORITY|HOME)='
 new_virtual_env() {
     virtual_dir=$(mktemp -d "$tmp_root/virtual.XXXXXX")
     mkdir -p "$virtual_dir/bin" "$virtual_dir/home/.config/fontconfig" "$virtual_dir/tmp"
@@ -1307,6 +1307,40 @@ test_virtual_session_keeps_the_owner_display_and_runtime_dir_away() {
             fail "$seen sees the owner's X server: $(<"$virtual_dir/$seen.txt")"
         fi
     done
+}
+
+# Some programs write to ~/.config or ~/.local/share by fixed paths, not through the XDG dirs (KDE's
+# update scripts, which a session's first Plasma start runs, do): the session's HOME is its own,
+# with ~/.config, ~/.local/share, ~/.local/state and ~/.cache leading to its XDG dirs, while cargo
+# still finds the owner's registry and a CARGO_HOME the caller set stays.
+test_virtual_session_gives_the_command_a_home_of_its_own() {
+    local seen session_home
+    new_virtual_env
+    run_virtual bash -c 'echo "home=$HOME"; echo "cargo=$CARGO_HOME"
+        mkdir -p "$HOME/.local/share/monitor" && echo page >"$HOME/.local/share/monitor/a.page"
+        echo changed >"$HOME/.config/kdeglobals"
+        [[ -f $XDG_DATA_HOME/monitor/a.page ]] && echo "data shared"
+        [[ $(<"$XDG_CONFIG_HOME/kdeglobals") == changed ]] && echo "config shared"
+        [[ -d $HOME/.local/state && -d $HOME/.cache ]] && echo "state and cache there"'
+    expect_status 0
+    session_home=$(sed -n 's/^home=//p' <<<"$stdout")
+    [[ $session_home == "$virtual_dir/tmp/x4-virtual."*/home ]] ||
+        fail "the command's HOME is not the session's: '$session_home'"
+    expect_contains "cargo=$virtual_dir/home/.cargo" "$stdout" "the command's CARGO_HOME"
+    expect_contains "data shared" "$stdout" "~/.local/share in the session"
+    expect_contains "config shared" "$stdout" "~/.config in the session"
+    expect_contains "state and cache there" "$stdout" "~/.local/state and ~/.cache in the session"
+    [[ ! -e $virtual_dir/home/.local/share/monitor ]] || fail "the command wrote into the owner's home"
+    [[ $(<"$virtual_dir/home/.config/kdeglobals") == $'[General]\nColorScheme=Owner' ]] ||
+        fail "the owner's kdeglobals changed"
+    for seen in dbus-run-session kwin_wayland; do
+        expect_contains "HOME=$session_home" "$(<"$virtual_dir/$seen.txt")" "the env of $seen"
+    done
+    run_with_input '' env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+        PATH="$virtual_dir/bin:$PATH" HOME="$virtual_dir/home" TMPDIR="$virtual_dir/tmp" \
+        CARGO_HOME=/opt/cargo "$BASH" "$virtual_session" bash -c 'echo "cargo=$CARGO_HOME"'
+    expect_status 0
+    expect_contains "cargo=/opt/cargo" "$stdout" "a CARGO_HOME the caller set"
 }
 
 # A fontconfig dir and a kdeglobals that are symlinks (into a dotfiles repository, say) are copied
@@ -2592,6 +2626,7 @@ cases=(
     virtual_session_propagates_the_exit_code
     virtual_session_gives_kwin_and_the_command_temp_xdg_dirs
     virtual_session_keeps_the_owner_display_and_runtime_dir_away
+    virtual_session_gives_the_command_a_home_of_its_own
     virtual_session_copies_linked_settings_as_files
     virtual_session_keeps_arguments_with_spaces
     virtual_session_names_a_missing_tool

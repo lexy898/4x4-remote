@@ -36,6 +36,7 @@ just package          # the Arch package of the committed master under ~/.cache/
 just default-handler  # make the installed 4x4 the default app for .torrent files and magnet links
                       # (--undo gives them back); the owner's only: agents never run it
 just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
+                      # and HOME (cargo keeps the owner's ~/.cargo)
 just demo-synthetic   # the main window over 2000 made-up torrents, no network
                       # (--static, --scroll, --select N)
 just update           # update dependencies, then run the full gate
@@ -183,8 +184,8 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - The owner's daemon: `http://192.168.1.5:9091/transmission/rpc`, on a Raspberry Pi 3 with little
   RAM — keep the request rate modest. Server notes: `/home/alexey/garage/raspberrypi/CLAUDE.md`.
 - Agents open app windows only through `just virtual …` (headless KWin, own D-Bus, own XDG and
-  runtime dirs); never run KWin, spectacle or test windows against the owner's session bus, XDG
-  dirs or screens. Debug builds use the `.Devel` app id.
+  runtime dirs, own HOME); never run KWin, spectacle or test windows against the owner's session
+  bus, XDG dirs, home or screens. Debug builds use the `.Devel` app id.
 - Agents never run `sudo`, `pacman -U`, `makepkg -i`/`-s` or `just default-handler`; installing and
   changing the default apps is the owner's. The guard hook refuses `just default-handler`,
   `scripts/default-handler.sh` and `xdg-mime default` (reading with `xdg-mime query default` is

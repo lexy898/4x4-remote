@@ -4,9 +4,10 @@
 #
 # The command gets a virtual screen that no monitor shows, so it can open windows, measure them
 # and take screenshots (`spectacle -b -n -f -o <file>`) without showing anything on the real
-# desktop or taking its focus. The session has its own D-Bus session and its own XDG config,
-# data, state, cache and runtime dirs, and neither it nor anything it starts sees the owner's
-# DISPLAY or XAUTHORITY. The command's stdout and stderr are the caller's; KWin's own output goes
+# desktop or taking its focus. The session has its own D-Bus session, its own XDG config, data,
+# state, cache and runtime dirs and its own HOME, and neither it nor anything it starts sees the
+# owner's DISPLAY or XAUTHORITY; cargo keeps the owner's CARGO_HOME, so builds inside reuse its
+# registry. The command's stdout and stderr are the caller's; KWin's own output goes
 # to kwin.log in the session's temp dir, which is removed at the end, after every process still
 # running with the session's dirs is stopped.
 #
@@ -32,6 +33,8 @@ fi
 width=${X4_VIRTUAL_WIDTH:-1440}
 height=${X4_VIRTUAL_HEIGHT:-900}
 owner_config=${XDG_CONFIG_HOME:-$HOME/.config}
+# Cargo's home stays the owner's while HOME changes below, as cargo would find it from HOME.
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
 
 root=$(mktemp -d "${TMPDIR:-/tmp}/x4-virtual.XXXXXX")
 # KWin's socket, in the session's runtime dir.
@@ -111,6 +114,15 @@ fi
 # document portal's and gvfs's mounts), away from the owner's.
 mkdir -p "$root/config" "$root/data" "$root/state" "$root/cache"
 mkdir -m 0700 "$root/runtime"
+# A HOME of its own too, because some programs write by fixed paths under HOME, not through the XDG
+# dirs: KDE's update scripts, which the session's first Plasma start runs, once rewrote the owner's
+# ~/.local/share/plasma-systemmonitor that way. Its usual dirs lead to the session's XDG dirs, so
+# both ways of finding a file find the same one.
+mkdir -p "$root/home/.local"
+ln -s "$root/config" "$root/home/.config"
+ln -s "$root/data" "$root/home/.local/share"
+ln -s "$root/state" "$root/home/.local/state"
+ln -s "$root/cache" "$root/home/.cache"
 # Copies of the owner's font and KDE settings, so the window looks as it does on the desktop.
 # Anything the session writes lands in the copies, never in the owner's files, even where those
 # are symlinks: the copies follow the links (-L).
@@ -142,7 +154,7 @@ chmod +x "$session"
 kwin_status=0
 env -u DISPLAY -u XAUTHORITY WAYLAND_DISPLAY="$socket" XDG_RUNTIME_DIR="$root/runtime" \
     XDG_CONFIG_HOME="$root/config" XDG_DATA_HOME="$root/data" XDG_STATE_HOME="$root/state" \
-    XDG_CACHE_HOME="$root/cache" \
+    XDG_CACHE_HOME="$root/cache" HOME="$root/home" CARGO_HOME="$cargo_home" \
     dbus-run-session -- kwin_wayland --virtual --no-lockscreen --socket "$socket" \
     --width "$width" --height "$height" --exit-with-session "$session" \
     3>&1 4>&2 >"$root/kwin.log" 2>&1 || kwin_status=$?
