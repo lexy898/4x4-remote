@@ -6,7 +6,7 @@ use x4_rpc::{FilePriority, HashString};
 
 use crate::details::FileEntry;
 use crate::files::{FileTree, NodeKey};
-use crate::metainfo::MetaFile;
+use crate::metainfo::{MetaFile, MetainfoError};
 
 /// Which files of a `.torrent` are wanted, and the tree that shows them.
 ///
@@ -21,22 +21,37 @@ pub(super) struct FileChoice {
 }
 
 impl FileChoice {
-    /// The files of the torrent `hash`, every one of them wanted.
-    pub(super) fn new(hash: HashString, files: Vec<MetaFile>) -> Self {
-        let files: Vec<FileEntry> = files
+    /// The tree of the files of the torrent `hash` as a form starts: every file wanted. It is made
+    /// when the torrent is loaded, so that a list too large to show is refused before any form.
+    ///
+    /// # Errors
+    ///
+    /// [`MetainfoError::FileListTooLarge`] when the tree's keys would take more than
+    /// [`TREE_KEY_BUDGET`](crate::TREE_KEY_BUDGET).
+    pub(super) fn first_tree(
+        hash: HashString,
+        files: &[MetaFile],
+    ) -> Result<Arc<FileTree>, MetainfoError> {
+        let entries: Vec<FileEntry> = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| entry(index, file.path.clone(), file.length))
+            .collect();
+        let tree = FileTree::of_files(hash, &entries);
+        if tree.is_too_large() {
+            return Err(MetainfoError::FileListTooLarge);
+        }
+        Ok(Arc::new(tree))
+    }
+
+    /// The files `files`, every one of them wanted, shown by `tree`, their
+    /// [`first_tree`](Self::first_tree).
+    pub(super) fn new(files: Vec<MetaFile>, tree: Arc<FileTree>) -> Self {
+        let files = files
             .into_iter()
             .enumerate()
-            .map(|(index, file)| FileEntry {
-                index,
-                name: file.path,
-                length: file.length,
-                bytes_completed: 0,
-                wanted: true,
-                priority: FilePriority::Normal,
-                playable_from_start: 0,
-            })
+            .map(|(index, file)| entry(index, file.path, file.length))
             .collect();
-        let tree = Arc::new(FileTree::of_files(hash, &files));
         Self { files, tree }
     }
 
@@ -77,5 +92,19 @@ impl FileChoice {
         // The second test follows from the first while the tree is made from these files. It
         // stays as a guard, so that a request never leaves out every file.
         !self.tree.wants_a_shown_file() || self.files.iter().all(|file| !file.wanted)
+    }
+}
+
+/// The file at `index` of a torrent not added yet: nothing downloaded, the normal priority, and
+/// wanted.
+fn entry(index: usize, path: String, length: u64) -> FileEntry {
+    FileEntry {
+        index,
+        name: path,
+        length,
+        bytes_completed: 0,
+        wanted: true,
+        priority: FilePriority::Normal,
+        playable_from_start: 0,
     }
 }

@@ -3,7 +3,8 @@
 //! - An [`AddQueue`] holds what the user asked to add, as [`AddItem`]s: paths and magnet links,
 //!   never the contents of a file. Its head is the one shown.
 //! - The app reads the head's `.torrent` file and core parses it: a [`LoadedItem`], whose
-//!   [`LoadedTorrent`] keeps the parse together with the bytes it was made from.
+//!   [`LoadedTorrent`] keeps the parse together with the bytes it was made from and the tree of
+//!   its files. A file list too large to show is refused there, before any form exists.
 //! - An [`AddForm`] is the dialog for that item: the folder, "Start immediately" and, for a
 //!   `.torrent`, the choice of files through the same [`FileTree`](crate::FileTree) as the
 //!   details panel.

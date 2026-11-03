@@ -25,17 +25,25 @@ pub enum LoadedItem {
 
 impl LoadedItem {
     /// The `.torrent` file read from `path`, whose content is `bytes`, parsed strictly by
-    /// [`parse_torrent`].
+    /// [`parse_torrent`], with the tree of its files made for the form.
     ///
     /// # Errors
     ///
-    /// The [`MetainfoError`] of [`parse_torrent`] when the daemon could not add the file.
+    /// The [`MetainfoError`] of [`parse_torrent`] when the daemon could not add the file, and
+    /// [`MetainfoError::FileListTooLarge`] when its file list would be too large to show. A
+    /// crafted file of a few tens of KB with folders nested thousands deep is refused here, in
+    /// bounded time and memory, before any form exists.
     pub fn torrent(path: PathBuf, bytes: Arc<[u8]>) -> Result<Self, MetainfoError> {
         let parsed = parse_torrent(&bytes)?;
+        let tree = match &parsed.files {
+            Some(files) => Some(FileChoice::first_tree(parsed.hash.clone(), files)?),
+            None => None,
+        };
         Ok(Self::Torrent(LoadedTorrent {
             path,
             parsed,
             bytes,
+            tree,
         }))
     }
 }
@@ -71,6 +79,8 @@ pub struct LoadedTorrent {
     path: PathBuf,
     parsed: ParsedTorrent,
     bytes: Arc<[u8]>,
+    /// The tree of `parsed.files` with every file wanted; `None` exactly when they are.
+    tree: Option<Arc<FileTree>>,
 }
 
 impl LoadedTorrent {
@@ -164,12 +174,14 @@ impl AddForm {
                 path,
                 parsed,
                 bytes,
+                tree,
             }) => Source::Torrent {
                 path,
                 name: parsed.name,
                 choice: parsed
                     .files
-                    .map(|files| FileChoice::new(parsed.hash.clone(), files)),
+                    .zip(tree)
+                    .map(|(files, tree)| FileChoice::new(files, tree)),
                 hash: parsed.hash,
                 bytes,
             },

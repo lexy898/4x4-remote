@@ -42,6 +42,9 @@ fn loaded(files: Option<&[(&str, u64)]>) -> LoadedItem {
             })
             .collect()
     });
+    let tree = files
+        .as_ref()
+        .map(|files| FileChoice::first_tree(hash(), files).unwrap());
     LoadedItem::Torrent(LoadedTorrent {
         path: PathBuf::from(PATH),
         parsed: ParsedTorrent {
@@ -53,6 +56,7 @@ fn loaded(files: Option<&[(&str, u64)]>) -> LoadedItem {
             files,
         },
         bytes: content(),
+        tree,
     })
 }
 
@@ -630,6 +634,139 @@ fn the_request_shares_the_bytes_that_were_parsed() {
         };
         assert!(Arc::ptr_eq(&sent, &bytes));
     }
+}
+
+/// A real multi-file `.torrent` named `name`, its files given by their path components, each one
+/// byte long.
+fn folder_torrent(name: &str, paths: &[Vec<String>]) -> Arc<[u8]> {
+    let mut bytes = b"d4:infod5:filesl".to_vec();
+    for path in paths {
+        bytes.extend(b"d6:lengthi1e4:pathl");
+        for part in path {
+            bytes.extend(format!("{}:{part}", part.len()).into_bytes());
+        }
+        bytes.extend(b"ee");
+    }
+    let pieces = paths.len().div_ceil(16_384);
+    bytes.extend(
+        format!(
+            "e4:name{}:{name}12:piece lengthi16384e6:pieces{}:",
+            name.len(),
+            20 * pieces
+        )
+        .into_bytes(),
+    );
+    bytes.extend(std::iter::repeat_n(0xab, 20 * pieces));
+    bytes.extend(b"ee");
+    Arc::from(bytes)
+}
+
+/// The peak memory of this process so far, in KiB, where Linux says it; the tests run one per
+/// process.
+fn peak_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Loads `bytes` and asserts that they are refused as too large to show, within bounded time
+/// and memory.
+fn assert_refused_at_load(bytes: Arc<[u8]>) {
+    let peak_before = peak_kib();
+    let start = std::time::Instant::now();
+
+    let loaded = LoadedItem::torrent(PathBuf::from(PATH), bytes);
+
+    let elapsed = start.elapsed();
+    assert!(
+        matches!(loaded, Err(MetainfoError::FileListTooLarge)),
+        "{loaded:?}"
+    );
+    // Some 25 ms in a release build and 400 ms in a debug one; the bound only says it ends.
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+    if let (Some(before), Some(after)) = (peak_before, peak_kib()) {
+        assert!(
+            after.saturating_sub(before) < 64 * 1024,
+            "{before} KiB to {after} KiB"
+        );
+    }
+}
+
+#[test]
+fn a_torrent_with_a_deep_path_is_refused_when_it_is_loaded() {
+    // A single file whose name holds 20 000 folders, one in the other: about 40 KB, which the
+    // parser takes, and whose tree would take some 400 MiB.
+    let name = "a/".repeat(20_000) + "f";
+    let mut bytes = format!(
+        "d4:infod6:lengthi5e4:name{}:{name}12:piece lengthi16384e6:pieces20:",
+        name.len()
+    )
+    .into_bytes();
+    bytes.extend([0xab; 20]);
+    bytes.extend(b"ee");
+    let bytes: Arc<[u8]> = Arc::from(bytes);
+    assert!(parse_torrent(&bytes).is_ok(), "the parser takes it");
+
+    assert_refused_at_load(bytes);
+}
+
+#[test]
+fn a_torrent_of_many_deep_chains_is_refused_when_it_is_loaded() {
+    // Eight paths of 2 050 parts that part at the top: each is 6 KB, its chain some 4 MiB of
+    // keys.
+    let paths: Vec<Vec<String>> = (0..8)
+        .map(|chain| {
+            std::iter::once(format!("x{chain}"))
+                .chain(std::iter::repeat_n("a".to_owned(), 2_048))
+                .chain(std::iter::once("f".to_owned()))
+                .collect()
+        })
+        .collect();
+    let bytes = folder_torrent("T", &paths);
+    assert!(parse_torrent(&bytes).is_ok(), "the parser takes it");
+
+    assert_refused_at_load(bytes);
+
+    // Three such chains fit, and give a form.
+    let fewer = folder_torrent("T", paths.get(..3).unwrap());
+    let form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), fewer).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+    assert!(!form.tree().unwrap().is_too_large());
+    assert_eq!(unwanted(&form), Vec::<usize>::new());
+}
+
+#[test]
+fn a_real_shaped_torrent_loads_with_its_tree() {
+    // 5 000 episodes, four levels deep with the torrent's folder, with long names.
+    let paths: Vec<Vec<String>> = (0..5_000)
+        .map(|n| {
+            vec![
+                format!("Season {:02}", n / 250),
+                format!("Disc {}", n / 50 % 5),
+                format!("Episode {n:04} - A Rather Long Title Of The Episode (1080p).mkv"),
+            ]
+        })
+        .collect();
+    let bytes = folder_torrent("A Long Running Show", &paths);
+
+    let mut form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+
+    let tree = form.tree().unwrap();
+    assert!(!tree.is_too_large());
+    assert_eq!(
+        tree.indices(&key("A Long Running Show"))
+            .map(NonEmptyIndices::into_vec),
+        Some((0..5_000).collect())
+    );
+    form.toggle_wanted(&key("A Long Running Show/Season 19"));
+    assert_eq!(unwanted(&form), (4_750..5_000).collect::<Vec<_>>());
 }
 
 #[test]

@@ -44,7 +44,8 @@
 //!
 //! The add dialog is decided here too. An [`AddQueue`] holds what the user asked to add, as
 //! [`AddItem`]s (paths and magnet links, at most [`QUEUE_CAP`]), and its head is shown. The app
-//! reads the head's file, and [`LoadedItem::torrent`] parses it. An [`AddForm`] holds the folder,
+//! reads the head's file, and [`LoadedItem::torrent`] parses it into a [`LoadedTorrent`], or
+//! refuses it, a list of files too large to show included. An [`AddForm`] holds the folder,
 //! "Start immediately" and, for a `.torrent`, the choice of files, in a [`FileTree`] made by
 //! [`FileTree::of_files`] whose checkboxes apply [`FileTree::wanted_toggle`] to the form.
 //! [`AddForm::check`] gives the [`AddCheck`] that tells whether Add may send it, and the request
