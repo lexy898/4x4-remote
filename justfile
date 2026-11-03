@@ -74,8 +74,10 @@ setup:
 test-hooks:
     bash scripts/hooks/test-hooks.sh
 
+# The arguments go to the app as given, so that a quoted magnet link stays one argument.
+[positional-arguments]
 run *args:
-    cargo run -p x4-app --locked -- {{args}}
+    cargo run -p x4-app --locked -- "$@"
 
 release:
     cargo build -p x4-app --release --locked

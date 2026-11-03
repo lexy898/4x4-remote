@@ -385,6 +385,30 @@ skips the torrent, a click beside the dialog does nothing, and `.torrent` files 
 the dialog join the queue. While the dialog that removes torrents is open, the torrents to add wait for it to
 close.
 
+4x4 also offers the `.torrent` files and magnet links it is started with, such as
+`4x4 Show.torrent 'magnet:?xt=urn:btih:…'`, or that a file manager or a browser opens with it, in
+the add dialog, in their order. A relative path is taken from the folder 4x4 was started in, and a
+`file://` address must name a file on this computer, without a query. Web addresses (`http://`,
+`https://` and the like), bare info hashes, options (anything starting with `-`) and anything else
+are refused, with one notification that counts them and says why the first one was; a first `--`,
+which ends the options, is skipped. From the source tree, `just run 'magnet:?xt=…'` passes them on;
+quote a magnet link, as its `&` means something to the shell.
+
+One 4x4 runs at a time for each user. Starting it again, with or without files and links, hands
+them to the 4x4 that runs already and exits at once: that one offers them in its add dialog, after
+any it is showing, and brings its window to the front. Where the desktop does not let it come to the
+front, the window asks for your attention instead (a highlighted task bar entry). If the 4x4 that
+runs does not answer within 2 seconds, because it hangs, the new start opens a window of its own
+with them, so a click on a file is never lost; the new start takes the place of a 4x4 that is
+quitting. Debug builds (`just run`) and release builds never hand over to each other, and a 4x4 in
+[`just virtual`](#windows-off-screen) never hands over to the one on your desktop. Without
+`$XDG_RUNTIME_DIR`, every start opens a window of its own and the log says so.
+
+[`packaging/linux/io.github.lexy898.FourByFour.desktop`](packaging/linux/io.github.lexy898.FourByFour.desktop)
+is the desktop entry that makes 4x4 the handler for `.torrent` files and `magnet:` links
+(`Exec=4x4 %U`, one process for all the files and links of a launch). Nothing installs it yet;
+packaging will, and 4x4 never makes itself the default handler.
+
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
 talks to the daemon stops or cannot start, the status bar says "Service stopped" or "Service could
@@ -481,6 +505,12 @@ to `~/.config` and `~/.local/state`):
 | `~/.local/state/4x4/state.toml`     | What 4x4 remembers between runs. It is safe to delete.                  |
 | `~/.local/state/4x4/4x4.<date>.log` | The log, one file per day (UTC date); the last 7 daily files are kept.  |
 
+While it runs, the first 4x4 also keeps two files in `$XDG_RUNTIME_DIR` (`/run/user/<uid>`), named
+after its app id (with `.Devel` in debug builds): `io.github.lexy898.FourByFour.lock`, which says
+that it runs, and `io.github.lexy898.FourByFour.sock`, the socket later starts hand their files and
+links to. Only you can use them. The socket is removed when 4x4 quits, and one left by a 4x4 that crashed is replaced by
+the next one; the lock file stays and is safe to delete while 4x4 is not running.
+
 `config.toml` is optional. It holds the daemon's address; only plain `http://` is supported, and a
 missing key takes the default:
 
@@ -504,8 +534,9 @@ libraries. If the log directory cannot be used, 4x4 logs to stderr only and stil
 
 Debug builds (`just run`) give the window the Wayland app id `io.github.lexy898.FourByFour.Devel`
 instead of `io.github.lexy898.FourByFour`, so window rules made for test windows (for example,
-open on another screen without taking focus) never catch the window you actually use. Set
-`X4_DEVEL=1` to give a release build the same id; `just measure` does.
+open on another screen without taking focus) never catch the window you actually use, and a debug
+build never hands its files and links to the 4x4 you use. Set `X4_DEVEL=1` to give a release build
+the same id; `just measure` does.
 
 ## Localization
 
@@ -541,7 +572,9 @@ Vulkan driver is installed. The exit code stays 0 unless the measurement itself 
 `--cpu <seconds>` adds a second line, the CPU time of all its threads over that many seconds after
 the memory figures, as a percentage of one core (`cpu_percent`); `--synthetic` measures the release
 build of the [synthetic demo](#synthetic-demo) instead of the app, and arguments after `--` go to
-the program, as in `just measure --synthetic --cpu 30 -- --static`.
+the program, as in `just measure --synthetic --cpu 30 -- --static`. Measure the app with no
+development 4x4 running in the same session, or inside `just virtual`: otherwise the measured start
+hands over to it and exits.
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS.
 RSS counts every resident page the app maps, including shared driver libraries (`libLLVM`,

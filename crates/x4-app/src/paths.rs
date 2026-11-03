@@ -1,5 +1,8 @@
-//! Where the app keeps its files: the owner's `config.toml`, the app's `state.toml` and the logs.
+//! Where the app keeps its files: the owner's `config.toml`, the app's `state.toml` and the logs;
+//! and the user's runtime directory, where the single instance keeps its lock and socket.
 
+use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
@@ -59,9 +62,32 @@ impl AppPaths {
     }
 }
 
+/// The user's runtime directory: `$XDG_RUNTIME_DIR`, when it is set to an absolute path. The XDG
+/// base directory spec has a relative one ignored. Nothing is read from disk.
+#[must_use]
+pub fn runtime_dir() -> Option<PathBuf> {
+    runtime_dir_of(env::var_os("XDG_RUNTIME_DIR"))
+}
+
+/// The runtime directory `$XDG_RUNTIME_DIR` = `value` names, if it is absolute.
+fn runtime_dir_of(value: Option<OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|dir| dir.is_absolute())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_absolute_xdg_runtime_dir_is_the_runtime_dir() {
+        assert_eq!(
+            runtime_dir_of(Some("/run/user/1000".into())),
+            Some(PathBuf::from("/run/user/1000"))
+        );
+        assert_eq!(runtime_dir_of(Some("run/user/1000".into())), None);
+        assert_eq!(runtime_dir_of(Some(OsString::new())), None);
+        assert_eq!(runtime_dir_of(None), None);
+    }
 
     #[test]
     fn paths_in_dirs_name_the_files_and_log_in_the_state_dir() {

@@ -1,5 +1,6 @@
-//! What the sources of adds ask the window for ([`AddRequest`]), and the reading of a `.torrent`
-//! file when its turn in the queue comes ([`read_torrent`]).
+//! What the sources of adds ask the window for ([`AddRequest`]), the requests of launch arguments
+//! ([`launch_requests`]), and the reading of a `.torrent` file when its turn in the queue comes
+//! ([`read_torrent`]).
 //!
 //! A `.torrent` file is untrusted: it may be a FIFO that never ends, a device, a directory, or a
 //! file of gigabytes. It is read only once `stat` says it is a regular file of at most
@@ -10,17 +11,19 @@
 //! thread. A read that never ends, as on a network file system that hangs, keeps its thread: the
 //! main view lets the user skip it, and the thread is abandoned.
 
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use x4_core::launch::RejectedArg;
+use x4_core::launch::{LaunchArg, RejectedArg, classify};
 use x4_core::{AddItem, LoadedItem, MAX_TORRENT_FILE_BYTES, MetainfoError};
 
 /// What a source of adds asks the window for: the toolbar, the keys, the file picker, the
 /// clipboard, a drop, the launch arguments and a second launch all send these, through the one
-/// channel that [`MainView::listen_for_adds`](crate::main_view::MainView::listen_for_adds) takes.
+/// channel the window listens to
+/// ([`MainView::listen_for_adds`](crate::main_view::MainView::listen_for_adds)).
 ///
 /// Nothing is added by a request: the items wait in the add dialog's queue for the user's Add.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,8 +38,10 @@ pub enum AddRequest {
 
 /// The one channel of [`AddRequest`]s into the main window. The app makes it at startup
 /// ([`Startup::adds`](crate::app::Startup::adds)): the sources outside the window, such as the
-/// launch arguments and a second launch, send into clones of `sender`, and the window takes
-/// `receiver` ([`MainView::listen_for_adds`](crate::main_view::MainView::listen_for_adds)).
+/// launch arguments and a second launch, send into clones of `sender`; the window listens on
+/// `receiver` and keeps `sender` for the sources inside it
+/// ([`MainView::listen_for_adds`](crate::main_view::MainView::listen_for_adds),
+/// [`MainView::add_requests`](crate::main_view::MainView::add_requests)).
 #[derive(Debug, Clone)]
 pub struct AddRequests {
     /// Where the sources send their requests.
@@ -58,6 +63,38 @@ impl Default for AddRequests {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The requests of the launch arguments `args` of a process started in `cwd`, told apart by
+/// [`classify`]: one [`AddRequest::Items`] with the `.torrent` files and magnet links, in their
+/// order, then one [`AddRequest::Rejected`] with the arguments 4x4 does not open; each only when
+/// it has any. The first `--`, which ends the options for a shell or `cargo run`, is skipped.
+pub fn launch_requests<A: AsRef<OsStr>>(
+    args: impl IntoIterator<Item = A>,
+    cwd: &Path,
+) -> Vec<AddRequest> {
+    let mut items = Vec::new();
+    let mut rejected = Vec::new();
+    let mut options_ended = false;
+    for arg in args {
+        let arg = arg.as_ref();
+        if !options_ended && arg == "--" {
+            options_ended = true;
+            continue;
+        }
+        match classify(arg, cwd) {
+            LaunchArg::Magnet(link) => items.push(AddItem::Magnet(Some(link))),
+            LaunchArg::File(path) => items.push(AddItem::File(path)),
+            LaunchArg::Rejected(refused) => rejected.push(refused),
+        }
+    }
+    [
+        (!items.is_empty()).then_some(AddRequest::Items(items)),
+        (!rejected.is_empty()).then_some(AddRequest::Rejected(rejected)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Why a `.torrent` file cannot be offered in the add dialog.
@@ -173,6 +210,9 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
 
+    use x4_core::launch::RejectKind;
+    use x4_rpc::MagnetLink;
+
     use super::*;
 
     /// "a": one file of 16 KiB, in one piece.
@@ -270,6 +310,71 @@ mod tests {
         if File::open(&path).is_err() {
             assert_eq!(read_torrent(path).err(), Some(LoadError::Denied));
         }
+    }
+
+    #[test]
+    fn launch_arguments_make_one_request_of_items_and_one_of_refusals() {
+        let link = format!("magnet:?xt=urn:btih:{}", "b".repeat(40));
+        let args = [
+            "show.torrent",
+            "https://example.org/a.torrent",
+            link.as_str(),
+            "-x",
+        ];
+
+        assert_eq!(
+            launch_requests(args, Path::new("/home/user")),
+            [
+                AddRequest::Items(vec![
+                    AddItem::File("/home/user/show.torrent".into()),
+                    AddItem::Magnet(Some(MagnetLink::parse(&link).unwrap())),
+                ]),
+                AddRequest::Rejected(vec![
+                    RejectedArg {
+                        kind: RejectKind::Url
+                    },
+                    RejectedArg {
+                        kind: RejectKind::Option
+                    },
+                ]),
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_arguments_of_one_kind_make_one_request_and_none_make_none() {
+        let cwd = Path::new("/home/user");
+
+        assert_eq!(
+            launch_requests(["a.torrent"], cwd),
+            [AddRequest::Items(vec![AddItem::File(
+                "/home/user/a.torrent".into()
+            )])]
+        );
+        assert_eq!(
+            launch_requests(["-v"], cwd),
+            [AddRequest::Rejected(vec![RejectedArg {
+                kind: RejectKind::Option
+            }])]
+        );
+        assert_eq!(launch_requests::<&str>([], cwd), []);
+    }
+
+    #[test]
+    fn the_first_double_dash_ends_the_options_and_is_skipped() {
+        let cwd = Path::new("/home/user");
+
+        assert_eq!(launch_requests(["--"], cwd), []);
+        assert_eq!(
+            launch_requests(["--", "a.torrent", "--"], cwd),
+            [
+                AddRequest::Items(vec![AddItem::File("/home/user/a.torrent".into())]),
+                AddRequest::Rejected(vec![RejectedArg {
+                    kind: RejectKind::Option
+                }]),
+            ],
+            "only the first"
+        );
     }
 
     #[test]

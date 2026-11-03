@@ -36,7 +36,6 @@ mod daemon;
 mod frames;
 
 use std::env;
-use std::ffi::OsStr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -45,14 +44,13 @@ use gpui_kit::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point,
     point, px,
 };
-use x4_app::adding::{AddRequest, AddRequests};
+use x4_app::adding::{AddRequest, AddRequests, launch_requests};
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
-use x4_core::launch::{LaunchArg, classify};
 use x4_core::service;
-use x4_core::{AddItem, EngineConfig, UiState};
+use x4_core::{EngineConfig, UiState};
 use x4_rpc::Client;
 
 use crate::daemon::{Activity, SyntheticDaemon};
@@ -159,40 +157,16 @@ fn drive_when_listed(
     .detach();
 }
 
-/// Asks the main window, through its channel `adds`, to add `args`, told apart as launch
-/// arguments run in `cwd` are: the `.torrent` files and magnet links in one request, the rest in
-/// another, which the window shows as one notification.
+/// Asks the main window, through its channel `adds`, to add `args`, with the requests the same
+/// launch arguments run in `cwd` would make ([`launch_requests`]): the `.torrent` files and magnet
+/// links in one request, the rest in another, which the window shows as one notification.
 fn ask_to_add(adds: &async_channel::Sender<AddRequest>, args: &[String], cwd: &Path) {
-    let (items, rejected) = add_requests(args, cwd);
-    tracing::info!(
-        items = items.len(),
-        rejected = rejected.len(),
-        "asking to add torrents"
-    );
-    let requests = [
-        (!items.is_empty()).then_some(AddRequest::Items(items)),
-        (!rejected.is_empty()).then_some(AddRequest::Rejected(rejected)),
-    ];
-    for request in requests.into_iter().flatten() {
+    tracing::info!(arguments = args.len(), "asking to add torrents");
+    for request in launch_requests(args, cwd) {
         if adds.try_send(request).is_err() {
             tracing::error!("the window stopped taking torrents to add");
         }
     }
-}
-
-/// The items to add of `args`, told apart as launch arguments run in `cwd` are, and the
-/// arguments refused.
-fn add_requests(args: &[String], cwd: &Path) -> (Vec<AddItem>, Vec<x4_core::launch::RejectedArg>) {
-    let mut items = Vec::new();
-    let mut rejected = Vec::new();
-    for arg in args {
-        match classify(OsStr::new(arg), cwd) {
-            LaunchArg::Magnet(link) => items.push(AddItem::Magnet(Some(link))),
-            LaunchArg::File(path) => items.push(AddItem::File(path)),
-            LaunchArg::Rejected(refused) => rejected.push(refused),
-        }
-    }
-    (items, rejected)
 }
 
 /// Presses `keys` in `window`, as the keyboard would: the keystroke goes through the key bindings
@@ -469,32 +443,6 @@ mod tests {
         assert_eq!(options.add, ["show.torrent", link.as_str()]);
         let missing = parse(&["--add"]).expect_err("nothing to add");
         assert!(missing.to_string().contains("magnet link"), "{missing}");
-    }
-
-    #[test]
-    fn the_items_to_add_are_told_apart_as_launch_arguments() {
-        let link = format!("magnet:?xt=urn:btih:{}", "b".repeat(40));
-        let args = [
-            "show.torrent".to_owned(),
-            link.clone(),
-            "https://example.org/a.torrent".to_owned(),
-        ];
-
-        let (items, rejected) = add_requests(&args, Path::new("/home/user"));
-
-        assert_eq!(
-            items,
-            [
-                AddItem::File("/home/user/show.torrent".into()),
-                AddItem::Magnet(Some(x4_rpc::MagnetLink::parse(&link).expect("a link"))),
-            ]
-        );
-        assert_eq!(
-            rejected,
-            [x4_core::launch::RejectedArg {
-                kind: x4_core::launch::RejectKind::Url
-            }]
-        );
     }
 
     #[test]
