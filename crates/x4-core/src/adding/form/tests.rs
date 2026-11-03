@@ -920,6 +920,48 @@ fn a_torrent_of_50_000_paths_the_tree_shows_alike_loads_in_bounded_time() {
     assert!(clicked < std::time::Duration::from_secs(10), "{clicked:?}");
 }
 
+/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
+/// after them, in a shuffled order: a `.torrent` of 8.9 MB, whose tree fits in the budget.
+fn names_crafted_to_compare_slowly() -> Arc<[u8]> {
+    let mut names: Vec<Vec<String>> = (0..14_000)
+        .map(|n| vec![format!("{}{n}", "a1".repeat(300))])
+        .collect();
+    let mut seed: u64 = 42;
+    for at in (1..names.len()).rev() {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        names.swap(at, usize::try_from(seed >> 33).unwrap() % (at + 1));
+    }
+    folder_torrent("T", &names)
+}
+
+#[test]
+fn a_torrent_of_names_crafted_to_compare_slowly_loads_in_bounded_time() {
+    // Each name has 600 runs of letters and digits to compare by number and without case: the
+    // tree took 3.3 s to sort in a release build.
+    let bytes = names_crafted_to_compare_slowly();
+    let start = std::time::Instant::now();
+
+    let form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+
+    let loaded = start.elapsed();
+    // Some 0.1 s in a release build and 5 s in a debug one, where it took 55 s.
+    assert!(loaded < std::time::Duration::from_secs(20), "{loaded:?}");
+    assert_eq!(form.choice_unavailable(), None);
+    assert_eq!(
+        form.tree()
+            .unwrap()
+            .indices(&key("T"))
+            .map(NonEmptyIndices::into_vec),
+        Some((0..14_000).collect())
+    );
+}
+
 #[test]
 fn a_real_shaped_torrent_loads_with_its_tree() {
     // 5 000 episodes, four levels deep with the torrent's folder, with long names.

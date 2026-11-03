@@ -31,21 +31,67 @@ pub(super) fn is_padding<'a>(parts: impl Iterator<Item = &'a str>) -> bool {
     name.starts_with(PADDING_PREFIX) || (count >= 3 && second == Some(PAD_FOLDER))
 }
 
+/// The most runs of digits, or of other characters, that two names are compared by in their
+/// natural order; what follows them is compared byte by byte. A real name has far fewer.
+const NATURAL_RUNS: usize = 32;
+
+/// The most bytes at the start of a name that are compared in their natural order and without
+/// case; what follows them is compared byte by byte. A file system allows 255 for a name.
+const NATURAL_BYTES: usize = 256;
+
 /// How two names in the same folder are ordered: digits compare by number, so `E2` comes before
 /// `E10`, and letters compare ignoring case.
 ///
 /// Names that this treats as equal (`a1` and `a01`, `A` and `a`) are ordered by their text
 /// without case, and then exactly, so the order is the same for the same names whatever order
 /// they came in.
+///
+/// Only the first [`NATURAL_RUNS`] runs of digits and of other characters within the first
+/// [`NATURAL_BYTES`] of a name compare that way; the rest of it compares byte by byte. So one
+/// comparison takes a bounded time, however long the names: 14 000 crafted names of 600 runs
+/// each took seconds to sort. The order stays total and the same for the same names, and real
+/// names, shorter than both bounds, are ordered as if there were none.
 pub(super) fn name_order(a: &str, b: &str) -> Ordering {
     natural_order(a, b)
-        .then_with(|| folded(a).cmp(folded(b)))
+        .then_with(|| folded_order(head(a), head(b)))
         .then_with(|| a.cmp(b))
+}
+
+/// The start of `name` that is compared in its natural order: its first [`NATURAL_BYTES`],
+/// fewer when they would cut a character.
+fn head(name: &str) -> &str {
+    name.get(..name.floor_char_boundary(NATURAL_BYTES))
+        .unwrap_or(name)
 }
 
 /// The characters of `text` in lower case.
 fn folded(text: &str) -> impl Iterator<Item = char> {
     text.chars().flat_map(char::to_lowercase)
+}
+
+/// How `a` and `b` compare in lower case: as their [`folded`] characters do, but byte by byte as
+/// long as both are ASCII, which most names are throughout.
+fn folded_order(a: &str, b: &str) -> Ordering {
+    let differ = a
+        .bytes()
+        .zip(b.bytes())
+        .position(|(x, y)| !(x.is_ascii() && y.is_ascii() && x.eq_ignore_ascii_case(&y)));
+    let Some(at) = differ else {
+        // One is the start of the other, and each character has a lower case.
+        return a.len().cmp(&b.len());
+    };
+    match (a.as_bytes().get(at), b.as_bytes().get(at)) {
+        (Some(x), Some(y)) if x.is_ascii() && y.is_ascii() => {
+            x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase())
+        }
+        // Every byte before is ASCII, so both texts have a character boundary here; a character
+        // beyond ASCII may have an ASCII lower case, or more than one character.
+        _ => match (a.get(at..), b.get(at..)) {
+            (Some(rest_a), Some(rest_b)) => folded(rest_a).cmp(folded(rest_b)),
+            // Not reached; the whole texts compare as their rests do.
+            _ => folded(a).cmp(folded(b)),
+        },
+    }
 }
 
 /// A stretch of a name that is all digits or has none.
@@ -56,9 +102,12 @@ enum Run<'a> {
 
 /// The first run of `text` and what follows it; `None` for an empty text.
 fn next_run(text: &str) -> Option<(Run<'_>, &str)> {
-    let digits = text.chars().next()?.is_ascii_digit();
+    // Digits are ASCII, and no byte of a character beyond ASCII is one, so the bytes tell where a
+    // run ends, at a character boundary.
+    let digits = text.as_bytes().first()?.is_ascii_digit();
     let end = text
-        .find(|c: char| c.is_ascii_digit() != digits)
+        .bytes()
+        .position(|byte| byte.is_ascii_digit() != digits)
         .unwrap_or(text.len());
     let (run, rest) = text.split_at_checked(end)?;
     Some((
@@ -71,25 +120,43 @@ fn next_run(text: &str) -> Option<(Run<'_>, &str)> {
     ))
 }
 
-/// Compares run by run: numbers by value, text without regard to case, and a number before text.
-/// A name that is the start of another one comes first.
-fn natural_order(mut a: &str, mut b: &str) -> Ordering {
-    loop {
-        let (Some((run_a, rest_a)), Some((run_b, rest_b))) = (next_run(a), next_run(b)) else {
-            // One name is used up, and the one that has more left comes later.
-            return a.len().cmp(&b.len());
+/// Compares the [`head`]s of two names run by run, for [`NATURAL_RUNS`] runs at most: numbers by
+/// value, text without regard to case, and a number before text. A name whose head has fewer runs
+/// than the other's, and is alike as far as it goes, comes first. Names alike in all those runs
+/// compare by what follows them, byte by byte.
+///
+/// Each name is cut into its runs on its own, so this orders the names as their runs and the rest
+/// after them would be ordered: a total order of names that it treats as equal.
+fn natural_order(a: &str, b: &str) -> Ordering {
+    let (mut rest_a, mut rest_b) = (head(a), head(b));
+    for _ in 0..NATURAL_RUNS {
+        let (Some((run_a, next_a)), Some((run_b, next_b))) = (next_run(rest_a), next_run(rest_b))
+        else {
+            if rest_a.is_empty() && rest_b.is_empty() {
+                break;
+            }
+            // One head is used up, and the one that has more runs left comes later.
+            return rest_a.len().cmp(&rest_b.len());
         };
         let order = match (run_a, run_b) {
             (Run::Digits(x), Run::Digits(y)) => number_order(x, y),
-            (Run::Text(x), Run::Text(y)) => folded(x).cmp(folded(y)),
+            (Run::Text(x), Run::Text(y)) => folded_order(x, y),
             (Run::Digits(_), Run::Text(_)) => Ordering::Less,
             (Run::Text(_), Run::Digits(_)) => Ordering::Greater,
         };
         if order != Ordering::Equal {
             return order;
         }
-        (a, b) = (rest_a, rest_b);
+        (rest_a, rest_b) = (next_a, next_b);
     }
+    after_runs(a, rest_a).cmp(after_runs(b, rest_b))
+}
+
+/// What follows the runs of `name` that were compared, of which `rest` is what is left in its
+/// head: the rest of the head and all after it.
+fn after_runs<'a>(name: &'a str, rest: &str) -> &'a str {
+    let compared = head(name).len().saturating_sub(rest.len());
+    name.get(compared..).unwrap_or_default()
 }
 
 /// Compares two runs of digits by value, however long they are.
@@ -171,6 +238,95 @@ mod tests {
         assert_eq!(sorted(&["a", "A"]), ["A", "a"]);
         assert_eq!(sorted(&["A", "a"]), ["A", "a"]);
         assert_eq!(name_order("a", "a"), Ordering::Equal);
+    }
+
+    #[test]
+    fn names_compare_by_number_for_32_runs_and_then_byte_by_byte() {
+        // 32 runs alike, "a1" sixteen times, and then "-9" and "-10": byte by byte, "1" comes
+        // before "9". A run less before them, and 9 and 10 are the 32nd: by number.
+        let alike = "a1".repeat(16);
+        let (nine, ten) = (format!("{alike}-9"), format!("{alike}-10"));
+        assert_eq!(
+            sorted(&[nine.as_str(), ten.as_str()]),
+            [ten.as_str(), nine.as_str()]
+        );
+        let fewer = format!("{}a", "a1".repeat(15));
+        let (nine, ten) = (format!("{fewer}9"), format!("{fewer}10"));
+        assert_eq!(
+            sorted(&[ten.as_str(), nine.as_str()]),
+            [nine.as_str(), ten.as_str()]
+        );
+    }
+
+    #[test]
+    fn names_compare_by_number_and_without_case_for_their_first_256_bytes() {
+        // Longer than any name a file system allows: past 256 bytes, byte by byte.
+        let long = "y".repeat(300);
+        let (nine, ten) = (format!("{long}9"), format!("{long}10"));
+        assert_eq!(
+            sorted(&[nine.as_str(), ten.as_str()]),
+            [ten.as_str(), nine.as_str()]
+        );
+        let (upper, lower) = (format!("{long}B"), format!("{long}a"));
+        assert_eq!(
+            sorted(&[lower.as_str(), upper.as_str()]),
+            [upper.as_str(), lower.as_str()]
+        );
+        // Within them, as for any name.
+        let name = "y".repeat(250);
+        let (nine, ten) = (format!("{name}9"), format!("{name}10"));
+        assert_eq!(
+            sorted(&[ten.as_str(), nine.as_str()]),
+            [nine.as_str(), ten.as_str()]
+        );
+        let (upper, lower) = (format!("{name}B"), format!("{name}a"));
+        assert_eq!(
+            sorted(&[upper.as_str(), lower.as_str()]),
+            [lower.as_str(), upper.as_str()]
+        );
+    }
+
+    /// Names of every kind the order treats in its own way: case, numbers with and without
+    /// zeros, letters beyond ASCII, a prefix of another, and names longer than 32 runs and than
+    /// 256 bytes, alike up to there.
+    fn odd_names() -> Vec<String> {
+        let mut names: Vec<String> = [
+            "", "a", "A", "a1", "a01", "A1", "a10", "a2", "1a", "_a", "é", "É", "e", "a b", "a-1",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        for stem in [
+            "a1".repeat(16),
+            "a1".repeat(15),
+            "Y".repeat(255),
+            "y".repeat(256),
+        ] {
+            for end in ["", "9", "10", "010", "a", "A", "é", "-9", "-10", "a1a1"] {
+                names.push(format!("{stem}{end}"));
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn the_order_is_total_and_the_same_whatever_order_the_names_come_in() {
+        let names = odd_names();
+        for a in &names {
+            for b in &names {
+                let order = name_order(a, b);
+                assert_eq!(order, name_order(b, a).reverse(), "{a:?} {b:?}");
+                assert_eq!(order == Ordering::Equal, a == b, "{a:?} {b:?}");
+                for c in &names {
+                    if order != Ordering::Greater && name_order(b, c) != Ordering::Greater {
+                        assert_ne!(name_order(a, c), Ordering::Greater, "{a:?} {b:?} {c:?}");
+                    }
+                }
+            }
+        }
+        let forward = sorted(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        let mut reversed: Vec<&str> = names.iter().map(String::as_str).rev().collect();
+        reversed.sort_by(|a, b| name_order(a, b));
+        assert_eq!(forward, reversed);
     }
 
     #[test]

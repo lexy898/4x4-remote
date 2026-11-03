@@ -239,3 +239,57 @@ fn indices_and_actions_carry_the_index_of_the_entry_not_its_position() {
         })
     );
 }
+
+/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
+/// after them, in a shuffled order: 8.9 MB of names, within the budget.
+pub(super) fn names_crafted_to_compare_slowly() -> Vec<String> {
+    let mut names: Vec<String> = (0..14_000)
+        .map(|n| format!("{}{n}", "a1".repeat(300)))
+        .collect();
+    let mut seed: u64 = 42;
+    for at in (1..names.len()).rev() {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let other = usize::try_from(seed >> 33).unwrap_or(0) % (at + 1);
+        names.swap(at, other);
+    }
+    names
+}
+
+#[test]
+fn names_crafted_to_compare_slowly_are_ordered_in_bounded_time() {
+    // Each name has 600 runs of letters and digits to compare by number and without case; a
+    // tree of them took 1.7 s to sort in a release build, at every read of the details.
+    let paths: Vec<String> = names_crafted_to_compare_slowly()
+        .iter()
+        .map(|name| format!("T/{name}"))
+        .collect();
+    let files: Vec<super::Spec<'_>> = paths
+        .iter()
+        .map(|path| (path.as_str(), 1, 0, true, Normal))
+        .collect();
+    let crafted = details_of(&files);
+    let start = std::time::Instant::now();
+
+    let tree = FileTree::new(&crafted);
+
+    let elapsed = start.elapsed();
+    // Some 70 ms in a release build and 3 s in a debug one, where it took 55 s.
+    assert!(elapsed < std::time::Duration::from_secs(20), "{elapsed:?}");
+    assert!(!tree.is_too_large());
+    // Past their first 32 runs the names compare byte by byte, so their numbers come in the
+    // order of their digits.
+    let rows = FileTreeView::new(&tree).rows(&tree);
+    let alike = "a1".repeat(300);
+    let names: Vec<&str> = rows
+        .iter()
+        .skip(1)
+        .take(4)
+        .map(|row| row.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["0", "1", "10", "100"].map(|n| format!("{alike}{n}"))
+    );
+}
