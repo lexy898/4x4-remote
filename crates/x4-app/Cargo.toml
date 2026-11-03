@@ -51,6 +51,10 @@ x4-rpc.workspace = true
 # `O_NONBLOCK` for opening a .torrent file (the `adding` module).
 libc.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The desktop's file dialog, with a filter for .torrent files (the `adding::picker` module).
+ashpd.workspace = true
+
 [dev-dependencies]
 fluent-syntax.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }

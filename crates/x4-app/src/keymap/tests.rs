@@ -415,6 +415,32 @@ fn the_open_dialog_keeps_every_window_key() {
     assert!(enter_kept, "Enter is bound to nothing in the add dialog");
 }
 
+/// The key contexts around the focus in the search box, from the window down.
+const IN_THE_SEARCH_BOX_STACK: &[&str] = &[MAIN_CONTEXT, SEARCH_CONTEXT, "Input"];
+
+/// The search box lies outside the torrent list, so the list's Ctrl+V, which adds the magnet links
+/// on the clipboard, never takes the key from the text field, which pastes text with it; nor does
+/// any other key of the list.
+#[test]
+fn the_search_box_keeps_its_own_paste() {
+    let acting: BTreeSet<&str> = keys_acting_in(&[IN_THE_SEARCH_BOX_STACK], &[], &[])
+        .into_iter()
+        .map(|(keys, _, _)| keys)
+        .collect();
+    assert!(!acting.contains("ctrl-v"), "{acting:?}");
+    assert!(!acting.contains("ctrl-c"), "{acting:?}");
+    let search: Vec<KeyContext> = IN_THE_SEARCH_BOX_STACK
+        .iter()
+        .map(|context| KeyContext::parse(context).expect("a key context parses"))
+        .collect();
+    assert_eq!(predicate(TORRENTS).depth_of(&search), None);
+    // The window's keys to add torrents work there.
+    assert!(
+        acting.contains("ctrl-o") && acting.contains("ctrl-u"),
+        "{acting:?}"
+    );
+}
+
 #[test]
 fn the_menu_rule_knows_which_contexts_leave_an_open_menu_out() {
     let context_menu: Vec<KeyContext> = OPEN_MENUS[0]

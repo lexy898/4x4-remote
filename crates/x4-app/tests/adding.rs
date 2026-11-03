@@ -1,25 +1,29 @@
 //! Headless tests for the add dialog: what a request of a `.torrent` file or a magnet link opens,
 //! what Add sends, why Add is disabled, the folder history and the free space, the queue, what
 //! becomes of an add (added, a duplicate, unconfirmed, failed) and the torrent selected once it
-//! shows, the keys an open dialog keeps, and files that cannot be offered.
+//! shows, the keys an open dialog keeps, and files that cannot be offered. Also the ways in: the
+//! toolbar's buttons, Ctrl+O, Ctrl+U and Ctrl+V, the file dialog (gpui's prompt, which the test
+//! platform lets the test answer, or a picker of the test's own), the clipboard and drops.
 //!
 //! Each test builds the two channels of a service and the channel of add requests itself, and
 //! opens the window with no service behind them, so nothing touches the network: the test sends
 //! the requests and the snapshots, reads the commands the window sends and answers them as a
 //! service would. The `.torrent` files are made by the tests, in a directory of their own.
 
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, ElementId, Entity, ExternalPaths, FileDropEvent,
-    Focusable as _, InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke, OperatingSystem,
-    TestAppContext,
+    AnyWindowHandle, App, AppContext as _, ClipboardItem, ElementId, Entity, ExternalPaths,
+    FileDropEvent, Focusable as _, InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke,
+    OperatingSystem, Task, TestAppContext,
 };
-use x4_app::adding::AddRequest;
+use x4_app::adding::{AddRequest, FilePicker, PickError, Picked};
 use x4_app::app;
 use x4_app::main_view::MainView;
 use x4_core::launch::{RejectKind, RejectedArg};
@@ -56,6 +60,17 @@ const MENU: &str = "popup-menu";
 const NOTIFICATION: &str = "notification";
 /// The buttons of the dialog that removes torrents from the list.
 const REMOVE_CANCEL: &str = "remove-from-list-cancel";
+/// The toolbar's buttons that add torrents.
+const ADD_FILES_BUTTON: &str = "add-torrent-files";
+const ADD_MAGNET_BUTTON: &str = "add-magnet-link";
+/// The list of torrents, the search box, the toolbar's column menu and the Apply button of the
+/// speed limits.
+const TABLE: &str = "torrent-list";
+const SEARCH: &str = "search";
+const COLUMN_MENU: &str = "column-menu";
+/// The dot of the connection in the status bar.
+const STATUS_BAR_DOT: &str = "connection";
+const LIMITS_APPLY: &str = "limits-apply";
 
 /// The session's download folder.
 const SESSION_DIR: &str = "/data/torrents";
@@ -456,15 +471,19 @@ impl Window {
         });
     }
 
-    /// Drops files at `paths` on the element `id`, as from a file manager.
+    /// Drops files at `paths` on the element `id`, as from a file manager: the drag enters there
+    /// and the files are let go, each as a platform event of its own, as the system sends them.
     fn drop_files(&self, id: &'static str, paths: &[&Path], cx: &mut TestAppContext) {
         let paths = ExternalPaths(paths.iter().map(|path| path.to_path_buf()).collect());
-        self.act(cx, |window, cx| {
+        let position = self.act(cx, |window, cx| {
             let position = window.find(id).bounds().center();
             window.dispatch_event(
                 FileDropEvent::Entered { position, paths }.to_platform_input(),
                 cx,
             );
+            position
+        });
+        self.act(cx, |window, cx| {
             window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
         });
     }
@@ -1798,4 +1817,361 @@ fn showing_one_new_torrent_lets_the_next_add_out_be_selected_too(cx: &mut TestAp
         std::slice::from_ref(&second_hash),
         "what the window did to show the first is no choice of the user's"
     );
+}
+
+/// Puts `text` on the clipboard.
+fn copy(text: &str, cx: &mut TestAppContext) {
+    cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+}
+
+/// A file dialog that cannot be opened, as without a file chooser, which counts how often it was
+/// asked for.
+struct FailingPicker(Rc<Cell<usize>>);
+
+impl FilePicker for FailingPicker {
+    fn pick(&self, _: &App) -> Task<Picked> {
+        self.0.set(self.0.get() + 1);
+        Task::ready(Err(PickError::new(
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+        )))
+    }
+}
+
+#[gpui_kit::test]
+fn the_toolbar_buttons_open_the_picker_and_the_magnet_form(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    assert!(!cx.did_prompt_for_paths());
+
+    window.click(ADD_FILES_BUTTON, cx);
+    assert!(cx.did_prompt_for_paths(), "Add file opens the file dialog");
+    cx.simulate_path_prompt_response(|options| {
+        assert!(
+            options.files && !options.directories && options.multiple,
+            "several files, no folder: {options:?}"
+        );
+        None
+    });
+    cx.run_until_parked();
+    assert!(
+        !window.dialog_open(cx),
+        "a cancelled file dialog adds nothing"
+    );
+    assert_eq!(window.notifications(cx), 0, "and says nothing");
+
+    // Without a magnet link on the clipboard, Add magnet opens the form with an empty link.
+    copy("some text", cx);
+    window.click(ADD_MAGNET_BUTTON, cx);
+    assert_eq!(window.label(TITLE, cx).as_deref(), Some("Add torrent"));
+    assert_eq!(window.value(LINK, cx).as_deref(), Some(""));
+    assert!(window.focused(LINK, cx));
+    window.press("escape", cx);
+    assert!(!window.dialog_open(cx));
+
+    // With links on it, it offers each of them.
+    let first = magnet('a', Some("First"));
+    let second = magnet('b', Some("Second"));
+    copy(&format!("{}\n{}", first.as_str(), second.as_str()), cx);
+    window.click(ADD_MAGNET_BUTTON, cx);
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("First"));
+    assert_eq!(window.value(LINK, cx).as_deref(), Some(first.as_str()));
+    window.press("escape", cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Second"));
+    assert_eq!(window.sent_adds(), [], "nothing is added without Add");
+}
+
+#[gpui_kit::test]
+fn chosen_files_join_the_queue_in_order(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let show = window.file("show.torrent", &show());
+    let notes = window.file("notes.txt", b"not a torrent");
+
+    window.press("ctrl-o", cx);
+    assert!(cx.did_prompt_for_paths());
+    let chosen = vec![film, notes, show];
+    cx.simulate_path_prompt_response(move |_| Some(chosen));
+    cx.run_until_parked();
+
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 3)")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+    window.press("escape", cx);
+    // Every path chosen joins the queue; a file that is no torrent is refused when its turn comes.
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("Could not open notes.txt: it is not a torrent file")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (2 of 2)")
+    );
+    assert_eq!(window.sent_adds(), []);
+}
+
+#[gpui_kit::test]
+fn a_second_ctrl_o_while_the_file_dialog_is_open_opens_no_other(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+
+    window.press("ctrl-o", cx);
+    window.press("ctrl-o", cx);
+    window.click(ADD_FILES_BUTTON, cx);
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    assert!(!cx.did_prompt_for_paths(), "one file dialog at a time");
+
+    // Once it is answered, the next press opens it again.
+    window.press("ctrl-o", cx);
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(move |_| Some(vec![film]));
+    cx.run_until_parked();
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+}
+
+#[gpui_kit::test]
+fn ctrl_o_and_ctrl_u_do_nothing_while_a_menu_or_the_dialog_is_open(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("Other")], cx);
+    copy(magnet('a', Some("Film")).as_str(), cx);
+    // Neither key opens the file dialog or a form, wherever the focus is now.
+    let keys_do_nothing = |place: &str, cx: &mut TestAppContext| {
+        for key in ["ctrl-o", "ctrl-u", "ctrl-v"] {
+            window.press(key, cx);
+            assert!(!cx.did_prompt_for_paths(), "{key} in {place}");
+            assert!(!window.shown(TITLE, cx), "{key} in {place}");
+        }
+    };
+
+    window.click(COLUMN_MENU, cx);
+    assert!(window.shown(MENU, cx));
+    keys_do_nothing("the column menu", cx);
+    assert!(window.shown(MENU, cx), "the menu stays open");
+    window.press("escape", cx);
+
+    window.act(cx, |window, cx| window.right_click(("row", 0_usize), cx));
+    assert!(window.shown(MENU, cx));
+    keys_do_nothing("the context menu", cx);
+    window.press("escape", cx);
+    assert!(!window.shown(MENU, cx));
+
+    window.press("ctrl-l", cx);
+    assert!(window.shown(LIMITS_APPLY, cx));
+    keys_do_nothing("the speed limits", cx);
+    assert!(window.shown(LIMITS_APPLY, cx), "the popover stays open");
+    window.press("escape", cx);
+    assert!(!window.shown(LIMITS_APPLY, cx));
+
+    window.click(("row", 0_usize), cx);
+    window.press("delete", cx);
+    assert!(window.shown(REMOVE_CANCEL, cx));
+    keys_do_nothing("the removal dialog", cx);
+    window.press("escape", cx);
+    assert!(
+        !window.dialog_open(cx),
+        "nothing waited behind the removal dialog"
+    );
+
+    window.request_torrent("show.torrent", &show(), cx);
+    assert_eq!(window.label(TITLE, cx).as_deref(), Some("Add torrent"));
+    for key in ["ctrl-o", "ctrl-u", "ctrl-v"] {
+        window.press(key, cx);
+        assert!(!cx.did_prompt_for_paths(), "{key} in the add dialog");
+        assert_eq!(
+            window.label(TITLE, cx).as_deref(),
+            Some("Add torrent"),
+            "{key} queues nothing behind the add dialog"
+        );
+    }
+    window.press("escape", cx);
+    assert!(!window.dialog_open(cx));
+
+    // With nothing open, they work.
+    window.press("ctrl-u", cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+    window.press("escape", cx);
+    window.press("ctrl-o", cx);
+    assert!(cx.did_prompt_for_paths());
+}
+
+#[gpui_kit::test]
+fn ctrl_v_in_the_table_queues_every_magnet_on_the_clipboard(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("Other")], cx);
+    window.click(("row", 0_usize), cx);
+    let first = magnet('a', Some("First"));
+    let second = magnet('b', Some("Second"));
+    copy(
+        &format!(
+            "{}\n\nnot a link\nhttps://example.org/a.torrent\n  {}  \n",
+            first.as_str(),
+            second.as_str()
+        ),
+        cx,
+    );
+
+    window.press("ctrl-v", cx);
+
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("First"));
+    window.press("escape", cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Second"));
+    window.press("escape", cx);
+    assert!(!window.dialog_open(cx));
+    assert_eq!(window.sent_adds(), [], "nothing is added without Add");
+    assert_eq!(window.notifications(cx), 0);
+
+    // Without one, it says so, once for a held key.
+    copy("just some text", cx);
+    window.key_down("ctrl-v", false, cx);
+    window.key_down("ctrl-v", true, cx);
+    window.key_down("ctrl-v", true, cx);
+    window.key_up("ctrl-v", cx);
+    assert!(!window.dialog_open(cx));
+    assert_eq!(window.notifications(cx), 1);
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("No magnet link on the clipboard")
+    );
+}
+
+#[gpui_kit::test]
+fn ctrl_v_in_the_search_box_still_pastes(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let link = magnet('a', Some("Film"));
+    copy(link.as_str(), cx);
+
+    window.click(SEARCH, cx);
+    window.press("ctrl-v", cx);
+
+    assert_eq!(window.value(SEARCH, cx).as_deref(), Some(link.as_str()));
+    assert!(!window.dialog_open(cx));
+    assert_eq!(window.notifications(cx), 0);
+    // Ctrl+U adds the link from there.
+    window.press("ctrl-u", cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+}
+
+#[gpui_kit::test]
+fn a_drop_of_torrent_files_queues_them_and_other_files_are_named(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let show = window.file("SHOW.TORRENT", &show());
+    let notes = window.file("notes.txt", b"not a torrent");
+    let cover = window.file("cover.png", b"not a torrent either");
+
+    window.drop_files(TABLE, &[&notes, &film, &cover, &show], cx);
+
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+    assert_eq!(window.notifications(cx), 1, "one for both of the others");
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("2 dropped files are not .torrent files and were left out")
+    );
+    window.press("escape", cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
+    window.press("escape", cx);
+    assert!(!window.dialog_open(cx));
+
+    // A drop of no torrent at all opens nothing, wherever it lands.
+    window.drop_files(STATUS_BAR_DOT, &[&notes], cx);
+    assert!(!window.dialog_open(cx));
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("1 dropped file is not a .torrent file and was left out")
+    );
+    window.drop_files(SEARCH, &[&film], cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+    assert_eq!(window.sent_adds(), [], "a drop only queues");
+}
+
+#[gpui_kit::test]
+fn a_drop_on_the_open_dialog_joins_the_queue(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.request_torrent("show.torrent", &show(), cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let notes = window.file("notes.txt", b"not a torrent");
+
+    window.drop_files(NAME, &[&notes, &film], cx);
+
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("1 dropped file is not a .torrent file and was left out")
+    );
+    assert_eq!(window.sent_adds(), [], "a drop only queues");
+    window.press("escape", cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (2 of 2)")
+    );
+}
+
+#[gpui_kit::test]
+fn a_picker_error_is_a_notification(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let asked = Rc::new(Cell::new(0));
+    let picker = FailingPicker(Rc::clone(&asked));
+    cx.update(|cx| {
+        window
+            .view
+            .update(cx, |view, _| view.set_file_picker(Rc::new(picker)));
+    });
+
+    window.click(ADD_FILES_BUTTON, cx);
+
+    assert_eq!(asked.get(), 1);
+    assert!(!window.dialog_open(cx));
+    assert_eq!(window.notifications(cx), 1);
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("Could not open the file dialog; .torrent files can also be dropped on the window")
+    );
+    // The next try asks again.
+    window.press("ctrl-o", cx);
+    assert_eq!(asked.get(), 2);
+    assert_eq!(window.notifications(cx), 2);
+}
+
+#[gpui_kit::test]
+fn a_drop_after_a_key_press_still_lands(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let show = window.file("show.torrent", &show());
+    // The last input is a key, and the mouse does not move: the files come from another app.
+    window.press("ctrl-f", cx);
+
+    window.drop_files(TABLE, &[&film], cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+
+    // So on the open dialog, after a key in it.
+    window.press("tab", cx);
+    window.drop_files(NAME, &[&show], cx);
+    assert_eq!(
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
+    );
+    window.press("escape", cx);
+    window.press("escape", cx);
+    assert!(!window.dialog_open(cx));
+    window.drop_files(STATUS_BAR_DOT, &[&film], cx);
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
 }

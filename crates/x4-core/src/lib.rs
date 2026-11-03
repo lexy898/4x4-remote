@@ -51,7 +51,10 @@
 //! with all of them, and [`NoChoiceReason`] says why.
 //! [`AddForm::check`] gives the [`AddCheck`] that tells whether Add may send it, and the request
 //! it sends. [`folder_picks`] lists at most [`MAX_FOLDER_PICKS`] folders to offer: the session's,
-//! then the history of the [`AddState`], then those of the torrents in the list.
+//! then the history of the [`AddState`], then those of the torrents in the list. Before anything
+//! is queued, [`dropped_files`] keeps the `.torrent` files of a drop and counts the others,
+//! [`clipboard_magnets`] takes the magnet links on the clipboard (and [`magnet_form_items`] what
+//! "Add magnet" queues), and [`chosen_file`] reads the file a file dialog names by its URI.
 //!
 //! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
 //! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
@@ -130,10 +133,11 @@ pub use action::{
     Action, ActionError, ActionId, AddError, Added, Direction, FileChange, FileTarget,
 };
 pub use adding::{
-    AddCheck, AddForm, AddItem, AddNotice, AddOutcome, AddQueue, FREE_SPACE_DELAY, FormDefaults,
-    FormStep, FreeSpaceCache, FreeSpaceFollow, ListChoices, LoadedItem, LoadedTorrent,
-    MAX_FOLDER_PICKS, NoChoiceReason, PENDING_SELECTION_LIFE, PendingSelection, QUEUE_CAP, Reveal,
-    SentAdd, TakenDefaults, add_outcome, folder_picks, stopped_outcome,
+    AddCheck, AddForm, AddItem, AddNotice, AddOutcome, AddQueue, DroppedFiles, FREE_SPACE_DELAY,
+    FormDefaults, FormStep, FreeSpaceCache, FreeSpaceFollow, ListChoices, LoadedItem,
+    LoadedTorrent, MAX_FOLDER_PICKS, NoChoiceReason, PENDING_SELECTION_LIFE, PendingSelection,
+    QUEUE_CAP, Reveal, SentAdd, TakenDefaults, add_outcome, chosen_file, clipboard_magnets,
+    dropped_files, folder_picks, magnet_form_items, stopped_outcome,
 };
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};

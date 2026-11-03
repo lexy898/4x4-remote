@@ -33,7 +33,10 @@
 //! (the `copying` module). The `menu` module carries out the items of the context menu.
 //!
 //! Torrents to add come as requests from their sources and wait in a queue; the add dialog shows
-//! them one at a time, and nothing is added without the user's Add (the `adding` module).
+//! them one at a time, and nothing is added without the user's Add (the `adding` module). The
+//! sources inside the window are the toolbar's Add file and Add magnet, Ctrl+O, Ctrl+U, Ctrl+V in
+//! the list, the file dialog, the clipboard, and `.torrent` files dropped anywhere on the window,
+//! which is highlighted while they hover.
 //!
 //! The status bar's turtle switches the daemon's alternative speed limits, and its limits button
 //! opens a popover that sets the normal ones (the `speed_controls` module); Ctrl+T and Ctrl+L do
@@ -68,8 +71,8 @@ use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    MouseDownEvent, ParentElement as _, Pixels, Render, SharedString,
+    App, AppContext as _, Context, Entity, ExternalPaths, Focusable as _, InteractiveElement as _,
+    IntoElement, MouseDownEvent, ParentElement as _, Pixels, Render, SharedString,
     StatefulInteractiveElement as _, Styled, Subscription, Task, TestSupportExt as _, Window, div,
     px,
 };
@@ -82,7 +85,7 @@ use x4_core::{
 use x4_rpc::HashString;
 
 use crate::actions::PendingActions;
-use crate::adding::AddRequests;
+use crate::adding::{AddRequests, drop_highlight, hover_while_dragging};
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
 use crate::details_panel::DetailsPanel;
@@ -101,6 +104,8 @@ use crate::torrent_table::{
     TorrentTable, follow_table, new_table_state, right_click, show_column, show_rows,
     watch_right_click,
 };
+pub(crate) use adding::AddButton;
+use adding::on_add_actions;
 use details::on_details_actions;
 use persistence::Saver;
 use selection_keys::on_selection_keys;
@@ -717,9 +722,13 @@ impl Render for MainView {
             cx,
         );
         let repeats = &self.key_repeats;
-        let root = on_details_actions(
-            on_speed_actions(
-                on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+        let root = on_add_actions(
+            on_details_actions(
+                on_speed_actions(
+                    on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+                    repeats,
+                    cx,
+                ),
                 repeats,
                 cx,
             ),
@@ -737,6 +746,13 @@ impl Render for MainView {
                 focus_search(&view.search, window, cx);
             }))
             .on_action(cx.listener(Self::on_clear_search))
+            // Over the table, a row, the search box or the status bar alike; and over the add
+            // dialog too, whose own drop needs the drag to count as the mouse just as well.
+            .on_drag_move::<ExternalPaths>(hover_while_dragging)
+            .drag_over::<ExternalPaths>(drop_highlight)
+            .on_drop(cx.listener(|view, paths: &ExternalPaths, window, cx| {
+                view.files_dropped(paths.paths(), window, cx);
+            }))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(content))
             .child(status_bar)

@@ -3,11 +3,12 @@
 //!
 //! Every source sends an [`AddRequest`] into one channel, which [`MainView::listen_for_adds`]
 //! pumps on the UI thread: the sources outside the window into the channel the app made at
-//! startup, those inside it into [`MainView::add_requests`], the sender of that same channel. A
-//! drop on the dialog hands its files over directly. The items join x4-core's [`AddQueue`], which
-//! holds at most [`QUEUE_CAP`](x4_core::QUEUE_CAP); what it has no room for is counted in a
-//! notification. Launch arguments 4x4 does not open make one notification, and a second launch
-//! raises the window.
+//! startup, those inside it (the toolbar, the keys, the file dialog, the clipboard and drops, a
+//! drop on the dialog among them: the `sources` module) into [`MainView::add_requests`], the
+//! sender of that same channel. The items join x4-core's [`AddQueue`], which holds at most
+//! [`QUEUE_CAP`](x4_core::QUEUE_CAP); what it has no room for is counted in a notification.
+//! Launch arguments 4x4 does not open make one notification, and a second launch raises the
+//! window.
 //!
 //! The head of the queue is read off the UI thread when its turn comes: a `.torrent` file only
 //! once `stat` says it is a regular file within the limit (the `adding` module of the crate). A
@@ -31,7 +32,10 @@
 //! change of the filter, the search or the sort order since the add was sent ends the wait, and
 //! so does the next full list. What the view does to show the torrent is not counted.
 
+mod sources;
+
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::WindowExt as _;
@@ -44,10 +48,15 @@ use x4_core::{
 use x4_rpc::TorrentAdd;
 
 use super::MainView;
-use crate::adding::{self, AddDialog, AddDialogEvent, AddRequest, AddRequests, LoadError, load};
+use crate::adding::{
+    self, AddDialog, AddDialogEvent, AddRequest, AddRequests, FilePicker, LoadError, PromptPicker,
+    load,
+};
 use crate::i18n::{add_notice_text, load_failure_text, queue_full_text, rejected_text};
 use crate::search::clear_search;
 use crate::torrent_table::select_added;
+pub(crate) use sources::AddButton;
+pub(super) use sources::on_add_actions;
 
 /// How long the head of the queue may take to read before the dialog opens to say so, with Skip.
 const READ_GRACE: Duration = Duration::from_millis(300);
@@ -85,6 +94,10 @@ pub(super) struct Adds {
     listener: Option<Task<()>>,
     /// The look, after the window was asked to come to the front, whether it did.
     raise: Option<Task<()>>,
+    /// How the window asks for `.torrent` files.
+    picker: Rc<dyn FilePicker>,
+    /// The wait for the answer of the file dialog that is open; one is open at a time.
+    picking: Option<Task<()>>,
 }
 
 impl Default for Adds {
@@ -101,6 +114,8 @@ impl Default for Adds {
             requests: AddRequests::new().sender,
             listener: None,
             raise: None,
+            picker: Rc::new(PromptPicker),
+            picking: None,
         }
     }
 }
@@ -507,7 +522,7 @@ impl MainView {
         let history = self.ui.add.recent_folders.clone();
         let snapshot = self.last_snapshot.clone();
         let connected = self.status.connected();
-        let repeats = std::rc::Rc::clone(&self.key_repeats);
+        let repeats = Rc::clone(&self.key_repeats);
         let dialog = cx.new(|cx| AddDialog::new(repeats, history, snapshot, connected, window, cx));
         let events = cx.subscribe_in(&dialog, window, Self::on_add_dialog_event);
         self.adds.dialog = Some((dialog.clone(), events));
@@ -549,9 +564,7 @@ impl MainView {
                 self.skip_add(window, cx);
             }
             AddDialogEvent::Skip => self.cancel_add(window, cx),
-            AddDialogEvent::Dropped(items) => {
-                self.take_add_request(AddRequest::Items(items.clone()), window, cx);
-            }
+            AddDialogEvent::Dropped(paths) => self.files_dropped(paths, window, cx),
             AddDialogEvent::AskFreeSpace(folder) => {
                 tracing::debug!(
                     folder = folder.as_str(),

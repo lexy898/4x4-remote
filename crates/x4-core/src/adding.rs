@@ -17,6 +17,8 @@
 //! - [`add_outcome`] says what follows the daemon's answer to an add (an [`AddOutcome`]), and
 //!   [`stopped_outcome`] what follows when the service stops before it; a [`PendingSelection`]
 //!   waits for the torrent to select once it is listed, unless the user's [`ListChoices`] changed.
+//! - [`dropped_files`], [`clipboard_magnets`], [`magnet_form_items`] and [`chosen_file`] tell what
+//!   a drop, the clipboard and a file dialog hand over before anything is queued.
 //!
 //! Nothing here sends anything: the app sends the request of an [`AddCheck::Ready`] only when the
 //! user presses Add.
@@ -29,6 +31,7 @@ mod free_space;
 mod outcome;
 mod queue;
 mod selection;
+mod sources;
 
 pub use defaults::{FormDefaults, TakenDefaults};
 pub use folders::{MAX_FOLDER_PICKS, folder_picks};
@@ -37,3 +40,4 @@ pub use free_space::{FREE_SPACE_DELAY, FreeSpaceCache, FreeSpaceFollow};
 pub use outcome::{AddNotice, AddOutcome, FormStep, SentAdd, add_outcome, stopped_outcome};
 pub use queue::{AddItem, AddQueue, QUEUE_CAP};
 pub use selection::{ListChoices, PENDING_SELECTION_LIFE, PendingSelection, Reveal};
+pub use sources::{DroppedFiles, chosen_file, clipboard_magnets, dropped_files, magnet_form_items};

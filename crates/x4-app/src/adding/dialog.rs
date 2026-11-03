@@ -27,7 +27,8 @@
 //! Enter never closes the dialog from a field. Escape, Cancel and Skip skip the torrent, through
 //! the main view, which moves on to the next one or closes the dialog. A click beside the dialog
 //! does nothing, so that it never throws a choice of files away. Files dropped anywhere on the
-//! dialog join the queue.
+//! dialog go to the main view, which queues the `.torrent` files among them; the dialog is
+//! highlighted while they hover.
 //!
 //! The dialog lies beside the main view, so the main view does not see its key-ups: the dialog
 //! passes them on to the record of the key held. The repeats of a held key press none of its
@@ -35,6 +36,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -57,6 +59,7 @@ use x4_core::{
 };
 use x4_rpc::{DownloadDir, HashString, MagnetLink, TorrentAdd};
 
+use super::drop_target::drop_highlight;
 use super::file_choice::FileChoiceList;
 use super::folder_field::FolderField;
 use crate::i18n::{add_reason_text, add_title_text, no_choice_text, size_text, t};
@@ -81,8 +84,8 @@ pub(crate) enum AddDialogEvent {
     Show(HashString),
     /// Skip the torrent shown, or the file being read.
     Skip,
-    /// Queue these, dropped on the dialog.
-    Dropped(Vec<AddItem>),
+    /// Take these files, dropped on the dialog: the `.torrent` files among them join the queue.
+    Dropped(Vec<PathBuf>),
     /// Read the free space of this folder.
     AskFreeSpace(DownloadDir),
 }
@@ -644,13 +647,9 @@ impl Render for AddDialog {
             // The dialog lies beside the main view, which would not see the key go up.
             .capture_key_up(move |_: &KeyUpEvent, _, _| repeats.borrow_mut().release())
             // The content is the whole surface of the dialog, so a drop anywhere on it lands here.
+            .drag_over::<ExternalPaths>(drop_highlight)
             .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
-                let items = paths
-                    .paths()
-                    .iter()
-                    .map(|path| AddItem::File(path.clone()))
-                    .collect();
-                cx.emit(AddDialogEvent::Dropped(items));
+                cx.emit(AddDialogEvent::Dropped(paths.paths().to_vec()));
             }))
             .child(self.title())
             .child(self.heading(cx))

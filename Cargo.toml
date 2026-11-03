@@ -14,6 +14,13 @@ publish = false
 x4-rpc = { path = "crates/x4-rpc" }
 x4-core = { path = "crates/x4-core" }
 anyhow = "1.0.104"
+# The desktop's file dialog through the xdg-desktop-portal, with a filter for .torrent files and a
+# title of our own (Linux only). gpui already pulls in this version, with these features and more,
+# for its own file dialog; ours adds no crate.
+ashpd = { version = "0.13.13", default-features = false, features = [
+  "async-io",
+  "file_chooser",
+] }
 # The worker thread sends events to the UI, which awaits them on its executor.
 async-channel = "2.5.0"
 base64 = "0.23.1"

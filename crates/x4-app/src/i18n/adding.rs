@@ -1,6 +1,7 @@
 //! The texts of the add dialog that carry values or depend on x4-core's decisions: its title with
 //! the place in the queue, the line under the folder field, why there is no choice of files, why
-//! Add is disabled, and the notifications of what became of a torrent to add.
+//! Add is disabled, the notifications of what became of a torrent to add, and the one of dropped
+//! files that are not `.torrent` files.
 //!
 //! Every reason comes from a variant, never from an error's `Display` text, which is English and
 //! for the log: x4-core's [`AddCheck`] and [`NoChoiceReason`], x4-rpc's [`DownloadDirError`] and
@@ -158,6 +159,11 @@ fn add_failure_text(name: &str, error: &AddError) -> SharedString {
 /// The notification of `count` items the queue had no room for.
 pub(crate) fn queue_full_text(count: usize) -> SharedString {
     t!("add-queue-full", count = count, max = QUEUE_CAP).into()
+}
+
+/// The one notification of `count` dropped files that are not `.torrent` files, and are left out.
+pub(crate) fn dropped_others_text(count: usize) -> SharedString {
+    t!("add-dropped-others", count = count).into()
 }
 
 /// The one notification of the launch arguments `rejected`, which names why the first is refused;
@@ -410,6 +416,18 @@ mod tests {
                 "Could not add Show: {}",
                 connection_reason_text(&ConnectionError::Timeout)
             )
+        );
+    }
+
+    #[test]
+    fn dropped_files_that_are_not_torrents_are_counted() {
+        assert_eq!(
+            dropped_others_text(1),
+            "1 dropped file is not a .torrent file and was left out"
+        );
+        assert_eq!(
+            dropped_others_text(3),
+            "3 dropped files are not .torrent files and were left out"
         );
     }
 

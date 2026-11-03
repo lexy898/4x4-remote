@@ -77,8 +77,9 @@ every column fits at its first width, which leaves room for its usual text: "Dow
 left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
 last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
-The window has five parts: a toolbar along the top, with the search box, the Start and Pause
-buttons and the Remove menu on the left and the theme button and the "Columns" menu on the right;
+The window has five parts: a toolbar along the top, with the search box, the Add file and Add
+magnet buttons, the Start and Pause buttons and the Remove menu on the left and the theme button
+and the "Columns" menu on the right;
 the filter sidebar down the left side; the torrent table, which takes the rest; the details panel
 under the table; and the status bar along the bottom.
 
@@ -331,6 +332,26 @@ and while it is not connected; an open popover then keeps what was typed, and Ap
 connection. A change that fails shows a notification, as an action does, one for the turtle and one
 for each limit.
 
+Torrents to add come from the toolbar, the keys, the clipboard and drops, and each of them only
+offers the torrents in the add dialog:
+
+- Add file (the file with a plus), or `Ctrl+O` from anywhere in the window, opens the desktop's
+  file dialog, which shows only torrent files ("Torrent files") and lets you choose several at
+  once; each file chosen is offered in turn. Cancelling it adds nothing. If the desktop has no
+  file dialog, a notification says so;
+- Add magnet (the magnet), or `Ctrl+U`, offers each magnet link on the clipboard, one per line, as
+  4x4's own "Copy magnet link" writes them; with none there, it opens the form with an empty link
+  field, to paste one into;
+- `Ctrl+V` in the table offers the magnet links on the clipboard too, and with none there a
+  notification says "No magnet link on the clipboard". In the search box `Ctrl+V` pastes text;
+- `.torrent` files dropped anywhere on the window, or on the open add dialog, join the torrents to
+  add. The window, or the dialog, is highlighted while they hover. Other files are left out, with
+  one notification that counts them.
+
+4x4 reads the clipboard only when you ask it to. While a menu, the speed limits or a dialog is open,
+`Ctrl+O`, `Ctrl+U` and `Ctrl+V` do nothing, and holding one of them down acts once. One file dialog
+is open at a time.
+
 The add dialog shows the torrents to add, one at a time; nothing is added until you press Add. A
 `.torrent` file is read only when its turn comes, and one that is not a regular file of at most 16
 MiB, or not a torrent the daemon can add, is skipped with a notification that names it and says why,
@@ -360,8 +381,8 @@ daemon stops before the daemon answers, a notification says so, as the torrent m
 A new torrent is not selected once you click or move in the list (even on the row selected already),
 or change the filter, the search or the sort order, from the moment you press Add. The next torrent
 keeps the folder and "Start immediately" you chose. `Enter` in a field adds, `Cancel` or `Escape`
-skips the torrent, a click beside the dialog does nothing, and files dropped anywhere on the dialog
-join the queue. While the dialog that removes torrents is open, the torrents to add wait for it to
+skips the torrent, a click beside the dialog does nothing, and `.torrent` files dropped anywhere on
+the dialog join the queue. While the dialog that removes torrents is open, the torrents to add wait for it to
 close.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
@@ -405,6 +426,9 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
 | `Alt+Enter`                                         | anywhere in the window    | shows or hides the details panel             |
 | `Alt+1`, `Alt+2`                                    | anywhere in the window    | show the panel's General or Files tab        |
+| `Ctrl+O`                                            | anywhere in the window    | opens the file dialog to add .torrent files  |
+| `Ctrl+U`                                            | anywhere in the window    | adds the clipboard's magnet links, or a form |
+| `Ctrl+V`                                            | in the table              | adds the magnet links on the clipboard       |
 | `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the file list          | move between files and folders               |
 | `Left`, `Right`                                     | in the file list          | close or open a folder, or go up or in       |
 | `Space`                                             | in the file list          | downloads or skips the file or folder        |
@@ -418,11 +442,11 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
 In the search box, `Ctrl+A` selects the text, not the torrents, `Ctrl+C` copies the selected text,
-`Space` types a space, and `Delete` deletes a character, never a torrent.
+`Ctrl+V` pastes text, `Space` types a space, and `Delete` deletes a character, never a torrent.
 `Ctrl+F` works on any keyboard layout. `/` is matched by the character the key types, not by its
 place on the keyboard: on the Russian layout it is the key that types `/` there, not the key marked
-`/`, which types a period. Verify is `Ctrl+Shift+R` rather than Transmission's `Ctrl+V`, which is
-kept for pasting a magnet link.
+`/`, which types a period. Verify is `Ctrl+Shift+R` rather than Transmission's `Ctrl+V`, which
+adds magnet links here.
 
 ## What 4x4 remembers
 
@@ -727,7 +751,8 @@ folders; their pieces follow the download, from the start when it is in order. `
 which can be given several times, presses each key in turn once the list is there and selected,
 one every three seconds, as on the keyboard: for example `just virtual just
 demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
-it again, and `--press shift-delete` opens the dialog that would delete its files. `--add
+it again, `--press shift-delete` opens the dialog that would delete its files, and `--press ctrl-o`
+opens the desktop's file dialog, with its filter for torrent files. `--add
 PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent` file or magnet
 link at the start, as if 4x4 had been opened with them, which opens the add dialog; what it does not
 open makes its notification. `just virtual just demo-synthetic --scroll` runs it off screen. With

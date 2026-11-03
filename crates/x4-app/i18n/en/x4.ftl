@@ -177,6 +177,11 @@ theme-light = Light theme
 theme-dark = Dark theme
 theme-switch-tooltip = Switch between the system, light and dark themes
 
+# The toolbar buttons that add torrents: their names for screen readers, which their tooltips show
+# too, with the key. Add file opens the file dialog to choose .torrent files; Add magnet adds the
+# magnet links on the clipboard, or opens the form to paste one into.
+action-add-file = Add file
+action-add-magnet = Add magnet
 # The toolbar buttons that start and pause the selected torrents: their names for screen readers,
 # which their tooltips show too, with the key.
 action-start = Start
@@ -782,3 +787,21 @@ add-rejected-empty = empty
 add-rejected-not-text = a magnet link that is not text
 add-rejected-magnet = a magnet link the server cannot add
 add-rejected-other = no name of a file
+
+## The ways to add torrents
+
+# The desktop's file dialog that chooses .torrent files to add: its title, and the name of its
+# filter, which shows only .torrent files.
+add-file-picker-title = Add torrent files
+add-file-picker-filter = Torrent files
+# When the desktop's file dialog cannot be opened, as when the desktop has no file chooser.
+add-file-picker-failed = Could not open the file dialog; .torrent files can also be dropped on the window
+# Ctrl+V in the list of torrents, when the clipboard holds no magnet link.
+add-no-magnet-on-clipboard = No magnet link on the clipboard
+# Files dropped on the window that are not .torrent files, and are not added. $count: how many
+# (a number).
+add-dropped-others =
+    { $count ->
+        [one] { $count } dropped file is not a .torrent file and was left out
+       *[other] { $count } dropped files are not .torrent files and were left out
+    }

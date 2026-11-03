@@ -1,6 +1,9 @@
-//! The toolbar along the top of the main window: the search box, the buttons that start and
-//! pause the selected torrents and the Remove menu on the left, the theme switch and the column
-//! menu on the right.
+//! The toolbar along the top of the main window: the search box, the buttons that add torrents
+//! (Add file and Add magnet), the buttons that start and pause the selected torrents and the Remove
+//! menu on the left, the theme switch and the column menu on the right.
+//!
+//! Add file and Add magnet are always enabled, as the add dialog says itself whether the daemon is
+//! connected; a click goes through the same request as their keys, Ctrl+O and Ctrl+U.
 //!
 //! Start, Pause and Remove are enabled as the selection's [`Availability`] says, and a click on
 //! Start or Pause goes through the same request as its key, which reads the availability again: a
@@ -24,8 +27,8 @@ use crate::actions::{
     PauseTorrents, RemoveTorrents, RemoveTorrentsWithData, StartTorrents, TorrentRequest,
 };
 use crate::i18n::{column_name_text, t};
-use crate::keymap::TORRENT_LIST_CONTEXT;
-use crate::main_view::MainView;
+use crate::keymap::{AddMagnetLink, AddTorrentFiles, MAIN_CONTEXT, TORRENT_LIST_CONTEXT};
+use crate::main_view::{AddButton, MainView};
 use crate::search::search_box;
 
 /// What the toolbar shows besides the search box.
@@ -64,6 +67,26 @@ pub(crate) fn toolbar(
         .child(
             h_flex()
                 .gap_1()
+                .child(add_button(
+                    "add-torrent-files",
+                    gpui_kit::assets::IconName::FilePlus,
+                    t!("action-add-file").into(),
+                    &AddTorrentFiles,
+                    AddButton::Files,
+                    cx,
+                ))
+                .child(add_button(
+                    "add-magnet-link",
+                    gpui_kit::assets::IconName::Magnet,
+                    t!("action-add-magnet").into(),
+                    &AddMagnetLink,
+                    AddButton::Magnet,
+                    cx,
+                )),
+        )
+        .child(
+            h_flex()
+                .gap_1()
                 .child(action_button(
                     ActionButton {
                         id: "start-torrents",
@@ -98,6 +121,27 @@ pub(crate) fn toolbar(
                 .on_click(cx.listener(|view, _, window, cx| view.switch_theme(window, cx))),
         )
         .child(column_menu(state.columns, cx))
+}
+
+/// The icon button `id` of the toolbar that adds torrents, named `name`: a click carries out
+/// `button` on the view of `cx`, and the tooltip shows the key of `action`, which does the same.
+fn add_button(
+    id: &'static str,
+    icon: gpui_kit::assets::IconName,
+    name: SharedString,
+    action: &dyn Action,
+    button: AddButton,
+    cx: &Context<'_, MainView>,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .icon(icon)
+        .accessibility_label(name.clone())
+        .tooltip_with_action(name, action, Some(MAIN_CONTEXT))
+        .on_click(cx.listener(move |view, _, window, cx| {
+            view.press_add_button(button, window, cx);
+        }))
 }
 
 /// An icon button of the toolbar that acts on the selected torrents.

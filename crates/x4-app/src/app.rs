@@ -194,6 +194,9 @@ pub fn run_with(started: Instant, startup: Startup) -> anyhow::Result<()> {
 /// [`run_with`], which also hands the main window and its view to `drive` once the window is
 /// open, before its first frame, so that a demo or a measurement can drive the real window.
 ///
+/// On Linux the window asks for `.torrent` files through the desktop's own file dialog, with a
+/// filter for them (the portal's); [`launch`] alone leaves it gpui's, which a test answers.
+///
 /// # Errors
 ///
 /// Returns an error if the main window cannot be opened.
@@ -211,6 +214,7 @@ pub fn run_driven(
         .run(move |cx| {
             init(cx);
             let opened = launch(startup, cx).and_then(|(window, view)| {
+                use_desktop_file_dialog(&view, cx);
                 log_first_frame(window, started, cx)?;
                 drive(window, view, cx);
                 Ok(())
@@ -223,6 +227,18 @@ pub fn run_driven(
             }
         });
     launch_error.take().map_or(Ok(()), Err)
+}
+
+/// Has `view` ask for `.torrent` files through the desktop's own file dialog, where 4x4 has one:
+/// the `FileChooser` portal on Linux, which filters them and has a title of 4x4's. Elsewhere gpui's
+/// dialog stays.
+fn use_desktop_file_dialog(view: &Entity<MainView>, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    view.update(cx, |view, _| {
+        view.set_file_picker(Rc::new(crate::adding::PortalPicker));
+    });
+    #[cfg(not(target_os = "linux"))]
+    let _ = (view, cx);
 }
 
 /// Reads `config.toml`. A file that cannot be used gives the defaults and the problem for the
