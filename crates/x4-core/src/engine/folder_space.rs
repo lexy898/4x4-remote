@@ -5,11 +5,12 @@
 //!
 //! The daemon answers one request at a time, on a Raspberry Pi whose disk may sleep, so this
 //! asks little: at most one call is out, a newer question replaces an older one that has not
-//! been answered yet, and one question makes at most [`MAX_CALLS`] calls.
+//! been answered yet, one question makes at most [`MAX_CALLS`] calls, and a call goes out no
+//! sooner than [`MIN_GAP`] after the one before, however fast the questions come.
 //!
 //! [`Command::FreeSpace`]: super::Command::FreeSpace
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use x4_rpc::{DownloadDir, RpcError};
 
@@ -17,6 +18,10 @@ use super::{Engine, Event, Request, Response, unexpected};
 
 /// How many `free_space` calls one question may make: the folder and up to two of its parents.
 pub(super) const MAX_CALLS: usize = 3;
+
+/// The least time from one `free_space` call, or its answer if that came later, to the next, so
+/// that a window that asks too often can neither flood the daemon nor keep its disk awake.
+pub(super) const MIN_GAP: Duration = Duration::from_millis(400);
 
 /// The JSON-RPC error code of `free_space` for a folder it cannot look at, with the system's
 /// message as its detail: in practice "No such file or directory" (T/rpcimpl.cc:2753-2760).
@@ -46,7 +51,7 @@ impl Engine {
         };
         let mut events: Vec<Event> = self
             .folder_space
-            .answered(folder, reading)
+            .answered(now, folder, reading)
             .into_iter()
             .collect();
         if let Some(error) = failure {
@@ -102,6 +107,9 @@ pub(super) struct FolderSpace {
     /// The folder of the call handed out and not answered yet. It may belong to a question that
     /// a newer one has replaced since: the newer one waits for it.
     out: Option<DownloadDir>,
+    /// When the last call went out, or its answer came if that was later; the next call waits
+    /// [`MIN_GAP`] from then.
+    last_call: Option<Instant>,
 }
 
 /// One question and how far up it has walked.
@@ -136,36 +144,47 @@ impl FolderSpace {
         });
     }
 
-    /// Whether a call is due: a question waits for one, and no call is out.
-    pub(super) fn is_due(&self) -> bool {
-        self.out.is_none()
-            && self
-                .question
-                .as_ref()
-                .is_some_and(|question| !question.sent)
+    /// When the next call is due, at the earliest `now`: `None` while no question waits for a
+    /// call or a call is out, else [`MIN_GAP`] after the last call.
+    pub(super) fn due_at(&self, now: Instant) -> Option<Instant> {
+        let waiting = self
+            .question
+            .as_ref()
+            .is_some_and(|question| !question.sent);
+        if self.out.is_some() || !waiting {
+            return None;
+        }
+        let rested = self
+            .last_call
+            .map(|at| at.checked_add(MIN_GAP).unwrap_or(at));
+        Some(rested.map_or(now, |at| at.max(now)))
     }
 
-    /// The folder to ask the daemon about now, if a call is due; it counts as out from now on.
-    pub(super) fn hand_out(&mut self) -> Option<DownloadDir> {
-        if !self.is_due() {
+    /// The folder to ask the daemon about at `now`, if a call is due; it counts as out from now
+    /// on.
+    pub(super) fn hand_out(&mut self, now: Instant) -> Option<DownloadDir> {
+        if self.due_at(now).is_none_or(|at| at > now) {
             return None;
         }
         let question = self.question.as_mut()?;
         question.sent = true;
         question.calls += 1;
         self.out = Some(question.asking.clone());
+        self.last_call = Some(now);
         Some(question.asking.clone())
     }
 
-    /// Takes what the call about `folder` read; returns the answer to the question when this
-    /// ends it, `None` when the question walks on to a parent, when a newer question replaced
-    /// the one it was for, or when no such call is out (it was dropped with the connection).
-    fn answered(&mut self, folder: &DownloadDir, reading: Reading) -> Option<Event> {
+    /// Takes what the call about `folder` read, answered at `now`; returns the answer to the
+    /// question when this ends it, `None` when the question walks on to a parent, when a newer
+    /// question replaced the one it was for, or when no such call is out (it was dropped with
+    /// the connection).
+    fn answered(&mut self, now: Instant, folder: &DownloadDir, reading: Reading) -> Option<Event> {
         if self.out.as_ref() != Some(folder) {
             tracing::debug!("ignored the free space of a folder no call is out for");
             return None;
         }
         self.out = None;
+        self.last_call = Some(self.last_call.map_or(now, |at| at.max(now)));
         let Some(mut question) = self.question.take_if(|question| question.sent) else {
             tracing::debug!("dropped the free space of a folder asked about before the newest");
             return None;

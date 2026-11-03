@@ -4,6 +4,8 @@
 
 use super::*;
 
+use crate::engine::folder_space::MIN_GAP;
+
 fn dir(path: &str) -> DownloadDir {
     DownloadDir::new(path).unwrap()
 }
@@ -21,6 +23,24 @@ fn space(path: &str, answer: FreeSpaceAnswer) -> Event {
         path: dir(path),
         answer,
     }
+}
+
+/// An engine that loaded at `base` and polls nothing else for an hour, so that the folder calls
+/// of a test are its only requests.
+fn quiet(base: Instant) -> Engine {
+    let hour = secs(3600);
+    let config = EngineConfig {
+        visible_interval: hour,
+        hidden_interval: hour,
+        full_refresh_interval: hour,
+        session_interval: hour,
+        free_space_interval: hour,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(config, base);
+    while !exchange(&mut engine, base).0.is_empty() {}
+    assert_eq!(engine.connection, ConnectionState::Connected);
+    engine
 }
 
 /// What the daemon answers for a folder that does not exist (live, 4.1.3).
@@ -59,8 +79,8 @@ fn free_space_of_a_folder_that_exists_is_read_once() {
 #[test]
 fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
     let base = Instant::now();
-    let now = base + ms(500);
-    let mut engine = loaded(base);
+    let mut now = base + ms(500);
+    let mut engine = quiet(base);
 
     command(&mut engine, now, ask("/data/new/a/b"));
     let mut calls = Vec::new();
@@ -72,6 +92,7 @@ fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
             respond(&mut engine, now, &folder(path), Err(no_such_folder())),
             []
         );
+        now += MIN_GAP;
     }
     let due = hand_out(&mut engine, now);
     assert_eq!(due, [folder("/data/new")]);
@@ -94,6 +115,7 @@ fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
         )]
     );
     assert_eq!(calls.len(), 3);
+    now += MIN_GAP;
     assert_eq!(hand_out(&mut engine, now), []);
 
     // No parent within three calls: the question ends there, with none found.
@@ -104,6 +126,7 @@ fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
             respond(&mut engine, now, &folder(path), Err(no_such_folder())),
             []
         );
+        now += MIN_GAP;
     }
     assert_eq!(hand_out(&mut engine, now), [folder("/x/y")]);
     let events = respond(&mut engine, now, &folder("/x/y"), Err(no_such_folder()));
@@ -117,6 +140,7 @@ fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
             }
         )]
     );
+    now += MIN_GAP;
     assert_eq!(hand_out(&mut engine, now), []);
 
     // The root has no parent to ask.
@@ -133,6 +157,7 @@ fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
             }
         )]
     );
+    now += MIN_GAP;
     assert_eq!(hand_out(&mut engine, now), []);
     assert_eq!(engine.connection, ConnectionState::Connected);
 }
@@ -140,8 +165,8 @@ fn free_space_of_a_missing_folder_walks_up_to_its_parent() {
 #[test]
 fn only_the_newest_free_space_question_is_asked() {
     let base = Instant::now();
-    let now = base + ms(500);
-    let mut engine = loaded(base);
+    let mut now = base + ms(500);
+    let mut engine = quiet(base);
 
     // Questions that came before anything was sent: only the last one goes out.
     for path in ["/a", "/b", "/c"] {
@@ -155,16 +180,20 @@ fn only_the_newest_free_space_question_is_asked() {
 
     // Questions that come while a call is out wait for it, and only the last one goes next;
     // the answer for the replaced question is dropped.
+    now += MIN_GAP;
     command(&mut engine, now, ask("/d"));
     assert_eq!(hand_out(&mut engine, now), [folder("/d")]);
     command(&mut engine, now, ask("/e"));
     command(&mut engine, now, ask("/f"));
-    assert_eq!(engine.next_wakeup(now), base + ms(1500));
+    // Nothing is due but the polls, an hour after loading.
+    assert_eq!(engine.next_wakeup(now), base + secs(3600));
+    now += MIN_GAP;
     assert_eq!(hand_out(&mut engine, now), []);
     assert_eq!(
         respond(&mut engine, now, &folder("/d"), Ok(free_space("/d", 2))),
         []
     );
+    now += MIN_GAP;
     assert_eq!(engine.next_wakeup(now), now);
     assert_eq!(hand_out(&mut engine, now), [folder("/f")]);
     assert_eq!(
@@ -173,15 +202,18 @@ fn only_the_newest_free_space_question_is_asked() {
     );
 
     // The same question again, before or while it is asked, is asked once.
+    now += MIN_GAP;
     command(&mut engine, now, ask("/g"));
     command(&mut engine, now, ask("/g"));
     assert_eq!(hand_out(&mut engine, now), [folder("/g")]);
     command(&mut engine, now, ask("/g"));
+    now += MIN_GAP;
     assert_eq!(hand_out(&mut engine, now), []);
     assert_eq!(
         respond(&mut engine, now, &folder("/g"), Ok(free_space("/g", 4))),
         [space("/g", FreeSpaceAnswer::Free { bytes: 4 })]
     );
+    now += MIN_GAP;
     assert_eq!(hand_out(&mut engine, now), []);
 }
 
@@ -233,33 +265,42 @@ fn free_space_is_not_asked_while_disconnected() {
     );
 }
 
+/// Hands out the call about `path` at `now`, which must be due, and moves `now` on by the gap
+/// the next call waits; returns when the call went out.
+fn call(engine: &mut Engine, now: &mut Instant, path: &str) -> Instant {
+    assert_eq!(hand_out(engine, *now), [folder(path)]);
+    let at = *now;
+    *now += MIN_GAP;
+    at
+}
+
 #[test]
 fn a_free_space_read_that_fails_is_unknown() {
     let base = Instant::now();
-    let now = base + ms(500);
+    let mut now = base + ms(500);
     let refused = RpcError::Server {
         code: 3,
         message: "path is not absolute".to_owned(),
         detail: Some("directory path is not absolute".to_owned()),
     };
+    let mut engine = quiet(base);
 
     // Refused: unknown, and the connection stays.
-    let mut engine = loaded(base);
     command(&mut engine, now, ask("/data"));
-    hand_out(&mut engine, now);
+    let at = call(&mut engine, &mut now, "/data");
     assert_eq!(
-        respond(&mut engine, now, &folder("/data"), Err(refused.clone())),
+        respond(&mut engine, at, &folder("/data"), Err(refused.clone())),
         [space("/data", FreeSpaceAnswer::Unknown)]
     );
     assert_eq!(engine.connection, ConnectionState::Connected);
 
     // A size the daemon could not read is no size.
-    command(&mut engine, now, ask("/data"));
-    hand_out(&mut engine, now);
+    command(&mut engine, at, ask("/data"));
+    let at = call(&mut engine, &mut now, "/data");
     assert_eq!(
         respond(
             &mut engine,
-            now,
+            at,
             &folder("/data"),
             Ok(free_space("/data", -1))
         ),
@@ -267,17 +308,12 @@ fn a_free_space_read_that_fails_is_unknown() {
     );
 
     // Known to be missing, but its parent could not be read: missing, with no parent found.
-    command(&mut engine, now, ask("/data/new"));
-    hand_out(&mut engine, now);
-    respond(
-        &mut engine,
-        now,
-        &folder("/data/new"),
-        Err(no_such_folder()),
-    );
-    assert_eq!(hand_out(&mut engine, now), [folder("/data")]);
+    command(&mut engine, at, ask("/data/new"));
+    let at = call(&mut engine, &mut now, "/data/new");
+    respond(&mut engine, at, &folder("/data/new"), Err(no_such_folder()));
+    let at = call(&mut engine, &mut now, "/data");
     assert_eq!(
-        respond(&mut engine, now, &folder("/data"), Err(refused)),
+        respond(&mut engine, at, &folder("/data"), Err(refused)),
         [space(
             "/data/new",
             FreeSpaceAnswer::Missing {
@@ -288,19 +324,14 @@ fn a_free_space_read_that_fails_is_unknown() {
     );
 
     // A parent that exists but whose size could not be read.
-    command(&mut engine, now, ask("/data/new"));
-    hand_out(&mut engine, now);
-    respond(
-        &mut engine,
-        now,
-        &folder("/data/new"),
-        Err(no_such_folder()),
-    );
-    hand_out(&mut engine, now);
+    command(&mut engine, at, ask("/data/new"));
+    let at = call(&mut engine, &mut now, "/data/new");
+    respond(&mut engine, at, &folder("/data/new"), Err(no_such_folder()));
+    let at = call(&mut engine, &mut now, "/data");
     assert_eq!(
         respond(
             &mut engine,
-            now,
+            at,
             &folder("/data"),
             Ok(free_space("/data", -1))
         ),
@@ -315,10 +346,10 @@ fn a_free_space_read_that_fails_is_unknown() {
     assert_eq!(engine.connection, ConnectionState::Connected);
 
     // No answer: unknown, and the daemon cannot be used, as after any call that gets none.
-    command(&mut engine, now, ask("/data"));
-    hand_out(&mut engine, now);
+    command(&mut engine, at, ask("/data"));
+    let at = call(&mut engine, &mut now, "/data");
     assert_eq!(
-        respond(&mut engine, now, &folder("/data"), Err(timeout())),
+        respond(&mut engine, at, &folder("/data"), Err(timeout())),
         [space("/data", FreeSpaceAnswer::Unknown)]
     );
     assert_eq!(engine.connection, reconnecting(1, ConnectionError::Timeout));
@@ -351,4 +382,130 @@ fn a_free_space_question_goes_before_the_polls_and_leaves_the_status_bar_alone()
     // The status bar shows the free space of the session's download directory only.
     assert!(before.free_space_bytes.is_some_and(|bytes| bytes != 1));
     assert_eq!(engine.take_snapshot(), None);
+}
+
+/// Runs the engine as the worker does, from `now` until the question about `path` is answered:
+/// it sleeps until each wakeup and answers every request at once, folders with `folder_answer`
+/// and the polls like the fixture daemon. Returns when that was, and adds to `calls` the time of
+/// each folder call.
+fn run_until_answered(
+    engine: &mut Engine,
+    mut now: Instant,
+    calls: &mut Vec<Instant>,
+    folder_answer: impl Fn(&DownloadDir) -> Result<Response, RpcError>,
+) -> Instant {
+    for _ in 0..100 {
+        now = engine.next_wakeup(now);
+        let mut answered = false;
+        for request in hand_out(engine, now) {
+            let result = match &request {
+                Request::FolderFreeSpace(folder) => {
+                    calls.push(now);
+                    folder_answer(folder)
+                }
+                poll => Ok(answer(poll)),
+            };
+            let events = respond(engine, now, &request, result);
+            answered |= events
+                .iter()
+                .any(|event| matches!(event, Event::FreeSpace { .. }));
+        }
+        if answered {
+            return now;
+        }
+    }
+    panic!("no answer after 100 wakeups");
+}
+
+#[test]
+fn free_space_calls_are_at_least_400_ms_apart() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let mut now = base + ms(100);
+    let mut calls = Vec::new();
+    let answer = |folder: &DownloadDir| {
+        if folder.as_str() == "/c/new" {
+            Err(no_such_folder())
+        } else {
+            Ok(free_space(folder.as_str(), 1))
+        }
+    };
+
+    // Each question comes as soon as the one before is answered; the missing folder's parent is
+    // asked too.
+    for path in ["/a", "/b", "/c/new", "/d"] {
+        command(&mut engine, now, ask(path));
+        now = run_until_answered(&mut engine, now, &mut calls, answer);
+    }
+
+    // The engine wakes for each call when the gap is over, not before and not later; the tick at
+    // 1500 ms does not bring the last call forward.
+    assert_eq!(
+        calls,
+        [100, 500, 900, 1300, 1700].map(|at| base + ms(at)),
+        "calls at {:?}",
+        calls
+            .iter()
+            .map(|at| at.duration_since(base))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_chatty_ui_gets_at_most_one_free_space_call_every_400_ms() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let mut calls = Vec::new();
+
+    // A new folder every 50 ms for two seconds, each answered at once.
+    for step in 1..=40_u64 {
+        let now = base + ms(50 * step);
+        command(&mut engine, now, ask(&format!("/typed/{step}")));
+        while engine.next_wakeup(now) <= now {
+            let due = hand_out(&mut engine, now);
+            if due.is_empty() {
+                break;
+            }
+            for request in due {
+                let result = match &request {
+                    Request::FolderFreeSpace(folder) => {
+                        calls.push(now);
+                        Ok(free_space(folder.as_str(), 1))
+                    }
+                    poll => Ok(answer(poll)),
+                };
+                respond(&mut engine, now, &request, result);
+            }
+        }
+    }
+
+    assert!(calls.len() <= 6, "{} calls in two seconds", calls.len());
+    for pair in calls.windows(2) {
+        assert!(
+            pair[1].duration_since(pair[0]) >= ms(400),
+            "calls {:?} apart",
+            pair[1].duration_since(pair[0])
+        );
+    }
+}
+
+#[test]
+fn the_gap_after_a_slow_free_space_answer_is_counted_from_the_answer() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let now = base + ms(100);
+
+    command(&mut engine, now, ask("/a"));
+    assert_eq!(hand_out(&mut engine, now), [folder("/a")]);
+    respond(
+        &mut engine,
+        now + ms(300),
+        &folder("/a"),
+        Ok(free_space("/a", 1)),
+    );
+    command(&mut engine, now + ms(300), ask("/b"));
+
+    assert_eq!(engine.next_wakeup(now + ms(300)), now + ms(700));
+    assert_eq!(hand_out(&mut engine, now + ms(699)), []);
+    assert_eq!(hand_out(&mut engine, now + ms(700)), [folder("/b")]);
 }

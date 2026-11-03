@@ -400,8 +400,9 @@ impl Engine {
     }
 
     /// The requests to send at `now`: the actions and reads of magnet links waiting to be sent
-    /// first, in the order they came, then the free space of a folder if a question waits for it
-    /// and no call for one is out, then the polls that are due, in a fixed order.
+    /// first, in the order they came, then the free space of a folder if a question waits for it,
+    /// no call for one is out and the last one was long enough ago, then the polls that are due,
+    /// in a fixed order.
     ///
     /// Each poll handed out is next due one interval after `now`, whether or not its answer has
     /// come back, so a request is never handed out twice for the same turn; an answer that comes
@@ -429,7 +430,7 @@ impl Engine {
                 }
             }
             ConnectionState::Connected => {
-                if let Some(folder) = self.folder_space.hand_out() {
+                if let Some(folder) = self.folder_space.hand_out(now) {
                     due.push(Request::FolderFreeSpace(folder));
                 }
                 self.due_polls(now, &mut due);
@@ -535,14 +536,15 @@ impl Engine {
     /// minute from `now` when nothing is scheduled.
     #[must_use]
     pub fn next_wakeup(&self, now: Instant) -> Instant {
-        let folder_due =
-            self.connection == ConnectionState::Connected && self.folder_space.is_due();
-        if !self.queued.is_empty() || folder_due {
+        if !self.queued.is_empty() {
             return now;
         }
         let earliest = match self.connection {
             ConnectionState::Connecting | ConnectionState::Reconnecting { .. } => self.check_at,
-            ConnectionState::Connected => self.next_poll(now),
+            ConnectionState::Connected => [self.next_poll(now), self.folder_space.due_at(now)]
+                .into_iter()
+                .flatten()
+                .min(),
             ConnectionState::Unsupported { .. } => None,
         };
         match earliest {
