@@ -81,12 +81,6 @@ pub enum MetainfoError {
     /// The daemon would refuse the torrent; the text says why, for the log.
     #[error("the torrent is invalid: {0}")]
     Invalid(&'static str),
-    /// The torrent's file list would take more than [`TREE_KEY_BUDGET`](crate::TREE_KEY_BUDGET)
-    /// to show: its folders are nested very deeply, or it has a great many long paths.
-    /// [`LoadedItem::torrent`](crate::LoadedItem::torrent) refuses it before any form exists;
-    /// [`parse_torrent`] does not.
-    #[error("the torrent's file list is too large to show")]
-    FileListTooLarge,
 }
 
 impl From<bencode::Error> for MetainfoError {

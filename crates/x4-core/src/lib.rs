@@ -44,10 +44,11 @@
 //!
 //! The add dialog is decided here too. An [`AddQueue`] holds what the user asked to add, as
 //! [`AddItem`]s (paths and magnet links, at most [`QUEUE_CAP`]), and its head is shown. The app
-//! reads the head's file, and [`LoadedItem::torrent`] parses it into a [`LoadedTorrent`], or
-//! refuses it, a list of files too large to show included. An [`AddForm`] holds the folder,
-//! "Start immediately" and, for a `.torrent`, the choice of files, in a [`FileTree`] made by
-//! [`FileTree::of_files`] whose checkboxes apply [`FileTree::wanted_toggle`] to the form.
+//! reads the head's file, and [`LoadedItem::torrent`] parses it into a [`LoadedTorrent`]. An
+//! [`AddForm`] holds the folder, "Start immediately" and, for a `.torrent`, the choice of files,
+//! in a [`FileTree`] made by [`FileTree::of_files`] whose checkboxes apply
+//! [`FileTree::wanted_toggle`] to the form; a torrent whose files cannot be chosen from is added
+//! with all of them, and [`NoChoiceReason`] says why.
 //! [`AddForm::check`] gives the [`AddCheck`] that tells whether Add may send it, and the request
 //! it sends. [`folder_picks`] lists at most [`MAX_FOLDER_PICKS`] folders to offer: the session's,
 //! then the history of the [`AddState`], then those of the torrents in the list.
@@ -129,8 +130,8 @@ pub use action::{
     Action, ActionError, ActionId, AddError, Added, Direction, FileChange, FileTarget,
 };
 pub use adding::{
-    AddCheck, AddForm, AddItem, AddQueue, LoadedItem, LoadedTorrent, MAX_FOLDER_PICKS, QUEUE_CAP,
-    folder_picks,
+    AddCheck, AddForm, AddItem, AddQueue, LoadedItem, LoadedTorrent, MAX_FOLDER_PICKS,
+    NoChoiceReason, QUEUE_CAP, folder_picks,
 };
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};

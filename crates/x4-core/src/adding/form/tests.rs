@@ -42,9 +42,10 @@ fn loaded(files: Option<&[(&str, u64)]>) -> LoadedItem {
             })
             .collect()
     });
-    let tree = files
-        .as_ref()
-        .map(|files| FileChoice::first_tree(hash(), files).unwrap());
+    let tree = match &files {
+        Some(files) => Ok(FileChoice::first_tree(hash(), files).unwrap()),
+        None => Err(NoChoiceReason::Ambiguous),
+    };
     LoadedItem::Torrent(LoadedTorrent {
         path: PathBuf::from(PATH),
         parsed: ParsedTorrent {
@@ -194,6 +195,7 @@ fn a_torrent_form_starts_with_every_file_wanted() {
     assert_eq!(form.name(), Some("T"));
     assert_eq!(form.path(), Some(Path::new(PATH)));
     assert!(!form.is_magnet());
+    assert_eq!(form.choice_unavailable(), None, "there is a choice");
 }
 
 #[test]
@@ -334,6 +336,7 @@ fn an_ambiguous_torrent_offers_all_files_only() {
     let mut form = AddForm::new(loaded(None), DEFAULT_DIR.to_owned(), true);
 
     assert!(form.tree().is_none(), "no choice of files");
+    assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
     form.toggle_wanted(&key("T"));
     form.toggle_wanted(&key(""));
 
@@ -341,6 +344,28 @@ fn an_ambiguous_torrent_offers_all_files_only() {
     assert_eq!(add.files_unwanted, Vec::<usize>::new());
     assert_eq!(add.source, AddSource::Metainfo(content()));
     assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
+}
+
+#[test]
+fn a_loaded_torrent_the_daemon_could_number_otherwise_has_no_choice() {
+    // `name` before `files`: keys out of order, which the daemon could read otherwise.
+    let mut bytes = b"d4:infod4:name3:Odd5:filesld6:lengthi1e4:pathl1:aeed6:lengthi2e4:pathl1:beee\
+        12:piece lengthi16384e6:pieces20:"
+        .to_vec();
+    bytes.extend([0xab; 20]);
+    bytes.extend(b"ee");
+    let bytes: Arc<[u8]> = Arc::from(bytes);
+    assert_eq!(parse_torrent(&bytes).unwrap().files, None);
+
+    let form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(&bytes)).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+
+    assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
+    assert!(form.tree().is_none());
+    assert_eq!(ready(&form).files_unwanted, Vec::<usize>::new());
 }
 
 #[test]
@@ -370,6 +395,11 @@ fn a_magnet_form_never_sends_unwanted_files() {
     assert_eq!(add.files_unwanted, Vec::<usize>::new());
     assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
     assert!(form.is_magnet());
+    assert_eq!(
+        form.choice_unavailable(),
+        None,
+        "the files come with the metadata"
+    );
     assert_eq!(form.name(), Some("Film"));
     assert_eq!(form.path(), None);
 
@@ -661,39 +691,57 @@ fn folder_torrent(name: &str, paths: &[Vec<String>]) -> Arc<[u8]> {
     Arc::from(bytes)
 }
 
-/// The peak memory of this process so far, in KiB, where Linux says it; the tests run one per
-/// process.
+/// The peak memory of this process since [`restart_peak`], in KiB, where Linux says it; the
+/// tests run one per process.
 fn peak_kib() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
     line.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// Loads `bytes` and asserts that they are refused as too large to show, within bounded time
-/// and memory.
-fn assert_refused_at_load(bytes: Arc<[u8]>) {
-    let peak_before = peak_kib();
+/// Starts the peak of [`peak_kib`] again from the memory in use now, so that what was built
+/// before does not hide what comes next; `false` where Linux does not allow it.
+fn restart_peak() -> bool {
+    std::fs::write("/proc/self/clear_refs", "5").is_ok()
+}
+
+/// Loads `bytes` and asserts that the form offers them with all their files and no choice,
+/// because the list is too large, within bounded time and memory: little beyond what parsing them
+/// takes.
+fn assert_offered_with_all_files(bytes: &Arc<[u8]>) {
+    // What the parse alone takes, so that the bound below is on what the form adds to it.
+    let measured = restart_peak();
+    drop(parse_torrent(bytes).unwrap());
+    let peak_parsed = peak_kib();
+    let measured = measured && restart_peak();
     let start = std::time::Instant::now();
 
-    let loaded = LoadedItem::torrent(PathBuf::from(PATH), bytes);
+    let item = LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(bytes)).unwrap();
+    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
+    let add = ready(&form);
 
     let elapsed = start.elapsed();
-    assert!(
-        matches!(loaded, Err(MetainfoError::FileListTooLarge)),
-        "{loaded:?}"
-    );
-    // Some 25 ms in a release build and 400 ms in a debug one; the bound only says it ends.
-    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
-    if let (Some(before), Some(after)) = (peak_before, peak_kib()) {
+    assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::TooLarge));
+    assert!(form.tree().is_none());
+    assert_eq!(add.files_unwanted, Vec::<usize>::new());
+    let AddSource::Metainfo(sent) = add.source else {
+        panic!("a .torrent goes as its content");
+    };
+    assert!(Arc::ptr_eq(&sent, bytes));
+    // The bound only says it ends: half a million files take some 3 s in a debug build.
+    assert!(elapsed < std::time::Duration::from_secs(60), "{elapsed:?}");
+    if let (true, Some(parsed), Some(after)) = (measured, peak_parsed, peak_kib()) {
+        // At most the key budget of a tree that was given up (17 MiB for the deep path). A tree
+        // of 500 000 files would take some 250 MiB, and copying their entries for it alone 40.
         assert!(
-            after.saturating_sub(before) < 64 * 1024,
-            "{before} KiB to {after} KiB"
+            after.saturating_sub(parsed) < 32 * 1024,
+            "{parsed} KiB after the parse, {after} KiB after the form"
         );
     }
 }
 
 #[test]
-fn a_torrent_with_a_deep_path_is_refused_when_it_is_loaded() {
+fn a_torrent_with_a_deep_path_is_offered_with_all_files() {
     // A single file whose name holds 20 000 folders, one in the other: about 40 KB, which the
     // parser takes, and whose tree would take some 400 MiB.
     let name = "a/".repeat(20_000) + "f";
@@ -704,14 +752,12 @@ fn a_torrent_with_a_deep_path_is_refused_when_it_is_loaded() {
     .into_bytes();
     bytes.extend([0xab; 20]);
     bytes.extend(b"ee");
-    let bytes: Arc<[u8]> = Arc::from(bytes);
-    assert!(parse_torrent(&bytes).is_ok(), "the parser takes it");
 
-    assert_refused_at_load(bytes);
+    assert_offered_with_all_files(&Arc::from(bytes));
 }
 
 #[test]
-fn a_torrent_of_many_deep_chains_is_refused_when_it_is_loaded() {
+fn a_torrent_of_many_deep_chains_is_offered_with_all_files() {
     // Eight paths of 2 050 parts that part at the top: each is 6 KB, its chain some 4 MiB of
     // keys.
     let paths: Vec<Vec<String>> = (0..8)
@@ -722,12 +768,10 @@ fn a_torrent_of_many_deep_chains_is_refused_when_it_is_loaded() {
                 .collect()
         })
         .collect();
-    let bytes = folder_torrent("T", &paths);
-    assert!(parse_torrent(&bytes).is_ok(), "the parser takes it");
 
-    assert_refused_at_load(bytes);
+    assert_offered_with_all_files(&folder_torrent("T", &paths));
 
-    // Three such chains fit, and give a form.
+    // Three such chains fit, and give a choice.
     let fewer = folder_torrent("T", paths.get(..3).unwrap());
     let form = AddForm::new(
         LoadedItem::torrent(PathBuf::from(PATH), fewer).unwrap(),
@@ -735,7 +779,57 @@ fn a_torrent_of_many_deep_chains_is_refused_when_it_is_loaded() {
         true,
     );
     assert!(!form.tree().unwrap().is_too_large());
-    assert_eq!(unwanted(&form), Vec::<usize>::new());
+    assert_eq!(form.choice_unavailable(), None);
+}
+
+#[test]
+fn a_torrent_of_500_000_tiny_files_is_offered_with_all_files() {
+    // 14 MB, within the 16 MiB a file may have; the keys of its tree would fit their budget.
+    let paths: Vec<Vec<String>> = (0..500_000).map(|n| vec![n.to_string()]).collect();
+    let bytes = folder_torrent("T", &paths);
+    drop(paths);
+
+    assert_offered_with_all_files(&bytes);
+}
+
+#[test]
+fn a_torrent_of_80_000_files_with_long_paths_is_offered_with_all_files() {
+    // Paths of 200 bytes: a folder name of 100 and a file name of 99.
+    let name = "N".repeat(100);
+    let paths: Vec<Vec<String>> = (0..80_000)
+        .map(|n| vec![format!("{n:05}{}", "f".repeat(94))])
+        .collect();
+    let bytes = folder_torrent(&name, &paths);
+    drop(paths);
+    let parsed = parse_torrent(&bytes).unwrap();
+    assert_eq!(
+        parsed
+            .files
+            .as_ref()
+            .and_then(|files| files.first())
+            .map(|file| file.path.len()),
+        Some(200)
+    );
+
+    assert_offered_with_all_files(&bytes);
+}
+
+#[test]
+fn up_to_50_000_files_can_be_chosen_from() {
+    let paths: Vec<Vec<String>> = (0..=50_000).map(|n| vec![n.to_string()]).collect();
+
+    let most = folder_torrent("T", paths.get(..50_000).unwrap());
+    let mut form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), most).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+    assert_eq!(form.choice_unavailable(), None);
+    assert!(!form.tree().unwrap().is_too_large());
+    form.toggle_wanted(&key("T/7"));
+    assert_eq!(unwanted(&form), [7]);
+
+    assert_offered_with_all_files(&folder_torrent("T", &paths));
 }
 
 #[test]

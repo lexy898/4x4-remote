@@ -13,8 +13,14 @@ use x4_rpc::FilePriority::Normal;
 
 use super::{hash, indices, key, open_all};
 
-/// The peak memory of this process so far, in KiB, where Linux says it; the tests run one per
-/// process.
+/// Starts the peak of [`peak_kib`] again from the memory in use now, so that what was built
+/// before does not hide what comes next; `false` where Linux does not allow it.
+fn restart_peak() -> bool {
+    std::fs::write("/proc/self/clear_refs", "5").is_ok()
+}
+
+/// The peak memory of this process since [`restart_peak`], in KiB, where Linux says it; the
+/// tests run one per process.
 fn peak_kib() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
@@ -23,6 +29,7 @@ fn peak_kib() -> Option<u64> {
 
 /// Makes the tree of `details` and asserts that it is refused within bounded time and memory.
 fn assert_refused_cheaply(details: &TorrentDetails) {
+    let measured = restart_peak();
     let peak_before = peak_kib();
     let start = Instant::now();
 
@@ -34,7 +41,7 @@ fn assert_refused_cheaply(details: &TorrentDetails) {
     assert_eq!(FileTreeView::new(&tree).rows(&tree), Vec::new());
     // Some 25 ms in a release build and 400 ms in a debug one; the bound only says it ends.
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
-    if let (Some(before), Some(after)) = (peak_before, peak_kib()) {
+    if let (true, Some(before), Some(after)) = (measured, peak_before, peak_kib()) {
         // The budget and the nodes around it, far from the hundreds of MiB of a whole tree.
         assert!(
             after.saturating_sub(before) < 64 * 1024,

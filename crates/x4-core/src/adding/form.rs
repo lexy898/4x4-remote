@@ -27,17 +27,21 @@ impl LoadedItem {
     /// The `.torrent` file read from `path`, whose content is `bytes`, parsed strictly by
     /// [`parse_torrent`], with the tree of its files made for the form.
     ///
+    /// No tree is made when the daemon could number the files otherwise, or when the list is too
+    /// large to choose from ([`NoChoiceReason`]); the torrent is then added with all its files.
+    /// A list of half a million files, or a crafted one of folders nested thousands deep, costs
+    /// little beyond its parse.
+    ///
     /// # Errors
     ///
-    /// The [`MetainfoError`] of [`parse_torrent`] when the daemon could not add the file, and
-    /// [`MetainfoError::FileListTooLarge`] when its file list would be too large to show. A
-    /// crafted file of a few tens of KB with folders nested thousands deep is refused here, in
-    /// bounded time and memory, before any form exists.
+    /// The [`MetainfoError`] of [`parse_torrent`] when the daemon could not add the file.
     pub fn torrent(path: PathBuf, bytes: Arc<[u8]>) -> Result<Self, MetainfoError> {
         let parsed = parse_torrent(&bytes)?;
         let tree = match &parsed.files {
-            Some(files) => Some(FileChoice::first_tree(parsed.hash.clone(), files)?),
-            None => None,
+            Some(files) => {
+                FileChoice::first_tree(parsed.hash.clone(), files).ok_or(NoChoiceReason::TooLarge)
+            }
+            None => Err(NoChoiceReason::Ambiguous),
         };
         Ok(Self::Torrent(LoadedTorrent {
             path,
@@ -79,8 +83,8 @@ pub struct LoadedTorrent {
     path: PathBuf,
     parsed: ParsedTorrent,
     bytes: Arc<[u8]>,
-    /// The tree of `parsed.files` with every file wanted; `None` exactly when they are.
-    tree: Option<Arc<FileTree>>,
+    /// The tree of `parsed.files` with every file wanted, or why there is none.
+    tree: Result<Arc<FileTree>, NoChoiceReason>,
 }
 
 impl LoadedTorrent {
@@ -111,6 +115,20 @@ impl fmt::Debug for LoadedTorrent {
             .field("len", &self.bytes.len())
             .finish_non_exhaustive()
     }
+}
+
+/// Why the form of a `.torrent` offers no choice of files, so that the dialog can say so; the
+/// torrent is then added with all its files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoChoiceReason {
+    /// The daemon could number the files otherwise than the strict reader, so leaving some out
+    /// could leave out the wrong ones ([`ParsedTorrent::files`] is `None`).
+    Ambiguous,
+    /// The list of files is too large to choose from: more than
+    /// [`MAX_CHOOSABLE_FILES`](crate::MAX_CHOOSABLE_FILES) files, or a tree whose keys would
+    /// take more than [`TREE_KEY_BUDGET`](crate::TREE_KEY_BUDGET), as for folders nested
+    /// thousands deep ([`FileTree::is_too_large`]).
+    TooLarge,
 }
 
 /// Whether the form can be sent, and what is sent; the app enables Add only for
@@ -155,8 +173,8 @@ enum Source {
         name: String,
         hash: HashString,
         bytes: Arc<[u8]>,
-        /// `None` when the torrent can be added only with all its files.
-        choice: Option<FileChoice>,
+        /// Or why the torrent can be added only with all its files.
+        choice: Result<FileChoice, NoChoiceReason>,
     },
     Magnet(Result<MagnetLink, MagnetError>),
 }
@@ -165,8 +183,9 @@ impl AddForm {
     /// The form for `item`, with the folder `folder` and "Start immediately" set to `start`.
     ///
     /// A `.torrent` starts with every file wanted. One whose files the daemon could number
-    /// otherwise ([`ParsedTorrent::files`] is `None`) has no choice of files and is added with
-    /// all of them. The magnet form of `LoadedItem::Magnet(None)` starts with an empty link.
+    /// otherwise, or whose list is too large to choose from, has no choice of files and is added
+    /// with all of them ([`choice_unavailable`](Self::choice_unavailable) says why). The magnet
+    /// form of `LoadedItem::Magnet(None)` starts with an empty link.
     #[must_use]
     pub fn new(item: LoadedItem, folder: String, start: bool) -> Self {
         let source = match item {
@@ -178,10 +197,12 @@ impl AddForm {
             }) => Source::Torrent {
                 path,
                 name: parsed.name,
-                choice: parsed
-                    .files
-                    .zip(tree)
-                    .map(|(files, tree)| FileChoice::new(files, tree)),
+                choice: match (tree, parsed.files) {
+                    (Ok(tree), Some(files)) => Ok(FileChoice::new(files, tree)),
+                    // A tree is made only of files, so this does not happen.
+                    (Ok(_), None) => Err(NoChoiceReason::Ambiguous),
+                    (Err(reason), _) => Err(reason),
+                },
                 hash: parsed.hash,
                 bytes,
             },
@@ -196,7 +217,7 @@ impl AddForm {
 
     /// The tree of the files to choose from, whose checkboxes show the choice: `None` for a
     /// magnet link, whose files are known only once its metadata arrives, and for a `.torrent`
-    /// that can be added only with all its files.
+    /// that can be added only with all its files ([`choice_unavailable`](Self::choice_unavailable)).
     ///
     /// The tree is shared, so the dialog can keep it for the rows it draws. A click makes a new
     /// one; a tree kept stays as it was drawn.
@@ -204,10 +225,9 @@ impl AddForm {
     pub fn tree(&self) -> Option<&Arc<FileTree>> {
         match &self.source {
             Source::Torrent {
-                choice: Some(choice),
-                ..
+                choice: Ok(choice), ..
             } => Some(choice.tree()),
-            Source::Torrent { choice: None, .. } | Source::Magnet(_) => None,
+            Source::Torrent { choice: Err(_), .. } | Source::Magnet(_) => None,
         }
     }
 
@@ -217,8 +237,7 @@ impl AddForm {
     /// when there is no tree.
     pub fn toggle_wanted(&mut self, key: &NodeKey) {
         if let Source::Torrent {
-            choice: Some(choice),
-            ..
+            choice: Ok(choice), ..
         } = &mut self.source
         {
             choice.toggle(key);
@@ -260,6 +279,21 @@ impl AddForm {
         match &self.source {
             Source::Torrent { path, .. } => Some(path),
             Source::Magnet(_) => None,
+        }
+    }
+
+    /// Why a `.torrent`'s form has no choice of files and adds it with all of them; `None` when
+    /// it has a [`tree`](Self::tree) to choose from. A magnet link has no choice either, for
+    /// another reason that [`is_magnet`](Self::is_magnet) gives: its files come with its
+    /// metadata, after it is added. So it is `None` for a magnet link too.
+    #[must_use]
+    pub fn choice_unavailable(&self) -> Option<NoChoiceReason> {
+        match &self.source {
+            Source::Torrent {
+                choice: Err(reason),
+                ..
+            } => Some(*reason),
+            Source::Torrent { choice: Ok(_), .. } | Source::Magnet(_) => None,
         }
     }
 
@@ -331,9 +365,9 @@ impl AddForm {
         let (source, files_unwanted) = match &self.source {
             Source::Torrent { bytes, choice, .. } => {
                 let files_unwanted = match choice {
-                    Some(choice) if choice.nothing_wanted() => return AddCheck::NothingWanted,
-                    Some(choice) => choice.unwanted(),
-                    None => Vec::new(),
+                    Ok(choice) if choice.nothing_wanted() => return AddCheck::NothingWanted,
+                    Ok(choice) => choice.unwanted(),
+                    Err(_) => Vec::new(),
                 };
                 (AddSource::Metainfo(Arc::clone(bytes)), files_unwanted)
             }

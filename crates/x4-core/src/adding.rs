@@ -4,7 +4,8 @@
 //!   never the contents of a file. Its head is the one shown.
 //! - The app reads the head's `.torrent` file and core parses it: a [`LoadedItem`], whose
 //!   [`LoadedTorrent`] keeps the parse together with the bytes it was made from and the tree of
-//!   its files. A file list too large to show is refused there, before any form exists.
+//!   its files. A list the daemon could number otherwise, or too large to choose from, gets no
+//!   tree there: the torrent is added with all its files ([`NoChoiceReason`]).
 //! - An [`AddForm`] is the dialog for that item: the folder, "Start immediately" and, for a
 //!   `.torrent`, the choice of files through the same [`FileTree`](crate::FileTree) as the
 //!   details panel.
@@ -21,5 +22,5 @@ mod form;
 mod queue;
 
 pub use folders::{MAX_FOLDER_PICKS, folder_picks};
-pub use form::{AddCheck, AddForm, LoadedItem, LoadedTorrent};
+pub use form::{AddCheck, AddForm, LoadedItem, LoadedTorrent, NoChoiceReason};
 pub use queue::{AddItem, AddQueue, QUEUE_CAP};

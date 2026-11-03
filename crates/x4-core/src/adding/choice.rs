@@ -5,8 +5,8 @@ use std::sync::Arc;
 use x4_rpc::{FilePriority, HashString};
 
 use crate::details::FileEntry;
-use crate::files::{FileTree, NodeKey};
-use crate::metainfo::{MetaFile, MetainfoError};
+use crate::files::{FileTree, MAX_CHOOSABLE_FILES, NodeKey};
+use crate::metainfo::MetaFile;
 
 /// Which files of a `.torrent` are wanted, and the tree that shows them.
 ///
@@ -22,26 +22,21 @@ pub(super) struct FileChoice {
 
 impl FileChoice {
     /// The tree of the files of the torrent `hash` as a form starts: every file wanted. It is made
-    /// when the torrent is loaded, so that a list too large to show is refused before any form.
-    ///
-    /// # Errors
-    ///
-    /// [`MetainfoError::FileListTooLarge`] when the tree's keys would take more than
-    /// [`TREE_KEY_BUDGET`](crate::TREE_KEY_BUDGET).
-    pub(super) fn first_tree(
-        hash: HashString,
-        files: &[MetaFile],
-    ) -> Result<Arc<FileTree>, MetainfoError> {
+    /// when the torrent is loaded; `None` when the list is too large to choose from
+    /// ([`FileTree::is_too_large`]).
+    pub(super) fn first_tree(hash: HashString, files: &[MetaFile]) -> Option<Arc<FileTree>> {
+        // The tree would give up on them too, but only after their entries were copied: half a
+        // million paths, some 40 MiB.
+        if files.len() > MAX_CHOOSABLE_FILES {
+            return None;
+        }
         let entries: Vec<FileEntry> = files
             .iter()
             .enumerate()
             .map(|(index, file)| entry(index, file.path.clone(), file.length))
             .collect();
         let tree = FileTree::of_files(hash, &entries);
-        if tree.is_too_large() {
-            return Err(MetainfoError::FileListTooLarge);
-        }
-        Ok(Arc::new(tree))
+        (!tree.is_too_large()).then(|| Arc::new(tree))
     }
 
     /// The files `files`, every one of them wanted, shown by `tree`, their
