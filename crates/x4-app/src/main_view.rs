@@ -118,6 +118,9 @@ pub struct MainView {
     status: StatusModel,
     /// The filter, the search and the sort order the table follows.
     view: ViewState,
+    /// How many times the user has changed `view` ([`MainView::set_view`]); showing an added
+    /// torrent changes it without counting.
+    view_changes: u64,
     /// The rows of the table and the counts of the sidebar.
     model: TableModel,
     /// The torrent table, whose delegate holds the rows of `model`, the columns and the
@@ -270,6 +273,7 @@ impl MainView {
         let mut view = Self {
             status: StatusModel::default(),
             view: view_state,
+            view_changes: 0,
             model: TableModel::default(),
             table,
             search,
@@ -350,12 +354,21 @@ impl MainView {
     /// Shows the torrents `view` asks for (the filter, the search and the sort order), from the
     /// last snapshot and without waiting for the next one, and remembers its filter and sort
     /// order in the [`UiState`]. The search is not remembered, so an edit of it saves nothing.
+    /// It is the user's choice: a change counts among the user's choices in the list, which an
+    /// added torrent waiting to be selected gives way to.
     pub fn set_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
         if view == self.view {
             return;
         }
-        if view.filter != self.view.filter || view.search != self.view.search {
-            self.adds.view_changed_by_user();
+        self.view_changes = self.view_changes.wrapping_add(1);
+        self.show_view(view, cx);
+    }
+
+    /// [`MainView::set_view`] for the window's own reasons, as to show an added torrent: not
+    /// counted as the user's choice.
+    fn show_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
+        if view == self.view {
+            return;
         }
         self.ui.filter = view.filter;
         self.ui.sort = SortState {

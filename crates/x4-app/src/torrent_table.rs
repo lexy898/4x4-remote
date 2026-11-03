@@ -66,7 +66,9 @@ use x4_rpc::HashString;
 pub(crate) use self::cells::{BAR_HEIGHT, bar_fraction};
 use self::right_click::RightClick;
 pub(crate) use self::right_click::{right_click, watch_right_click};
-pub(crate) use self::selection::{SelectionChange, change_selection, follow_table, page_step};
+pub(crate) use self::selection::{
+    SelectionChange, change_selection, follow_table, page_step, select_added,
+};
 use self::selection::{click_row, mirror_lead};
 use crate::context_menu::{MenuChoice, MenuHandler, torrent_menu};
 use crate::i18n::{column_name_text, empty_table_text};
@@ -84,9 +86,9 @@ pub struct TorrentTable {
     columns: Vec<ColumnState>,
     /// The selected torrents, which stay selected wherever a new snapshot puts them.
     selection: Selection,
-    /// How many times [`change_selection`](Self::change_selection) has changed the selection:
-    /// the user's clicks and keys, and the selection of an added torrent.
-    selection_changes: u64,
+    /// How many times the user has acted on the selection, whether it changed or not: the clicks,
+    /// the keys and the table's own Escape (the `selection` module's `change_selection`).
+    selection_gestures: u64,
     /// The sort order of the rows, which the header of its column marks.
     sort: (SortKey, SortDirection),
     /// What the table says when it has no rows.
@@ -124,7 +126,7 @@ impl TorrentTable {
             rows: Arc::new([]),
             columns,
             selection: Selection::default(),
-            selection_changes: 0,
+            selection_gestures: 0,
             sort,
             empty: EmptyTable::Waiting,
             stale: false,

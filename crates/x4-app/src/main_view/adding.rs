@@ -25,9 +25,11 @@
 //! say so ([`stopped_outcome`]).
 //!
 //! The torrent to select waits in x4-core's [`PendingSelection`] until a snapshot lists it; it is
-//! then selected, once, with the filter and the search cleared if they would hide it. Any change of
-//! the selection, the filter or the search by the user ends the wait, and so does the next full
-//! list.
+//! then selected, once, with the filter and the search cleared if they would hide it. The view
+//! hands it the user's [`ListChoices`] when the add is sent, when it is answered and with every
+//! snapshot: any gesture on the selection (even a click on the row selected already) and any
+//! change of the filter, the search or the sort order since the add was sent ends the wait, and
+//! so does the next full list. What the view does to show the torrent is not counted.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -37,15 +39,15 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{App, AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
 use x4_core::{
     Action, ActionId, AddError, AddItem, AddNotice, AddOutcome, AddQueue, Added, Command, FormStep,
-    LoadedItem, PendingSelection, SentAdd, add_outcome, stopped_outcome,
+    ListChoices, LoadedItem, PendingSelection, SentAdd, add_outcome, stopped_outcome,
 };
-use x4_rpc::{HashString, TorrentAdd};
+use x4_rpc::TorrentAdd;
 
 use super::MainView;
 use crate::adding::{self, AddDialog, AddDialogEvent, AddRequest, AddRequests, LoadError, load};
 use crate::i18n::{add_notice_text, load_failure_text, queue_full_text, rejected_text};
 use crate::search::clear_search;
-use crate::torrent_table::{SelectionChange, change_selection};
+use crate::torrent_table::select_added;
 
 /// How long the head of the queue may take to read before the dialog opens to say so, with Skip.
 const READ_GRACE: Duration = Duration::from_millis(300);
@@ -75,9 +77,6 @@ pub(super) struct Adds {
     out: HashMap<ActionId, SentAdd>,
     /// The torrent to select once a snapshot lists it.
     pending: PendingSelection,
-    /// How many changes of the selection the table had when the wait for the torrent to select
-    /// began; another one is the user's.
-    selection_mark: u64,
     /// What the newest notification about an add said.
     last_notice: Option<SharedString>,
     /// The sender of the channel `listener` pumps, for the sources of adds inside the window.
@@ -97,22 +96,11 @@ impl Default for Adds {
             read: read_in_background,
             out: HashMap::new(),
             pending: PendingSelection::default(),
-            selection_mark: 0,
             last_notice: None,
             // A channel nobody listens to, until the view listens to one of its own.
             requests: AddRequests::new().sender,
             listener: None,
             raise: None,
-        }
-    }
-}
-
-impl Adds {
-    /// Ends the wait for a torrent to select: the user has changed the filter or the search.
-    pub(super) fn view_changed_by_user(&mut self) {
-        if self.pending.waiting().is_some() {
-            tracing::debug!("the user changed the view; the added torrent will not be selected");
-            self.pending.cancel();
         }
     }
 }
@@ -233,18 +221,6 @@ impl MainView {
         self.apply_pending_selection(window, cx);
     }
 
-    /// Ends the wait for a torrent to select if the user has changed the selection since it began.
-    pub(super) fn follow_selection_for_adds(&mut self, cx: &App) {
-        if self.adds.pending.waiting().is_some()
-            && self.table.read(cx).delegate().selection_changes() != self.adds.selection_mark
-        {
-            tracing::debug!(
-                "the user changed the selection; the added torrent will not be selected"
-            );
-            self.adds.pending.cancel();
-        }
-    }
-
     /// The service has stopped, so the adds still out will never be answered: each says so, in
     /// the order they were sent, and the dialog does not wait for them for good.
     pub(super) fn adds_service_stopped(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -274,7 +250,8 @@ impl MainView {
     }
 
     /// Does what `outcome` says follows the add `id`: remembers the folder, says what became of
-    /// the add, waits for the torrent to select, and moves the dialog on or keeps its form.
+    /// the add, waits for the torrent to select unless the user has made a choice in the list
+    /// since the add was sent, and moves the dialog on or keeps its form.
     fn follow_outcome(
         &mut self,
         id: ActionId,
@@ -303,8 +280,11 @@ impl MainView {
             };
             self.add_notice(kind, add_notice_text(notice), window, cx);
         }
-        if let Some(hash) = outcome.select {
-            self.wait_to_select(hash, cx);
+        let selects = outcome.select.is_some();
+        let choices = self.list_choices(cx);
+        let now = cx.background_executor().now();
+        if !self.adds.pending.answered(id, outcome.select, choices, now) && selects {
+            tracing::debug!("the user chose in the list meanwhile; the torrent is not selected");
         }
         if shown {
             match outcome.form {
@@ -352,12 +332,13 @@ impl MainView {
         }));
     }
 
-    /// Waits for `hash` to be listed, to select it, from now on.
-    fn wait_to_select(&mut self, hash: HashString, cx: &App) {
-        self.adds
-            .pending
-            .wait_for(hash, cx.background_executor().now());
-        self.adds.selection_mark = self.table.read(cx).delegate().selection_changes();
+    /// What the user has chosen in the list so far: the gestures on the selection, and the changes
+    /// of the filter, the search and the sort order.
+    fn list_choices(&self, cx: &App) -> ListChoices {
+        ListChoices {
+            selection_gestures: self.table.read(cx).delegate().selection_gestures(),
+            view_changes: self.view_changes,
+        }
     }
 
     /// Moves on from the head of the queue, after it was added or skipped.
@@ -561,7 +542,9 @@ impl MainView {
             }
             AddDialogEvent::Show(hash) => {
                 tracing::debug!(torrent = %hash, "the torrent in the list is shown");
-                self.wait_to_select(hash.clone(), cx);
+                let choices = self.list_choices(cx);
+                let now = cx.background_executor().now();
+                self.adds.pending.wait_for(hash.clone(), choices, now);
                 self.apply_pending_selection(window, cx);
                 self.skip_add(window, cx);
             }
@@ -605,6 +588,8 @@ impl MainView {
         );
         dialog.update(cx, |dialog, cx| dialog.set_waiting(Some(id), cx));
         self.adds.out.insert(id, sent);
+        let choices = self.list_choices(cx);
+        self.adds.pending.sent(id, choices);
         if self
             .commands
             .send(Command::Run(id, Action::Add(add)))
@@ -625,23 +610,33 @@ impl MainView {
             return;
         };
         let now = cx.background_executor().now();
-        let Some(reveal) = self.adds.pending.follow(&snapshot, &self.view, now) else {
+        let choices = self.list_choices(cx);
+        let Some(reveal) = self
+            .adds
+            .pending
+            .follow(&snapshot, &self.view, choices, now)
+        else {
             if self.adds.pending.waiting().is_none() {
-                tracing::debug!("the added torrent did not show in time; it is not selected");
+                tracing::debug!(
+                    "the user chose in the list, or the added torrent did not show in time; \
+                     it is not selected"
+                );
             }
             return;
         };
         if let Some(view) = reveal.view {
             tracing::debug!("the filter and the search are cleared to show the added torrent");
-            if view.search != self.view.search {
+            let search_cleared = view.search != self.view.search;
+            // The view first, so that the search box's own report of the cleared search changes
+            // nothing more and counts as no choice of the user's.
+            self.show_view(view, cx);
+            if search_cleared {
                 clear_search(&self.search, window, cx);
             }
-            self.set_view(view, cx);
         }
         tracing::debug!(torrent = %reveal.hash, "the added torrent is selected");
-        self.table.update(cx, |table, cx| {
-            change_selection(table, SelectionChange::Click(reveal.hash), cx);
-        });
+        self.table
+            .update(cx, |table, cx| select_added(table, reveal.hash, cx));
     }
 
     /// Shows `text` as a notification made by `kind` (info, warning or error), which a click

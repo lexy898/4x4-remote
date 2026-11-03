@@ -355,8 +355,10 @@ torrent once and says "Adding…" until the daemon answers. The dialog then show
 closes, and the new torrent is selected as soon as it is in the list, with the filter and the search
 cleared if they would hide it. A torrent the daemon has already is selected, with a notification;
 one whose add the daemon does not confirm in time is selected if it shows up within two minutes; a
-failure shows a notification and keeps the form, to try again. A torrent waiting to be selected is
-not selected once you change the selection, the filter or the search yourself. The next torrent
+failure shows a notification and keeps the form, to try again; if the part of 4x4 that talks to the
+daemon stops before the daemon answers, a notification says so, as the torrent may have been added.
+A new torrent is not selected once you click or move in the list (even on the row selected already),
+or change the filter, the search or the sort order, from the moment you press Add. The next torrent
 keeps the folder and "Start immediately" you chose. `Enter` in a field adds, `Cancel` or `Escape`
 skips the torrent, a click beside the dialog does nothing, and files dropped anywhere on the dialog
 join the queue. While the dialog that removes torrents is open, the torrents to add wait for it to

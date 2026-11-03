@@ -1624,6 +1624,120 @@ fn adds_still_out_when_the_service_stops_are_not_confirmed(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn choices_made_while_an_add_is_out_stand_when_it_is_answered(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+
+    // A click on a row, after Cancel while the add is out.
+    let content = show();
+    let hash = hash_of(&content);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.click(CANCEL, cx);
+    assert!(!window.dialog_open(cx));
+    window.click(("row", 0_usize), cx);
+    window.finish(id, Ok(added(&hash, "Show", false)), cx);
+    window.send(vec![other.clone(), listed("Show", &hash)], cx);
+    assert_eq!(window.selected(cx), std::slice::from_ref(&other.hash));
+
+    // A filter chosen.
+    let film = folder_torrent("Film", &[(&["film.mkv"], MIB)]);
+    let film_hash = hash_of(&film);
+    window.request_torrent("film.torrent", &film, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.click(CANCEL, cx);
+    let paused = Filter::ALL
+        .iter()
+        .position(|filter| *filter == Filter::Paused)
+        .expect("the sidebar lists every filter");
+    window.click(("filter-count", paused), cx);
+    window.finish(id, Ok(added(&film_hash, "Film", false)), cx);
+    window.send(
+        vec![
+            other.clone(),
+            listed("Show", &hash),
+            listed("Film", &film_hash),
+        ],
+        cx,
+    );
+    assert_eq!(window.view_state(cx).filter, Filter::Paused);
+    assert!(!window.selected(cx).contains(&film_hash));
+
+    // A search typed.
+    let again = folder_torrent("Again", &[(&["a"], MIB)]);
+    let again_hash = hash_of(&again);
+    window.request_torrent("again.torrent", &again, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.click(CANCEL, cx);
+    window.click("search", cx);
+    window.type_text("zzz", cx);
+    window.finish(id, Ok(added(&again_hash, "Again", false)), cx);
+    window.send(
+        vec![
+            other,
+            listed("Show", &hash),
+            listed("Film", &film_hash),
+            listed("Again", &again_hash),
+        ],
+        cx,
+    );
+    assert_eq!(window.view_state(cx).filter, Filter::Paused);
+    assert_eq!(window.view_state(cx).search, "zzz");
+    assert!(!window.selected(cx).contains(&again_hash));
+}
+
+#[gpui_kit::test]
+fn a_click_on_the_selected_row_ends_the_wait_for_the_new_torrent(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+    window.click(("row", 0_usize), cx);
+    assert_eq!(window.selected(cx), std::slice::from_ref(&other.hash));
+    let content = show();
+    let hash = hash_of(&content);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Ok(added(&hash, "Show", false)), cx);
+    assert!(!window.dialog_open(cx));
+
+    // Long after the first, so that it is no double click.
+    Window::wait(1000, cx);
+    window.click(("row", 0_usize), cx);
+    window.send(vec![other.clone(), listed("Show", &hash)], cx);
+
+    assert_eq!(window.selected(cx), std::slice::from_ref(&other.hash));
+}
+
+#[gpui_kit::test]
+fn a_sort_change_ends_the_wait_for_the_new_torrent(cx: &mut TestAppContext) {
+    /// The size column, whose header sorts by size.
+    const SIZE_COLUMN: usize = 1;
+    let window = Window::open(cx);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+    let content = show();
+    let hash = hash_of(&content);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Ok(added(&hash, "Show", false)), cx);
+
+    window.click(("col-header", SIZE_COLUMN), cx);
+    window.send(vec![other, listed("Show", &hash)], cx);
+
+    assert_ne!(
+        window.view_state(cx).sort_key,
+        ViewState::default().sort_key
+    );
+    assert_eq!(window.selected(cx), []);
+}
+
+#[gpui_kit::test]
 fn the_free_space_waits_for_typing_to_stop_across_a_session_change(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.request_torrent("show.torrent", &show(), cx);
@@ -1641,4 +1755,47 @@ fn the_free_space_waits_for_typing_to_stop_across_a_session_change(cx: &mut Test
 
     Window::wait(1, cx);
     assert_eq!(Window::free_space_in(&window.sent()), ["/data/ne"]);
+}
+
+#[gpui_kit::test]
+fn showing_one_new_torrent_lets_the_next_add_out_be_selected_too(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+    window.click("search", cx);
+    window.type_text("zzz", cx);
+    let first = folder_torrent("First", &[(&["a"], MIB)]);
+    let first_hash = hash_of(&first);
+    let second = folder_torrent("Second", &[(&["b"], MIB)]);
+    let second_hash = hash_of(&second);
+    let paths = [
+        window.file("first.torrent", &first),
+        window.file("second.torrent", &second),
+    ];
+    window.request_files(&[&paths[0], &paths[1]], cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Ok(added(&first_hash, "First", false)), cx);
+    window.click(CONFIRM, cx);
+    let (second_id, _) = window.sent_add();
+
+    // The first shows, with the search cleared for it, while the second is out.
+    window.send(vec![other.clone(), listed("First", &first_hash)], cx);
+    assert_eq!(window.selected(cx), std::slice::from_ref(&first_hash));
+    assert_eq!(window.view_state(cx).search, "");
+    window.finish(second_id, Ok(added(&second_hash, "Second", false)), cx);
+    window.send(
+        vec![
+            other,
+            listed("First", &first_hash),
+            listed("Second", &second_hash),
+        ],
+        cx,
+    );
+
+    assert_eq!(
+        window.selected(cx),
+        std::slice::from_ref(&second_hash),
+        "what the window did to show the first is no choice of the user's"
+    );
 }

@@ -46,10 +46,12 @@ pub(crate) enum SelectionChange {
 }
 
 impl TorrentTable {
-    /// How many times [`change_selection`](Self::change_selection) has changed the selection; a
-    /// new count tells that it has changed since the count was read.
-    pub(crate) fn selection_changes(&self) -> u64 {
-        self.selection_changes
+    /// How many times the user has acted on the selection, with the mouse or a key, whether it
+    /// changed or not: a new count tells that the user has made a choice since the count was
+    /// read, even a click on the row selected already. The selection of an added torrent
+    /// ([`select_added`]) is not the user's, and does not count.
+    pub(crate) fn selection_gestures(&self) -> u64 {
+        self.selection_gestures
     }
 
     /// Applies `change` to the selection; returns whether the selection changed. A click on a
@@ -81,19 +83,38 @@ impl TorrentTable {
             SelectionChange::All => selection.select_all(rows),
             SelectionChange::Nothing => selection.clear(),
         }
-        let changed = *selection != before;
-        if changed {
-            self.selection_changes = self.selection_changes.wrapping_add(1);
-        }
-        changed
+        *selection != before
     }
 }
 
 /// Applies what the user did to the selection of `table`, and moves the table's selected row to
 /// the lead. A click and a key bring the lead into view; Ctrl+A leaves the view where it is. A
 /// moving key also brings back a lead the user has scrolled away from when it cannot move it, such
-/// as Down on the last row. The table is drawn again only when the selection or the view changed.
+/// as Down on the last row. The table is drawn again only when the selection or the view changed;
+/// the gesture is counted all the same ([`TorrentTable::selection_gestures`]).
 pub(crate) fn change_selection(
+    table: &mut TableState<TorrentTable>,
+    change: SelectionChange,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    let delegate = table.delegate_mut();
+    delegate.selection_gestures = delegate.selection_gestures.wrapping_add(1);
+    apply_change(table, change, cx);
+}
+
+/// Selects only the torrent `hash`, as a click on it would, and brings it into view, for the
+/// window's own reasons: the torrent was just added. It is no gesture of the user's, so it is not
+/// counted.
+pub(crate) fn select_added(
+    table: &mut TableState<TorrentTable>,
+    hash: HashString,
+    cx: &mut Context<'_, TableState<TorrentTable>>,
+) {
+    apply_change(table, SelectionChange::Click(hash), cx);
+}
+
+/// Applies `change` to the selection of `table`, as [`change_selection`] describes.
+fn apply_change(
     table: &mut TableState<TorrentTable>,
     change: SelectionChange,
     cx: &mut Context<'_, TableState<TorrentTable>>,
