@@ -1334,7 +1334,7 @@ expect_srcinfo() { # <key> <value>...
 }
 
 # makepkg reads the PKGBUILD as `just package` gives it: a copy, with X4_REPO naming the checkout.
-# The owner's makepkg.conf stays out of it.
+# The owner's makepkg.conf stays out of it (makepkg reads one in XDG_CONFIG_HOME or in HOME).
 test_package_build_file_describes_4x4_git_built_from_the_local_master() {
     local dir
     if ! command -v makepkg >/dev/null 2>&1; then
@@ -1343,8 +1343,8 @@ test_package_build_file_describes_4x4_git_built_from_the_local_master() {
     fi
     dir=$(mktemp -d "$tmp_root/pkgbuild.XXXXXX")
     cp "$pkgbuild" "$dir/PKGBUILD" 2>/dev/null || fail "no PKGBUILD at $pkgbuild"
-    run_with_input '' env -C "$dir" XDG_CONFIG_HOME="$dir/config" X4_REPO="$dir/checkout" \
-        makepkg --printsrcinfo
+    run_with_input '' env -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" \
+        X4_REPO="$dir/checkout" makepkg --printsrcinfo
     expect_status 0
     expect_srcinfo pkgbase 4x4-git
     expect_srcinfo pkgname 4x4-git
@@ -1373,7 +1373,8 @@ test_package_build_file_stops_without_just_package() {
     fi
     dir=$(mktemp -d "$tmp_root/pkgbuild.XXXXXX")
     cp "$pkgbuild" "$dir/PKGBUILD" 2>/dev/null || fail "no PKGBUILD at $pkgbuild"
-    run_with_input '' env -u X4_REPO -C "$dir" XDG_CONFIG_HOME="$dir/config" makepkg --printsrcinfo
+    run_with_input '' env -u X4_REPO -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" \
+        makepkg --printsrcinfo
     ((status != 0)) || fail "makepkg read the PKGBUILD without X4_REPO: $stdout"
     expect_contains "X4_REPO: run makepkg through just package, which sets X4_REPO" "$stderr" stderr
     [[ $stdout != *pkgname* ]] || fail "makepkg printed a .SRCINFO: $stdout"
@@ -1396,6 +1397,59 @@ test_package_version_is_the_workspace_version_with_the_commit_count_and_hash() {
     run_with_input '' env -C "$dir/src" X4_REPO="$dir" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
     expect_status 0
     [[ $stdout == "1.2.3.r3.g$hash" ]] || fail "expected the version 1.2.3.r3.g$hash, got: '$stdout'"
+}
+
+# A [workspace.package] version line of another form (here with a comment) gives no version: pkgver()
+# fails and says why, rather than make a version without one.
+test_package_version_stops_without_a_workspace_version() {
+    local dir checkout
+    dir=$(mktemp -d "$tmp_root/pkgver.XXXXXX")
+    checkout=$dir/src/4x4
+    mkdir -p "$checkout"
+    git -C "$checkout" init -q
+    printf '%s\n' '[workspace.package]' 'version = "1.2.3" # the next release' >"$checkout/Cargo.toml"
+    commit_all "$checkout" "first"
+    run_with_input '' env -C "$dir/src" X4_REPO="$dir" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
+    ((status != 0)) || fail "pkgver() made a version without one: '$stdout'"
+    expect_contains "no version in [workspace.package] of Cargo.toml" "$stderr" stderr
+    [[ -z $stdout ]] || fail "expected no version, got: '$stdout'"
+}
+
+# prepare() and build() as makepkg runs them, each in a subshell from $srcdir, with makepkg's
+# RUSTFLAGS and a stand-in cargo that writes its arguments, working dir and environment to
+# cargo.log: the crates are fetched for the host, then only the app is built, offline, with the
+# default features (never the synthetic demo), into the target dir package() reads, and with the
+# build dir and cargo's registry remapped out of the binary.
+test_package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped() {
+    local dir name expected
+    dir=$(mktemp -d "$tmp_root/package-build.XXXXXX")
+    mkdir -p "$dir/bin" "$dir/home" "$dir/src/4x4"
+    cat >"$dir/bin/cargo" <<EOF
+#!/usr/bin/env bash
+{
+    echo "args: \$*"
+    echo "pwd: \$PWD"
+    for name in RUSTFLAGS CARGO_TARGET_DIR RUSTUP_TOOLCHAIN; do echo "\$name: \${!name-unset}"; done
+} >>"$dir/cargo.log"
+EOF
+    chmod +x "$dir/bin/cargo"
+    run_with_input '' env -C "$dir/src" -u CARGO_HOME -u CARGO_TARGET_DIR -u RUSTUP_TOOLCHAIN \
+        PATH="$dir/bin:$PATH" HOME="$dir/home" X4_REPO="$dir" srcdir="$dir/src" \
+        RUSTFLAGS='-C force-frame-pointers=yes' \
+        bash -e -c 'source "$1"; (prepare); (build)' _ "$pkgbuild"
+    expect_status 0
+    expected="args: fetch --locked --target host-tuple
+pwd: $dir/src/4x4
+RUSTFLAGS: -C force-frame-pointers=yes
+CARGO_TARGET_DIR: unset
+RUSTUP_TOOLCHAIN: stable
+args: build --frozen --release -p x4-app --bin 4x4
+pwd: $dir/src/4x4
+RUSTFLAGS: -C force-frame-pointers=yes --remap-path-prefix=$dir/src=/build --remap-path-prefix=$dir/home/.cargo/registry/src=/cargo
+CARGO_TARGET_DIR: target
+RUSTUP_TOOLCHAIN: stable"
+    [[ $(<"$dir/cargo.log") == "$expected" ]] ||
+        fail "unexpected cargo runs; expected: $expected; got: $(<"$dir/cargo.log")"
 }
 
 # package() in a stand-in of makepkg's $srcdir and $pkgdir, with a stand-in binary and the
@@ -2138,6 +2192,8 @@ cases=(
     package_build_file_describes_4x4_git_built_from_the_local_master
     package_build_file_stops_without_just_package
     package_version_is_the_workspace_version_with_the_commit_count_and_hash
+    package_version_stops_without_a_workspace_version
+    package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped
     package_installs_the_binary_desktop_file_icon_and_licenses
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file

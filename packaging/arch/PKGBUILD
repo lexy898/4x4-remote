@@ -42,6 +42,10 @@ pkgver() {
   cd 4x4
   local version
   version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+  if [[ -z $version ]]; then
+    echo "no version in [workspace.package] of Cargo.toml" >&2
+    return 1
+  fi
   printf '%s.r%s.g%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
