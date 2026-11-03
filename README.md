@@ -373,9 +373,9 @@ torrent. At most 100 torrents wait; a notification says how many more were left 
 which torrent of how many it shows, such as "Add torrent (2 of 5)"; under it come the torrent's name
 and size, and for a magnet link its field, checked as you type, with the link's name or its hash. A
 magnet link must start with `magnet:?` and name one BitTorrent info hash (40 hexadecimal or 32
-base32 characters), without line breaks and in at most 64 KiB; a bare hash, a link with several
-hashes and one with only a BitTorrent v2 hash, which Transmission 4.1 cannot add, are refused with
-the reason under the form.
+base32 characters), without a control character such as a line break, and in at most 64 KiB; a
+bare hash, a link with several hashes and one with only a BitTorrent v2 hash, which Transmission
+4.1 cannot add, are refused with the reason under the form.
 
 The folder on the server starts as the daemon's download folder. The button beside it, or
 `Alt+Down`, offers that folder, the last 10 folders torrents were added to (remembered between runs;
@@ -389,13 +389,14 @@ torrent starts and writes there, and a torrent added paused makes nothing until 
 A `.torrent` lists its files as a tree with checkboxes, every file wanted at first, which the keys
 of the Files tab move through (without the priorities); padding files are hidden and go with their
 folder. Some `.torrent` files offer no choice, and all their files are added, with the dialog saying
-why. One whose list of files could be read in more than one way, as when its dictionary keys are out
-of order or given twice, it has two `info` dictionaries, or an entry of its file list is not a plain
-one. The daemon could then number the files otherwise than 4x4 reads them, so leaving one out could
-leave out another. And one with too many files to choose from: more than 50 000, or files nested so
-deep that their tree would take too much memory. A magnet link has no choice of files either, as its
-files are known only once its metadata has come. "Start immediately" starts as the daemon's setting
-for new torrents; without it, the torrent is added paused.
+why. A `.torrent` whose list of files could be read in more than one way offers none: its
+dictionary keys are out of order or given twice, it has two `info` dictionaries, or an entry of its
+file list is not a plain one. The daemon could then number the files otherwise than 4x4 reads them,
+so leaving one out could leave out another. So does one with too many files to choose from: more
+than 50 000, or files nested so deep that their tree would take too much memory. A magnet link has
+no choice of files either, as its files are known only once its metadata has come. "Start
+immediately" starts as the daemon's setting for new torrents; without it, the torrent is added
+paused.
 
 Add stays disabled, with the reason under the form, until a file is wanted, the folder is a full
 path on the server without `.` or `..`, the magnet link is valid and the daemon is connected; for a
@@ -934,8 +935,9 @@ paused and without its metadata. Every test checks that every other torrent kept
 sequential mode, file priorities and wanted files, and prints how many torrents the daemon lists
 when it starts and once it has removed its own. The torrent and its data are removed even when a
 test fails, and only from the folder it was added to: the test directory, or the folder of its own
-that the daemon made directly in it, exactly as the daemon reports it, and never from a folder whose
-name holds a control character.
+that the daemon made directly in it. The folder the daemon reports must be that one once both are
+normalized, so a doubled or a trailing `/` makes no difference, and a folder with any control
+character in its name is never it.
 
 An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and the
 data of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with its
