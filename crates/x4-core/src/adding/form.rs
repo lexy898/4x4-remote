@@ -66,6 +66,7 @@ impl LoadedItem {
 ///     path: "/home/user/t.torrent".into(),
 ///     parsed,
 ///     bytes: Arc::from(&b"other bytes"[..]),
+///     tree: Err(x4_core::NoChoiceReason::Ambiguous),
 /// }
 /// # }
 /// ```
