@@ -27,6 +27,13 @@ fn peak_kib() -> Option<u64> {
 
 /// Makes the tree of `details` and asserts that it is refused within bounded time and memory.
 fn assert_refused_cheaply(details: &TorrentDetails) {
+    // The budget, 32 MiB, far from the hundreds of MiB of a whole tree.
+    assert_refused_within(details, 40 * 1024);
+}
+
+/// Makes the tree of `details` and asserts that it is refused within bounded time, and that its
+/// peak memory grows by less than `most_kib`.
+fn assert_refused_within(details: &TorrentDetails, most_kib: u64) {
     let measured = restart_peak();
     let peak_before = peak_kib();
     let start = Instant::now();
@@ -40,9 +47,8 @@ fn assert_refused_cheaply(details: &TorrentDetails) {
     // At most some 150 ms in a release build and 1 s in a debug one; the bound only says it ends.
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     if let (true, Some(before), Some(after)) = (measured, peak_before, peak_kib()) {
-        // The budget, 32 MiB, far from the hundreds of MiB of a whole tree.
         assert!(
-            after.saturating_sub(before) < 40 * 1024,
+            after.saturating_sub(before) < most_kib,
             "{before} KiB to {after} KiB"
         );
     }
@@ -58,6 +64,18 @@ fn a_deep_path_is_too_large_to_show() {
     assert_refused_cheaply(&deep);
     assert_eq!(indices(&FileTree::new(&deep), "a"), None);
     assert_eq!(FileTree::new(&deep).toggle_wanted_action(&key("a")), None);
+}
+
+#[test]
+fn a_path_of_millions_of_folders_is_too_large_to_show() {
+    // 8 million folders, one in the other, in 16 MB of path. Splitting the path into its parts
+    // before counting anything took 128 MiB for the list of parts alone.
+    let path = format!("T/{}f", "a/".repeat(8_000_000));
+    let deep = details(&hash(), &[(path.as_str(), 5, 0, true, Normal)]);
+
+    // Given up once its folders are counted, before a single node is made: making nodes until the
+    // budget ran out took the 32 MiB of the budget.
+    assert_refused_within(&deep, 4 * 1024);
 }
 
 #[test]

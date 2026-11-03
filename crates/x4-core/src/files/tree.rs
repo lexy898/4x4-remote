@@ -117,9 +117,11 @@ impl FileTree {
     ///
     /// A tree of more than [`MAX_CHOOSABLE_FILES`] files, or that would take more than
     /// [`TREE_BUDGET`], is not made: the tree is empty, and [`is_too_large`](Self::is_too_large)
-    /// says so. Too many files are refused before any work, and making the tree stops as soon as
-    /// the budget is spent, so the time and memory stay bounded however many files there are and
-    /// however deep their paths go.
+    /// says so. Too many files are refused before any work. Each path is read one component at a
+    /// time, without a list of them, and a path with more folders than the budget can hold is
+    /// refused as soon as they are counted; making the tree stops as soon as the budget is spent.
+    /// So the memory stays within about the budget however many files there are and however deep
+    /// their paths go, and the work done on a path grows with its length.
     #[must_use]
     pub fn of_files(hash: HashString, files: &[FileEntry]) -> Self {
         Self::of_files_within(hash, files, TREE_BUDGET)
@@ -138,11 +140,10 @@ impl FileTree {
             if builder.over_budget() {
                 break;
             }
-            let parts = parts_of(&entry.name);
-            if is_padding(&parts) {
+            if is_padding(parts(&entry.name)) {
                 padding.push(entry);
             } else {
-                builder.add_file(entry, &parts);
+                builder.add_file(entry);
             }
         }
         // Padding files join the lists of the folders that are shown, which exist only once all
@@ -151,7 +152,7 @@ impl FileTree {
             if builder.over_budget() {
                 break;
             }
-            builder.add_padding(entry.index, &parts_of(&entry.name));
+            builder.add_padding(entry.index, &entry.name);
         }
         builder.finish(hash)
     }
@@ -303,14 +304,10 @@ impl FileTree {
     }
 }
 
-/// The components of `path`, without empty ones; a path without any is one file without a name.
-fn parts_of(path: &str) -> Vec<&str> {
-    let mut parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-    if parts.is_empty() {
-        // A file without a name still is a file the user can see and act on.
-        parts.push("");
-    }
-    parts
+/// The components of `path`, without empty ones, read one by one: a path may have millions, and
+/// a list of them would take 16 bytes each before the tree had counted anything.
+fn parts(path: &str) -> impl Iterator<Item = &str> {
+    path.split('/').filter(|part| !part.is_empty())
 }
 
 #[cfg(test)]
@@ -376,5 +373,17 @@ mod tests {
 
         // A tree without files is never too large.
         assert!(!FileTree::of_files_within(hash(), &[], 0).is_too_large());
+    }
+
+    #[test]
+    fn a_path_is_refused_for_its_count_of_folders_only_when_they_cannot_fit() {
+        let files = details(&hash(), &[("T/a", 1, 0, true, Normal)]).files;
+        // A folder and a file: their nodes, the keys "T" and "T/a", the names, and a list of one
+        // index each. The budget holds one folder's cost and no more, and so does the path.
+        let cost = 2 * NODE_COST + FOLDER_COST + 4 + 2 + 2 * list_bytes(1);
+        assert_eq!(cost / (NODE_COST + FOLDER_COST), 1);
+
+        assert!(!FileTree::of_files_within(hash(), &files, cost).is_too_large());
+        assert!(FileTree::of_files_within(hash(), &files, cost - 1).is_too_large());
     }
 }

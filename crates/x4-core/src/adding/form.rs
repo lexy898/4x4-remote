@@ -29,9 +29,10 @@ impl LoadedItem {
     ///
     /// No tree is made when the daemon could number the files otherwise, or when the list is too
     /// large to choose from ([`NoChoiceReason`]); the torrent is then added with all its files.
-    /// Making the tree takes no more than about [`TREE_BUDGET`](crate::TREE_BUDGET) beyond the
-    /// parse, the copy of the files it is made from included, however many files there are and
-    /// however deep and long their paths go.
+    /// Making the tree takes about [`TREE_BUDGET`](crate::TREE_BUDGET) at most beyond the parse,
+    /// the copy of the files it is made from included: each path is read one component at a time,
+    /// and one with more folders than the budget can hold is given up as soon as they are counted
+    /// ([`FileTree::of_files`]).
     ///
     /// # Errors
     ///

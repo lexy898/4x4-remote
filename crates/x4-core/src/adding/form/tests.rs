@@ -758,6 +758,19 @@ fn a_torrent_with_a_deep_path_is_offered_with_all_files() {
 }
 
 #[test]
+fn a_torrent_of_a_path_of_millions_of_folders_is_offered_with_all_files() {
+    // One part of a path in the `.torrent` that holds 8 million folders, one in the other: 16 MB,
+    // within the 16 MiB a file may have. Splitting it into its parts before counting anything
+    // took 128 MiB for the list of parts alone.
+    let paths = vec![vec![format!("{}f", "a/".repeat(8_000_000))]];
+    let bytes = folder_torrent("T", &paths);
+    drop(paths);
+    assert!(u64::try_from(bytes.len()).unwrap() <= crate::MAX_TORRENT_FILE_BYTES);
+
+    assert_offered_with_all_files(&bytes);
+}
+
+#[test]
 fn a_torrent_of_many_deep_chains_is_offered_with_all_files() {
     // Eight paths of 2 050 parts that part at the top: each is 6 KB, its chain some 4 MiB of
     // keys.

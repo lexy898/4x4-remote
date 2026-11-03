@@ -8,7 +8,7 @@ use x4_rpc::{FilePriority, HashString};
 
 use super::super::names::name_order;
 use super::super::{NodeKey, PriorityView, WantedState};
-use super::{FOLDER_COST, FileTree, INDEX_COST, NODE_COST, Node};
+use super::{FOLDER_COST, FileTree, INDEX_COST, NODE_COST, Node, parts};
 use crate::details::FileEntry;
 use crate::playable::Playable;
 
@@ -105,16 +105,30 @@ impl<'a> Builder<'a> {
         self.over_budget
     }
 
-    /// Adds a file that is shown, with the folders above it. `parts` are the components of its
-    /// path, the last one its name. Nothing is added once the budget is spent.
-    pub(super) fn add_file(&mut self, entry: &FileEntry, parts: &[&'a str]) {
-        let Some((&name, folder_parts)) = parts.split_last() else {
+    /// Adds a file that is shown, with the folders above it: the components of its path, the
+    /// last one its name. A path without any is a file without a name, which the user still sees
+    /// and acts on. Nothing is added once the budget is spent.
+    ///
+    /// Each folder of a path is a node of its own, which takes at least [`NODE_COST`] and
+    /// [`FOLDER_COST`]. A path with more folders than the budget holds of those spends the budget
+    /// at once, when its components have been counted and before anything is made: 8 million
+    /// folders in a path of 16 MB would otherwise be split into a list of parts of 128 MiB.
+    pub(super) fn add_file(&mut self, entry: &'a FileEntry) {
+        let folders = parts(&entry.name).count().saturating_sub(1);
+        if folders > self.budget / (NODE_COST + FOLDER_COST) {
+            self.over_budget = true;
             return;
-        };
+        }
+        let mut rest = parts(&entry.name).peekable();
         let mut parent = None;
         let mut path = String::new();
-        for &part in folder_parts {
+        let mut name = "";
+        while let Some(part) = rest.next() {
             push_component(&mut path, part);
+            if rest.peek().is_none() {
+                name = part;
+                break;
+            }
             let folder = match self.folders.get(&(parent, part)) {
                 Some(&folder) => folder,
                 None => match self.add_node(parent, part, &path, true) {
@@ -124,7 +138,6 @@ impl<'a> Builder<'a> {
             };
             parent = Some(folder);
         }
-        push_component(&mut path, name);
         let Some(leaf) = self.add_node(parent, name, &path, false) else {
             return;
         };
@@ -164,15 +177,17 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Adds the index of a padding file to the folders above it that exist. The ones that do not
-    /// are folders of padding only, which are not shown. Nothing more is added once the budget is
-    /// spent.
-    pub(super) fn add_padding(&mut self, index: usize, parts: &[&'a str]) {
-        let Some((_, folder_parts)) = parts.split_last() else {
-            return;
-        };
+    /// Adds the index of a padding file, at `path`, to the folders above it that exist. The ones
+    /// that do not are folders of padding only, which are not shown. Nothing more is added once
+    /// the budget is spent.
+    pub(super) fn add_padding(&mut self, index: usize, path: &str) {
+        let mut rest = parts(path).peekable();
         let mut parent = None;
-        for &part in folder_parts {
+        while let Some(part) = rest.next() {
+            // The last component is the name of the padding file itself.
+            if rest.peek().is_none() {
+                return;
+            }
             let Some(&folder) = self.folders.get(&(parent, part)) else {
                 return;
             };

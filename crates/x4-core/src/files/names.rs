@@ -14,13 +14,21 @@ const PAD_FOLDER: &str = ".pad";
 /// torrent's top folder is `.pad`.
 ///
 /// Transmission lists such a file like any other, so the details hold it, but a user has nothing
-/// to do with it.
-pub(super) fn is_padding(parts: &[&str]) -> bool {
-    let Some(name) = parts.last() else {
+/// to do with it. The components are read one by one, and not kept: a path may have millions.
+pub(super) fn is_padding<'a>(parts: impl Iterator<Item = &'a str>) -> bool {
+    let (mut count, mut second, mut name) = (0_usize, None, None);
+    for part in parts {
+        count = count.saturating_add(1);
+        if count == 2 {
+            second = Some(part);
+        }
+        name = Some(part);
+    }
+    let Some(name) = name else {
         return false;
     };
     // A `.pad` below the top folder has to be a folder, so the path goes on after it.
-    name.starts_with(PADDING_PREFIX) || (parts.len() >= 3 && parts.get(1) == Some(&PAD_FOLDER))
+    name.starts_with(PADDING_PREFIX) || (count >= 3 && second == Some(PAD_FOLDER))
 }
 
 /// How two names in the same folder are ordered: digits compare by number, so `E2` comes before
@@ -94,8 +102,8 @@ fn number_order(a: &str, b: &str) -> Ordering {
 mod tests {
     use super::*;
 
-    fn parts(path: &str) -> Vec<&str> {
-        path.split('/').collect()
+    fn parts(path: &str) -> std::str::Split<'_, char> {
+        path.split('/')
     }
 
     fn sorted<'a>(names: &[&'a str]) -> Vec<&'a str> {
@@ -106,22 +114,22 @@ mod tests {
 
     #[test]
     fn a_file_named_like_a_padding_file_is_padding() {
-        assert!(is_padding(&parts("T/_____padding_file_0")));
-        assert!(is_padding(&parts("T/sub/_____padding_file_12_extra")));
-        assert!(is_padding(&parts("_____padding_file_0")));
-        assert!(!is_padding(&parts("T/padding_file_0")));
-        assert!(!is_padding(&parts("T/_____padding_file_0/real.mkv")));
+        assert!(is_padding(parts("T/_____padding_file_0")));
+        assert!(is_padding(parts("T/sub/_____padding_file_12_extra")));
+        assert!(is_padding(parts("_____padding_file_0")));
+        assert!(!is_padding(parts("T/padding_file_0")));
+        assert!(!is_padding(parts("T/_____padding_file_0/real.mkv")));
     }
 
     #[test]
     fn a_file_in_the_pad_folder_below_the_top_folder_is_padding() {
-        assert!(is_padding(&parts("T/.pad/0")));
-        assert!(is_padding(&parts("T/.pad/sub/1024")));
+        assert!(is_padding(parts("T/.pad/0")));
+        assert!(is_padding(parts("T/.pad/sub/1024")));
         // Elsewhere, the name is an ordinary one.
-        assert!(!is_padding(&parts("T/.pad")));
-        assert!(!is_padding(&parts("T/sub/.pad/0")));
-        assert!(!is_padding(&parts(".pad")));
-        assert!(!is_padding(&parts("T/.padding/0")));
+        assert!(!is_padding(parts("T/.pad")));
+        assert!(!is_padding(parts("T/sub/.pad/0")));
+        assert!(!is_padding(parts(".pad")));
+        assert!(!is_padding(parts("T/.padding/0")));
     }
 
     #[test]
