@@ -92,6 +92,24 @@ fn a_file_in_a_folder_of_the_torrent_has_one_path_element_per_part() {
 }
 
 #[test]
+fn a_file_in_the_pad_folder_is_marked_as_a_padding_file() {
+    let files: [(&str, &[u8]); 3] = [("a.bin", b"abc"), (".pad/1", b"\0"), ("b.bin", b"de")];
+
+    let metainfo = multi_file_metainfo("dir", &files, 4);
+
+    let files_list = b"5:filesld6:lengthi3e4:pathl5:a.bineed4:attr1:p6:lengthi1e4:pathl4:.pad\
+                       1:1eed6:lengthi2e4:pathl5:b.bineee";
+    assert!(
+        metainfo
+            .bytes
+            .windows(files_list.len())
+            .any(|window| window == files_list),
+        "{}",
+        String::from_utf8_lossy(&metainfo.bytes)
+    );
+}
+
+#[test]
 fn random_bytes_have_the_requested_length_and_follow_the_seed() {
     let first = random_bytes(1, 13);
 

@@ -12,8 +12,9 @@
 //! built from a full read and merged from the progress reads.
 //!
 //! The add path is checked against the daemon's own numbering of the files: a torrent of this
-//! run, whose files are not in the order their names sort in, is read by the strict parser, a
-//! file is unchecked in the add form, and the form's request is sent as the add dialog sends it,
+//! run, whose files are not in the order their names sort in, with an empty file and a padding
+//! file among them, is read by the strict parser, a file past the padding is unchecked in the add
+//! form, and the form's request is sent as the add dialog sends it,
 //! paused and with no data written. The daemon must list the files in the parse's order, with
 //! that file, and only that one, left out.
 
@@ -47,10 +48,13 @@ use x4_rpc::{
 /// moment; it needs two or three.
 const TURNS: usize = 10;
 /// The files of the torrent added with a file left out, in its order, with their sizes: not the
-/// order their names sort in, and one of them in a folder of the torrent.
-const OUT_OF_ORDER: [(&str, usize); 3] = [
+/// order their names sort in, one of them in a folder of the torrent, an empty one, and a padding
+/// file (BEP 47) that ends the first piece, so that `alpha.bin` begins the second.
+const OUT_OF_ORDER: [(&str, usize); 5] = [
     ("zeta.bin", 9 * 1024),
+    (".pad/7168", 7 * 1024),
     ("alpha.bin", 13 * 1024),
+    ("empty.bin", 0),
     ("mid/beta.bin", 5 * 1024),
 ];
 /// What a test reads of the files of its torrent: their names and lengths, and which are wanted.
@@ -441,13 +445,22 @@ fn adding_with_unwanted_files_matches_the_daemons_file_order() {
         .files
         .expect("the strict parse leaves the test torrent no choice of files");
     let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    let in_order: Vec<String> = OUT_OF_ORDER
+        .iter()
+        .map(|(file, _)| format!("{name}/{file}"))
+        .collect();
+    assert_eq!(
+        paths, in_order,
+        "the parse keeps every file at its place, the padding and the empty one too"
+    );
     let mut sorted = paths.clone();
     sorted.sort_unstable();
     assert_ne!(
         paths, sorted,
         "the test needs files out of the order of their names"
     );
-    // The add form, with the second file unchecked, makes the request the add dialog sends.
+    // The add form, with `alpha.bin` unchecked, makes the request the add dialog sends. The
+    // padding file is hidden in the form, but keeps its index, so the one left out is past it.
     let loaded = LoadedItem::torrent(
         PathBuf::from(format!("{name}.torrent")),
         Arc::from(own.bytes()),
@@ -459,7 +472,7 @@ fn adding_with_unwanted_files_matches_the_daemons_file_order() {
         AddCheck::Ready(request) => request,
         other => panic!("the add form would send nothing: {other:?}"),
     };
-    assert_eq!(request.files_unwanted, [1]);
+    assert_eq!(request.files_unwanted, [2]);
     assert!(request.paused);
 
     let torrent = TestTorrent::add(&mut client, &env, own, &request);
@@ -480,7 +493,10 @@ fn adding_with_unwanted_files_matches_the_daemons_file_order() {
         listed, parsed,
         "the daemon numbers the files as the parse does"
     );
-    assert_eq!(record.wanted.as_deref(), Some(&[true, false, true][..]));
+    assert_eq!(
+        record.wanted.as_deref(),
+        Some(&[true, true, false, true, true][..])
+    );
     assert_others_unchanged(&mut client, Some(&hash), &before);
 
     torrent.remove_with_data(&mut client);

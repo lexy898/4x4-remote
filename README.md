@@ -922,9 +922,10 @@ they add their torrent paused, or by a magnet link of it, and the daemon then ha
 One removes its torrent from the list only, checks that the daemon kept the file, and then deletes
 the file itself. The tests of x4-core read the details of their torrent as the app does, in full and
 then only their progress, with and without the trackers, and check that the app understands every
-answer; and they add a torrent as the add dialog does, with its second file unchecked, and check
-that the daemon numbers the files in the order 4x4 read them from the `.torrent`, which is not the
-order of their names, with only that file left out. The tests of adding check that a torrent added
+answer; and they add a torrent as the add dialog does, with a file unchecked that comes after an
+empty file and a padding file, and check that the daemon numbers the files, those two included, in
+the order 4x4 read them from the `.torrent`, which is not the order of their names, with only that
+file left out. The tests of adding check that a torrent added
 paused stays stopped, though all its data is there; that adding it again, started, into another
 folder and with another file left out, is a duplicate that changes nothing; that a folder that does
 not exist yet, `4x4-live-new-<hex>` in the test directory, is kept as it was sent and made only
