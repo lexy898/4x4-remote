@@ -72,8 +72,9 @@ struct Socket {
 struct Held {
     socket_path: PathBuf,
     /// The socket the launches still waiting are taken from. The thread of [`Listener::serve`]
-    /// has the other handle; once this one is made non-blocking, so is that one, and the thread
-    /// ends.
+    /// has the other handle; once this one is made non-blocking, so is that one. That does not
+    /// wake the thread if it is blocked in `accept` already: it ends at its next `accept` that
+    /// finds no launch waiting, or with the process.
     listener: UnixListener,
     /// How long, in all, the launches still waiting are answered.
     read: Duration,
@@ -138,8 +139,9 @@ impl Listener {
     /// sends the requests of each frame into `adds`: those of its arguments, as
     /// [`launch_requests`] tells them apart, then [`AddRequest::Raise`]. It answers
     /// [`Reply::Ok`] once they are sent, or [`Reply::Closing`] when nobody takes them any more.
-    /// Returns the place of the first 4x4, held until dropped; the thread runs until the process
-    /// ends.
+    /// Returns the place of the first 4x4, held until dropped. The thread runs until the place is
+    /// dropped: it then ends at its next `accept` that finds no launch waiting, or with the
+    /// process.
     ///
     /// Call it once the GPUI platform exists: creating it changes the environment, which is only
     /// safe while no other thread may read it.
@@ -183,8 +185,9 @@ impl Listener {
 }
 
 impl Socket {
-    /// Answers launches one at a time, as long as the process runs. Each holds it at most for the
-    /// read timeout and the answer's write.
+    /// Answers launches one at a time, until the place is let go of (its next `accept` then finds
+    /// no launch waiting) or the process ends. Each holds it at most for the read timeout and the
+    /// answer's write.
     fn serve(&self, adds: &async_channel::Sender<AddRequest>) {
         loop {
             match self.answer_next_into(adds) {
@@ -204,16 +207,22 @@ impl Socket {
 
     /// [`Listener::answer_next_into`].
     fn answer_next_into(&self, adds: &async_channel::Sender<AddRequest>) -> io::Result<Reply> {
-        self.answer_next(|frame| forward(&frame, adds))
+        self.answer_with(|received| forward(received, adds))
     }
 
     /// [`Listener::answer_next`].
     fn answer_next(&self, deliver: impl FnOnce(Frame) -> bool) -> io::Result<Reply> {
+        self.answer_with(|received| deliver(received.to_frame()))
+    }
+
+    /// Answers the next launch that connects, as [`Listener::answer_next`] says, handing
+    /// `deliver` the frame read as views of its bytes.
+    fn answer_with(&self, deliver: impl FnOnce(wire::Received<'_>) -> bool) -> io::Result<Reply> {
         let (mut stream, _) = self.listener.accept()?;
         let reply = match read_until_closed(&mut stream, wire::MAX_FRAME_BYTES, self.read) {
             Ok(bytes) => match wire::decode(&bytes) {
-                Ok(frame) => {
-                    if deliver(frame) {
+                Ok(received) => {
+                    if deliver(received) {
                         Reply::Ok
                     } else {
                         Reply::Closing
@@ -245,28 +254,29 @@ fn send_reply(stream: &mut UnixStream, reply: Reply, wait: Duration) {
     }
 }
 
-/// Sends the requests of `frame` into `adds`: whether they all went.
-fn forward(frame: &Frame, adds: &async_channel::Sender<AddRequest>) -> bool {
+/// Sends the requests of the frame `received` into `adds`: whether they all went.
+fn forward(received: wire::Received<'_>, adds: &async_channel::Sender<AddRequest>) -> bool {
     // The tokens of the launch: gpui-pre 0.3.10 cannot raise an open window with a token from
     // another process, so they are only kept for a later version.
     tracing::debug!(
-        activation_token = ?frame.activation_token,
-        desktop_startup_id = ?frame.desktop_startup_id,
+        activation_token = ?received.activation_token,
+        desktop_startup_id = ?received.desktop_startup_id,
         "the activation tokens of another launch"
     );
-    requests_of(frame)
+    requests_of(received)
         .into_iter()
         .all(|request| adds.send_blocking(request).is_ok())
 }
 
-/// The requests of a frame handed over: those of its arguments ([`launch_requests`]), then
-/// [`AddRequest::Raise`]. A frame without arguments only raises the window.
-fn requests_of(frame: &Frame) -> Vec<AddRequest> {
+/// The requests of a frame handed over: those of its arguments ([`launch_requests`]), taken from
+/// the frame's bytes one by one, then [`AddRequest::Raise`]. A frame without arguments only
+/// raises the window.
+fn requests_of(received: wire::Received<'_>) -> Vec<AddRequest> {
     tracing::info!(
-        arguments = frame.args.len(),
+        arguments = received.arg_count,
         "another launch handed its arguments over"
     );
-    let mut requests = launch_requests(&frame.args, &frame.cwd);
+    let mut requests = launch_requests(received.args(), received.cwd());
     requests.push(AddRequest::Raise);
     requests
 }
@@ -767,7 +777,10 @@ mod tests {
         stream.set_nonblocking(false).expect("blocking");
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).expect("the frame");
-        assert_eq!(wire::decode(&bytes), Ok(second));
+        assert_eq!(
+            wire::decode(&bytes).map(wire::Received::to_frame),
+            Ok(second)
+        );
         assert_eq!(
             listener
                 .socket
@@ -815,7 +828,7 @@ mod tests {
         let (mut stream, _) = listener.socket.listener.accept().expect("a connection");
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).expect("the frame");
-        (stream, wire::decode(&bytes).expect("a frame"))
+        (stream, wire::decode(&bytes).expect("a frame").to_frame())
     }
 
     #[test]

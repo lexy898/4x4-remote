@@ -86,8 +86,12 @@ pub enum StandaloneReason {
         /// The length of the path in bytes.
         bytes: usize,
     },
-    /// The arguments cannot go in a frame: one holds a NUL byte, or they take more than 4 MiB.
-    #[error("the arguments cannot be handed over: they hold a NUL byte or take more than 4 MiB")]
+    /// The frame cannot be written: an argument or a token holds a NUL byte, the frame would take
+    /// more than 4 MiB, or its working directory is relative or longer than 4096 bytes (the frame
+    /// of this process, [`Frame::of_this_process`], sends an unknown one instead of a longer one).
+    #[error(
+        "the arguments cannot be handed over: they hold a NUL byte, take more than 4 MiB, or come          with a working directory that is relative or longer than 4096 bytes"
+    )]
     Unencodable,
     /// A file or socket operation failed.
     #[error("could not {what}: {source}")]
@@ -111,6 +115,10 @@ pub enum StandaloneReason {
     Unsupported,
 }
 
+/// The longest working directory a frame carries, in bytes: Linux's `PATH_MAX`. glibc's `getcwd`
+/// gives longer ones too; [`Frame::of_this_process`] sends those as unknown.
+pub(crate) const MAX_CWD_BYTES: usize = 4096;
+
 /// What a launch hands over to the running 4x4: where it ran, its arguments, and what the desktop
 /// gave it to bring a window to the front.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -129,6 +137,11 @@ pub struct Frame {
 impl Frame {
     /// The frame of this process: its arguments, its working directory and its tokens. The tokens
     /// are read from the environment and left there, for gpui to take.
+    ///
+    /// A working directory longer than a frame carries, 4096 bytes, goes as unknown: the
+    /// running 4x4 then refuses the relative arguments, and the magnet links and absolute paths
+    /// still hand over, where the frame would otherwise not be written and this launch would open
+    /// a window of its own.
     #[must_use]
     pub fn of_this_process() -> Self {
         let cwd = env::current_dir().unwrap_or_else(|error| {
@@ -136,7 +149,7 @@ impl Frame {
             PathBuf::new()
         });
         Self {
-            cwd,
+            cwd: frame_cwd(cwd),
             activation_token: env::var_os("XDG_ACTIVATION_TOKEN"),
             desktop_startup_id: env::var_os("DESKTOP_STARTUP_ID"),
             args: env::args_os().skip(1).collect(),
@@ -180,6 +193,20 @@ pub enum Reply {
     Closing,
     /// The frame could not be read: it is too large, cut short, late, or not one of this version.
     Bad,
+}
+
+/// The working directory a frame carries for `cwd`, the working directory of this process: `cwd`
+/// itself, or an empty one (unknown) when it is longer than [`MAX_CWD_BYTES`].
+fn frame_cwd(cwd: PathBuf) -> PathBuf {
+    let bytes = cwd.as_os_str().len();
+    if bytes > MAX_CWD_BYTES {
+        tracing::debug!(
+            bytes,
+            "the working directory is too long to hand over; it goes as unknown"
+        );
+        return PathBuf::new();
+    }
+    cwd
 }
 
 /// Claims the place of the first 4x4 of the user for the app `app_id`, in `runtime_dir` (the
@@ -230,5 +257,23 @@ pub fn claim_with(
             tracing::warn!(%reason, "running on its own; later launches do not hand over to it");
             Claim::Standalone(reason)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_working_directory_too_long_for_a_frame_goes_as_unknown() {
+        let longest = PathBuf::from(format!("/{}", "d".repeat(MAX_CWD_BYTES - 1)));
+        let longer = PathBuf::from(format!("/{}", "d".repeat(MAX_CWD_BYTES)));
+
+        assert_eq!(frame_cwd(longest.clone()), longest);
+        assert_eq!(frame_cwd(longer), PathBuf::new());
+        assert_eq!(
+            frame_cwd(PathBuf::from("/home/user")),
+            Path::new("/home/user")
+        );
     }
 }
