@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Tests for the agent and git hook scripts and the repository's helper scripts.
+# Tests for the agent and git hook scripts, the repository's helper scripts and its packaging.
 # Every case works in a throwaway directory under a temp root; the real repository
-# and its target/.agent-hooks state are never touched. Prints "ok <case>" per case,
-# exits 1 on the first failure.
+# and its target/.agent-hooks state are never touched. Prints "ok <case>" per case, or
+# "skip <case>: <why>" for a case that needs a tool this machine lacks (makepkg off Arch Linux),
+# and exits 1 on the first failure.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -14,6 +15,8 @@ lint_policy=$root/scripts/lint-policy.sh
 measure_lib=$root/scripts/measure-lib.sh
 measure=$root/scripts/measure.sh
 virtual_session=$root/scripts/virtual-session.sh
+pkgbuild=$root/packaging/arch/PKGBUILD
+icon=$root/packaging/linux/io.github.lexy898.FourByFour.svg
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
@@ -36,6 +39,7 @@ clean_up() {
 trap clean_up EXIT
 
 case_name=
+skipped=
 status=0
 stdout=
 stderr=
@@ -43,6 +47,11 @@ stderr=
 fail() {
     echo "FAIL $case_name: $*" >&2
     exit 1
+}
+
+# skip <why>: marks the case as skipped; the case returns right after.
+skip() {
+    skipped=$1
 }
 
 new_repo() {
@@ -1155,6 +1164,256 @@ test_virtual_session_reports_a_session_that_never_ran() {
     expect_contains "cannot open the virtual output" "$stderr" "stderr with KWin's log"
 }
 
+# The Arch package. makepkg exists only on Arch Linux, so the cases that run it skip elsewhere (as
+# on the CI runner); the cases that run the PKGBUILD's functions themselves, the `package` recipe
+# with a stand-in makepkg, and the icon checks run everywhere.
+
+# commit_all <repo> <message>: commits everything in <repo>, with a test identity and unsigned.
+commit_all() {
+    git -C "$1" add -A
+    git -C "$1" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
+        commit -q --allow-empty -m "$2"
+}
+
+# The values of <key> in the .SRCINFO that $stdout holds, one per line, in order.
+srcinfo_values() { # <key>
+    sed -nE "s/^[[:space:]]*$1 = //p" <<<"$stdout"
+}
+
+expect_srcinfo() { # <key> <value>...
+    local key=$1 expected
+    shift
+    expected=$(printf '%s\n' "$@")
+    [[ $(srcinfo_values "$key") == "$expected" ]] ||
+        fail "expected $key to be '$*', got: '$(srcinfo_values "$key" | paste -sd '|')'"
+}
+
+# makepkg reads the PKGBUILD as `just package` gives it: a copy, with X4_REPO naming the checkout.
+# The owner's makepkg.conf stays out of it.
+test_package_build_file_describes_4x4_git_built_from_the_local_master() {
+    local dir
+    if ! command -v makepkg >/dev/null 2>&1; then
+        skip "makepkg not found; it exists only on Arch Linux"
+        return
+    fi
+    dir=$(mktemp -d "$tmp_root/pkgbuild.XXXXXX")
+    cp "$pkgbuild" "$dir/PKGBUILD" 2>/dev/null || fail "no PKGBUILD at $pkgbuild"
+    run_with_input '' env -C "$dir" XDG_CONFIG_HOME="$dir/config" X4_REPO="$dir/checkout" \
+        makepkg --printsrcinfo
+    expect_status 0
+    expect_srcinfo pkgbase 4x4-git
+    expect_srcinfo pkgname 4x4-git
+    expect_srcinfo arch x86_64
+    expect_srcinfo license 'MIT OR Apache-2.0'
+    expect_srcinfo depends glibc libgcc hicolor-icon-theme libxcb libxkbcommon libxkbcommon-x11 \
+        vulkan-icd-loader wayland
+    expect_srcinfo makedepends cargo git fontconfig freetype2
+    expect_srcinfo optdepends \
+        'vulkan-driver: draw through Vulkan; without one 4x4 falls back to OpenGL and uses more memory' \
+        'xdg-desktop-portal-impl: the file dialog for .torrent files'
+    expect_srcinfo provides 4x4
+    expect_srcinfo conflicts 4x4
+    expect_srcinfo options '!lto' '!debug'
+    # The local master branch of the checkout: only what is committed there is built.
+    expect_srcinfo source "4x4::git+file://$dir/checkout#branch=master"
+    expect_srcinfo b2sums SKIP
+}
+
+# Run by hand, without the recipe, makepkg stops at once and names the recipe.
+test_package_build_file_stops_without_just_package() {
+    local dir
+    if ! command -v makepkg >/dev/null 2>&1; then
+        skip "makepkg not found; it exists only on Arch Linux"
+        return
+    fi
+    dir=$(mktemp -d "$tmp_root/pkgbuild.XXXXXX")
+    cp "$pkgbuild" "$dir/PKGBUILD" 2>/dev/null || fail "no PKGBUILD at $pkgbuild"
+    run_with_input '' env -u X4_REPO -C "$dir" XDG_CONFIG_HOME="$dir/config" makepkg --printsrcinfo
+    ((status != 0)) || fail "makepkg read the PKGBUILD without X4_REPO: $stdout"
+    expect_contains "X4_REPO: run makepkg through just package, which sets X4_REPO" "$stderr" stderr
+    [[ $stdout != *pkgname* ]] || fail "makepkg printed a .SRCINFO: $stdout"
+}
+
+# pkgver() in a stand-in of makepkg's $srcdir, whose 4x4 is a clone with three commits and a
+# version line outside [workspace.package] too.
+test_package_version_is_the_workspace_version_with_the_commit_count_and_hash() {
+    local dir checkout hash
+    dir=$(mktemp -d "$tmp_root/pkgver.XXXXXX")
+    checkout=$dir/src/4x4
+    mkdir -p "$checkout"
+    git -C "$checkout" init -q
+    printf '%s\n' '[workspace]' 'members = []' '' '[workspace.package]' 'version = "1.2.3"' \
+        'edition = "2024"' '' '[workspace.metadata.other]' 'version = "9.9.9"' >"$checkout/Cargo.toml"
+    commit_all "$checkout" "first"
+    commit_all "$checkout" "second"
+    commit_all "$checkout" "third"
+    hash=$(git -C "$checkout" rev-parse --short=7 HEAD)
+    run_with_input '' env -C "$dir/src" X4_REPO="$dir" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
+    expect_status 0
+    [[ $stdout == "1.2.3.r3.g$hash" ]] || fail "expected the version 1.2.3.r3.g$hash, got: '$stdout'"
+}
+
+# package() in a stand-in of makepkg's $srcdir and $pkgdir, with a stand-in binary and the
+# repository's own desktop file, icon and licenses: exactly those five files, with pacman's modes.
+test_package_installs_the_binary_desktop_file_icon_and_licenses() {
+    local dir checkout listing expected
+    dir=$(mktemp -d "$tmp_root/package-files.XXXXXX")
+    checkout=$dir/src/4x4
+    mkdir -p "$checkout/target/release" "$checkout/packaging/linux" "$dir/pkg"
+    printf '#!/bin/sh\n' >"$checkout/target/release/4x4"
+    cp "$root/packaging/linux/io.github.lexy898.FourByFour.desktop" "$checkout/packaging/linux/"
+    cp "$icon" "$checkout/packaging/linux/" 2>/dev/null || fail "no icon at $icon"
+    cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$checkout/"
+    run_with_input '' env -C "$dir/src" X4_REPO="$dir" srcdir="$dir/src" pkgdir="$dir/pkg" \
+        bash -e -c 'source "$1" && package' _ "$pkgbuild"
+    expect_status 0
+    listing=$(cd "$dir/pkg" && find . -type f -printf '%m %p\n' | LC_ALL=C sort)
+    expected="644 ./usr/share/applications/io.github.lexy898.FourByFour.desktop
+644 ./usr/share/icons/hicolor/scalable/apps/io.github.lexy898.FourByFour.svg
+644 ./usr/share/licenses/4x4-git/LICENSE-APACHE
+644 ./usr/share/licenses/4x4-git/LICENSE-MIT
+755 ./usr/bin/4x4"
+    [[ $listing == "$expected" ]] || fail "unexpected files in the package: $listing"
+}
+
+# `just package` with a stand-in makepkg on PATH, which writes its arguments, its working dir and
+# the variables the recipe sets to makepkg.log, keeps the PKGBUILD it was given, rewrites pkgver=
+# in it as makepkg does, and lists the package as `--packagelist` does. The checkout has another
+# branch checked out, with a commit and an uncommitted change of its own; only master is built.
+test_package_recipe_builds_the_committed_master_under_the_cache_dir() {
+    local dir repo cache master run
+    dir=$(mktemp -d "$tmp_root/package-recipe.XXXXXX")
+    repo=$dir/checkout
+    cache=$dir/home/.cache/4x4-pkg
+    mkdir -p "$dir/bin" "$dir/home" "$repo/packaging/arch"
+    cp "$root/justfile" "$repo/"
+    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# master\n' >"$repo/packaging/arch/PKGBUILD"
+    git -C "$repo" init -q -b master
+    commit_all "$repo" "feat: the tip of master"
+    master=$(git -C "$repo" log -1 --format='%h %s' master)
+    git -C "$repo" switch -q -c feature
+    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# feature\n' >"$repo/packaging/arch/PKGBUILD"
+    commit_all "$repo" "feat: a feature"
+    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted\n' >"$repo/packaging/arch/PKGBUILD"
+    cat >"$dir/bin/makepkg" <<EOF
+#!/usr/bin/env bash
+{
+    echo "args: \$*"
+    echo "pwd: \$PWD"
+    for name in X4_REPO BUILDDIR SRCDEST PKGDEST; do echo "\$name: \${!name-unset}"; done
+} >>"$dir/makepkg.log"
+if [[ \$* == --force ]]; then
+    cp PKGBUILD "$dir/built-PKGBUILD"
+    sed -i 's/^pkgver=.*/pkgver=0.1.0.r2.gbbbbbbb/' PKGBUILD
+elif [[ \$* == --packagelist ]]; then
+    echo "\$PKGDEST/4x4-git-\$(sed -n 's/^pkgver=//p' PKGBUILD)-1-x86_64.pkg.tar.zst"
+fi
+EOF
+    chmod +x "$dir/bin/makepkg"
+    run_with_input '' env -u XDG_CACHE_HOME HOME="$dir/home" PATH="$dir/bin:$PATH" \
+        just --justfile "$repo/justfile" package
+    expect_status 0
+    expect_contains "building master: $master" "$stdout" stdout
+    [[ ${stdout##*$'\n'} == "$cache/packages/4x4-git-0.1.0.r2.gbbbbbbb-1-x86_64.pkg.tar.zst" ]] ||
+        fail "expected the package's path last, got: $stdout"
+    run="pwd: $cache
+X4_REPO: $repo
+BUILDDIR: $cache/build
+SRCDEST: $cache/sources
+PKGDEST: $cache/packages"
+    [[ $(<"$dir/makepkg.log") == "args: --force"$'\n'"$run"$'\n'"args: --packagelist"$'\n'"$run" ]] ||
+        fail "expected makepkg --force, then --packagelist, in the cache dir; got: $(<"$dir/makepkg.log")"
+    [[ $(<"$dir/built-PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# master' ]] ||
+        fail "makepkg was not given master's PKGBUILD: $(<"$dir/built-PKGBUILD")"
+    [[ $(<"$repo/packaging/arch/PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted' ]] ||
+        fail "the checkout's PKGBUILD changed: $(<"$repo/packaging/arch/PKGBUILD")"
+    [[ -d $cache/build && -d $cache/sources && -d $cache/packages ]] ||
+        fail "expected build, sources and packages in $cache: $(ls -A "$cache")"
+    [[ $(ls -A "$dir/home") == .cache && $(ls -A "$dir/home/.cache") == 4x4-pkg ]] ||
+        fail "the recipe wrote outside ~/.cache/4x4-pkg: $(cd "$dir/home" && find . | paste -sd ' ')"
+}
+
+need_python3() {
+    command -v python3 >/dev/null 2>&1 || fail "python3 not found; the icon checks need it"
+}
+
+# What makes <file> unfit as the app icon, one problem per line: it is not XML, its root is not an
+# SVG <svg>, its viewBox is missing or not square, or it has a <text> (whose font differs from
+# desktop to desktop), an <image> or a link to anything outside the file.
+svg_icon_problems() { # <file>
+    python3 -I - "$1" <<'EOF'
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+SVG = "{http://www.w3.org/2000/svg}"
+LINKS = ("href", "{http://www.w3.org/1999/xlink}href")
+
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+except (ET.ParseError, OSError) as error:
+    print(f"not XML: {error}")
+    sys.exit(0)
+if root.tag != SVG + "svg":
+    print(f"the root element is {root.tag}, not an SVG <svg>")
+try:
+    box = [float(value) for value in re.split(r"[\s,]+", root.get("viewBox", "").strip())]
+except ValueError:
+    box = []
+if len(box) != 4 or box[2] <= 0 or box[2] != box[3]:
+    print(f"the viewBox is not square: {root.get('viewBox')!r}")
+for element in root.iter():
+    name = element.tag.removeprefix(SVG)
+    if name in ("text", "image"):
+        print(f"a <{name}> element")
+    for attribute in LINKS:
+        link = element.get(attribute)
+        if link is not None and not link.startswith("#"):
+            print(f"a link outside the file: {link}")
+EOF
+}
+
+test_icon_is_a_square_svg_without_text_images_or_links() {
+    local problems
+    need_python3
+    problems=$(svg_icon_problems "$icon")
+    [[ -z $problems ]] || fail "$icon: $problems"
+}
+
+# The icon check itself catches each kind of unfit SVG, and passes a fit one with a link inside it.
+test_icon_check_catches_what_does_not_belong_in_an_icon() {
+    local dir svg name problem problems
+    need_python3
+    dir=$(mktemp -d "$tmp_root/icon.XXXXXX")
+    svg='<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'
+    printf '%s viewBox="0 0 16 16"><rect id="a" width="16" height="16"/><use href="#a"/></svg>\n' \
+        "$svg" >"$dir/fit.svg"
+    printf '%s viewBox="0 0 16 16"><rect' "$svg" >"$dir/broken.svg"
+    printf '<svg viewBox="0 0 16 16"/>\n' >"$dir/no-namespace.svg"
+    printf '%s viewBox="0 0 16 8"/>\n' "$svg" >"$dir/wide.svg"
+    printf '%s width="16" height="16"/>\n' "$svg" >"$dir/no-view-box.svg"
+    printf '%s viewBox="0 0 16 16"><text>4x4</text></svg>\n' "$svg" >"$dir/text.svg"
+    printf '%s viewBox="0 0 16 16"><image href="#a"/></svg>\n' "$svg" >"$dir/image.svg"
+    printf '%s viewBox="0 0 16 16"><use href="other.svg#a"/></svg>\n' "$svg" >"$dir/link.svg"
+    printf '%s viewBox="0 0 16 16"><use xlink:href="https://example.invalid/a.svg#a"/></svg>\n' \
+        "$svg" >"$dir/xlink.svg"
+    problems=$(svg_icon_problems "$dir/fit.svg")
+    [[ -z $problems ]] || fail "the check rejected a fit icon: $problems"
+    while read -r name problem; do
+        problems=$(svg_icon_problems "$dir/$name.svg")
+        expect_contains "$problem" "$problems" "the problems of $name.svg"
+    done <<'EOF'
+broken not XML
+no-namespace not an SVG <svg>
+wide the viewBox is not square
+no-view-box the viewBox is not square
+text a <text> element
+image a <image> element
+link a link outside the file: other.svg#a
+xlink a link outside the file: https://example.invalid/a.svg#a
+EOF
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -1230,11 +1489,23 @@ cases=(
     virtual_session_stops_what_the_session_left_running
     virtual_session_refuses_a_tmpdir_too_long_for_the_socket
     virtual_session_reports_a_session_that_never_ran
+    package_build_file_describes_4x4_git_built_from_the_local_master
+    package_build_file_stops_without_just_package
+    package_version_is_the_workspace_version_with_the_commit_count_and_hash
+    package_installs_the_binary_desktop_file_icon_and_licenses
+    package_recipe_builds_the_committed_master_under_the_cache_dir
+    icon_is_a_square_svg_without_text_images_or_links
+    icon_check_catches_what_does_not_belong_in_an_icon
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
 
 for case_name in "${cases[@]}"; do
+    skipped=
     "test_$case_name"
-    echo "ok $case_name"
+    if [[ -n $skipped ]]; then
+        echo "skip $case_name: $skipped"
+    else
+        echo "ok $case_name"
+    fi
 done

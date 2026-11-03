@@ -73,6 +73,55 @@ just run
 The second command installs the system libraries the GUI toolkit builds and links against; Wayland
 and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
+## Install
+
+On Arch Linux, 4x4 installs as the package `4x4-git`, built from this checkout:
+
+```bash
+just package
+sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
+```
+
+`just package` builds the package with `makepkg` (from `packaging/arch/PKGBUILD`) and prints the
+path of the file it made as its last line; that file is what `pacman -U` installs. The version
+names the commit it was built from, such as `0.1.0.r231.g1a2b3c4` (the workspace version, the number
+of commits and the commit). The build needs the tools and libraries of
+[Build from source](#build-from-source); makepkg names any package that is missing, and
+`just package` never installs anything itself. The first build takes about four minutes. Everything it makes stays
+in `~/.cache/4x4-pkg` (crates come from cargo's own cache, `~/.cargo`): the build dir keeps the
+compiled crates, about 2 GiB, so later builds are faster, and all of it is safe to delete.
+
+The package is always built from the commits of the local `master` branch: not from the working
+tree, so uncommitted changes are left out, and not from the branch checked out; the first line
+`just package` prints names the commit it builds. The package installs `/usr/bin/4x4`, its desktop file in
+`/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
+application menu with its icon at once, without logging out.
+
+To update, bring `master` up to date and run the same two commands again; pacman replaces the
+installed version:
+
+```bash
+git switch master
+git pull
+just package
+sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
+```
+
+To uninstall, run `sudo pacman -R 4x4-git`. Your `config.toml`, `state.toml` and logs stay (see
+[Files and logs](#files-and-logs)).
+
+The installed 4x4 and a debug build (`just run`) run side by side. The debug build has its own app
+id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links to the other, and
+window rules for the one never catch the other. But both read the same `config.toml` and write the
+same `state.toml` and log: whichever saves last decides the window size, columns and filter the next
+start remembers.
+
+The icon, `packaging/linux/io.github.lexy898.FourByFour.svg`, is a placeholder for now. It is one
+SVG, installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small
+sizes would be installed under the same name into `16x16/apps`, `22x22/apps`, `24x24/apps` and
+`32x32/apps` of `hicolor` too, four more `install` lines in the PKGBUILD's `package()`; KDE takes
+the icon of a fixed size when one matches the size it draws, and the scalable one for every other.
+
 ## The main window
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing

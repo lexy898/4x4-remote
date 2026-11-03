@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Placeholder: a tile with a 2 by 2 grid of pieces, one of them active. Every edge falls on
+       a whole pixel at 16 px, so the 16 px icon is sharp and larger sizes are exact multiples. -->
+  <rect width="16" height="16" rx="3" fill="#2f6fd6"/>
+  <rect x="3" y="3" width="4" height="4" rx="1" fill="#ffffff"/>
+  <rect x="9" y="3" width="4" height="4" rx="1" fill="#ffffff"/>
+  <rect x="3" y="9" width="4" height="4" rx="1" fill="#ffffff"/>
+  <rect x="9" y="9" width="4" height="4" rx="1" fill="#57d38c"/>
+</svg>

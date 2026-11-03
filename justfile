@@ -82,6 +82,22 @@ run *args:
 release:
     cargo build -p x4-app --release --locked
 
+# Build the Arch package of the committed master branch (never the working tree or another branch) under ~/.cache/4x4-pkg and print its path; install it with `sudo pacman -U <path>`.
+package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "building master: $(git log -1 --format='%h %s' master)"
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/4x4-pkg"
+    mkdir -p "$cache/build" "$cache/sources" "$cache/packages"
+    # makepkg rewrites pkgver= in the PKGBUILD it runs, so it runs a copy, and master's, as the
+    # sources it builds are.
+    git show master:packaging/arch/PKGBUILD >"$cache/PKGBUILD"
+    cd "$cache"
+    export X4_REPO="{{justfile_directory()}}" BUILDDIR="$cache/build" \
+        SRCDEST="$cache/sources" PKGDEST="$cache/packages"
+    makepkg --force
+    makepkg --packagelist
+
 # The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N), `--extend K` (then Shift+Down K times), `--right-click` (then right-click row N), `--press KEY` (press a key, repeatable, one every 3 s).
 demo-synthetic *args:
     RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
