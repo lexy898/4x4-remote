@@ -1,0 +1,341 @@
+//! The form of the add dialog for one torrent or magnet link, and the check that gates Add.
+
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use x4_rpc::{
+    AddSource, DownloadDir, DownloadDirError, HashString, MagnetError, MagnetLink, TorrentAdd,
+};
+
+use super::choice::FileChoice;
+use crate::files::{FileTree, NodeKey};
+use crate::metainfo::{MetainfoError, ParsedTorrent, parse_torrent};
+use crate::snapshot::Snapshot;
+
+/// The head of the [`AddQueue`](super::AddQueue) once it is read: the app reads a `.torrent`
+/// file, and [`LoadedItem::torrent`] parses it.
+///
+/// Its `Debug` shows a `.torrent` by its path, hash and length: its content names the trackers,
+/// whose addresses can carry passkeys.
+#[derive(Clone)]
+pub enum LoadedItem {
+    /// A `.torrent` file, read and parsed.
+    ///
+    /// It is made only by [`LoadedItem::torrent`], so `parsed` is always the parse of `bytes`:
+    /// the files the user leaves out are counted in the very bytes that are sent. Another crate
+    /// cannot pair a parse with other bytes:
+    ///
+    /// ```compile_fail,E0639
+    /// # use std::sync::Arc;
+    /// # fn pair(parsed: x4_core::ParsedTorrent) -> x4_core::LoadedItem {
+    /// x4_core::LoadedItem::Torrent {
+    ///     path: "/home/user/t.torrent".into(),
+    ///     parsed,
+    ///     bytes: Arc::from(&b"other bytes"[..]),
+    /// }
+    /// # }
+    /// ```
+    #[non_exhaustive]
+    Torrent {
+        /// The file it was read from.
+        path: PathBuf,
+        /// What `bytes` hold, as the daemon will read them.
+        parsed: ParsedTorrent,
+        /// The content of the file, exactly as parsed. It is sent as it is.
+        bytes: Arc<[u8]>,
+    },
+    /// A magnet link; `None` for the magnet form with an empty link, which the user fills in.
+    Magnet(Option<MagnetLink>),
+}
+
+impl LoadedItem {
+    /// The `.torrent` file read from `path`, whose content is `bytes`, parsed strictly by
+    /// [`parse_torrent`].
+    ///
+    /// # Errors
+    ///
+    /// The [`MetainfoError`] of [`parse_torrent`] when the daemon could not add the file.
+    pub fn torrent(path: PathBuf, bytes: Arc<[u8]>) -> Result<Self, MetainfoError> {
+        let parsed = parse_torrent(&bytes)?;
+        Ok(Self::Torrent {
+            path,
+            parsed,
+            bytes,
+        })
+    }
+}
+
+impl fmt::Debug for LoadedItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Torrent {
+                path,
+                parsed,
+                bytes,
+            } => f
+                .debug_struct("Torrent")
+                .field("path", path)
+                .field("hash", &parsed.hash)
+                .field("len", &bytes.len())
+                .finish_non_exhaustive(),
+            Self::Magnet(link) => f.debug_tuple("Magnet").field(link).finish(),
+        }
+    }
+}
+
+/// Whether the form can be sent, and what is sent; the app enables Add only for
+/// [`Ready`](Self::Ready).
+///
+/// [`AddForm::check`] looks at the form in this order and gives the first reason it finds:
+/// [`NotConnected`](Self::NotConnected), [`AlreadyInList`](Self::AlreadyInList),
+/// [`BadLink`](Self::BadLink), [`BadFolder`](Self::BadFolder), then
+/// [`NothingWanted`](Self::NothingWanted).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddCheck {
+    /// Add sends this request.
+    Ready(TorrentAdd),
+    /// No file that is shown is wanted: the torrent would download nothing.
+    NothingWanted,
+    /// The folder is not one the daemon can download into.
+    BadFolder(DownloadDirError),
+    /// The text of the magnet form is not a magnet link the daemon can add.
+    BadLink(MagnetError),
+    /// The daemon has this torrent already, so nothing is sent; the dialog offers to show it.
+    AlreadyInList(HashString),
+    /// The daemon is not connected; the form is kept until it is.
+    NotConnected,
+}
+
+/// The form of the add dialog for one item of the queue.
+///
+/// For a `.torrent` it holds the parse, the bytes to send and the choice of files; for a magnet
+/// link, the link the user typed or the one that came. Both have the folder and "Start
+/// immediately". Its `Debug` shows neither the content of the file nor the link.
+pub struct AddForm {
+    source: Source,
+    /// The folder as the user typed or picked it.
+    folder: String,
+    start: bool,
+}
+
+/// What the form adds.
+enum Source {
+    Torrent {
+        path: PathBuf,
+        name: String,
+        hash: HashString,
+        bytes: Arc<[u8]>,
+        /// `None` when the torrent can be added only with all its files.
+        choice: Option<FileChoice>,
+    },
+    Magnet(Result<MagnetLink, MagnetError>),
+}
+
+impl AddForm {
+    /// The form for `item`, with the folder `folder` and "Start immediately" set to `start`.
+    ///
+    /// A `.torrent` starts with every file wanted. One whose files the daemon could number
+    /// otherwise ([`ParsedTorrent::files`] is `None`) has no choice of files and is added with
+    /// all of them. The magnet form of `LoadedItem::Magnet(None)` starts with an empty link.
+    #[must_use]
+    pub fn new(item: LoadedItem, folder: String, start: bool) -> Self {
+        let source = match item {
+            LoadedItem::Torrent {
+                path,
+                parsed,
+                bytes,
+            } => Source::Torrent {
+                path,
+                name: parsed.name,
+                choice: parsed
+                    .files
+                    .map(|files| FileChoice::new(parsed.hash.clone(), files)),
+                hash: parsed.hash,
+                bytes,
+            },
+            LoadedItem::Magnet(link) => Source::Magnet(link.ok_or(MagnetError::Empty)),
+        };
+        Self {
+            source,
+            folder,
+            start,
+        }
+    }
+
+    /// The tree of the files to choose from, whose checkboxes show the choice: `None` for a
+    /// magnet link, whose files are known only once its metadata arrives, and for a `.torrent`
+    /// that can be added only with all its files.
+    #[must_use]
+    pub fn tree(&self) -> Option<&FileTree> {
+        match &self.source {
+            Source::Torrent {
+                choice: Some(choice),
+                ..
+            } => Some(choice.tree()),
+            Source::Torrent { choice: None, .. } | Source::Magnet(_) => None,
+        }
+    }
+
+    /// Applies a click on the checkbox of the node `key` of the [`tree`](Self::tree): its files
+    /// become wanted, or not wanted when all of them are. A folder takes its padding files with
+    /// it, as in the details panel. Nothing changes for a key that is not a node of the tree, or
+    /// when there is no tree.
+    pub fn toggle_wanted(&mut self, key: &NodeKey) {
+        if let Source::Torrent {
+            choice: Some(choice),
+            ..
+        } = &mut self.source
+        {
+            choice.toggle(key);
+        }
+    }
+
+    /// Sets the folder to download into, as the user typed or picked it. It is checked by
+    /// [`check`](Self::check) and [`folder`](Self::folder).
+    pub fn set_folder(&mut self, folder: String) {
+        self.folder = folder;
+    }
+
+    /// Sets "Start immediately".
+    pub fn set_start(&mut self, start: bool) {
+        self.start = start;
+    }
+
+    /// Sets the text of the magnet form's link field, which [`MagnetLink::parse`] checks. A
+    /// `.torrent`'s form has no link, and ignores it.
+    pub fn set_link(&mut self, link: &str) {
+        if let Source::Magnet(current) = &mut self.source {
+            *current = MagnetLink::parse(link);
+        }
+    }
+
+    /// The torrent's name as the daemon will show it: the `.torrent`'s name, or the magnet link's
+    /// display name. `None` when it has none, or the link is not valid.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        match &self.source {
+            Source::Torrent { name, .. } => Some(name.as_str()).filter(|name| !name.is_empty()),
+            Source::Magnet(link) => link.as_ref().ok().and_then(MagnetLink::name),
+        }
+    }
+
+    /// The `.torrent` file the form was read from; `None` for a magnet link.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        match &self.source {
+            Source::Torrent { path, .. } => Some(path),
+            Source::Magnet(_) => None,
+        }
+    }
+
+    /// Whether this is the magnet form, which has a link field and no choice of files.
+    #[must_use]
+    pub fn is_magnet(&self) -> bool {
+        matches!(self.source, Source::Magnet(_))
+    }
+
+    /// The folder to download into, checked and normalized; the app asks for its free space.
+    ///
+    /// # Errors
+    ///
+    /// The [`DownloadDirError`] of [`DownloadDir::new`] when the daemon could not use the folder.
+    pub fn folder(&self) -> Result<DownloadDir, DownloadDirError> {
+        DownloadDir::new(&self.folder)
+    }
+
+    /// Whether "Start immediately" is set.
+    #[must_use]
+    pub fn start(&self) -> bool {
+        self.start
+    }
+
+    /// Whether Add may send the form, and the request it sends; `connected` tells whether the
+    /// daemon answers now.
+    ///
+    /// The checks come in this order, and the first that fails is the answer:
+    /// 1. [`AddCheck::NotConnected`], whatever the form holds.
+    /// 2. [`AddCheck::AlreadyInList`] when a torrent of `snapshot` has the info hash of the form,
+    ///    whatever else is wrong with it: nothing is sent for it.
+    /// 3. [`AddCheck::BadLink`], then [`AddCheck::BadFolder`]. A link that is not valid names no
+    ///    torrent, so it cannot be in the list.
+    /// 4. [`AddCheck::NothingWanted`] when no file shown is wanted.
+    ///
+    /// The request of [`AddCheck::Ready`]:
+    /// - sends a `.torrent` as the very bytes that were parsed, with `files_unwanted` from that
+    ///   parse: in ascending order, each index once and less than the number of files, and never
+    ///   all of them;
+    /// - sends a magnet link with no file choices at all, and a `.torrent` without a choice of
+    ///   files ([`tree`](Self::tree) is `None`) with all its files;
+    /// - names the folder, normalized, only when it is not the session's default folder. The
+    ///   daemon then uses its own default, as it does for every add without a folder. While the
+    ///   session is not known, the folder is always named;
+    /// - adds the torrent paused unless "Start immediately" is set, and sets no priorities.
+    ///
+    /// A `.torrent` is copied into the request, so call this when the form or the snapshot
+    /// changes, or when Add is pressed, rather than on every frame.
+    #[must_use]
+    pub fn check(&self, snapshot: &Snapshot, connected: bool) -> AddCheck {
+        if !connected {
+            return AddCheck::NotConnected;
+        }
+        let hash = match &self.source {
+            Source::Torrent { hash, .. } => hash,
+            Source::Magnet(Ok(link)) => link.hash(),
+            Source::Magnet(Err(error)) => return AddCheck::BadLink(*error),
+        };
+        if snapshot
+            .torrents
+            .iter()
+            .any(|torrent| torrent.hash == *hash)
+        {
+            return AddCheck::AlreadyInList(hash.clone());
+        }
+        let folder = match DownloadDir::new(&self.folder) {
+            Ok(folder) => folder,
+            Err(error) => return AddCheck::BadFolder(error),
+        };
+        let (source, files_unwanted) = match &self.source {
+            Source::Torrent { bytes, choice, .. } => {
+                let files_unwanted = match choice {
+                    Some(choice) if choice.nothing_wanted() => return AddCheck::NothingWanted,
+                    Some(choice) => choice.unwanted(),
+                    None => Vec::new(),
+                };
+                (AddSource::Metainfo(bytes.to_vec()), files_unwanted)
+            }
+            Source::Magnet(Ok(link)) => (AddSource::Magnet(link.clone()), Vec::new()),
+            Source::Magnet(Err(error)) => return AddCheck::BadLink(*error),
+        };
+        let default = snapshot
+            .session
+            .as_ref()
+            .and_then(|session| DownloadDir::new(&session.download_dir).ok());
+        let download_dir = (default.as_ref() != Some(&folder)).then_some(folder);
+        AddCheck::Ready(TorrentAdd {
+            source,
+            download_dir,
+            paused: !self.start,
+            files_unwanted,
+            priority_high: Vec::new(),
+            priority_low: Vec::new(),
+            sequential_download: None,
+        })
+    }
+}
+
+impl fmt::Debug for AddForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut form = f.debug_struct("AddForm");
+        match &self.source {
+            Source::Torrent { hash, bytes, .. } => {
+                form.field("torrent", hash).field("len", &bytes.len())
+            }
+            Source::Magnet(link) => form.field("magnet", link),
+        };
+        form.field("start", &self.start).finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests;

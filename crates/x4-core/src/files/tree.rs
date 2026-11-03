@@ -120,6 +120,15 @@ impl FileTree {
         self.top.is_empty()
     }
 
+    /// Whether a file that is shown is wanted; padding files do not count. `false` for an empty
+    /// tree.
+    pub(crate) fn wants_a_shown_file(&self) -> bool {
+        self.top
+            .iter()
+            .filter_map(|&index| self.nodes.get(index))
+            .any(|node| node.wanted != WantedState::None)
+    }
+
     /// Whether `key` names a node of this tree.
     #[must_use]
     pub fn contains(&self, key: &NodeKey) -> bool {
