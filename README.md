@@ -802,27 +802,34 @@ its target:
   0.24 ms (22 ms for the first), and the first 4x4 had queued the link 0.26 ms after the second
   began to claim. The rest is starting the process and its log.
 
-The add dialog on the 2000 files; the demo was measured 15 seconds after its start, 28 seconds for
-the five files, and the app after 5 seconds:
+The add dialog on the 2000 files, measured again once each file was read on a thread of its own;
+the demo was measured 15 seconds after its start, 28 seconds for the five files, and the app after
+5 seconds:
 
 | Metric                     | Demo, no dialog | Demo, dialog open | Demo, closed | Demo, 5 files opened and skipped | App, no dialog | App, dialog open |
 | -------------------------- | --------------- | ----------------- | ------------ | -------------------------------- | -------------- | ---------------- |
-| First frame                | 229 ms          | 233 ms            | 233 ms       | 237 ms                           | 219 ms         | 218 ms           |
-| Resident memory (RSS)      | 165.4 MiB       | 168.8 MiB         | 168.7 MiB    | 174.1 MiB                        | 145.1 MiB      | 148.9 MiB        |
-| Proportional memory (PSS)  | 81.3 MiB        | 84.8 MiB          | 84.7 MiB     | 90.1 MiB                         | 60.9 MiB       | 64.7 MiB         |
-| Unique memory (USS)        | 69.7 MiB        | 73.2 MiB          | 73.1 MiB     | 78.5 MiB                         | 49.3 MiB       | 53.1 MiB         |
-| Private memory (`RssAnon`) | 36.4 MiB        | 40.2 MiB          | 40.1 MiB     | 45.5 MiB                         | 16.0 MiB       | 19.3 MiB         |
+| First frame                | 299 ms          | 287 ms            | 260 ms       | 237 ms                           | 223 ms         | 219 ms           |
+| Resident memory (RSS)      | 166.0 MiB       | 168.2 MiB         | 168.3 MiB    | 171.9 MiB                        | 146.3 MiB      | 149.9 MiB        |
+| Proportional memory (PSS)  | 81.9 MiB        | 83.9 MiB          | 84.0 MiB     | 87.6 MiB                         | 62.0 MiB       | 65.6 MiB         |
+| Unique memory (USS)        | 70.4 MiB        | 72.4 MiB          | 72.6 MiB     | 76.1 MiB                         | 50.6 MiB       | 54.2 MiB         |
+| Private memory (`RssAnon`) | 36.4 MiB        | 40.1 MiB          | 40.1 MiB     | 41.9 MiB                         | 16.0 MiB       | 19.3 MiB         |
 | Threads                    | 33              | 33                | 33           | 33                               | 35             | 35               |
 
-- The dialog on 2000 files adds 3.3 to 3.8 MiB of private memory: the parse, the tree of the files
+- The dialog on 2000 files adds 3.3 to 3.7 MiB of private memory: the parse, the tree of the files
   and the rows it draws; the file itself is 168 KB.
-- Closing the dialog gives none of it back to the system, and five such files opened and skipped in
-  turn hold 5.5 MiB more than one. That is the memory allocator, not the files kept: each file is
-  read and parsed on a thread of GPUI's background pool, and glibc keeps an arena of freed memory
-  for each thread that allocates, for its next use. With one arena (`MALLOC_ARENA_MAX=1`, two runs
-  each) the demo held 29.0 MiB of private memory with no dialog, 31.9 MiB after one file opened and
-  skipped, and 31.5 MiB after five: each skipped file's bytes and tree are freed, and the next one
-  reuses the memory.
+- Closing the dialog gives none of it back to the system, since glibc keeps freed memory for its
+  next use, but nothing builds up per file: five such files opened and skipped in turn hold 1.8 MiB
+  more than one. glibc keeps an arena of freed memory for each thread that allocates. Each file is
+  read and parsed on a thread of its own, which ends with the read, and the next reader takes over
+  the arena the last one left, so the reads reuse the same memory; now and then another thread
+  takes that arena first, and the next reader makes one more. Read on GPUI's background pool, whose
+  threads never end, each file had kept an arena of its own, and five held 5.5 MiB more than one.
+  With a single arena for the whole app (`MALLOC_ARENA_MAX=1`, two runs each, measured then) the
+  demo held 29.0 MiB with no dialog, 31.9 MiB after one file and 31.5 MiB after five.
+- After a large add, which none of these runs made, glibc may keep some freed memory resident as
+  well: the service thread builds the request, the `.torrent` in base64 inside JSON, and its arena
+  keeps the freed buffers for the next request (a separate test of the same pattern kept 6.3 MiB
+  after a 16 MiB file); the memory is reused, not lost.
 
 The Files tab keeps its tree from one read of the details to the next while the torrent's files
 stay the same, which they do while it downloads: each read every 3 seconds only takes in the

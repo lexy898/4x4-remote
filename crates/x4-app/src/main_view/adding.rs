@@ -10,12 +10,13 @@
 //! Launch arguments 4x4 does not open make one notification, and a second launch raises the
 //! window.
 //!
-//! The head of the queue is read off the UI thread when its turn comes: a `.torrent` file only
-//! once `stat` says it is a regular file within the limit (the `adding` module of the crate). A
+//! The head of the queue is read off the UI thread when its turn comes: a `.torrent` file on a
+//! thread of its own, which ends with the read, and only once `stat` says it is a regular file
+//! within the limit (the `adding` module of the crate). A
 //! file that cannot be offered is skipped with a notification that names it and the reason, and
 //! does not count in the run. The dialog opens for a head that has been read, or after
 //! [`READ_GRACE`] for one whose read takes longer, to say so and let the user skip it: a read that
-//! never ends never holds the queue, and its thread is abandoned. While another dialog is open,
+//! never ends never holds the queue, and its thread is abandoned to it. While another dialog is open,
 //! the queue waits until that dialog closes, which tells the view ([`MainView::dialog_closed`]).
 //!
 //! Nothing is added without the user's Add. Add sends the dialog's request once and keeps it until
@@ -67,8 +68,19 @@ const RAISE_GRACE: Duration = Duration::from_millis(250);
 /// How the head of the queue is read, off the UI thread.
 pub(super) type ReadItem = fn(AddItem, &App) -> Task<Result<LoadedItem, LoadError>>;
 
-/// Reads `item` on the background executor. A read that never ends keeps its thread there.
-fn read_in_background(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
+/// Reads `item`: a `.torrent` file on a thread of its own (`adding::read_on_a_thread`), which a
+/// read that never ends keeps, and a magnet link, which needs no reading, at once.
+fn read_item(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
+    match item {
+        AddItem::File(_) => adding::read_on_a_thread(item, load, cx),
+        AddItem::Magnet(_) => Task::ready(load(item)),
+    }
+}
+
+/// Reads `item` on GPUI's background executor, which a read that never ends keeps a thread of.
+/// Under the executor of a test the read runs in its turn with every other task, where a thread of
+/// its own would end at a time of its own: [`MainView::read_adds_on_the_executor`].
+fn read_on_the_executor(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
     cx.background_executor().spawn(async move { load(item) })
 }
 
@@ -106,7 +118,7 @@ impl Default for Adds {
             queue: AddQueue::default(),
             dialog: None,
             reading: None,
-            read: read_in_background,
+            read: read_item,
             out: HashMap::new(),
             pending: PendingSelection::default(),
             last_notice: None,
@@ -172,6 +184,14 @@ impl MainView {
     #[must_use]
     pub fn add_requests(&self) -> &async_channel::Sender<AddRequest> {
         &self.adds.requests
+    }
+
+    /// Reads the `.torrent` files to add on GPUI's background executor from now on, instead of on
+    /// a thread of their own each. For tests: the executor of a test runs each read in its turn
+    /// with every other task, so a test sees the dialog as soon as it runs the tasks; a thread of
+    /// its own ends at a time of its own, and wakes the window from outside the test's executor.
+    pub fn read_adds_on_the_executor(&mut self) {
+        self.adds.read = read_on_the_executor;
     }
 
     /// What the newest notification about a torrent to add said: a file that cannot be offered,

@@ -1,5 +1,6 @@
 //! Adding torrents: the requests that the sources of adds send the main window ([`AddRequest`]),
-//! the reading of a `.torrent` file when its turn comes (the `requests` module), the file dialog
+//! the reading of a `.torrent` file when its turn comes (the `requests` module), on a thread of
+//! its own (the `reader` module), the file dialog
 //! that chooses `.torrent` files ([`FilePicker`], the `picker` module), and the add dialog that
 //! shows one torrent of the queue at a time (the `dialog` module), with its folder field
 //! (`folder_field`) and its choice of files (`file_choice`). The main window and the dialog are
@@ -15,6 +16,7 @@ mod drop_target;
 mod file_choice;
 mod folder_field;
 mod picker;
+mod reader;
 mod requests;
 
 pub(crate) use dialog::{AddDialog, AddDialogEvent, open};
@@ -23,5 +25,6 @@ pub(crate) use drop_target::{drop_highlight_layer, hover_while_dragging};
 pub(crate) use picker::PortalPicker;
 pub(crate) use picker::PromptPicker;
 pub use picker::{FilePicker, PickError, Picked};
+pub(crate) use reader::read_on_a_thread;
 pub use requests::{AddRequest, AddRequests, launch_requests};
 pub(crate) use requests::{LoadError, load};

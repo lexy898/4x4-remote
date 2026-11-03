@@ -250,6 +250,8 @@ impl Window {
             .expect("the main window opens");
         cx.update_window(handle, |_, window, _| window.activate_window())
             .expect("the window is open");
+        // Each read in its turn among the test's tasks; the reader thread has its own tests.
+        cx.update(|cx| view.update(cx, |view, _| view.read_adds_on_the_executor()));
         // The window's own channel, which its sources inside send into.
         let adds = cx.update(|cx| view.read(cx).add_requests().clone());
         cx.run_until_parked();
