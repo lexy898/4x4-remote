@@ -23,8 +23,10 @@ pub struct HttpRequest<'a> {
     pub body: &'a [u8],
     /// The `X-Transmission-Session-Id` to send, if one is known.
     pub session_id: Option<&'a str>,
-    /// How long this request may take in place of the transport's own timeout, from connecting
-    /// to the last byte of the response; `None` keeps the transport's.
+    /// How long this request may take in place of the transport's own timeout, from the host
+    /// lookup to the last byte of the response; `None` keeps the transport's. Looking up the host
+    /// and connecting still get only the transport's timeout: running out of it there is a
+    /// [`TransportError::Connect`], since nothing was sent.
     pub timeout: Option<Duration>,
 }
 
@@ -45,7 +47,9 @@ pub enum TransportError {
     /// The request did not complete within the configured timeout.
     #[error("the request timed out")]
     Timeout,
-    /// No connection to the server: refused, unreachable, unknown host or invalid URL.
+    /// No connection to the server: refused, unreachable, unknown host or invalid URL; for a
+    /// request with a [timeout of its own](HttpRequest::timeout), also a host lookup or a
+    /// connection that took longer than the transport's timeout.
     #[error("cannot connect to the server: {0}")]
     Connect(String),
     /// The connection failed while sending the request or reading the response.
@@ -74,6 +78,9 @@ pub trait Transport: Send {
 pub struct UreqTransport {
     agent: ureq::Agent,
     url: String,
+    /// The timeout of every request, and of the host lookup and connecting of a request with a
+    /// longer one.
+    timeout: Duration,
 }
 
 impl UreqTransport {
@@ -100,6 +107,7 @@ impl UreqTransport {
         Self {
             agent,
             url: url.to_owned(),
+            timeout,
         }
     }
 }
@@ -139,18 +147,34 @@ impl Transport for UreqTransport {
         if let Some(session_id) = request.session_id {
             builder = builder.header(SESSION_ID_HEADER, session_id);
         }
-        if let Some(timeout) = request.timeout {
-            // A copy of the agent's configuration for this request only.
-            builder = builder.config().timeout_global(Some(timeout)).build();
-        }
-        let mut response = builder.send(request.body).map_err(transport_error)?;
+        let budget = match request.timeout {
+            Some(timeout) => {
+                // A copy of the agent's configuration for this request only. A request waits
+                // long for the server to read it, not to be connected: a server that does not
+                // take the connection in the usual time is as unreachable as for any other call.
+                builder = builder
+                    .config()
+                    .timeout_global(Some(timeout))
+                    .timeout_resolve(Some(self.timeout))
+                    .timeout_connect(Some(self.timeout))
+                    .build();
+                Budget::Long
+            }
+            None => Budget::Whole,
+        };
+        let mut response = builder
+            .send(request.body)
+            .map_err(|error| transport_error(error, budget))?;
         let session_id = response
             .headers()
             .get(SESSION_ID_HEADER)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let status = response.status().as_u16();
-        let body = response.body_mut().read_to_vec().map_err(transport_error)?;
+        let body = response
+            .body_mut()
+            .read_to_vec()
+            .map_err(|error| transport_error(error, budget))?;
         Ok(HttpResponse {
             status,
             session_id,
@@ -159,8 +183,27 @@ impl Transport for UreqTransport {
     }
 }
 
-fn transport_error(error: ureq::Error) -> TransportError {
+/// How a request's time is budgeted, which tells what running out of it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Budget {
+    /// The transport's one timeout for the whole request: running out of it in any phase is a
+    /// timeout.
+    Whole,
+    /// A longer timeout of the request's own, with the host lookup and connecting still held to
+    /// the transport's timeout.
+    Long,
+}
+
+fn transport_error(error: ureq::Error, budget: Budget) -> TransportError {
     match error {
+        // Only a long request has budgets of its own for these, so only there does running out
+        // of one say for sure that nothing was sent. A whole budget that runs out while
+        // connecting is reported either way, whichever deadline ureq meets first.
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect)
+            if budget == Budget::Long =>
+        {
+            TransportError::Connect(error.to_string())
+        }
         ureq::Error::Timeout(_) => TransportError::Timeout,
         ureq::Error::Io(io) if io.kind() == io::ErrorKind::TimedOut => TransportError::Timeout,
         ureq::Error::Io(io) if is_connect_error(io.kind()) => {
@@ -194,7 +237,11 @@ mod tests {
 
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
     use std::thread::{self, JoinHandle};
+    use std::time::Instant;
+
+    use ureq::Timeout;
 
     use super::*;
 
@@ -435,5 +482,151 @@ mod tests {
                     .to_owned()
             ))
         );
+    }
+
+    /// The time budgets one host lookup was given: the request's whole, its lookup and its
+    /// connect budget, and which of them the lookup's own deadline is.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Budgets {
+        global: Option<Duration>,
+        resolve: Option<Duration>,
+        connect: Option<Duration>,
+        lookup_deadline: Timeout,
+    }
+
+    /// Records the budgets of each lookup, then resolves as the default resolver does. The test
+    /// URLs hold an IP address, so nothing is looked up on the network.
+    #[derive(Debug, Clone, Default)]
+    struct RecordingLookup(Arc<Mutex<Vec<Budgets>>>);
+
+    impl Resolver for RecordingLookup {
+        fn resolve(
+            &self,
+            uri: &Uri,
+            config: &Config,
+            timeout: NextTimeout,
+        ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+            let timeouts = config.timeouts();
+            self.0.lock().unwrap().push(Budgets {
+                global: timeouts.global,
+                resolve: timeouts.resolve,
+                connect: timeouts.connect,
+                lookup_deadline: timeout.reason,
+            });
+            DefaultResolver::default().resolve(uri, config, timeout)
+        }
+    }
+
+    /// The budgets of the one request posted to a one-shot server with `timeout`.
+    fn budgets_of(timeout: Option<Duration>) -> Vec<Budgets> {
+        let (url, server) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        let lookups = RecordingLookup::default();
+        let transport = UreqTransport::with_resolver(&url, TIMEOUT, lookups.clone());
+
+        let response = transport.post(&HttpRequest {
+            body: b"{}",
+            session_id: None,
+            timeout,
+        });
+
+        assert_eq!(response.map(|response| response.status), Ok(200));
+        server.join().unwrap();
+        lookups.0.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a_long_request_still_looks_up_and_connects_within_the_transport_timeout() {
+        assert_eq!(
+            budgets_of(Some(Duration::from_secs(60))),
+            [Budgets {
+                global: Some(Duration::from_secs(60)),
+                resolve: Some(TIMEOUT),
+                connect: Some(TIMEOUT),
+                lookup_deadline: Timeout::Resolve,
+            }]
+        );
+        // Every other request keeps one budget for the whole of it.
+        assert_eq!(
+            budgets_of(None),
+            [Budgets {
+                global: Some(TIMEOUT),
+                resolve: None,
+                connect: None,
+                lookup_deadline: Timeout::Global,
+            }]
+        );
+    }
+
+    /// A lookup that never finishes: it gives up when its deadline comes, as the default
+    /// resolver does.
+    #[derive(Debug)]
+    struct StalledLookup;
+
+    impl Resolver for StalledLookup {
+        fn resolve(
+            &self,
+            _uri: &Uri,
+            _config: &Config,
+            timeout: NextTimeout,
+        ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+            thread::sleep(*timeout.after);
+            Err(ureq::Error::Timeout(timeout.reason))
+        }
+    }
+
+    #[test]
+    fn a_long_request_that_cannot_connect_in_time_is_a_connect_error() {
+        let transport = UreqTransport::with_resolver(
+            "http://daemon.example:9091/transmission/rpc",
+            Duration::from_millis(100),
+            StalledLookup,
+        );
+        let post = |timeout| {
+            let started = Instant::now();
+            let response = transport.post(&HttpRequest {
+                body: b"{}",
+                session_id: None,
+                timeout,
+            });
+            (response, started.elapsed())
+        };
+
+        let (long, waited) = post(Some(Duration::from_secs(5)));
+        assert!(
+            matches!(long, Err(TransportError::Connect(_))),
+            "got {long:?}"
+        );
+        assert!(waited < Duration::from_secs(2), "waited {waited:?}");
+
+        // Every other request keeps its meaning: out of time is a timeout.
+        let (usual, _) = post(None);
+        assert_eq!(usual, Err(TransportError::Timeout));
+    }
+
+    #[test]
+    fn only_a_long_request_reads_a_lookup_or_connect_timeout_as_no_connection() {
+        let read = |timeout: Timeout, budget: Budget| {
+            transport_error(ureq::Error::Timeout(timeout), budget)
+        };
+
+        for timeout in [Timeout::Resolve, Timeout::Connect] {
+            assert_eq!(
+                read(timeout, Budget::Long),
+                TransportError::Connect(format!("timeout: {timeout}"))
+            );
+            assert_eq!(read(timeout, Budget::Whole), TransportError::Timeout);
+        }
+        for timeout in [
+            Timeout::Global,
+            Timeout::PerCall,
+            Timeout::SendRequest,
+            Timeout::SendBody,
+            Timeout::RecvResponse,
+            Timeout::RecvBody,
+        ] {
+            assert_eq!(read(timeout, Budget::Long), TransportError::Timeout);
+            assert_eq!(read(timeout, Budget::Whole), TransportError::Timeout);
+        }
     }
 }

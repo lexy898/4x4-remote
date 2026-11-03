@@ -19,7 +19,9 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// An add sends the whole `.torrent` file: up to 16 MiB become about 21 MiB of base64, which
 /// take several seconds over Wi-Fi to a Raspberry Pi, and the daemon decodes, parses, hashes and
 /// stores them before it answers, with every other request waiting. Running out of this time
-/// does not tell whether the torrent was added.
+/// does not tell whether the torrent was added. Looking up the host and connecting still get
+/// only the transport's timeout, so a daemon that does not take the connection fails as fast as
+/// for any other call, with [`TransportError::Connect`](crate::TransportError::Connect).
 pub const ADD_TIMEOUT: Duration = Duration::from_secs(60);
 
 const JSONRPC_VERSION: &str = "2.0";
