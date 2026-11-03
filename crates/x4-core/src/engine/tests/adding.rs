@@ -2,7 +2,7 @@
 //! [`Event::ActionFinished`], and an add that gets no answer within its long timeout leaves the
 //! connection as it is.
 
-use x4_rpc::{AddOutcome, AddedTorrent};
+use x4_rpc::{ADD_TIMEOUT, AddOutcome, AddedTorrent};
 
 use super::*;
 
@@ -120,6 +120,33 @@ fn an_add_that_times_out_is_unconfirmed_and_keeps_the_connection() {
         hand_out(&mut engine, base + ms(1500)),
         [Request::RecentlyActive, Request::SessionStats]
     );
+}
+
+#[test]
+fn the_lists_that_tell_whether_an_unconfirmed_add_was_added_are_read_at_once() {
+    let base = Instant::now();
+    let now = base + ms(500);
+    let mut engine = adding(base, now, 40);
+    // The worker waits for the add as long as it may, and polls nothing meanwhile.
+    let answered = now + ADD_TIMEOUT;
+
+    let events = respond(&mut engine, answered, &add_request(40), Err(timeout()));
+
+    assert_eq!(events, [add_finished(40, Err(AddError::Unconfirmed))]);
+    let due = hand_out(&mut engine, answered);
+    // Every poll is overdue. The whole list, which holds the recently active torrents too, is
+    // what shows the torrent if the daemon added it; nothing checks the server again.
+    assert_eq!(
+        due,
+        [
+            Request::SessionGet,
+            Request::FullList,
+            Request::SessionStats,
+            Request::FreeSpace(DOWNLOAD_DIR.to_owned()),
+        ]
+    );
+    assert!(!due.contains(&Request::CheckServer));
+    assert_eq!(engine.connection, ConnectionState::Connected);
 }
 
 #[test]
