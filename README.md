@@ -808,27 +808,40 @@ contain it.
 `just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` and `crates/x4-core/tests/live.rs`
 against a real Transmission 4.1+ daemon; `just test` and `just check` skip them. They never touch
 existing torrents or the daemon's settings. One test only reads the server version. Each of the
-others writes the data of a torrent of its own into a test directory, a random 3 MiB file or a
-folder of three random files of a few KiB, adds it as a trackerless torrent, works only on that
-torrent (stop, start, start now, verify, reannounce, sequential download on and off, which files are
-downloaded and their priorities, a file index past the last file, which the daemon refuses, adding
-it twice), and removes it together with its data. One removes it from the list only, checks that the
-daemon kept the file, and then deletes the file itself. The test of x4-core reads the details of its
-torrent as the app does, in full and then only their progress, with and without the trackers, and
-checks that the app understands every answer. Every test checks that every other torrent kept its
-status, sequential mode, file priorities and wanted files. The torrent and its data are removed even
-when a test fails.
+others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a few
+KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
+start, start now, verify, reannounce, sequential download on and off, which files are downloaded and
+their priorities, a file index past the last file, which the daemon refuses, adding it twice), and
+removes it together with its data. Most write the data into the test directory first. Some do not:
+they add their torrent paused, or by a magnet link of it, and the daemon then has none of its data.
+One removes its torrent from the list only, checks that the daemon kept the file, and then deletes
+the file itself. The tests of x4-core read the details of their torrent as the app does, in full and
+then only their progress, with and without the trackers, and check that the app understands every
+answer; and they add a torrent as the add dialog does, with its second file unchecked, and check
+that the daemon numbers the files in the order 4x4 read them from the `.torrent`, which is not the
+order of their names, with only that file left out. The tests of adding check that a torrent added
+paused stays stopped, though all its data is there; that adding it again, started, into another
+folder and with another file left out, is a duplicate that changes nothing; that a folder that does
+not exist yet, `4x4-live-new-<hex>` in the test directory, is kept as it was sent and made only
+when the torrent starts; and that a magnet link of a torrent of the test's own is added and listed,
+paused and without its metadata. Every test checks that every other torrent kept its status,
+sequential mode, file priorities and wanted files, and prints how many torrents the daemon lists
+when it starts and once it has removed its own. The torrent and its data are removed even when a
+test fails, and only from the folder it was added to: the test directory, or the folder of its own
+that the daemon made directly in it, exactly as the daemon reports it, and never from a folder whose
+name holds a control character.
 
 An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and the
 data of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with its
 data at <path>`). To recover, remove the torrent with that hash in any Transmission client, choosing
 to delete its local data. If no such line was printed, the run most likely stopped before the
 torrent was added: delete the `4x4-live-<hex>.bin` file or the `4x4-live-<hex>` folder from the test
-directory instead. The next run refuses to start while any torrent downloads into the test
-directory, so a leftover torrent cannot go unnoticed; remove it the same way. The test that removes
-its torrent from the list only, keeping the file, may be interrupted after the removal: then the
-daemon no longer has the torrent, and the file stays. Delete by hand the file named on its `live
-test: added torrent …` line.
+directory instead. A `4x4-live-new-<hex>` folder left there is a test's own, and can be deleted once
+no torrent downloads into it. The next run refuses to start while any torrent downloads into the
+test directory or a folder in it, so a leftover torrent cannot go unnoticed; remove it the same way.
+The test that removes its torrent from the list only, keeping the file, may be interrupted after the
+removal: then the daemon no longer has the torrent, and the file stays. Delete by hand the file
+named on its `live test: added torrent …` line.
 
 The test directory is one directory seen from both sides: the daemon reads it under one path and
 this machine writes to it under another (for example over NFS), so both must be able to write

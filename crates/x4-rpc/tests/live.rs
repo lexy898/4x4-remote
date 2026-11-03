@@ -2,15 +2,17 @@
 //!
 //! They act on nothing but a torrent they create themselves: a random file, or a folder of a few
 //! small random files, written into a dedicated test directory (`X4_LIVE_LOCAL_DIR`, the same
-//! directory the daemon sees as `X4_LIVE_REMOTE_DIR`) and added as a trackerless torrent. Every
-//! request that changes a torrent names that torrent by the info hash of the metainfo the test
-//! built, once `torrent_add` has confirmed it; `session_set` is never called, and each test checks
-//! that every other torrent kept its status, sequential mode, file priorities and wanted files. A
-//! drop guard removes the test torrent with its data, the local files and the directories it
-//! created on every path, including a failed assertion. One test removes its torrent keeping the
-//! data, checks that the file stayed, and deletes it itself; a guard of the file deletes it on
-//! every path too. An interrupted run skips the guards, so each new torrent is named on stderr as
-//! soon as it is added.
+//! directory the daemon sees as `X4_LIVE_REMOTE_DIR`) and added as a trackerless torrent. Some
+//! write no data: a paused torrent of data nobody has, or its magnet link; one downloads into a
+//! folder of its own directly in the test directory, which does not exist yet and which the
+//! daemon makes when the torrent starts. Every request that changes a torrent names that torrent
+//! by the info hash of the metainfo the test built, once `torrent_add` has confirmed it;
+//! `session_set` is never called, and each test checks that every other torrent kept its status,
+//! sequential mode, file priorities and wanted files. A drop guard removes the test torrent with
+//! its data, the local files and the directories it created on every path, including a failed
+//! assertion. One test removes its torrent keeping the data, checks that the file stayed, and
+//! deletes it itself; a guard of the file deletes it on every path too. An interrupted run skips
+//! the guards, so each new torrent is named on stderr as soon as it is added.
 //!
 //! One test only reads: it looks for a few of the daemon's own torrents that have trackers and
 //! reads their details as the details panel does (the `tracker_entries` module), so that real
@@ -33,16 +35,18 @@ mod support_tests;
 #[path = "live/tracker_entries.rs"]
 mod tracker_entries;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use metainfo::random_seed;
 use support::{
-    FILE_SIZE, LiveEnv, MULTI_FILES, TestTorrent, assert_others_unchanged, file_is_gone, file_size,
-    others_fingerprint, torrent_by_hash, wait_until,
+    FILE_SIZE, LiveEnv, MULTI_FILES, OwnTorrent, TestFolder, TestTorrent, assert_others_unchanged,
+    file_is_gone, file_size, folder_exists, others_fingerprint, torrent_by_hash, wait_until,
 };
 use tracker_entries::{WITH_TRACKERS, listed_hashes, read_and_check, with_trackers};
 use x4_rpc::{
-    AddOutcome, Client, FilePriority, GetIds, RpcError, Status, TorrentAction, TorrentField,
-    TorrentSelection, TorrentSet, UreqTransport,
+    AddOutcome, AddSource, Client, FilePriority, GetIds, RpcError, Status, TorrentAction,
+    TorrentAdd, TorrentField, TorrentSelection, TorrentSet, UreqTransport,
 };
 
 const STOPPED_AFTER_STOP: Duration = Duration::from_secs(10);
@@ -62,6 +66,28 @@ const FILE_FIELDS: &[TorrentField] = &[
 ];
 /// The JSON-RPC error code of a file index past the torrent's last file (`FILE_IDX_OOR`).
 const FILE_INDEX_OUT_OF_RANGE: i64 = 6;
+/// How long a new paused torrent may take to check its data and settle as stopped.
+const CHECKED_AFTER_ADD: Duration = Duration::from_secs(60);
+/// How long a torrent that must not start is watched, to see that it does not.
+const STAYS_STOPPED_FOR: Duration = Duration::from_secs(3);
+/// How long the daemon may take to make the folder of a torrent that starts.
+const FOLDER_AFTER_START: Duration = Duration::from_secs(30);
+/// How long a file the daemon made may take to show on this machine's mount.
+const SHOWS_HERE: Duration = Duration::from_secs(10);
+/// The files of the torrent that downloads into a new folder: an empty one, which the daemon
+/// makes as soon as the torrent starts, and one of data that nobody has.
+const EMPTY_AND_DATA: [(&str, usize); 2] = [("empty.bin", 0), ("data.bin", 16 * 1024)];
+/// The one file of the torrent added from a magnet link, of data that nobody has.
+const MAGNET_FILES: [(&str, usize); 1] = [("data.bin", 16 * 1024)];
+
+/// Whether `status` is that of a torrent that runs or waits to run, which one added paused must
+/// never show.
+fn is_started(status: Status) -> bool {
+    matches!(
+        status,
+        Status::DownloadWait | Status::Downloading | Status::SeedWait | Status::Seeding
+    )
+}
 
 /// Whether each file of `torrent` is wanted, and its priority, as the daemon has them.
 fn files_of(
@@ -449,4 +475,210 @@ fn real_tracker_stats_parse_on_the_daemons_torrents() {
         eprintln!("{what}: {tally}");
         assert!(tally.entries > 0, "{what}: no tracker entry was parsed");
     }
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn a_paused_add_stays_stopped() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    // All of its data is there, so a torrent that started would seed: only `paused` stops it.
+    let own = OwnTorrent::multi_file(&mut client, &env);
+    let request = own.metainfo_request(true, Vec::new());
+    let torrent = TestTorrent::add(&mut client, &env, own, &request);
+    let hash = torrent.hash().clone();
+
+    // The daemon checks a new torrent's data, or takes files older than the add for complete:
+    // either way it then knows that all of it is there.
+    let (checked, mut seen) = torrent.wait_until(&mut client, CHECKED_AFTER_ADD, |record| {
+        record.status == Some(Status::Stopped)
+            && record.percent_done.is_some_and(|done| done >= 1.0)
+    });
+    seen.extend(torrent.statuses_for(&mut client, STAYS_STOPPED_FOR));
+
+    assert!(
+        !seen.iter().copied().any(is_started),
+        "the paused torrent ran: {seen:?}; checked: {checked:?}"
+    );
+    assert_eq!(seen.last(), Some(&Status::Stopped), "{seen:?}");
+    assert_others_unchanged(&mut client, Some(&hash), &before);
+    torrent.remove_with_data(&mut client);
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+    assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn adding_the_same_torrent_again_is_a_duplicate_and_changes_nothing() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    let own = OwnTorrent::unwritten(
+        &mut client,
+        &env,
+        TestFolder::test_dir(&env.remote_dir),
+        &MULTI_FILES,
+    );
+    let first = own.metainfo_request(true, vec![1]);
+    // The same content again, as when the same file is opened twice.
+    let content: Arc<[u8]> = Arc::from(own.bytes());
+    let torrent = TestTorrent::add(&mut client, &env, own, &first);
+    let hash = torrent.hash().clone();
+    let own = Some(&hash);
+    let added = torrent.wait_for(&mut client, Status::Stopped, CHECKED_AFTER_ADD);
+    let files = files_of(&torrent, &mut client);
+    assert_eq!(files.0, [true, false, true]);
+
+    // The same metainfo, into another folder of this run, started, with another file left out:
+    // the daemon takes none of it.
+    let elsewhere = TestFolder::new_subfolder(&env.remote_dir, random_seed());
+    let again = TorrentAdd {
+        source: AddSource::Metainfo(content),
+        download_dir: Some(elsewhere.remote().clone()),
+        paused: false,
+        files_unwanted: vec![0],
+        priority_high: Vec::new(),
+        priority_low: Vec::new(),
+        sequential_download: None,
+    };
+    let outcome = torrent
+        .add_again(&mut client, &again, &elsewhere)
+        .expect("the second torrent_add failed");
+
+    match outcome {
+        AddOutcome::Duplicate(duplicate) => {
+            assert_eq!(duplicate.hash, hash);
+            assert_eq!(duplicate.id, torrent.id());
+        }
+        AddOutcome::Added(added) => panic!("the same metainfo was added twice: {added:?}"),
+    }
+    let seen = torrent.statuses_for(&mut client, STAYS_STOPPED_FOR);
+    assert!(
+        !seen.iter().copied().any(is_started),
+        "the duplicate started the torrent: {seen:?}"
+    );
+    assert_eq!(
+        torrent.record(&mut client).download_dir,
+        added.download_dir,
+        "the duplicate moved the torrent"
+    );
+    assert_eq!(
+        files_of(&torrent, &mut client),
+        files,
+        "the duplicate changed the files"
+    );
+    assert_others_unchanged(&mut client, own, &before);
+
+    torrent.remove_with_data(&mut client);
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+    assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn a_missing_subfolder_of_the_test_dir_is_accepted_and_created_on_start() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    let folder = TestFolder::new_subfolder(&env.remote_dir, random_seed());
+    // `unwritten` asks the daemon first that the folder is not there.
+    let own = OwnTorrent::unwritten(&mut client, &env, folder.clone(), &EMPTY_AND_DATA);
+    let request = own.metainfo_request(true, Vec::new());
+    let torrent = TestTorrent::add(&mut client, &env, own, &request);
+    let hash = torrent.hash().clone();
+    let own = Some(&hash);
+
+    // The folder is kept as it was sent, and a paused torrent makes nothing.
+    let added = torrent.wait_for(&mut client, Status::Stopped, CHECKED_AFTER_ADD);
+    assert_eq!(
+        added.download_dir.as_deref(),
+        Some(folder.remote().as_str())
+    );
+    // Its check ends first: a start during the check waits for it, and then for the queue.
+    let seen = torrent.statuses_for(&mut client, STAYS_STOPPED_FOR);
+    assert!(!seen.iter().copied().any(is_started), "{seen:?}");
+    assert_eq!(
+        folder_exists(&mut client, &folder),
+        Ok(false),
+        "a paused add made the folder"
+    );
+
+    client
+        .torrent_action(TorrentAction::StartNow, &torrent.selection())
+        .expect("torrent_start_now failed");
+
+    // A torrent that starts makes its wanted empty files, and the folders they are in.
+    let mut last = None;
+    let made = wait_until(FOLDER_AFTER_START, || {
+        let exists = folder_exists(&mut client, &folder);
+        let made = exists == Ok(true);
+        last = Some(exists);
+        made
+    });
+    assert!(
+        made,
+        "the daemon did not make {:?} within {FOLDER_AFTER_START:?} of the start (last answer: \
+         {last:?}); the torrent: {:?}",
+        folder.remote(),
+        torrent.record(&mut client)
+    );
+    let empty = torrent.local_data().join("empty.bin");
+    assert!(
+        wait_until(SHOWS_HERE, || file_size(&empty).is_ok_and(|size| size == 0)),
+        "{} is not here",
+        empty.display()
+    );
+    assert_others_unchanged(&mut client, own, &before);
+
+    // The guard accepts exactly this run's folder, and removes it once it is empty.
+    torrent.remove_with_data(&mut client);
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+    assert!(file_is_gone(&empty), "{} is still there", empty.display());
+    assert_eq!(
+        folder_exists(&mut client, &folder),
+        Ok(false),
+        "the test's folder is still there"
+    );
+    assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn a_magnet_add_of_an_own_torrent_is_accepted() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    // A torrent of this run, of data nobody has, which the link names by its hash and its name.
+    let own = OwnTorrent::unwritten(
+        &mut client,
+        &env,
+        TestFolder::test_dir(&env.remote_dir),
+        &MAGNET_FILES,
+    );
+    let name = own.name().to_owned();
+    // Paused, so the daemon does not look for the metadata, which nobody could send.
+    let request = own.magnet_request(true);
+    let torrent = TestTorrent::add(&mut client, &env, own, &request);
+    let hash = torrent.hash().clone();
+
+    let listed = torrent.record(&mut client);
+
+    assert_eq!(listed.name.as_deref(), Some(name.as_str()), "{listed:?}");
+    assert_eq!(
+        listed.download_dir.as_deref(),
+        Some(env.remote_dir.as_str()),
+        "{listed:?}"
+    );
+    assert_eq!(listed.status, Some(Status::Stopped), "{listed:?}");
+    assert!(
+        listed
+            .metadata_percent_complete
+            .is_some_and(|done| done < 1.0),
+        "{listed:?}"
+    );
+    assert_others_unchanged(&mut client, Some(&hash), &before);
+    torrent.remove_with_data(&mut client);
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+    assert_others_unchanged(&mut client, None, &before);
 }

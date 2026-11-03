@@ -9,9 +9,7 @@ use std::path::PathBuf;
 use x4_rpc::{AddOutcome, AddedTorrent, DownloadDir, HashString, TorrentId};
 
 use crate::metainfo::random_seed;
-use crate::support::{
-    KeptFile, LocalData, accept_added, file_is_gone, is_in_test_dir, is_the_test_dir,
-};
+use crate::support::{KeptFile, LocalData, TestFolder, accept_added, file_is_gone, is_in_test_dir};
 
 fn hash(digit: char) -> HashString {
     HashString::parse(&digit.to_string().repeat(40)).unwrap()
@@ -128,13 +126,14 @@ fn a_kept_file_is_deleted_when_the_test_fails_before_deleting_it() {
 #[test]
 fn the_test_directory_is_compared_in_its_normalized_form() {
     let test_dir = DownloadDir::new("//mnt/hdd//torrents/4x4-test/").unwrap();
+    let folder = TestFolder::test_dir(&test_dir);
 
     for dir in [
         "/mnt/hdd/torrents/4x4-test",
         "/mnt/hdd/torrents/4x4-test/",
         "//mnt/hdd//torrents/4x4-test//",
     ] {
-        assert!(is_the_test_dir(dir, &test_dir), "{dir}");
+        assert!(folder.is(dir), "{dir}");
         assert!(is_in_test_dir(dir, &test_dir), "{dir}");
     }
     // Inside it. A folder that does not normalize is compared by its text, so it is counted
@@ -144,7 +143,7 @@ fn the_test_directory_is_compared_in_its_normalized_form() {
         "//mnt/hdd/torrents//4x4-test//sub/",
         "/mnt/hdd/torrents/4x4-test/../other",
     ] {
-        assert!(!is_the_test_dir(dir, &test_dir), "{dir}");
+        assert!(!folder.is(dir), "{dir}");
         assert!(is_in_test_dir(dir, &test_dir), "{dir}");
     }
     for dir in [
@@ -154,7 +153,114 @@ fn the_test_directory_is_compared_in_its_normalized_form() {
         "mnt/hdd/torrents/4x4-test",
         "",
     ] {
-        assert!(!is_the_test_dir(dir, &test_dir), "{dir}");
+        assert!(!folder.is(dir), "{dir}");
         assert!(!is_in_test_dir(dir, &test_dir), "{dir}");
     }
+}
+
+#[test]
+fn a_folder_with_a_control_character_is_never_the_test_directory() {
+    let test_dir = DownloadDir::new("/mnt/hdd/torrents/4x4-test").unwrap();
+    let folder = TestFolder::test_dir(&test_dir);
+
+    // `DownloadDir::new` trims these at either end, so they must be refused before it does.
+    for dir in [
+        "/mnt/hdd/torrents/4x4-test\n",
+        "/mnt/hdd/torrents/4x4-test/\r\n",
+        "\t/mnt/hdd/torrents/4x4-test",
+        "\0/mnt/hdd/torrents/4x4-test",
+        "/mnt/hdd/torrents/4x4-test\u{7f}",
+        "/mnt/hdd/torrents/4x4-test\u{85}",
+        "/mnt/hdd/torrents/4x4\u{1b}-test",
+    ] {
+        assert!(!folder.is(dir), "{dir:?}");
+    }
+}
+
+#[test]
+fn a_subfolder_is_its_own_name_directly_in_the_test_directory_and_nothing_else() {
+    let test_dir = DownloadDir::new("/mnt/hdd/torrents/4x4-test").unwrap();
+    let folder = TestFolder::new_subfolder(&test_dir, 0xabc);
+    let own = "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc";
+
+    assert_eq!(folder.remote().as_str(), own);
+    assert_eq!(folder.subfolder(), Some("4x4-live-new-0000000000000abc"));
+    assert_eq!(TestFolder::test_dir(&test_dir).subfolder(), None);
+    for dir in [
+        own,
+        "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc/",
+        "//mnt/hdd/torrents//4x4-test//4x4-live-new-0000000000000abc",
+    ] {
+        assert!(folder.is(dir), "{dir}");
+    }
+    for dir in [
+        // The test directory itself, and the folders around it.
+        "/mnt/hdd/torrents/4x4-test",
+        "/mnt/hdd/torrents",
+        "/mnt/hdd/torrents/4x4-live-new-0000000000000abc",
+        // Another run's folder, and folders inside this one or beside it.
+        "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abd",
+        "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc/sub",
+        "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc2",
+        "/mnt/hdd/torrents/4x4-test/sub/4x4-live-new-0000000000000abc",
+        "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc/..",
+        "/mnt/hdd/torrents/4x4-test2/4x4-live-new-0000000000000abc",
+        "mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc",
+        // Control characters, even where `DownloadDir::new` would trim them.
+        "/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc\n",
+        "\n/mnt/hdd/torrents/4x4-test/4x4-live-new-0000000000000abc",
+        "",
+    ] {
+        assert!(!folder.is(dir), "{dir:?}");
+    }
+    assert!(!TestFolder::test_dir(&test_dir).is(own));
+}
+
+#[test]
+fn a_subfolder_the_daemon_made_is_deleted_with_what_it_put_there() {
+    let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
+    let data = LocalData::unwritten(
+        &dir,
+        Some("4x4-live-new-1"),
+        "torrent",
+        &["empty.bin", "data.bin"],
+    )
+    .unwrap();
+    // As the daemon does when the torrent starts: it makes the folders and the empty file.
+    fs::create_dir_all(dir.join("4x4-live-new-1/torrent")).unwrap();
+    fs::write(dir.join("4x4-live-new-1/torrent/empty.bin"), b"").unwrap();
+    assert!(!data.files_are_gone());
+
+    drop(data);
+
+    assert!(!dir.exists(), "{} is left behind", dir.display());
+}
+
+#[test]
+fn a_subfolder_the_daemon_never_made_leaves_nothing_to_delete() {
+    let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
+    let mut data =
+        LocalData::unwritten(&dir, Some("4x4-live-new-2"), "torrent", &["a.bin"]).unwrap();
+    assert!(data.files_are_gone());
+
+    assert_eq!(data.delete(), Vec::<String>::new());
+
+    assert!(data.is_clean());
+    assert!(!dir.exists(), "{} is left behind", dir.display());
+}
+
+#[test]
+fn unwritten_data_in_the_test_directory_is_never_deleted_here() {
+    let dir = env::temp_dir().join(format!("x4-live-support-{:016x}", random_seed()));
+    fs::create_dir(&dir).unwrap();
+    let data = LocalData::unwritten(&dir, None, "torrent", &["a.bin"]).unwrap();
+    // Whatever is there under the torrent's name, this run did not write it.
+    fs::create_dir(dir.join("torrent")).unwrap();
+    fs::write(dir.join("torrent/a.bin"), b"theirs").unwrap();
+    assert!(data.is_clean());
+
+    drop(data);
+
+    assert_eq!(fs::read(dir.join("torrent/a.bin")).unwrap(), b"theirs");
+    fs::remove_dir_all(&dir).unwrap();
 }

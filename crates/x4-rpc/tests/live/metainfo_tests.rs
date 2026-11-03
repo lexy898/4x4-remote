@@ -75,6 +75,23 @@ fn a_multi_file_metainfo_lists_the_files_and_hashes_their_data_as_one() {
 }
 
 #[test]
+fn a_file_in_a_folder_of_the_torrent_has_one_path_element_per_part() {
+    let files: [(&str, &[u8]); 2] = [("z.bin", b"hello"), ("mid/a.bin", b" world")];
+
+    let metainfo = multi_file_metainfo("dir", &files, 4);
+
+    let files_list = b"5:filesld6:lengthi5e4:pathl5:z.bineed6:lengthi6e4:pathl3:mid5:a.bineee";
+    assert!(
+        metainfo
+            .bytes
+            .windows(files_list.len())
+            .any(|window| window == files_list),
+        "{}",
+        String::from_utf8_lossy(&metainfo.bytes)
+    );
+}
+
+#[test]
 fn random_bytes_have_the_requested_length_and_follow_the_seed() {
     let first = random_bytes(1, 13);
 

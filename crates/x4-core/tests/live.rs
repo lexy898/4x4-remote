@@ -10,6 +10,12 @@
 //! hands out is answered by the daemon through the same call the service makes, all of them
 //! reads. So the daemon's real answers go through `TorrentRecord` and into the engine's details,
 //! built from a full read and merged from the progress reads.
+//!
+//! The add path is checked against the daemon's own numbering of the files: a torrent of this
+//! run, whose files are not in the order their names sort in, is read by the strict parser, a
+//! file is unchecked in the add form, and the form's request is sent as the add dialog sends it,
+//! paused and with no data written. The daemon must list the files in the parse's order, with
+//! that file, and only that one, left out.
 
 #[path = "../../x4-rpc/tests/live/metainfo.rs"]
 mod metainfo;
@@ -20,16 +26,17 @@ mod metainfo;
 )]
 mod support;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use support::{
-    LiveEnv, MULTI_FILES, MULTI_PIECE_LENGTH, TestTorrent, assert_others_unchanged,
-    others_fingerprint, torrent_by_hash,
+    LiveEnv, MULTI_FILES, MULTI_PIECE_LENGTH, OwnTorrent, TestFolder, TestTorrent,
+    assert_others_unchanged, others_fingerprint, torrent_by_hash,
 };
 use x4_core::{
-    Command, ConnectionState, DetailsRead, Engine, EngineConfig, Event, Request, Response,
-    TorrentDetails, Visibility,
+    AddCheck, AddForm, Command, ConnectionState, DetailsRead, Engine, EngineConfig, Event,
+    LoadedItem, NodeKey, Request, Response, Snapshot, TorrentDetails, Visibility, parse_torrent,
 };
 use x4_rpc::{
     Client, FilePriority, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse,
@@ -39,6 +46,20 @@ use x4_rpc::{
 /// How many batches of requests the engine may hand out before it has nothing more to ask at one
 /// moment; it needs two or three.
 const TURNS: usize = 10;
+/// The files of the torrent added with a file left out, in its order, with their sizes: not the
+/// order their names sort in, and one of them in a folder of the torrent.
+const OUT_OF_ORDER: [(&str, usize); 3] = [
+    ("zeta.bin", 9 * 1024),
+    ("alpha.bin", 13 * 1024),
+    ("mid/beta.bin", 5 * 1024),
+];
+/// What a test reads of the files of its torrent: their names and lengths, and which are wanted.
+const NAMES_AND_WANTED: &[TorrentField] = &[
+    TorrentField::Id,
+    TorrentField::HashString,
+    TorrentField::Files,
+    TorrentField::Wanted,
+];
 
 /// The engine, the moment it is told it is, and the daemon that answers it.
 struct Driven<'a> {
@@ -384,5 +405,85 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
 
     torrent.remove_with_data(&mut client);
     assert_eq!(torrent_by_hash(&mut client, &own), Ok(None));
+    assert_others_unchanged(&mut client, None, &before);
+}
+
+/// A snapshot without the daemon's settings, in which the add form names its folder whatever it
+/// is.
+fn without_session() -> Snapshot {
+    Snapshot {
+        torrents: Vec::new(),
+        listed: true,
+        session: None,
+        free_space_bytes: None,
+        rate_down: 0,
+        rate_up: 0,
+        connection: ConnectionState::Connected,
+        stale: false,
+    }
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn adding_with_unwanted_files_matches_the_daemons_file_order() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let before = others_fingerprint(&mut client, None);
+    let own = OwnTorrent::unwritten(
+        &mut client,
+        &env,
+        TestFolder::test_dir(&env.remote_dir),
+        &OUT_OF_ORDER,
+    );
+    let name = own.name().to_owned();
+    let parsed = parse_torrent(own.bytes()).expect("the test torrent does not parse");
+    let files = parsed
+        .files
+        .expect("the strict parse leaves the test torrent no choice of files");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    let mut sorted = paths.clone();
+    sorted.sort_unstable();
+    assert_ne!(
+        paths, sorted,
+        "the test needs files out of the order of their names"
+    );
+    // The add form, with the second file unchecked, makes the request the add dialog sends.
+    let loaded = LoadedItem::torrent(
+        PathBuf::from(format!("{name}.torrent")),
+        Arc::from(own.bytes()),
+    )
+    .expect("the add form cannot read the test torrent");
+    let mut form = AddForm::new(loaded, env.remote_dir.as_str().to_owned(), false);
+    form.toggle_wanted(&NodeKey::new(&format!("{name}/alpha.bin")));
+    let request = match form.check(&without_session(), true) {
+        AddCheck::Ready(request) => request,
+        other => panic!("the add form would send nothing: {other:?}"),
+    };
+    assert_eq!(request.files_unwanted, [1]);
+    assert!(request.paused);
+
+    let torrent = TestTorrent::add(&mut client, &env, own, &request);
+    let hash = torrent.hash().clone();
+    let record = torrent.read(&mut client, NAMES_AND_WANTED);
+
+    let listed: Vec<(String, u64)> = record
+        .files
+        .iter()
+        .flatten()
+        .map(|file| (file.name.clone(), file.length))
+        .collect();
+    let parsed: Vec<(String, u64)> = files
+        .iter()
+        .map(|file| (file.path.clone(), file.length))
+        .collect();
+    assert_eq!(
+        listed, parsed,
+        "the daemon numbers the files as the parse does"
+    );
+    assert_eq!(record.wanted.as_deref(), Some(&[true, false, true][..]));
+    assert_others_unchanged(&mut client, Some(&hash), &before);
+
+    torrent.remove_with_data(&mut client);
+    assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
     assert_others_unchanged(&mut client, None, &before);
 }

@@ -108,8 +108,9 @@ pub(crate) fn single_file_metainfo(name: &str, data: &[u8], piece_length: usize)
 }
 
 /// The metainfo of a multi-file torrent: the folder `name` holding `files`, each a name and its
-/// data, in that order, without trackers. The pieces run across the files: the data is hashed
-/// end to end.
+/// data, in that order, without trackers. A name with `/` is a file in a folder of the torrent,
+/// with one path element per part. The pieces run across the files: the data is hashed end to
+/// end.
 #[expect(
     clippy::expect_used,
     reason = "a SHA-1 digest in hex is always a valid hash"
@@ -129,7 +130,14 @@ pub(crate) fn multi_file_metainfo(
         .map(|(file, data)| {
             Bencode::Dict(vec![
                 ("length", Bencode::Int(data.len())),
-                ("path", Bencode::List(vec![Bencode::Bytes(file.as_bytes())])),
+                (
+                    "path",
+                    Bencode::List(
+                        file.split('/')
+                            .map(|part| Bencode::Bytes(part.as_bytes()))
+                            .collect(),
+                    ),
+                ),
             ])
         })
         .collect();
