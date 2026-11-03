@@ -15,11 +15,14 @@ x4-rpc = { path = "crates/x4-rpc" }
 x4-core = { path = "crates/x4-core" }
 anyhow = "1.0.104"
 # The desktop's file dialog through the xdg-desktop-portal, with a filter for .torrent files and a
-# title of our own (Linux only). gpui already pulls in this version, with these features and more,
-# for its own file dialog; ours adds no crate.
+# title of our own (Linux only), parented to the window it opens over (`raw_handle`: the X11 window
+# id, or a Wayland surface exported through xdg-foreign, hence `wayland`). gpui already pulls in
+# this version and every crate these features need; ours adds no crate.
 ashpd = { version = "0.13.13", default-features = false, features = [
   "async-io",
   "file_chooser",
+  "raw_handle",
+  "wayland",
 ] }
 # The worker thread sends events to the UI, which awaits them on its executor.
 async-channel = "2.5.0"
@@ -39,6 +42,9 @@ i18n-embed-fl = "0.10.1"
 # `O_NONBLOCK` for opening a .torrent file, so that a FIFO swapped in after the first look never
 # blocks the open. gpui already pulls it in.
 libc = "0.2.191"
+# The window and display handles that parent the file dialog (Linux only). gpui already pulls in
+# this version.
+raw-window-handle = "0.6.2"
 # Embeds the .ftl files into the binary (read from disk in debug builds).
 rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }

@@ -30,6 +30,15 @@ use x4_core::{AddItem, LoadedItem, MAX_TORRENT_FILE_BYTES, MetainfoError};
 pub enum AddRequest {
     /// `.torrent` files and magnet links to offer in the add dialog, in this order.
     Items(Vec<AddItem>),
+    /// What a source that stops at the queue's cap, such as the clipboard, hands over: `items` to
+    /// offer, in this order, and how many more it `left_out` unread. The window counts those with
+    /// the ones a full queue drops, in one notification.
+    Capped {
+        /// The items to offer, in this order.
+        items: Vec<AddItem>,
+        /// How many more the source left out.
+        left_out: usize,
+    },
     /// Launch arguments 4x4 does not open; the window says so in one notification.
     Rejected(Vec<RejectedArg>),
     /// Bring the window to the front, as for a second launch that handed its arguments over.

@@ -85,7 +85,7 @@ use x4_core::{
 use x4_rpc::HashString;
 
 use crate::actions::PendingActions;
-use crate::adding::{AddRequests, drop_highlight, hover_while_dragging};
+use crate::adding::{AddRequests, drop_highlight_layer, hover_while_dragging};
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
 use crate::details_panel::DetailsPanel;
@@ -116,6 +116,8 @@ use torrent_actions::{follow_key_repeats, on_torrent_actions};
 const ROW_HEIGHT: f32 = 44.;
 /// The height of the table's header.
 const HEADER_HEIGHT: f32 = 32.;
+/// The id of the layer that highlights the window while files are dragged over it.
+const WINDOW_DROP_TARGET: &str = "window-drop-target";
 
 /// The main window's content.
 pub struct MainView {
@@ -749,13 +751,13 @@ impl Render for MainView {
             // Over the table, a row, the search box or the status bar alike; and over the add
             // dialog too, whose own drop needs the drag to count as the mouse just as well.
             .on_drag_move::<ExternalPaths>(hover_while_dragging)
-            .drag_over::<ExternalPaths>(drop_highlight)
             .on_drop(cx.listener(|view, paths: &ExternalPaths, window, cx| {
                 view.files_dropped(paths.paths(), window, cx);
             }))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(content))
             .child(status_bar)
+            .child(drop_highlight_layer(WINDOW_DROP_TARGET, px(0.)))
     }
 }
 

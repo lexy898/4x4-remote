@@ -59,7 +59,7 @@ use x4_core::{
 };
 use x4_rpc::{DownloadDir, HashString, MagnetLink, TorrentAdd};
 
-use super::drop_target::drop_highlight;
+use super::drop_target::drop_highlight_layer;
 use super::file_choice::FileChoiceList;
 use super::folder_field::FolderField;
 use crate::i18n::{add_reason_text, add_title_text, no_choice_text, size_text, t};
@@ -68,6 +68,8 @@ use crate::keymap::ADD_DIALOG_CONTEXT;
 
 /// The width of the dialog.
 const DIALOG_WIDTH: f32 = 640.;
+/// The id of the layer that highlights the dialog while files are dragged over it.
+const DIALOG_DROP_TARGET: &str = "add-dialog-drop-target";
 
 /// What the dialog asks the main view for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,7 +649,6 @@ impl Render for AddDialog {
             // The dialog lies beside the main view, which would not see the key go up.
             .capture_key_up(move |_: &KeyUpEvent, _, _| repeats.borrow_mut().release())
             // The content is the whole surface of the dialog, so a drop anywhere on it lands here.
-            .drag_over::<ExternalPaths>(drop_highlight)
             .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
                 cx.emit(AddDialogEvent::Dropped(paths.paths().to_vec()));
             }))
@@ -655,6 +656,11 @@ impl Render for AddDialog {
             .child(self.heading(cx))
             .children(form)
             .child(self.buttons(cx))
+            .child(drop_highlight_layer(
+                DIALOG_DROP_TARGET,
+                cx.theme().radius_lg,
+            ))
+            .test_support()
     }
 }
 

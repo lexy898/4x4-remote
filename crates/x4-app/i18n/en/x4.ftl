@@ -796,6 +796,15 @@ add-file-picker-title = Add torrent files
 add-file-picker-filter = Torrent files
 # When the desktop's file dialog cannot be opened, as when the desktop has no file chooser.
 add-file-picker-failed = Could not open the file dialog; .torrent files can also be dropped on the window
+# Add file or Ctrl+O while the file dialog is open, which may be behind another window.
+add-file-picker-open = The file dialog is open already
+# Files chosen in the file dialog that are not on this computer, such as those of a network place,
+# and are not added. $count: how many (a number).
+add-chosen-not-local =
+    { $count ->
+        [one] { $count } chosen file is not on this computer and was left out
+       *[other] { $count } chosen files are not on this computer and were left out
+    }
 # Ctrl+V in the list of torrents, when the clipboard holds no magnet link.
 add-no-magnet-on-clipboard = No magnet link on the clipboard
 # Files dropped on the window that are not .torrent files, and are not added. $count: how many

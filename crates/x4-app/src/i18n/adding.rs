@@ -1,7 +1,7 @@
 //! The texts of the add dialog that carry values or depend on x4-core's decisions: its title with
 //! the place in the queue, the line under the folder field, why there is no choice of files, why
-//! Add is disabled, the notifications of what became of a torrent to add, and the one of dropped
-//! files that are not `.torrent` files.
+//! Add is disabled, the notifications of what became of a torrent to add, and those of dropped
+//! files that are not `.torrent` files and of chosen files that are not on this computer.
 //!
 //! Every reason comes from a variant, never from an error's `Display` text, which is English and
 //! for the log: x4-core's [`AddCheck`] and [`NoChoiceReason`], x4-rpc's [`DownloadDirError`] and
@@ -164,6 +164,12 @@ pub(crate) fn queue_full_text(count: usize) -> SharedString {
 /// The one notification of `count` dropped files that are not `.torrent` files, and are left out.
 pub(crate) fn dropped_others_text(count: usize) -> SharedString {
     t!("add-dropped-others", count = count).into()
+}
+
+/// The one notification of `count` files chosen in the file dialog that are not on this computer,
+/// and are left out.
+pub(crate) fn chosen_not_local_text(count: usize) -> SharedString {
+    t!("add-chosen-not-local", count = count).into()
 }
 
 /// The one notification of the launch arguments `rejected`, which names why the first is refused;
@@ -428,6 +434,18 @@ mod tests {
         assert_eq!(
             dropped_others_text(3),
             "3 dropped files are not .torrent files and were left out"
+        );
+    }
+
+    #[test]
+    fn chosen_files_that_are_not_on_this_computer_are_counted() {
+        assert_eq!(
+            chosen_not_local_text(1),
+            "1 chosen file is not on this computer and was left out"
+        );
+        assert_eq!(
+            chosen_not_local_text(2),
+            "2 chosen files are not on this computer and were left out"
         );
     }
 

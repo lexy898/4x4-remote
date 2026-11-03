@@ -29,9 +29,9 @@ use x4_app::main_view::MainView;
 use x4_core::launch::{RejectKind, RejectedArg};
 use x4_core::test_support::torrent;
 use x4_core::{
-    Action, ActionId, AddError, AddItem, Added, Command, ConnectionError, ConnectionState,
-    DisplayState, Event, Filter, FreeSpaceAnswer, KbPerSecond, SessionSummary, Snapshot,
-    SpeedLimit, Torrent, UiState, ViewState, parse_torrent,
+    Action, ActionId, AddError, AddItem, Added, ChosenFiles, Command, ConnectionError,
+    ConnectionState, DisplayState, Event, Filter, FreeSpaceAnswer, KbPerSecond, QUEUE_CAP,
+    SessionSummary, Snapshot, SpeedLimit, Torrent, UiState, ViewState, parse_torrent,
 };
 use x4_rpc::{AddSource, DownloadDir, HashString, MagnetLink, TorrentAdd};
 
@@ -70,6 +70,11 @@ const SEARCH: &str = "search";
 const COLUMN_MENU: &str = "column-menu";
 /// The dot of the connection in the status bar.
 const STATUS_BAR_DOT: &str = "connection";
+/// The content of the add dialog, and the layers that highlight it and the window while files
+/// are dragged over them.
+const DIALOG: &str = "add-dialog";
+const DIALOG_DROP_TARGET: &str = "add-dialog-drop-target";
+const WINDOW_DROP_TARGET: &str = "window-drop-target";
 const LIMITS_APPLY: &str = "limits-apply";
 
 /// The session's download folder.
@@ -486,6 +491,45 @@ impl Window {
         self.act(cx, |window, cx| {
             window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
         });
+    }
+
+    /// Drags files at `paths` from a file manager over the element `id`, and keeps them there.
+    fn drag_over(&self, id: &'static str, paths: &[&Path], cx: &mut TestAppContext) {
+        let paths = ExternalPaths(paths.iter().map(|path| path.to_path_buf()).collect());
+        self.act(cx, |window, cx| {
+            let position = window.find(id).bounds().center();
+            window.dispatch_event(
+                FileDropEvent::Entered { position, paths }.to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Drags the files of [`Self::drag_over`] out of the window again.
+    fn drag_away(&self, cx: &mut TestAppContext) {
+        self.act(cx, |window, cx| {
+            window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
+        });
+    }
+
+    /// Where the element `id` is drawn.
+    fn bounds(
+        &self,
+        id: &'static str,
+        cx: &mut TestAppContext,
+    ) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+        self.act(cx, |window, _| window.find(id).bounds())
+    }
+
+    /// Whether the window is the active one, which has the keyboard.
+    fn active(&self, cx: &mut TestAppContext) -> bool {
+        self.act(cx, |window, _| window.is_window_active())
+    }
+
+    /// Makes another window the active one, as when the user works in a file manager.
+    fn deactivate(&self, cx: &mut TestAppContext) {
+        gpui_kit::VisualTestContext::from_window(self.handle, cx).deactivate_window();
+        cx.run_until_parked();
     }
 
     /// Stops the service: the channel of its events closes, as when its thread ends.
@@ -1829,11 +1873,21 @@ fn copy(text: &str, cx: &mut TestAppContext) {
 struct FailingPicker(Rc<Cell<usize>>);
 
 impl FilePicker for FailingPicker {
-    fn pick(&self, _: &App) -> Task<Picked> {
+    fn pick(&self, _: &gpui_kit::Window, _: &App) -> Task<Picked> {
         self.0.set(self.0.get() + 1);
         Task::ready(Err(PickError::new(
             "org.freedesktop.DBus.Error.ServiceUnknown",
         )))
+    }
+}
+
+/// A file dialog that gives the same answer each time, as the desktop's would for files it names
+/// by their URIs.
+struct AnsweringPicker(ChosenFiles);
+
+impl FilePicker for AnsweringPicker {
+    fn pick(&self, _: &gpui_kit::Window, _: &App) -> Task<Picked> {
+        Task::ready(Ok(Some(self.0.clone())))
     }
 }
 
@@ -1921,18 +1975,95 @@ fn a_second_ctrl_o_while_the_file_dialog_is_open_opens_no_other(cx: &mut TestApp
     let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
 
     window.press("ctrl-o", cx);
+    assert_eq!(window.notifications(cx), 0);
     window.press("ctrl-o", cx);
     window.click(ADD_FILES_BUTTON, cx);
-    cx.simulate_path_prompt_response(|_| None);
-    cx.run_until_parked();
-    assert!(!cx.did_prompt_for_paths(), "one file dialog at a time");
+    assert_eq!(window.notifications(cx), 1, "one notice, however often");
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("The file dialog is open already")
+    );
 
-    // Once it is answered, the next press opens it again.
-    window.press("ctrl-o", cx);
-    assert!(cx.did_prompt_for_paths());
+    // The dialog that is open is kept, however long it stays open, and its answer lands.
+    Window::wait(15 * 60 * 1000, cx);
     cx.simulate_path_prompt_response(move |_| Some(vec![film]));
     cx.run_until_parked();
+    assert!(!cx.did_prompt_for_paths(), "one file dialog at a time");
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+
+    // Once it is answered, the next press opens it again.
+    window.press("escape", cx);
+    window.press("ctrl-o", cx);
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    assert!(!window.dialog_open(cx));
+}
+
+#[gpui_kit::test]
+fn files_chosen_off_this_computer_are_named_in_one_notification(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let pick = |chosen: ChosenFiles, cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            window.view.update(cx, |view, _| {
+                view.set_file_picker(Rc::new(AnsweringPicker(chosen)));
+            });
+        });
+        window.click(ADD_FILES_BUTTON, cx);
+    };
+
+    pick(
+        ChosenFiles {
+            paths: Vec::new(),
+            not_local: 1,
+        },
+        cx,
+    );
+    assert!(!window.dialog_open(cx));
+    assert_eq!(window.notifications(cx), 1);
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("1 chosen file is not on this computer and was left out")
+    );
+
+    pick(
+        ChosenFiles {
+            paths: vec![film],
+            not_local: 2,
+        },
+        cx,
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+    assert_eq!(
+        window.last_notice(cx).as_deref(),
+        Some("2 chosen files are not on this computer and were left out")
+    );
+}
+
+#[gpui_kit::test]
+fn a_clipboard_of_more_links_than_the_queue_holds_names_the_rest(cx: &mut TestAppContext) {
+    let links: Vec<String> = (0..QUEUE_CAP + 3)
+        .map(|n| format!("magnet:?xt=urn:btih:{n:040x}"))
+        .collect();
+    copy(&links.join("\n"), cx);
+
+    for key in ["ctrl-v", "ctrl-u"] {
+        let window = Window::open(cx);
+        window.press(key, cx);
+
+        assert_eq!(
+            window.label(TITLE, cx).as_deref(),
+            Some("Add torrent (1 of 100)"),
+            "{key}"
+        );
+        assert_eq!(window.notifications(cx), 1, "{key}");
+        assert_eq!(
+            window.last_notice(cx).as_deref(),
+            Some("3 more torrents were left out: at most 100 wait to be added"),
+            "{key}"
+        );
+    }
 }
 
 #[gpui_kit::test]
@@ -2096,6 +2227,57 @@ fn a_drop_of_torrent_files_queues_them_and_other_files_are_named(cx: &mut TestAp
     window.drop_files(SEARCH, &[&film], cx);
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
     assert_eq!(window.sent_adds(), [], "a drop only queues");
+}
+
+#[gpui_kit::test]
+fn a_drop_of_torrents_from_another_app_brings_the_window_forward(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+    let notes = window.file("notes.txt", b"not a torrent");
+
+    window.deactivate(cx);
+    window.drop_files(TABLE, &[&notes], cx);
+    assert!(!window.active(cx), "nothing to add, nothing to show");
+
+    window.drop_files(TABLE, &[&film], cx);
+    assert!(window.active(cx));
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
+}
+
+#[gpui_kit::test]
+fn the_highlight_of_a_drag_covers_the_window_or_the_dialog_and_moves_nothing(
+    cx: &mut TestAppContext,
+) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("Other")], cx);
+    let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
+
+    let table = window.bounds(TABLE, cx);
+    let button = window.bounds(ADD_FILES_BUTTON, cx);
+    window.drag_over(TABLE, &[&film], cx);
+    let viewport = window.act(cx, |window, _| window.viewport_size());
+    assert_eq!(
+        window.bounds(WINDOW_DROP_TARGET, cx),
+        gpui_kit::Bounds::new(gpui_kit::Point::default(), viewport),
+        "over the whole window"
+    );
+    assert_eq!(window.bounds(TABLE, cx), table);
+    assert_eq!(window.bounds(ADD_FILES_BUTTON, cx), button);
+    window.drag_away(cx);
+    assert_eq!(window.bounds(TABLE, cx), table);
+
+    // The magnet form, after a key press.
+    window.press("ctrl-u", cx);
+    let link = window.bounds(LINK, cx);
+    window.drag_over(LINK, &[&film], cx);
+    assert_eq!(
+        window.bounds(DIALOG_DROP_TARGET, cx),
+        window.bounds(DIALOG, cx),
+        "over the whole dialog"
+    );
+    assert_eq!(window.bounds(LINK, cx), link);
+    window.drag_away(cx);
+    assert_eq!(window.bounds(LINK, cx), link);
 }
 
 #[gpui_kit::test]

@@ -336,21 +336,24 @@ Torrents to add come from the toolbar, the keys, the clipboard and drops, and ea
 offers the torrents in the add dialog:
 
 - Add file (the file with a plus), or `Ctrl+O` from anywhere in the window, opens the desktop's
-  file dialog, which shows only torrent files ("Torrent files") and lets you choose several at
-  once; each file chosen is offered in turn. Cancelling it adds nothing. If the desktop has no
-  file dialog, a notification says so;
+  file dialog over the window, which shows only torrent files ("Torrent files") and lets you choose
+  several at once; each file chosen is offered in turn. Cancelling it adds nothing. Files it names
+  that are not on this computer, such as those of a network place, are left out, with one
+  notification that counts them. If the desktop has no file dialog, a notification says so;
 - Add magnet (the magnet), or `Ctrl+U`, offers each magnet link on the clipboard, one per line, as
   4x4's own "Copy magnet link" writes them; with none there, it opens the form with an empty link
   field, to paste one into;
 - `Ctrl+V` in the table offers the magnet links on the clipboard too, and with none there a
   notification says "No magnet link on the clipboard". In the search box `Ctrl+V` pastes text;
 - `.torrent` files dropped anywhere on the window, or on the open add dialog, join the torrents to
-  add. The window, or the dialog, is highlighted while they hover. Other files are left out, with
-  one notification that counts them.
+  add. The window, or the dialog, is tinted and framed while they hover, and nothing in it moves.
+  Other files are left out, with one notification that counts them. Torrents dropped from another
+  app bring the window to the front, so that the keys go to the add dialog.
 
-4x4 reads the clipboard only when you ask it to. While a menu, the speed limits or a dialog is open,
-`Ctrl+O`, `Ctrl+U` and `Ctrl+V` do nothing, and holding one of them down acts once. One file dialog
-is open at a time.
+4x4 reads the clipboard only when you ask it to, and no more magnet links of it than can wait to be
+added (see below). While a menu, the speed limits or a dialog is open, `Ctrl+O`, `Ctrl+U` and
+`Ctrl+V` do nothing, and holding one of them down acts once. One file dialog is open at a time, for
+as long as it stays open: Add file or `Ctrl+O` meanwhile says "The file dialog is open already".
 
 The add dialog shows the torrents to add, one at a time; nothing is added until you press Add. A
 `.torrent` file is read only when its turn comes, and one that is not a regular file of at most 16
@@ -382,8 +385,8 @@ A new torrent is not selected once you click or move in the list (even on the ro
 or change the filter, the search or the sort order, from the moment you press Add. The next torrent
 keeps the folder and "Start immediately" you chose. `Enter` in a field adds, `Cancel` or `Escape`
 skips the torrent, a click beside the dialog does nothing, and `.torrent` files dropped anywhere on
-the dialog join the queue. While the dialog that removes torrents is open, the torrents to add wait for it to
-close.
+the dialog join the queue. While the dialog that removes torrents is open, the torrents to add wait
+for it to close.
 
 4x4 also offers the `.torrent` files and magnet links it is started with, such as
 `4x4 Show.torrent 'magnet:?xt=urn:btih:…'`, or that a file manager or a browser opens with it, in

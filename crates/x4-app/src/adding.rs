@@ -18,7 +18,7 @@ mod picker;
 mod requests;
 
 pub(crate) use dialog::{AddDialog, AddDialogEvent, open};
-pub(crate) use drop_target::{drop_highlight, hover_while_dragging};
+pub(crate) use drop_target::{drop_highlight_layer, hover_while_dragging};
 #[cfg(target_os = "linux")]
 pub(crate) use picker::PortalPicker;
 pub(crate) use picker::PromptPicker;

@@ -190,14 +190,9 @@ impl MainView {
         cx: &mut Context<'_, Self>,
     ) {
         match request {
-            AddRequest::Items(items) => {
-                let count = items.len();
-                let dropped = self.adds.queue.push(items);
-                tracing::info!(count, dropped, "torrents to add were queued");
-                if dropped > 0 {
-                    self.add_notice(Notification::warning, queue_full_text(dropped), window, cx);
-                }
-                self.advance_adds(window, cx);
+            AddRequest::Items(items) => self.queue_adds(items, 0, window, cx),
+            AddRequest::Capped { items, left_out } => {
+                self.queue_adds(items, left_out, window, cx);
             }
             AddRequest::Rejected(rejected) => {
                 tracing::info!(count = rejected.len(), "launch arguments were refused");
@@ -205,8 +200,26 @@ impl MainView {
                     self.add_notice(Notification::warning, text, window, cx);
                 }
             }
-            AddRequest::Raise => self.raise(window, cx),
+            AddRequest::Raise => self.raise("another launch handed its arguments over", window, cx),
         }
+    }
+
+    /// Queues `items`, and says in one notification how many were left out: those the full queue
+    /// drops, and the `left_out` that their source did not hand over.
+    fn queue_adds(
+        &mut self,
+        items: Vec<AddItem>,
+        left_out: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let count = items.len();
+        let dropped = self.adds.queue.push(items) + left_out;
+        tracing::info!(count, dropped, "torrents to add were queued");
+        if dropped > 0 {
+            self.add_notice(Notification::warning, queue_full_text(dropped), window, cx);
+        }
+        self.advance_adds(window, cx);
     }
 
     /// Handles Cancel, Skip and Escape in the add dialog: skips the torrent shown, or the file
@@ -329,9 +342,9 @@ impl MainView {
     }
 
     /// Brings the window to the front, and asks for the user's attention if it has not come by
-    /// [`RAISE_GRACE`].
-    fn raise(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        tracing::debug!("the window is raised for another launch");
+    /// [`RAISE_GRACE`]; `reason` says why, for the log.
+    fn raise(&mut self, reason: &'static str, window: &mut Window, cx: &mut Context<'_, Self>) {
+        tracing::debug!(reason, "the window is raised");
         window.activate_window();
         self.adds.raise = Some(cx.spawn_in(window, async move |_, cx| {
             cx.background_executor().timer(RAISE_GRACE).await;
@@ -652,8 +665,9 @@ impl MainView {
             .update(cx, |table, cx| select_added(table, reveal.hash, cx));
     }
 
-    /// Shows `text` as a notification made by `kind` (info, warning or error), which a click
-    /// dismisses, and keeps it as the last notice about an add.
+    /// Shows `text` as a notification made by `kind` (info, warning or error, and with an id of
+    /// its own when a newer one is to replace it), which a click dismisses, and keeps it as the
+    /// last notice about an add.
     fn add_notice(
         &mut self,
         kind: fn(SharedString) -> Notification,
