@@ -90,7 +90,8 @@ pub enum StandaloneReason {
     /// more than 4 MiB, or its working directory is relative or longer than 4096 bytes (the frame
     /// of this process, [`Frame::of_this_process`], sends an unknown one instead of a longer one).
     #[error(
-        "the arguments cannot be handed over: they hold a NUL byte, take more than 4 MiB, or come          with a working directory that is relative or longer than 4096 bytes"
+        "the arguments cannot be handed over: they hold a NUL byte, take more than 4 MiB, or come \
+         with a working directory that is relative or longer than 4096 bytes"
     )]
     Unencodable,
     /// A file or socket operation failed.
