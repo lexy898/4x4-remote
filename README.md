@@ -697,11 +697,11 @@ from the repository's directory. `--offline` gives the program a temporary confi
 own, removed afterwards, whose `config.toml` names a closed port on this machine
 (`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting.
 Without it the app reads your `config.toml`, and inside `just virtual`, whose config directory is
-empty, it polls the default address. For example, `just virtual just measure --binary /usr/bin/4x4
---offline --cpu 60` measures the installed 4x4 off screen and off the network. Measure the app with
-no development 4x4 running in the same session, or inside `just virtual`: otherwise the measured
-start hands over to it and exits. (`just measure` gives the program the development app id, so it
-never hands over to an installed 4x4.)
+empty, it polls the default address, which is your daemon's (`192.168.1.5`). For example,
+`just virtual just measure --binary /usr/bin/4x4 --offline --cpu 60` measures the installed 4x4 off
+screen and off the network. Measure the app with no development 4x4 running in the same session, or
+inside `just virtual`: otherwise the measured start hands over to it and exits. (`just measure`
+gives the program the development app id, so it never hands over to an installed 4x4.)
 
 The honest memory metrics are the private (anonymous, `RssAnon`) memory and the PSS, not the RSS.
 RSS counts every resident page the app maps, including shared driver libraries (`libLLVM`,
@@ -988,10 +988,10 @@ every cell over its target:
 | Binary size                | —                   | 39.6 MiB               | 38.7 MiB                  | 39.1 MiB                  |
 
 - The installed build and the one in `target/release` differ by less than the runs among
-  themselves: the package's first frames were 227 to 317 ms (the slowest at a busy moment of the
-  laptop), those of `target/release` 218 to 229 ms. The package's binary is 0.9 MiB smaller,
-  mostly in its unwind tables (`.eh_frame`) and its code: makepkg builds it with Arch's Rust flags
-  (frame pointers) and shorter source paths (`--remap-path-prefix`).
+  themselves: the package's first frames were 227 to 317 ms (the 317 ms start is an outlier of
+  unknown cause), those of `target/release` 218 to 229 ms. The package's binary is 0.9 MiB smaller,
+  mostly in its unwind tables (`.eh_frame`) and its code; makepkg builds it with Arch's Rust flags
+  and `--remap-path-prefix`, and which of them makes the difference was not isolated.
 - Against stage 5 the app has 0.2 MiB less private memory (16.0 then), as the measurement of the
   allocator's pin found, and the same first frame (219 and 223 ms then); its PSS and USS are within
   about 1 MiB of stage 5's two measurements of it (60.9 to 62.0 and 49.3 to 50.6 MiB).
@@ -1019,21 +1019,26 @@ the traffic of the polls on a real daemon has not been measured.
 What only the real desktop can show, with 4x4 installed and its real daemon (quit 4x4 before each
 command that starts one, or the new start hands over to it): the start on the real screen, the
 memory and CPU against the real daemon, the requests a second to it, and the scrolling at the real
-screen's pace:
+screen's pace. Each command says whether it contacts your daemon:
 
 ```bash
-# First frame from the application menu: start 4x4 there, then
+# First frame from the application menu: start 4x4 there, then read its log. Local, no network
 grep 'first frame rendered' ~/.local/state/4x4/4x4.$(date -u +%F).log | tail -n 1
-# First frame, memory and idle CPU of the installed 4x4 on the real screen, polling the daemon for
-# about a minute as 4x4 does
+# First frame, memory and idle CPU of the installed 4x4 on the real screen. Contacts your daemon:
+# it polls it for about a minute, as 4x4 does
 just measure --binary /usr/bin/4x4 --cpu 60
-# Requests over 2 minutes with the window focused; divide the count by 120
+# Requests over 2 minutes with the window focused; divide the count by 120. Contacts your daemon
+# for 2 minutes, with your real window and state
 RUST_LOG=warn,x4_app=info,x4_core::service=debug timeout 120 4x4 2>&1 | grep -c 'request answered'
-# Scrolling 2000 made-up torrents (the package has no demo, so it is built here; a window for ~13 s)
+# Scrolling 2000 made-up torrents (the package has no demo, so it is built here, from the checkout;
+# a window for ~13 s). No network
 RUST_LOG=warn,x4_synthetic=info cargo run --release --locked -p x4-app --features synthetic \
     --bin x4-synthetic -- --scroll 2>&1 | grep 'scrolled the table'
 # Private memory before and after adding a large .torrent (several MiB): it should come back to
-# within a few MiB of the first figure
+# within a few MiB of the first figure. With no debug build (just run) going, as its process is
+# named 4x4 too. Adding contacts your daemon and adds that torrent to it for real: untick "Start
+# immediately" in the add dialog, and afterwards remove it with "Remove from list…", which keeps
+# files (there are none)
 grep RssAnon /proc/$(pgrep -x 4x4)/status
 ```
 
@@ -1064,9 +1069,9 @@ the newest, and it redraws only when what it shows has changed, so an idle daemo
 directories of its own, runtime directory included, and without your desktop's `DISPLAY`, so the
 windows it opens show on no monitor, take no focus and leave the desktop's settings alone;
 `spectacle -b -n -f -o /tmp/shot.png` inside it captures the virtual screen. Whatever the session
-started is stopped when it ends. For example, `just virtual just measure` measures the app without a
-window on your screens. It needs KDE Plasma (`kwin_wayland` and `dbus-run-session`) and works
-nowhere else.
+started is stopped when it ends. For example, `just virtual just measure --offline` measures the app
+without a window on your screens and without reaching your daemon. It needs KDE Plasma
+(`kwin_wayland` and `dbus-run-session`) and works nowhere else.
 
 ### Synthetic demo
 
