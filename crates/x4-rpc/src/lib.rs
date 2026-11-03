@@ -14,7 +14,9 @@
 //! URL to fetch or a path on its own disk too, so the only thing ever sent there is a
 //! [`MagnetLink`], which [`MagnetLink::parse`] accepts only when the daemon would add it by the
 //! same info hash; a `.torrent` file goes as its content. A [`DownloadDir`] is an absolute,
-//! normalized folder on the server.
+//! normalized folder on the server. An add uploads the whole file and the daemon reads it before
+//! it answers, so [`Client::torrent_add`] waits [`ADD_TIMEOUT`] rather than the transport's own
+//! timeout; every other call keeps the transport's.
 //!
 //! The session methods ([`Client::session_get`], [`Client::session_set`],
 //! [`Client::session_stats`], [`Client::free_space`]) read and change the daemon's settings and
@@ -37,7 +39,7 @@ mod torrent;
 mod torrent_methods;
 mod transport;
 
-pub use client::{Client, DEFAULT_TIMEOUT};
+pub use client::{ADD_TIMEOUT, Client, DEFAULT_TIMEOUT};
 pub use download_dir::{DownloadDir, DownloadDirError, MAX_DOWNLOAD_DIR_BYTES};
 pub use error::{RpcError, UnsupportedReason};
 pub use ids::{GetIds, HashString, IdError, TorrentId, TorrentRef, TorrentSelection};

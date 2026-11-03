@@ -23,6 +23,9 @@ pub struct HttpRequest<'a> {
     pub body: &'a [u8],
     /// The `X-Transmission-Session-Id` to send, if one is known.
     pub session_id: Option<&'a str>,
+    /// How long this request may take in place of the transport's own timeout, from connecting
+    /// to the last byte of the response; `None` keeps the transport's.
+    pub timeout: Option<Duration>,
 }
 
 /// The server's answer to an [`HttpRequest`], whatever its status.
@@ -136,6 +139,10 @@ impl Transport for UreqTransport {
         if let Some(session_id) = request.session_id {
             builder = builder.header(SESSION_ID_HEADER, session_id);
         }
+        if let Some(timeout) = request.timeout {
+            // A copy of the agent's configuration for this request only.
+            builder = builder.config().timeout_global(Some(timeout)).build();
+        }
         let mut response = builder.send(request.body).map_err(transport_error)?;
         let session_id = response
             .headers()
@@ -242,6 +249,7 @@ mod tests {
         let response = transport.post(&HttpRequest {
             body: br#"{"jsonrpc":"2.0","method":"session_stats","id":1}"#,
             session_id: Some("stale"),
+            timeout: None,
         });
         let request = server.join().unwrap().to_ascii_lowercase();
 
@@ -274,6 +282,7 @@ mod tests {
         let response = transport.post(&HttpRequest {
             body: b"{}",
             session_id: None,
+            timeout: None,
         });
         let request = server.join().unwrap().to_ascii_lowercase();
 
@@ -304,10 +313,36 @@ mod tests {
         let response = transport.post(&HttpRequest {
             body: b"{}",
             session_id: None,
+            timeout: None,
         });
 
         assert_eq!(response, Err(TransportError::Timeout));
         drop(transport);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_request_can_wait_longer_than_the_transport_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/transmission/rpc", listener.local_addr().unwrap());
+        // Answers well after the transport's own timeout.
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream);
+            thread::sleep(Duration::from_millis(300));
+            // A client that gave up has closed the connection; the response below tells.
+            let _written = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        });
+        let transport = UreqTransport::new(&url, Duration::from_millis(100));
+
+        let response = transport.post(&HttpRequest {
+            body: b"{}",
+            session_id: None,
+            timeout: Some(Duration::from_secs(5)),
+        });
+
+        assert_eq!(response.map(|response| response.status), Ok(200));
         server.join().unwrap();
     }
 
@@ -321,6 +356,7 @@ mod tests {
         let response = transport.post(&HttpRequest {
             body: b"{}",
             session_id: None,
+            timeout: None,
         });
 
         assert!(
@@ -336,6 +372,7 @@ mod tests {
         let response = transport.post(&HttpRequest {
             body: b"{}",
             session_id: None,
+            timeout: None,
         });
 
         assert!(
@@ -387,6 +424,7 @@ mod tests {
         let response = transport.post(&HttpRequest {
             body: b"{}",
             session_id: None,
+            timeout: None,
         });
 
         assert_eq!(

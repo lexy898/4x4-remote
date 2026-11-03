@@ -11,8 +11,16 @@ use serde_json::Value;
 use crate::error::{RpcError, UnsupportedReason};
 use crate::transport::{HttpRequest, HttpResponse, Transport};
 
-/// The HTTP timeout per request.
+/// The HTTP timeout per request; [`Client::torrent_add`] waits [`ADD_TIMEOUT`] instead.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long [`Client::torrent_add`] waits for its answer, in place of the transport's timeout.
+///
+/// An add sends the whole `.torrent` file: up to 16 MiB become about 21 MiB of base64, which
+/// take several seconds over Wi-Fi to a Raspberry Pi, and the daemon decodes, parses, hashes and
+/// stores them before it answers, with every other request waiting. Running out of this time
+/// does not tell whether the torrent was added.
+pub const ADD_TIMEOUT: Duration = Duration::from_secs(60);
 
 const JSONRPC_VERSION: &str = "2.0";
 const HTTP_OK: u16 = 200;
@@ -74,6 +82,21 @@ impl<T: Transport> Client<T> {
         method: &str,
         params: Option<&P>,
     ) -> Result<R, RpcError> {
+        self.call_with_timeout(method, params, None)
+    }
+
+    /// [`Client::call`] that may take `timeout` in place of the transport's own timeout, for
+    /// each POST of it: the first, and the one resent after a session-id conflict.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::call`].
+    pub(crate) fn call_with_timeout<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Option<&P>,
+        timeout: Option<Duration>,
+    ) -> Result<R, RpcError> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let request = RequestEnvelope {
@@ -84,7 +107,7 @@ impl<T: Transport> Client<T> {
         };
         let body = serde_json::to_vec(&request)
             .map_err(|error| RpcError::InvalidRequest(format!("{method}: {error}")))?;
-        let response = self.post_with_session(&body)?;
+        let response = self.post_with_session(&body, timeout)?;
         match response.status {
             HTTP_OK => decode_response(method, id, &response.body),
             HTTP_UNAUTHORIZED => Err(RpcError::Unauthorized),
@@ -94,13 +117,17 @@ impl<T: Transport> Client<T> {
     }
 
     /// POSTs `body`; on 409 adopts the session id the server sent and resends once.
-    fn post_with_session(&mut self, body: &[u8]) -> Result<HttpResponse, RpcError> {
-        let response = self.post(body)?;
+    fn post_with_session(
+        &mut self,
+        body: &[u8],
+        timeout: Option<Duration>,
+    ) -> Result<HttpResponse, RpcError> {
+        let response = self.post(body, timeout)?;
         if response.status != HTTP_CONFLICT {
             return Ok(response);
         }
         self.session_id = Some(response.session_id.ok_or(RpcError::SessionIdMissing)?);
-        let retry = self.post(body)?;
+        let retry = self.post(body, timeout)?;
         if retry.status == HTTP_CONFLICT {
             // Keep the newest id anyway, so the next call starts from it.
             if let Some(session_id) = retry.session_id {
@@ -111,11 +138,12 @@ impl<T: Transport> Client<T> {
         Ok(retry)
     }
 
-    fn post(&self, body: &[u8]) -> Result<HttpResponse, RpcError> {
+    fn post(&self, body: &[u8], timeout: Option<Duration>) -> Result<HttpResponse, RpcError> {
         self.transport
             .post(&HttpRequest {
                 body,
                 session_id: self.session_id.as_deref(),
+                timeout,
             })
             .map_err(RpcError::Transport)
     }

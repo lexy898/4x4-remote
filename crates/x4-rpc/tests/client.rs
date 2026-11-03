@@ -2,12 +2,15 @@
 //! `X-Transmission-Session-Id` handshake, HTTP status and server error mapping, and the id types.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use serde_json::{Value, json};
+use x4_rpc::testing::fixtures::{FREE_SPACE, SESSION_GET, SESSION_STATS};
 use x4_rpc::testing::{self, FakeTransport};
 use x4_rpc::{
-    Client, HashString, HttpRequest, HttpResponse, IdError, RpcError, TorrentSelection, Transport,
-    TransportError, UnsupportedReason,
+    ADD_TIMEOUT, AddSource, Client, GetIds, HashString, HttpRequest, HttpResponse, IdError,
+    MagnetLink, RemoveData, RpcError, SessionSet, TorrentAction, TorrentAdd, TorrentField,
+    TorrentSelection, TorrentSet, Transport, TransportError, UnsupportedReason,
 };
 
 /// A scripted fake that also keeps the raw request bodies, to inspect the envelope itself.
@@ -332,6 +335,125 @@ fn routed_fake_answers_by_method_and_records_params() {
         Value::Null,
         "no params recorded as null"
     );
+}
+
+/// The `result` of a recorded fixture envelope; null if the fixture is malformed, which
+/// `tests/fixtures.rs` reports.
+fn fixture_result(text: &str) -> Value {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|envelope| envelope.get("result").cloned())
+        .unwrap_or_default()
+}
+
+/// A result of the right shape for each method a 4.1 daemon has.
+fn any_method(method: &str) -> HttpResponse {
+    testing::ok(match method {
+        "session_get" => fixture_result(SESSION_GET),
+        "session_stats" => fixture_result(SESSION_STATS),
+        "free_space" => fixture_result(FREE_SPACE),
+        "torrent_get" => json!({ "torrents": [] }),
+        "torrent_add" => {
+            json!({ "torrent_added": { "id": 9, "name": "x", "hash_string": HASH } })
+        }
+        _ => json!({}),
+    })
+}
+
+#[test]
+fn only_torrent_add_asks_for_a_timeout_of_its_own() {
+    let fake = FakeTransport::routed(|method, _| Ok(any_method(method)));
+    let mut client = Client::new(fake.clone());
+    let selection = TorrentSelection::from_hashes([HashString::parse(HASH).unwrap()]).unwrap();
+    let add = TorrentAdd {
+        source: AddSource::Magnet(
+            MagnetLink::parse(&format!("magnet:?xt=urn:btih:{HASH}")).unwrap(),
+        ),
+        download_dir: None,
+        paused: false,
+        files_unwanted: Vec::new(),
+        priority_high: Vec::new(),
+        priority_low: Vec::new(),
+        sequential_download: None,
+    };
+
+    client.check_server().unwrap();
+    client.session_get().unwrap();
+    client
+        .session_set(&SessionSet {
+            alt_speed_enabled: Some(true),
+            ..SessionSet::default()
+        })
+        .unwrap();
+    client.session_stats().unwrap();
+    client.free_space("/data").unwrap();
+    client
+        .torrent_get(&GetIds::All, &[TorrentField::Id])
+        .unwrap();
+    client
+        .torrent_action(TorrentAction::Stop, &selection)
+        .unwrap();
+    client
+        .torrent_set(
+            &selection,
+            &TorrentSet {
+                sequential_download: Some(true),
+                ..TorrentSet::default()
+            },
+        )
+        .unwrap();
+    client.torrent_remove(&selection, RemoveData::Keep).unwrap();
+    client.torrent_add(&add).unwrap();
+
+    let waits: Vec<(String, Option<Duration>)> = fake
+        .requests()
+        .into_iter()
+        .map(|request| (request.method, request.timeout))
+        .collect();
+    let usual = |method: &str| (method.to_owned(), None);
+    assert_eq!(
+        waits,
+        [
+            usual("session_get"),
+            usual("session_get"),
+            usual("session_set"),
+            usual("session_stats"),
+            usual("free_space"),
+            usual("torrent_get"),
+            usual("torrent_stop"),
+            usual("torrent_set"),
+            usual("torrent_remove"),
+            ("torrent_add".to_owned(), Some(ADD_TIMEOUT)),
+        ]
+    );
+    assert_eq!(ADD_TIMEOUT, Duration::from_secs(60));
+}
+
+#[test]
+fn an_add_resent_after_a_session_conflict_waits_as_long() {
+    let fake = FakeTransport::scripted(vec![
+        Ok(testing::conflict("fresh")),
+        Ok(any_method("torrent_add")),
+    ]);
+    let mut client = Client::new(fake.clone());
+    let add = TorrentAdd {
+        source: AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec()),
+        download_dir: None,
+        paused: true,
+        files_unwanted: Vec::new(),
+        priority_high: Vec::new(),
+        priority_low: Vec::new(),
+        sequential_download: None,
+    };
+
+    client.torrent_add(&add).unwrap();
+
+    let timeouts: Vec<Option<Duration>> = fake
+        .requests()
+        .into_iter()
+        .map(|request| request.timeout)
+        .collect();
+    assert_eq!(timeouts, [Some(ADD_TIMEOUT), Some(ADD_TIMEOUT)]);
 }
 
 #[test]

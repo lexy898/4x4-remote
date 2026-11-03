@@ -459,6 +459,7 @@ impl Session {
             "speed_limit_down_enabled": self.speed_limit_down_enabled,
             "speed_limit_up": self.speed_limit_up,
             "speed_limit_up_enabled": self.speed_limit_up_enabled,
+            "start_added_torrents": true,
             "version": "4.1.3 (synthetic)",
         })
     }

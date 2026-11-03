@@ -112,6 +112,7 @@ fn each_answer_is_logged_at_debug_with_its_bytes_both_ways() {
             .post(&HttpRequest {
                 body,
                 session_id: None,
+                timeout: None,
             })
             .ok();
     });
@@ -236,6 +237,7 @@ fn post(daemon: &SyntheticDaemon, body: &str) -> Value {
         .post(&HttpRequest {
             body: body.as_bytes(),
             session_id: None,
+            timeout: None,
         })
         .expect("an answer");
     assert_eq!(response.status, 200);
@@ -671,6 +673,7 @@ fn a_request_that_is_not_json_is_a_transport_error() {
     let answer = daemon.post(&HttpRequest {
         body: b"<html>",
         session_id: None,
+        timeout: None,
     });
     assert!(
         matches!(answer, Err(TransportError::Io(ref message)) if message.contains("not JSON")),

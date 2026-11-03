@@ -48,6 +48,7 @@ fn parses_session_get_fixture() {
     assert_eq!(session.rpc_version_semver, "6.0.1");
     assert!(session.version.starts_with("4.1.3"), "{session:?}");
     assert_ne!(session.download_dir, "");
+    assert!(session.start_added_torrents, "{session:?}");
 }
 
 #[test]
@@ -91,6 +92,7 @@ fn session_get_reads_each_field_from_its_wire_key() {
         "speed_limit_up": 44,
         "speed_limit_up_enabled": false,
         "sequential_download": true,
+        "start_added_torrents": false,
         "some_future_key": [1, 2, 3],
     }));
 
@@ -110,6 +112,7 @@ fn session_get_reads_each_field_from_its_wire_key() {
             speed_limit_up_kbps: 44,
             speed_limit_up_enabled: false,
             sequential_download: true,
+            start_added_torrents: false,
         }
     );
 }
@@ -128,6 +131,7 @@ fn session_result_with_speeds(down: &Value, up: &Value) -> Value {
         "speed_limit_up": up,
         "speed_limit_up_enabled": false,
         "sequential_download": false,
+        "start_added_torrents": true,
     })
 }
 
