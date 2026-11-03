@@ -5,7 +5,7 @@ in Rust.
 
 ## Status
 
-Early development — stage 4, details. The window connects to the daemon set in `config.toml` and
+Early development — stage 5, adding. The window connects to the daemon set in `config.toml` and
 shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
 state, with live counts, and a search box finds them by name. The status bar shows the total
 download and upload speeds, the free space and the state of the connection; it switches the
@@ -18,7 +18,11 @@ where its data is, its size, hash, dates, share ratio and metainfo, and how its 
 with the worst problem in plain words. Files shows its files as a tree, with each one's progress and
 how much of it already plays from the start; each file or folder can be skipped or given a Low,
 Normal or High priority, and the torrent can be downloaded in order. Whether the panel is shown, its
-height and its tab are remembered too.
+height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
+desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
+that picks the folder on the server (with its free space and the folders used lately), the files to
+download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
+file or a link, hands them to the 4x4 that runs.
 
 ## What it will do
 
@@ -356,37 +360,55 @@ added (see below). While a menu, the speed limits or a dialog is open, `Ctrl+O`,
 as long as it stays open: Add file or `Ctrl+O` meanwhile says "The file dialog is open already".
 
 The add dialog shows the torrents to add, one at a time; nothing is added until you press Add. A
-`.torrent` file is read only when its turn comes, and one that is not a regular file of at most 16
-MiB, or not a torrent the daemon can add, is skipped with a notification that names it and says why,
-and is not counted among the torrents to add. A file that takes longer than a moment to read, as on
-a network folder that hangs, opens the dialog with "Reading the file…" and Skip, which moves on to
-the next torrent. At most 100 torrents wait; a notification says how many more were left out. The
-title says which torrent of how many it shows, such as "Add torrent (2 of 5)", under it come the
-torrent's name and size, and for a magnet link its field, checked as you type, with the link's name
-or its hash. The folder on the server starts as the daemon's download folder. The button beside it,
-or `Alt+Down`, offers that folder, the last 10 folders torrents were added to (remembered between
-runs) and the folders of the torrents in the list. Half a second after you stop typing, 4x4 asks the
-daemon how much space is free in the folder, once per folder while the dialog is open: the line
-under the field gives the free space, says "New folder" with the free space of the nearest folder
-above it that exists, or says that the free space is unknown. A `.torrent` lists its files as a tree
-with checkboxes, every file wanted at first, which the keys of the Files tab move through (without
-the priorities); when its list of files could be read in more than one way, or is too large to
-choose from, all the files are added and the dialog says why. "Start immediately" starts as the
-daemon's setting for new torrents. Add stays disabled, with the reason under the form, until a file
-is wanted, the folder is a full path on the server without `.` or `..`, the magnet link is valid and
-the daemon is connected; for a torrent in the list already, Show selects it instead. Add sends the
-torrent once and says "Adding…" until the daemon answers. The dialog then shows the next torrent or
-closes, and the new torrent is selected as soon as it is in the list, with the filter and the search
-cleared if they would hide it. A torrent the daemon has already is selected, with a notification;
-one whose add the daemon does not confirm in time is selected if it shows up within two minutes; a
-failure shows a notification and keeps the form, to try again; if the part of 4x4 that talks to the
-daemon stops before the daemon answers, a notification says so, as the torrent may have been added.
-A new torrent is not selected once you click or move in the list (even on the row selected already),
-or change the filter, the search or the sort order, from the moment you press Add. The next torrent
-keeps the folder and "Start immediately" you chose. `Enter` in a field adds, `Cancel` or `Escape`
-skips the torrent, a click beside the dialog does nothing, and `.torrent` files dropped anywhere on
-the dialog join the queue. While the dialog that removes torrents is open, the torrents to add wait
-for it to close.
+`.torrent` file is read only when its turn comes, and one that cannot be offered is skipped with a
+notification that names it and says why, and is not counted among the torrents to add: it does not
+exist, 4x4 may not read it, it is not a regular file or is larger than 16 MiB, it is not a torrent
+file or holds no torrent, it is a BitTorrent v2 torrent only, which Transmission 4.1 cannot add, or
+the daemon would refuse it as broken (as when it has no files, two files of the same path, or piece
+hashes that do not match its size). A file that takes longer than a moment to read, as on a network
+folder that hangs, opens the dialog with "Reading the file…" and Skip, which moves on to the next
+torrent. At most 100 torrents wait; a notification says how many more were left out. The title says
+which torrent of how many it shows, such as "Add torrent (2 of 5)"; under it come the torrent's name
+and size, and for a magnet link its field, checked as you type, with the link's name or its hash. A
+magnet link must start with `magnet:?` and name one BitTorrent info hash (40 hexadecimal or 32
+base32 characters), without line breaks and in at most 64 KiB; a bare hash, a link with several
+hashes and one with only a BitTorrent v2 hash, which Transmission 4.1 cannot add, are refused with
+the reason under the form.
+
+The folder on the server starts as the daemon's download folder. The button beside it, or
+`Alt+Down`, offers that folder, the last 10 folders torrents were added to (remembered between runs;
+a folder counts once a torrent was added there, not when the daemon had the torrent already) and the
+folders of the torrents in the list. Half a second after you stop typing, 4x4 asks the daemon how
+much space is free in the folder, once per folder while the dialog is open: the line under the field
+gives the free space, says "New folder" with the free space of the nearest folder above it that
+exists, or says that the free space is unknown. A new folder is fine: the daemon makes it once the
+torrent starts and writes there, and a torrent added paused makes nothing until then.
+
+A `.torrent` lists its files as a tree with checkboxes, every file wanted at first, which the keys
+of the Files tab move through (without the priorities); padding files are hidden and go with their
+folder. Some `.torrent` files offer no choice, and all their files are added, with the dialog saying
+why. One whose list of files could be read in more than one way, as when its dictionary keys are out
+of order or given twice, it has two `info` dictionaries, or an entry of its file list is not a plain
+one. The daemon could then number the files otherwise than 4x4 reads them, so leaving one out could
+leave out another. And one with too many files to choose from: more than 50 000, or files nested so
+deep that their tree would take too much memory. A magnet link has no choice of files either, as its
+files are known only once its metadata has come. "Start immediately" starts as the daemon's setting
+for new torrents; without it, the torrent is added paused.
+
+Add stays disabled, with the reason under the form, until a file is wanted, the folder is a full
+path on the server without `.` or `..`, the magnet link is valid and the daemon is connected; for a
+torrent in the list already, Show selects it instead. Add sends the torrent once and says "Adding…"
+until the daemon answers. The dialog then shows the next torrent or closes, and the new torrent is
+selected as soon as it is in the list, with the filter and the search cleared if they would hide it.
+A torrent the daemon has already is selected, with a notification; one whose add the daemon does not
+confirm in time is selected if it shows up within two minutes; a failure shows a notification and
+keeps the form, to try again; if the part of 4x4 that talks to the daemon stops before the daemon
+answers, a notification says so, as the torrent may have been added. A new torrent is not selected
+once you click or move in the list (even on the row selected already), or change the filter, the
+search or the sort order, from the moment you press Add. The next torrent keeps the folder and
+"Start immediately" you chose. `Enter` in a field adds, `Cancel` or `Escape` skips the torrent, a
+click beside the dialog does nothing, and `.torrent` files dropped anywhere on the dialog join the
+queue. While the dialog that removes torrents is open, the torrents to add wait for it to close.
 
 4x4 also offers the `.torrent` files and magnet links it is started with, such as
 `4x4 Show.torrent 'magnet:?xt=urn:btih:…'`, or that a file manager or a browser opens with it, in
@@ -412,9 +434,11 @@ of its own and the log says so.
 
 The desktop entry in `packaging/linux/`,
 [`io.github.lexy898.FourByFour.desktop`](packaging/linux/io.github.lexy898.FourByFour.desktop),
-makes 4x4 the handler for `.torrent` files and `magnet:` links (`Exec=4x4 %U`, one process for all
-the files and links of a launch). Nothing installs it yet; packaging will, and 4x4 never makes
-itself the default handler.
+offers 4x4 as a handler for `.torrent` files and `magnet:` links (`Exec=4x4 %U`, one process for all
+the files and links of a launch). Nothing installs or registers it yet, so today no file manager or
+browser opens them with 4x4: start it with them, or drop them on its window. Stage 6, packaging,
+will install it and offer to make 4x4 the handler for `.torrent` files and magnet links; 4x4 never
+makes itself the default handler without asking.
 
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
@@ -489,10 +513,11 @@ Between runs 4x4 remembers, in `state.toml`:
 - the theme chosen with the toolbar button (system, light or dark);
 - the size of the window and whether it is maximized. Not its position: on Wayland the desktop
   places windows, and an app can neither read nor set where its window is;
-- the details panel: whether it is shown, its height and the tab open in it.
+- the details panel: whether it is shown, its height and the tab open in it;
+- the last 10 folders torrents were added to, which the add dialog offers.
 
-The search text, the selected torrent, the scroll position and the open folders of the Files tab
-are not remembered.
+The search text, the selected torrent, the scroll position, the open folders of the Files tab and
+the torrents waiting in the add dialog are not remembered.
 
 4x4 saves a second after the last change, so that dragging a column edge or the window edge writes
 the file once, and at once when the window is closed or 4x4 quits (`Ctrl+Q`). Typing in the search
@@ -738,6 +763,64 @@ over its target:
 - The PSS and the private memory are close to those of the busy demo in stage 2 (81.6 and 38.6 MiB),
   while the RSS is 65 MiB higher: it counts the shared driver pages that were resident in these
   sessions (see above), so compare the columns of this table with each other.
+
+### Adding (stage 5)
+
+Measured on 2026-11-03 on the same laptop, inside the headless KWin of `just virtual`, with release
+builds; each figure is the median of three runs, each the first start of its own session. The app
+had a `config.toml` in the session's own config directory that names a closed port on this machine
+(`http://127.0.0.1:1/transmission/rpc`), so it reached no daemon and kept reconnecting; the
+synthetic demo answered from memory (`--static`). Nothing was added: the add dialog was opened and,
+where the table says so, skipped with Escape (the demo's `--press escape`). The `.torrent` was made
+for the measurement: 2000 files of 1 MiB in 40 folders, 168 KB.
+
+Startup (`just measure`), with the single-instance claim and without it, as when there is no
+`$XDG_RUNTIME_DIR` (KWin's socket was then named by its full path); "not met" marks every cell over
+its target:
+
+| Metric                     | Target              | With the claim      | Without the claim   |
+| -------------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 219 ms              | 217 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 145.1 MiB (not met) | 145.0 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 60.9 MiB (not met)  | 60.9 MiB (not met)  |
+| Unique memory (USS)        | —                   | 49.3 MiB            | 49.3 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 16.0 MiB (not met)  | 16.0 MiB (not met)  |
+| Threads                    | —                   | 35                  | 34                  |
+| Binary size                | —                   | 39.5 MiB            | 39.5 MiB            |
+
+- The claim, which takes the lock and binds the socket before the window opens, took 80 to 92 µs in
+  the app's own log (from "claiming the single instance" to "this is the first 4x4", three runs),
+  and 113 to 118 µs when it first removed the socket of a 4x4 that had been killed: well under the
+  10 ms it may take. The first frames with and without it differ by less than the runs among
+  themselves. The thread that answers later launches is the one more thread. The private memory is
+  just over 16 MiB (by less than 0.1 MiB) either way.
+- A second launch with a magnet link, while the first 4x4 ran, took 6.3 ms from its start to its
+  exit (median of 10 in one session, 5.1 to 7.2 ms, and 27.3 ms for the first of them, 5 seconds
+  after the first 4x4 started). Of that, the hand-over itself, from connecting to the answer, took
+  0.24 ms (22 ms for the first), and the first 4x4 had queued the link 0.26 ms after the second
+  began to claim. The rest is starting the process and its log.
+
+The add dialog on the 2000 files; the demo was measured 15 seconds after its start, 28 seconds for
+the five files, and the app after 5 seconds:
+
+| Metric                     | Demo, no dialog | Demo, dialog open | Demo, closed | Demo, 5 files opened and skipped | App, no dialog | App, dialog open |
+| -------------------------- | --------------- | ----------------- | ------------ | -------------------------------- | -------------- | ---------------- |
+| First frame                | 229 ms          | 233 ms            | 233 ms       | 237 ms                           | 219 ms         | 218 ms           |
+| Resident memory (RSS)      | 165.4 MiB       | 168.8 MiB         | 168.7 MiB    | 174.1 MiB                        | 145.1 MiB      | 148.9 MiB        |
+| Proportional memory (PSS)  | 81.3 MiB        | 84.8 MiB          | 84.7 MiB     | 90.1 MiB                         | 60.9 MiB       | 64.7 MiB         |
+| Unique memory (USS)        | 69.7 MiB        | 73.2 MiB          | 73.1 MiB     | 78.5 MiB                         | 49.3 MiB       | 53.1 MiB         |
+| Private memory (`RssAnon`) | 36.4 MiB        | 40.2 MiB          | 40.1 MiB     | 45.5 MiB                         | 16.0 MiB       | 19.3 MiB         |
+| Threads                    | 33              | 33                | 33           | 33                               | 35             | 35               |
+
+- The dialog on 2000 files adds 3.3 to 3.8 MiB of private memory: the parse, the tree of the files
+  and the rows it draws; the file itself is 168 KB.
+- Closing the dialog gives none of it back to the system, and five such files opened and skipped in
+  turn hold 5.5 MiB more than one. That is the memory allocator, not the files kept: each file is
+  read and parsed on a thread of GPUI's background pool, and glibc keeps an arena of freed memory
+  for each thread that allocates, for its next use. With one arena (`MALLOC_ARENA_MAX=1`, two runs
+  each) the demo held 29.0 MiB of private memory with no dialog, 31.9 MiB after one file opened and
+  skipped, and 31.5 MiB after five: each skipped file's bytes and tree are freed, and the next one
+  reuses the memory.
 
 ## Development
 
