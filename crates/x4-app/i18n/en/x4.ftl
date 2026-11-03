@@ -675,3 +675,105 @@ files-percent = { $percent }%
 # $size: the formatted size, such as "12.4 GiB"; $percent: the share of the file in whole percent
 # (a number).
 files-playable = Playable from start: { $size } ({ $percent }%)
+
+## The dialog that adds a torrent
+
+# Its title. With several torrents to add, which one it shows of how many: $position and $count
+# (numbers).
+add-title = Add torrent
+add-title-of = Add torrent ({ $position } of { $count })
+# While the next .torrent file is read, which takes a moment for a large one.
+add-reading = Reading the file…
+# The field of a magnet link: its name for screen readers, and its hint while it is empty.
+add-link-field = Magnet link
+add-link-placeholder = magnet:?xt=urn:btih:…
+# A magnet link brings no list of files: the server gets it from the peers once it is added.
+add-magnet-note = The files can be chosen once the torrent's metadata arrives
+# The folder on the server to download into: the field's name for screen readers, and the button
+# beside it that opens the folders used lately.
+add-folder-field = Folder on the server
+add-folder-history = Folders used lately
+# Under the folder field: the free space there. $size: the free space, such as "22.9 GiB".
+add-free-space = { $size } free
+# A folder that does not exist yet, which the server makes when it adds the torrent. $parent: the
+# nearest folder above it that exists; $size: its free space.
+add-new-folder-free = New folder; { $size } free in { $parent }
+add-new-folder = New folder
+add-free-space-unknown = Free space unknown
+# The name of the list of the torrent's files, for screen readers.
+add-files-list = Files
+# Instead of the list, when the files cannot be chosen: the server could number them otherwise
+# than 4x4 reads them, so leaving one out could leave out another; or there are too many.
+add-no-choice-ambiguous = All files are added: the list of files could be read in more than one way
+add-no-choice-too-large = All files are added: there are too many to choose from
+add-start = Start immediately
+add-confirm = Add
+# On the Add button while the server adds the torrent.
+add-adding = Adding…
+add-cancel = Cancel
+# Selects the torrent that is in the list already.
+add-show = Show
+# Why Add is disabled, on one line under the form.
+add-reason-nothing-wanted = Choose at least one file
+add-reason-not-connected = Not connected to the server
+add-reason-in-list = This torrent is in the list already
+add-reason-folder-empty = Name a folder on the server
+add-reason-folder-not-absolute = The folder must be a full path on the server, from /
+add-reason-folder-control = The folder has a line break or another control character
+add-reason-folder-dot = The folder cannot have . or .. in its path
+# $max: the longest folder the server takes, in bytes (a number).
+add-reason-folder-too-long = The folder is longer than { $max } bytes
+add-reason-link-empty = Paste a magnet link
+# $max: the longest link taken, in bytes (a number).
+add-reason-link-too-long = The magnet link is longer than { $max } bytes
+add-reason-link-control = The magnet link has a line break or another control character
+add-reason-link-bare-hash = A bare info hash is no link: write it as magnet:?xt=urn:btih:…
+add-reason-link-not-magnet = This is not a magnet link: it must start with magnet:?
+add-reason-link-no-hash = The magnet link has no BitTorrent info hash
+add-reason-link-v2-only = The magnet link has only a BitTorrent v2 info hash, which the server cannot add
+add-reason-link-bad-hash = The info hash of the magnet link is not valid
+# $count: the info hashes the link has (a number).
+add-reason-link-several = The magnet link has { $count } info hashes, and may have only one
+
+## What became of a torrent to add, in a notification
+
+# A .torrent file that cannot be offered. $file: the name of the file; $reason: one of the
+# add-file-* messages.
+add-file-failed = Could not open { $file }: { $reason }
+add-file-missing = it does not exist
+add-file-denied = 4x4 may not read it
+add-file-unreadable = it could not be read
+add-file-not-file = it is not a file
+# $max: the size of the largest .torrent file read, such as "16.0 MiB".
+add-file-too-large = it is larger than { $max }
+add-file-not-torrent = it is not a torrent file
+add-file-no-info = it holds no torrent
+add-file-v2-only = it is a BitTorrent v2 torrent, which the server cannot add
+add-file-invalid = the server would refuse it as broken
+# $name: the torrent's name.
+add-duplicate = { $name } is in the list already
+add-unconfirmed = The server has not confirmed { $name } yet; it shows in the list once it is added
+# $name: the torrent's name; $reason: one of the connection-reason-* messages,
+# add-failed-not-connected, or the server's own text.
+add-failed = Could not add { $name }: { $reason }
+add-failed-not-connected = the server is not connected, so nothing was sent
+# More torrents than may wait. $count: those left out; $max: how many may wait (numbers).
+add-queue-full =
+    { $count ->
+        [one] { $count } more torrent was left out: at most { $max } wait to be added
+       *[other] { $count } more torrents were left out: at most { $max } wait to be added
+    }
+# What 4x4 was started with or handed, and does not open. $count: how many (a number); $reason:
+# one of the add-rejected-* messages, for the first of them.
+add-rejected =
+    { $count ->
+        [one] Could not open the item 4x4 was given: it is { $reason }
+       *[other] Could not open { $count } of the items 4x4 was given; the first is { $reason }
+    }
+add-rejected-url = a web address, and only magnet links and .torrent files can be added
+add-rejected-option = an option, and 4x4 has none
+add-rejected-bare-hash = a bare info hash, which must be given as a magnet link
+add-rejected-empty = empty
+add-rejected-not-text = a magnet link that is not text
+add-rejected-magnet = a magnet link the server cannot add
+add-rejected-other = no name of a file

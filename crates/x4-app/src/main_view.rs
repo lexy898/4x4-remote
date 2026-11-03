@@ -32,6 +32,9 @@
 //! torrents are removed, with or without their files. Their hashes and magnet links can be copied
 //! (the `copying` module). The `menu` module carries out the items of the context menu.
 //!
+//! Torrents to add come as requests from their sources and wait in a queue; the add dialog shows
+//! them one at a time, and nothing is added without the user's Add (the `adding` module).
+//!
 //! The status bar's turtle switches the daemon's alternative speed limits, and its limits button
 //! opens a popover that sets the normal ones (the `speed_controls` module); Ctrl+T and Ctrl+L do
 //! the same from the keyboard.
@@ -43,6 +46,7 @@
 //! the window size and the details panel) is saved a second after the last change, and when the
 //! window closes or the app quits (the `persistence` module).
 
+mod adding;
 mod copying;
 mod details;
 mod events;
@@ -158,6 +162,8 @@ pub struct MainView {
     selected_details: Option<HashString>,
     /// The height of the split when the panel was last fitted to it; `None` before the first fit.
     fitted_split: Option<Pixels>,
+    /// The torrents to add: the queue, the add dialog and the adds sent.
+    adds: adding::Adds,
     /// The event pump; dropping the view drops it, which cancels it.
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
@@ -283,6 +289,7 @@ impl MainView {
             details_split,
             selected_details: None,
             fitted_split: None,
+            adds: adding::Adds::default(),
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,

@@ -24,6 +24,11 @@
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
+//! - in the add dialog (`AddTorrent`), Enter is bound to nothing too: the dialog's own Enter would
+//!   close it from any field. A text field of the dialog still adds on Enter, through its own
+//!   event, and a focused button is pressed by it. Alt+Down opens the history of the folder field
+//!   (`FolderField`). The dialog lies beside the main window's content, so none of the window's
+//!   keys reach behind it; the keys of its file list are those of the Files tab;
 //! - only Ctrl+Q has no context. A binding without one also fires in a text field, before the
 //!   field's own binding of the same key, so it would take the key from the search box.
 //!
@@ -119,6 +124,8 @@ actions!(
         RaiseFilePriority,
         /// Lowers the priority of the file or folder under the file cursor by one step.
         LowerFilePriority,
+        /// Opens the history of folders under the folder field of the add dialog.
+        OpenFolderHistory,
     ]
 );
 
@@ -153,6 +160,14 @@ pub(crate) const FILE_LIST_CONTEXT: &str = "FileList";
 /// Where the file list's keys work: in it, while no menu of it is open. A priority menu is drawn
 /// inside the list, so without `!PopupMenu` its arrows would move the file cursor behind it.
 const FILES: &str = "FileList && !PopupMenu";
+/// The key context of the add dialog's content, inside gpui-component's `Dialog`.
+pub(crate) const ADD_DIALOG_CONTEXT: &str = "AddTorrent";
+/// The key context of the folder field of the add dialog, around its text field and the button of
+/// its history.
+pub(crate) const FOLDER_FIELD_CONTEXT: &str = "FolderField";
+/// The folder field while its history is not open: the history's menu is drawn inside the field,
+/// and keeps its own keys.
+const FOLDER_FIELD: &str = "FolderField && !PopupMenu";
 
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
@@ -522,6 +537,20 @@ pub const BINDINGS: &[Binding] = &[
         keys: "enter",
         action: || Box::new(NoAction),
         context: Some(REMOVAL_FOOTER_CONTEXT),
+    },
+    // The same in the add dialog, where the dialog's own Enter would close it from a field: a
+    // field's Enter adds through the field's own event, a focused button is pressed by it, and
+    // elsewhere Enter does nothing.
+    Binding {
+        keys: "enter",
+        action: || Box::new(NoAction),
+        context: Some(ADD_DIALOG_CONTEXT),
+    },
+    // The text field binds Alt+Down to nothing of its own.
+    Binding {
+        keys: "alt-down",
+        action: || Box::new(OpenFolderHistory),
+        context: Some(FOLDER_FIELD),
     },
 ];
 

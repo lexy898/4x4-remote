@@ -16,6 +16,11 @@
 //!   there, as a click would, for screenshots of a selected row.
 //! - `--extend K`, after `--select N`, then extends the selection `K` rows down, as Shift+Down
 //!   pressed `K` times would, for screenshots of several selected rows.
+//! - `--add PATH_OR_MAGNET`, which may be given several times, asks the window to add each
+//!   `.torrent` file or magnet link at the start, as launch arguments would, for screenshots of
+//!   the add dialog. The arguments are told apart as launch arguments are, and the ones 4x4 does
+//!   not open make their notification. Nothing is added until Add is pressed, and then only to
+//!   the made-up daemon.
 //! - `--right-click`, after `--select N` (and `--extend K`), then right-clicks the row `N` with
 //!   the mouse, which opens its context menu, for screenshots of the menu.
 //! - `--press KEY`, which may be given several times, presses each key in turn once the list is
@@ -31,6 +36,8 @@ mod daemon;
 mod frames;
 
 use std::env;
+use std::ffi::OsStr;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -38,12 +45,14 @@ use gpui_kit::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point,
     point, px,
 };
+use x4_app::adding::AddRequest;
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
+use x4_core::launch::{LaunchArg, classify};
 use x4_core::service;
-use x4_core::{EngineConfig, UiState};
+use x4_core::{AddItem, EngineConfig, UiState};
 use x4_rpc::Client;
 
 use crate::daemon::{Activity, SyntheticDaemon};
@@ -74,6 +83,7 @@ fn main() -> anyhow::Result<()> {
         extend = options.extend,
         right_click = options.right_click,
         press = ?options.press,
+        adds = options.add.len(),
         "synthetic daemon"
     );
     let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
@@ -85,7 +95,11 @@ fn main() -> anyhow::Result<()> {
         config_problem: None,
     };
     let scroll = options.scroll;
+    let cwd = env::current_dir()?;
     app::run_driven(started, startup, move |window, view, cx| {
+        if !options.add.is_empty() {
+            ask_to_add(window, &view, &options.add, &cwd, cx);
+        }
         if options.select.is_some() || !options.press.is_empty() {
             drive_when_listed(window, view.clone(), options, cx);
         }
@@ -141,6 +155,56 @@ fn drive_when_listed(
         }
     })
     .detach();
+}
+
+/// Asks the main window `window`, whose view is `view`, to add `args`, told apart as launch
+/// arguments run in `cwd` are: the `.torrent` files and magnet links in one request, the rest in
+/// another, which the window shows as one notification.
+fn ask_to_add(
+    window: AnyWindowHandle,
+    view: &Entity<MainView>,
+    args: &[String],
+    cwd: &Path,
+    cx: &mut App,
+) {
+    let (adds, requests) = async_channel::unbounded();
+    let listening = window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| view.listen_for_adds(requests, window, cx));
+    });
+    if let Err(error) = listening {
+        tracing::error!(%error, "the window cannot take torrents to add");
+        return;
+    }
+    let (items, rejected) = add_requests(args, cwd);
+    tracing::info!(
+        items = items.len(),
+        rejected = rejected.len(),
+        "asking to add torrents"
+    );
+    let requests = [
+        (!items.is_empty()).then_some(AddRequest::Items(items)),
+        (!rejected.is_empty()).then_some(AddRequest::Rejected(rejected)),
+    ];
+    for request in requests.into_iter().flatten() {
+        if adds.try_send(request).is_err() {
+            tracing::error!("the window stopped taking torrents to add");
+        }
+    }
+}
+
+/// The items to add of `args`, told apart as launch arguments run in `cwd` are, and the
+/// arguments refused.
+fn add_requests(args: &[String], cwd: &Path) -> (Vec<AddItem>, Vec<x4_core::launch::RejectedArg>) {
+    let mut items = Vec::new();
+    let mut rejected = Vec::new();
+    for arg in args {
+        match classify(OsStr::new(arg), cwd) {
+            LaunchArg::Magnet(link) => items.push(AddItem::Magnet(Some(link))),
+            LaunchArg::File(path) => items.push(AddItem::File(path)),
+            LaunchArg::Rejected(refused) => rejected.push(refused),
+        }
+    }
+    (items, rejected)
 }
 
 /// Presses `keys` in `window`, as the keyboard would: the keystroke goes through the key bindings
@@ -261,6 +325,8 @@ struct Options {
     right_click: bool,
     /// The keys to press in turn, in gpui's spelling.
     press: Vec<String>,
+    /// The `.torrent` files and magnet links to ask to add at the start.
+    add: Vec<String>,
 }
 
 impl Options {
@@ -300,9 +366,15 @@ impl Options {
                     })?;
                     options.press.push(keys);
                 }
+                "--add" => {
+                    let item = args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--add needs a .torrent file or a magnet link")
+                    })?;
+                    options.add.push(item);
+                }
                 other => anyhow::bail!(
                     "unknown argument {other:?}; the options are --static, --scroll, --select N, \
-                     --extend K, --right-click and --press KEY"
+                     --extend K, --right-click, --press KEY and --add PATH_OR_MAGNET"
                 ),
             }
         }
@@ -335,6 +407,7 @@ mod tests {
                 extend: 0,
                 right_click: false,
                 press: Vec::new(),
+                add: Vec::new(),
             }
         );
     }
@@ -350,6 +423,7 @@ mod tests {
                 extend: 0,
                 right_click: false,
                 press: Vec::new(),
+                add: Vec::new(),
             }
         );
     }
@@ -397,6 +471,42 @@ mod tests {
         assert!(missing.to_string().contains("ctrl-p"), "{missing}");
         let invalid = parse(&["--press", "p-ctrl"]).expect_err("the key comes last");
         assert!(invalid.to_string().contains("\"p-ctrl\""), "{invalid}");
+    }
+
+    #[test]
+    fn add_takes_files_and_links_in_order() {
+        let link = format!("magnet:?xt=urn:btih:{}", "a".repeat(40));
+        let options =
+            parse(&["--add", "show.torrent", "--add", &link, "--static"]).expect("two items");
+        assert_eq!(options.add, ["show.torrent", link.as_str()]);
+        let missing = parse(&["--add"]).expect_err("nothing to add");
+        assert!(missing.to_string().contains("magnet link"), "{missing}");
+    }
+
+    #[test]
+    fn the_items_to_add_are_told_apart_as_launch_arguments() {
+        let link = format!("magnet:?xt=urn:btih:{}", "b".repeat(40));
+        let args = [
+            "show.torrent".to_owned(),
+            link.clone(),
+            "https://example.org/a.torrent".to_owned(),
+        ];
+
+        let (items, rejected) = add_requests(&args, Path::new("/home/user"));
+
+        assert_eq!(
+            items,
+            [
+                AddItem::File("/home/user/show.torrent".into()),
+                AddItem::Magnet(Some(x4_rpc::MagnetLink::parse(&link).expect("a link"))),
+            ]
+        );
+        assert_eq!(
+            rejected,
+            [x4_core::launch::RejectedArg {
+                kind: x4_core::launch::RejectKind::Url
+            }]
+        );
     }
 
     #[test]

@@ -328,6 +328,33 @@ and while it is not connected; an open popover then keeps what was typed, and Ap
 connection. A change that fails shows a notification, as an action does, one for the turtle and one
 for each limit.
 
+The add dialog shows the torrents to add, one at a time; nothing is added until you press Add. A
+`.torrent` file is read only when its turn comes, and one that is not a regular file of at most 16
+MiB, or not a torrent the daemon can add, is skipped with a notification that names it and says
+why. At most 100 torrents wait; a notification says how many more were left out. The title says
+which torrent of how many it shows, such as "Add torrent (2 of 5)", under it come the torrent's
+name and size, and for a magnet link its field, checked as you type, with the link's name or its
+hash. The folder on the server starts as the daemon's download folder. The button beside it, or
+`Alt+Down`, offers that folder, the last 10 folders torrents were added to (remembered between
+runs) and the folders of the torrents in the list. Half a second after you stop typing, 4x4 asks the
+daemon how much space is free in the folder, once per folder while the dialog is open: the line
+under the field gives the free space, says "New folder" with the free space of the nearest folder
+above it that exists, or says that the free space is unknown. A `.torrent` lists its files as a
+tree with checkboxes, every file wanted at first, which the keys of the Files tab move through
+(without the priorities); when its list of files could be read in more than one way, or is too
+large to choose from, all the files are added and the dialog says why. "Start immediately" starts
+as the daemon's setting for new torrents. Add stays disabled, with the reason under the form, until
+a file is wanted, the folder is a full path on the server without `.` or `..`, the magnet link is
+valid and the daemon is connected; for a torrent in the list already, Show selects it instead. Add
+sends the torrent once and says "Adding…" until the daemon answers. The dialog then shows the next
+torrent or closes, and the new torrent is selected as soon as it is in the list, with the filter
+and the search cleared if they would hide it. A torrent the daemon has already is selected, with a
+notification; one whose add the daemon does not confirm in time is selected if it shows up later;
+a failure shows a notification and keeps the form, to try again. The next torrent keeps the folder
+and "Start immediately" you chose. `Enter` in a field adds, `Cancel` or `Escape` skips the torrent,
+a click beside the dialog does nothing, and files dropped on the dialog join the queue. While the
+dialog that removes torrents is open, the torrents to add wait for it to close.
+
 When the daemon stops answering, the last data stays on screen, with the list, the counts in the
 sidebar and the numbers in the status bar dimmed, until it answers again. If the part of 4x4 that
 talks to the daemon stops or cannot start, the status bar says "Service stopped" or "Service could
@@ -375,6 +402,9 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `+`, `-`                                            | in the file list          | raise or lower its priority                  |
 | `Enter`                                             | in the speed limits       | applies them                                 |
 | `Escape`                                            | in the speed limits       | closes them and changes nothing              |
+| `Enter`                                             | in the add dialog         | adds it from a field, or presses the button  |
+| `Escape`                                            | in the add dialog         | skips the torrent shown; adds nothing        |
+| `Alt+Down`                                          | in the folder field       | opens the folders used lately                |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
 
@@ -688,8 +718,10 @@ folders; their pieces follow the download, from the start when it is in order. `
 which can be given several times, presses each key in turn once the list is there and selected,
 one every three seconds, as on the keyboard: for example `just virtual just
 demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
-it again, and `--press shift-delete` opens the dialog that would delete its files. `just virtual
-just demo-synthetic --scroll` runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up
+it again, and `--press shift-delete` opens the dialog that would delete its files. `--add
+PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent` file or magnet
+link at the start, as if 4x4 had been opened with them, which opens the add dialog; what it does not
+open makes its notification. `just virtual just demo-synthetic --scroll` runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up
 daemon logs each request it answers with the bytes of the request and of the answer, which is how
 the requests and the bytes the app asks of a daemon are counted (see [Performance](#performance)).
 The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build does not

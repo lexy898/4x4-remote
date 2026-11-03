@@ -21,7 +21,8 @@
 //!
 //! The light dialog is built the same way, with Remove focused, so that Enter removes from the
 //! list. Closing either dialog gives the focus back to what had it when it opened, which the main
-//! view makes the torrent list.
+//! view makes the torrent list, and tells the main view, whose torrents to add wait while a
+//! removal dialog is open.
 //!
 //! The pointer cannot press either confirm button by accident. A menu item opens its dialog on
 //! the first click of a double-click, and the second click lands on whatever the dialog has put
@@ -176,8 +177,11 @@ pub(crate) fn open(
         let connected = view
             .upgrade()
             .is_some_and(|view| view.read(cx).status().connected());
+        let closed_view = view.clone();
         dialog
             .close_button(false)
+            // Escape and a click beside the dialog close it without its buttons.
+            .on_close(move |_, window, cx| closed(&closed_view, window, cx))
             .title(text_line("removal-title", &removal.title).test_support())
             .child(body(&removal, cx))
             .footer(footer(&removal, &focus, connected, &view, &arming))
@@ -248,10 +252,11 @@ fn footer(
     arming: &Rc<Arming>,
 ) -> impl IntoElement + use<> {
     let ids = ButtonIds::of(removal.data);
+    let cancel_view = view.clone();
     let cancel = Button::new(ids.cancel)
         .label(t!("remove-cancel"))
         .track_focus(&focus.cancel)
-        .on_click(|_, window, cx| window.close_dialog(cx));
+        .on_click(move |_, window, cx| close(&cancel_view, window, cx));
     let confirm = Button::new(ids.confirm)
         .track_focus(&focus.confirm)
         .disabled(!connected)
@@ -315,12 +320,26 @@ fn confirm(removal: &Removal, view: &WeakEntity<MainView>, window: &mut Window, 
     match view.update(cx, |view, cx| {
         view.confirm_removal(removal.data, hashes, window, cx)
     }) {
-        Ok(true) => window.close_dialog(cx),
+        Ok(true) => close(view, window, cx),
         Ok(false) => {}
         Err(error) => {
             tracing::debug!(%error, "a removal was confirmed after the window closed");
             window.close_dialog(cx);
         }
+    }
+}
+
+/// Closes the dialog from one of its buttons, and tells `view`, whose torrents to add may wait for
+/// it.
+fn close(view: &WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
+    window.close_dialog(cx);
+    closed(view, window, cx);
+}
+
+/// Tells `view` that the dialog closed, so that the torrents to add that waited for it come.
+fn closed(view: &WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
+    if let Err(error) = view.update(cx, |view, cx| view.dialog_closed(window, cx)) {
+        tracing::debug!(%error, "a removal dialog closed after the window did");
     }
 }
 

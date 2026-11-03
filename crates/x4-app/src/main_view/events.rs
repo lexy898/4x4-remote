@@ -26,18 +26,12 @@ impl MainView {
                 Event::MagnetLinks { id, result } => {
                     self.magnet_links_read(id, result, window, cx);
                 }
-                // Nothing in the window adds torrents or asks about a folder yet, so these answer
-                // no one.
-                Event::AddFinished { id, result } => tracing::warn!(
-                    id = id.0,
-                    ok = result.is_ok(),
-                    "an add finished that this window did not start"
-                ),
-                Event::FreeSpace { .. } => {
-                    tracing::debug!("ignored the free space of a folder no one asked about");
-                }
+                Event::AddFinished { id, result } => self.add_finished(id, result, window, cx),
+                Event::FreeSpace { path, answer } => self.free_space_read(path, answer, cx),
             }
         }
+        // After the batch, so that the dialog and the selection see its newest snapshot.
+        self.follow_adds(window, cx);
         if changed {
             cx.notify();
         }
@@ -68,7 +62,10 @@ pub(super) async fn pump(
             return;
         }
     }
-    if let Err(error) = view.update(cx, MainView::service_stopped) {
+    if let Err(error) = view.update_in(cx, |view, window, cx| {
+        view.service_stopped(cx);
+        view.follow_adds(window, cx);
+    }) {
         tracing::debug!(%error, "the service stopped after the window closed");
     }
 }

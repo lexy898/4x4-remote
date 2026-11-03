@@ -13,7 +13,8 @@
 //! them, the `removal` module the dialogs that ask before they are removed, the `clipboard` module
 //! the copies of their hashes and magnet links, and the `key_repeats` module tells a press of
 //! their keys from the repeats of a held key. The `speed_limits` module is the popover of the
-//! status bar that sets the daemon's speed limits. [`paths`] finds the config, state and log
+//! status bar that sets the daemon's speed limits. [`adding`] holds the requests to add torrents
+//! and the add dialog that offers them one at a time. [`paths`] finds the config, state and log
 //! locations, [`logging`] logs to stderr and a daily file there, and the `files` module reads
 //! `config.toml` and reads and writes `state.toml`; the `saving` module decides when the window's
 //! state is written, and the `window_state` module turns the window's bounds into the size to
@@ -23,6 +24,7 @@
 //! module.
 
 pub mod actions;
+pub mod adding;
 pub mod app;
 mod clipboard;
 mod context_menu;
