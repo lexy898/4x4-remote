@@ -5,6 +5,7 @@
 //! sentinels of `eta` and `upload_ratio`); turning them into the app's model is `x4-core`'s job.
 
 use std::fmt;
+use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT;
@@ -578,8 +579,9 @@ pub struct TorrentSet {
 pub enum AddSource {
     /// A magnet link, sent as `filename`.
     Magnet(MagnetLink),
-    /// The content of a `.torrent` file, sent base64-encoded as `metainfo`.
-    Metainfo(Vec<u8>),
+    /// The content of a `.torrent` file, sent base64-encoded as `metainfo`. It is shared, not
+    /// copied, with whoever read the file.
+    Metainfo(Arc<[u8]>),
 }
 
 impl fmt::Debug for AddSource {
@@ -952,7 +954,7 @@ mod tests {
             sequential_download: None,
         };
         let magnet = add(AddSource::Magnet(MagnetLink::parse(&link).unwrap()));
-        let metainfo = add(AddSource::Metainfo(content.clone()));
+        let metainfo = add(AddSource::Metainfo(Arc::from(content.as_slice())));
 
         for text in [format!("{magnet:?}"), format!("{magnet:#?}")] {
             for secret in ["magnet:?", "t.example", "passkey", "SECRET"] {

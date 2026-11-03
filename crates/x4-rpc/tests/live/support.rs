@@ -23,6 +23,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -210,7 +211,7 @@ impl TestTorrent {
     ) -> Self {
         let hash = metainfo.info_hash;
         let add = TorrentAdd {
-            source: AddSource::Metainfo(metainfo.bytes),
+            source: AddSource::Metainfo(Arc::from(metainfo.bytes)),
             download_dir: Some(env.remote_dir.clone()),
             paused: false,
             files_unwanted: Vec::new(),

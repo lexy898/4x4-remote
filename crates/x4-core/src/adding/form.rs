@@ -272,8 +272,7 @@ impl AddForm {
     ///   session is not known, the folder is always named;
     /// - adds the torrent paused unless "Start immediately" is set, and sets no priorities.
     ///
-    /// A `.torrent` is copied into the request, so call this when the form or the snapshot
-    /// changes, or when Add is pressed, rather than on every frame.
+    /// A `.torrent`'s content is shared with the form, not copied, so the check is cheap.
     #[must_use]
     pub fn check(&self, snapshot: &Snapshot, connected: bool) -> AddCheck {
         if !connected {
@@ -302,7 +301,7 @@ impl AddForm {
                     Some(choice) => choice.unwanted(),
                     None => Vec::new(),
                 };
-                (AddSource::Metainfo(bytes.to_vec()), files_unwanted)
+                (AddSource::Metainfo(Arc::clone(bytes)), files_unwanted)
             }
             Source::Magnet(Ok(link)) => (AddSource::Magnet(link.clone()), Vec::new()),
             Source::Magnet(Err(error)) => return AddCheck::BadLink(*error),

@@ -460,6 +460,7 @@ impl<T: Transport> Worker<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use serde_json::{Value, json};
@@ -802,7 +803,7 @@ mod tests {
     #[test]
     fn an_add_sends_metainfo_base64_folder_paused_and_unwanted_files() {
         let add = TorrentAdd {
-            source: AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec()),
+            source: AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..])),
             download_dir: Some(DownloadDir::new("/data/torrents/new//").unwrap()),
             paused: true,
             files_unwanted: vec![0, 2],

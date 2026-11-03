@@ -178,7 +178,7 @@ fn a_torrent_form_starts_with_every_file_wanted() {
     assert_eq!(
         check(&form),
         AddCheck::Ready(TorrentAdd {
-            source: AddSource::Metainfo(content().to_vec()),
+            source: AddSource::Metainfo(content()),
             download_dir: None,
             paused: false,
             files_unwanted: Vec::new(),
@@ -335,7 +335,7 @@ fn an_ambiguous_torrent_offers_all_files_only() {
 
     let add = ready(&form);
     assert_eq!(add.files_unwanted, Vec::<usize>::new());
-    assert_eq!(add.source, AddSource::Metainfo(content().to_vec()));
+    assert_eq!(add.source, AddSource::Metainfo(content()));
     assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
 }
 
@@ -382,10 +382,7 @@ fn a_magnet_form_never_sends_unwanted_files() {
     // A `.torrent`'s form has no link to set.
     let mut torrent_form = form_of(&[("T/a", 1)]);
     torrent_form.set_link(link().as_str());
-    assert_eq!(
-        ready(&torrent_form).source,
-        AddSource::Metainfo(content().to_vec())
-    );
+    assert_eq!(ready(&torrent_form).source, AddSource::Metainfo(content()));
 }
 
 #[test]
@@ -583,7 +580,7 @@ fn a_loaded_torrent_holds_the_parse_of_its_own_bytes() {
     };
     assert_eq!(*parsed, parse_torrent(&bytes).unwrap());
     let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
-    assert_eq!(ready(&form).source, AddSource::Metainfo(bytes.to_vec()));
+    assert_eq!(ready(&form).source, AddSource::Metainfo(Arc::clone(&bytes)));
     assert_eq!(form.name(), Some("a.bin"));
     assert_eq!(wanted_rows(&form), [("a.bin".to_owned(), WantedState::All)]);
 
@@ -591,6 +588,21 @@ fn a_loaded_torrent_holds_the_parse_of_its_own_bytes() {
         LoadedItem::torrent(PathBuf::from(PATH), Arc::from(&b"not bencode"[..])).err(),
         Some(MetainfoError::NotBencode { offset: 0 })
     );
+}
+
+#[test]
+fn the_request_shares_the_bytes_that_were_parsed() {
+    let bytes = single_file_torrent("http://t.test/announce");
+    let item = LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(&bytes)).unwrap();
+    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
+
+    // The very bytes, not a copy, however often the form is checked.
+    for _ in 0..3 {
+        let AddSource::Metainfo(sent) = ready(&form).source else {
+            panic!("a .torrent goes as its content");
+        };
+        assert!(Arc::ptr_eq(&sent, &bytes));
+    }
 }
 
 #[test]

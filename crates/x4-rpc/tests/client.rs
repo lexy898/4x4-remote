@@ -437,7 +437,7 @@ fn an_add_resent_after_a_session_conflict_waits_as_long() {
     ]);
     let mut client = Client::new(fake.clone());
     let add = TorrentAdd {
-        source: AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec()),
+        source: AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..])),
         download_dir: None,
         paused: true,
         files_unwanted: Vec::new(),

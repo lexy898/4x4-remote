@@ -2,6 +2,8 @@
 //! never sends: no `ids` meaning "all torrents", no `[]` meaning "all files"), and how the
 //! recorded fixtures and synthetic results parse.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use x4_rpc::testing::fixtures::{TORRENT_GET_DETAILS, TORRENT_GET_LIST, TORRENT_GET_RECENT};
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
@@ -317,7 +319,7 @@ fn the_add_request_sends_a_magnet_as_filename_and_a_file_as_metainfo() {
     );
     // A file goes as its content, never as a name the daemon would read on its own disk.
     assert_eq!(
-        sent(AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec())),
+        sent(AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..]))),
         json!({
             "metainfo": "ZDQ6aW5mb2Q0Om5hbWUxOnhlZQ==",
             "paused": true,
@@ -332,7 +334,7 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
         "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
     }));
     let add = TorrentAdd {
-        source: AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec()),
+        source: AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..])),
         files_unwanted: vec![1],
         priority_high: vec![0],
         priority_low: vec![2, 3],
@@ -397,7 +399,7 @@ fn add_metainfo_is_base64() {
         "torrent_added": { "id": 9, "name": "x.bin", "hash_string": HASH }
     }));
     let add = TorrentAdd {
-        source: AddSource::Metainfo(metainfo),
+        source: AddSource::Metainfo(Arc::from(metainfo)),
         ..magnet_add()
     };
 
