@@ -452,7 +452,18 @@ test_guard_blocks_the_default_handler_script() {
         'bash scripts/default-handler.sh --yes' 'bash -x scripts/default-handler.sh' \
         'sh ./scripts/default-handler.sh --undo' 'env HOME=/tmp/x bash scripts/default-handler.sh --yes' \
         'source scripts/default-handler.sh' '. scripts/default-handler.sh --yes' \
-        'bash -c "scripts/default-handler.sh --yes"'
+        'bash -c "scripts/default-handler.sh --yes"' \
+        'bash -euo pipefail scripts/default-handler.sh --yes' \
+        'bash -eu -o pipefail scripts/default-handler.sh' 'bash -o pipefail ./scripts/default-handler.sh --undo' \
+        'bash -O extglob scripts/default-handler.sh' 'bash --rcfile /dev/null scripts/default-handler.sh' \
+        'sh -x -e scripts/default-handler.sh' 'bash -o pipefail -c "just default-handler"' \
+        'bash -euo pipefail -c "scripts/default-handler.sh --yes"'
+}
+
+test_guard_blocks_the_default_handler_behind_setsid() {
+    expect_blocked 'setsid just default-handler' 'setsid --wait scripts/default-handler.sh --yes' \
+        'setsid -f xdg-mime default a.desktop text/plain' \
+        'setsid --wait bash scripts/default-handler.sh --yes'
 }
 
 test_guard_blocks_xdg_mime_default() {
@@ -466,7 +477,11 @@ test_guard_allows_reading_and_testing_the_default_handler() {
     expect_allowed 'grep default-handler README.md' 'cat scripts/default-handler.sh' \
         'ls scripts/default-handler.sh' 'git add scripts/default-handler.sh' \
         'chmod +x scripts/default-handler.sh' 'bash -n scripts/default-handler.sh' \
-        'bash -xn scripts/default-handler.sh' 'echo just default-handler' \
+        'bash -xn scripts/default-handler.sh' 'bash -n -o pipefail scripts/default-handler.sh' \
+        'bash -euo pipefail scripts/hooks/test-hooks.sh default_handler' \
+        'bash -o pipefail scripts/hooks/test-hooks.sh guard_' \
+        'setsid --wait bash scripts/hooks/test-hooks.sh default_handler' 'setsid -f sleep 1' \
+        'echo just default-handler' \
         'git commit -m "feat: just default-handler, then xdg-mime default"' \
         'just --list' 'just test-hooks' 'just package' 'just check' \
         'bash scripts/hooks/test-hooks.sh default_handler' \
@@ -2451,6 +2466,7 @@ cases=(
     guard_blocks_unquoted_heredoc_substitution
     guard_blocks_the_default_handler_recipe
     guard_blocks_the_default_handler_script
+    guard_blocks_the_default_handler_behind_setsid
     guard_blocks_xdg_mime_default
     guard_allows_reading_and_testing_the_default_handler
     guard_tells_the_agent_to_ask_the_owner_about_default_apps

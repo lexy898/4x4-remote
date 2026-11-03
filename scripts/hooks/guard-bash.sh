@@ -22,7 +22,7 @@
 # ones (`\$(`, `\``) and the body of a heredoc with a quoted delimiter are plain text.
 #
 # This is a guard against mistakes and shortcuts, not a sandbox: a determined workaround
-# (an alias, a script file, an encoded string) is not detected.
+# (an alias, a variable, a script file, an encoded string) is not detected.
 set -euo pipefail
 shopt -s extglob
 export LC_ALL=C
@@ -478,7 +478,7 @@ strip_wrappers() { # <word...>
             '!' | '{' | '}' | if | then | elif | else | do | while | until | fi | done | time | command | builtin | exec | nohup)
                 ARGV=("${ARGV[@]:1}")
                 ;;
-            env | nice | timeout | stdbuf | xargs | sudo | doas)
+            env | nice | timeout | stdbuf | xargs | sudo | doas | setsid)
                 ARGV=("${ARGV[@]:1}")
                 while ((${#ARGV[@]} > 0)); do
                     case ${ARGV[0]} in
@@ -535,22 +535,33 @@ judge_simple() { # <depth> <word...> (redirections are judged by the caller)
             done
             ;;
         bash | sh | zsh | dash | ksh)
-            local noexec=0
+            # Options first: `-c` runs its argument as shell text; `-n` (a syntax check) runs
+            # nothing; `-o`, `-O` (alone or ending a cluster such as `-euo`) and `--rcfile` take
+            # the next word, which is not the script.
+            local noexec=0 command_string=0
             for ((i = 1; i < ${#argv[@]}; i++)); do
                 if [[ ${argv[i]} =~ ^-[A-Za-z]*c[A-Za-z]*$ ]]; then
                     judge_text "$((depth + 1))" "${argv[i + 1]:-}"
+                    command_string=1
                     break
                 fi
                 if [[ ${argv[i]} =~ ^-[A-Za-z]*n[A-Za-z]*$ ]]; then
-                    noexec=1 # a syntax check runs nothing
+                    noexec=1
                 fi
-                if [[ ${argv[i]} != -* ]]; then
-                    if ((!noexec)) && [[ ${argv[i]##*/} == default-handler.sh ]]; then
+                if [[ ${argv[i]} =~ ^[-+][A-Za-z]*[oO]$ || ${argv[i]} == --rcfile || ${argv[i]} == --init-file ]]; then
+                    i=$((i + 1))
+                    continue
+                fi
+                [[ ${argv[i]} == -* ]] || break
+            done
+            # Then any word that names the script: the option arguments above are not always known.
+            if ((!command_string && !noexec)); then
+                for ((i = 1; i < ${#argv[@]}; i++)); do
+                    if [[ ${argv[i]##*/} == default-handler.sh ]]; then
                         block_default_apps "running scripts/default-handler.sh changes the owner's default apps"
                     fi
-                    break
-                fi
-            done
+                done
+            fi
             ;;
         source | .)
             local sourced=${argv[1]:-}
