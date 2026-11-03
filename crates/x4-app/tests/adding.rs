@@ -301,6 +301,23 @@ impl Window {
         );
     }
 
+    /// Sends a snapshot like [`Window::send`] does, with `free` bytes free in the session's folder.
+    fn send_free(&self, free: u64, cx: &mut TestAppContext) {
+        self.send_event(
+            Event::Snapshot(Arc::new(Snapshot {
+                torrents: Vec::new(),
+                listed: true,
+                session: Some(session()),
+                free_space_bytes: Some(free),
+                rate_down: 0,
+                rate_up: 0,
+                connection: ConnectionState::Connected,
+                stale: false,
+            })),
+            cx,
+        );
+    }
+
     /// Sends `request` as a source of adds would and lets the window take it.
     #[expect(
         clippy::expect_used,
@@ -1606,4 +1623,24 @@ fn adds_still_out_when_the_service_stops_are_not_confirmed(cx: &mut TestAppConte
         Some("The server has not confirmed Show yet; it shows in the list once it is added")
     );
     assert!(!window.dialog_open(cx), "it moved on from the torrent sent");
+}
+
+#[gpui_kit::test]
+fn the_free_space_waits_for_typing_to_stop_across_a_session_change(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.request_torrent("show.torrent", &show(), cx);
+
+    window.retype(FOLDER, "/data/ne", cx);
+    Window::wait(200, cx);
+    // The session's folder has less room now: nothing that was unknown is forgotten.
+    window.send_free(SESSION_FREE - MIB, cx);
+    Window::wait(100, cx);
+    // The daemon is away and back, with nothing unknown to ask again.
+    window.send_with(Vec::new(), ConnectionState::Connecting, cx);
+    window.send(Vec::new(), cx);
+    Window::wait(199, cx);
+    assert_eq!(Window::free_space_in(&window.sent()), Vec::<String>::new());
+
+    Window::wait(1, cx);
+    assert_eq!(Window::free_space_in(&window.sent()), ["/data/ne"]);
 }

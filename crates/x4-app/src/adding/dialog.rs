@@ -274,8 +274,8 @@ impl AddDialog {
 
     /// Takes the newest `snapshot`, with the daemon `connected` or not. The first session that is
     /// known gives the folder and "Start immediately" the user has not set yet; when the daemon is
-    /// back, the free space that was not known is asked for again. Draws again only if what the
-    /// dialog shows changed.
+    /// back, the free space that was not known is asked for again at once. Draws again only if
+    /// what the dialog shows changed.
     pub(crate) fn follow(
         &mut self,
         snapshot: Option<Arc<Snapshot>>,
@@ -301,10 +301,12 @@ impl AddDialog {
                 }
                 changed = true;
             }
-            if self.space.follow(&snapshot, connected) {
+            let space = self.space.follow(&snapshot, connected);
+            // Only answers forgotten are asked for at once; the delay after an edit holds.
+            if space.ask_again {
                 self.ask_free_space(cx);
-                changed = true;
             }
+            changed |= space.changed;
         }
         changed |= self.refresh_picks();
         changed |= self.recheck();

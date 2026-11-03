@@ -32,7 +32,7 @@ mod selection;
 pub use defaults::{FormDefaults, TakenDefaults};
 pub use folders::{MAX_FOLDER_PICKS, folder_picks};
 pub use form::{AddCheck, AddForm, LoadedItem, LoadedTorrent, NoChoiceReason};
-pub use free_space::{FREE_SPACE_DELAY, FreeSpaceCache};
+pub use free_space::{FREE_SPACE_DELAY, FreeSpaceCache, FreeSpaceFollow};
 pub use outcome::{AddNotice, AddOutcome, FormStep, SentAdd, add_outcome};
 pub use queue::{AddItem, AddQueue, QUEUE_CAP};
 pub use selection::{PENDING_SELECTION_LIFE, PendingSelection, Reveal};
