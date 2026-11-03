@@ -110,6 +110,28 @@ sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
 To uninstall, run `sudo pacman -R 4x4-git`. Your `config.toml`, `state.toml` and logs stay (see
 [Files and logs](#files-and-logs)).
 
+To open `.torrent` files and magnet links with 4x4, in Dolphin and in a browser, make it their
+default app once after installing:
+
+```bash
+just default-handler
+```
+
+It shows what `application/x-bittorrent` and `x-scheme-handler/magnet` open with now, asks on the
+terminal whether to go on, runs `xdg-mime default` for both and prints what they open with
+afterwards. That writes two lines to `~/.config/mimeapps.list` and nothing else. A browser may ask
+once more the first time it meets a magnet link, offering 4x4 as the system default. The command
+needs 4x4 installed, refuses to run as root, and refuses without a terminal unless `--yes` answers
+the question. If a list for your desktop (such as `~/.config/kde-mimeapps.list`) still names
+another app, it says so and exits 1.
+
+`just default-handler --undo` gives them back: after asking, it removes exactly the entries the
+first command made and leaves the rest of the file as it was, so both types open with what the
+system picks again (Deluge, for example). It works after uninstalling too, and the entries stay
+in the file until it runs. If you had chosen an app for these types by name before (in System
+Settings), the first command replaced that choice, and the undo cannot bring it back: choose it
+again there, or with `xdg-mime default <app>.desktop <type>`.
+
 The installed 4x4 and a debug build (`just run`) run side by side. The debug build has its own app
 id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links to the other, and
 window rules for the one never catch the other. But both read the same `config.toml` and write the

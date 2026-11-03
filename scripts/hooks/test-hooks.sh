@@ -3,7 +3,8 @@
 # Every case works in a throwaway directory under a temp root; the real repository
 # and its target/.agent-hooks state are never touched. Prints "ok <case>" per case, or
 # "skip <case>: <why>" for a case that needs a tool this machine lacks (makepkg off Arch Linux),
-# and exits 1 on the first failure.
+# and exits 1 on the first failure. Arguments select the cases to run, by part of their name:
+# `bash scripts/hooks/test-hooks.sh default_handler`.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -15,8 +16,10 @@ lint_policy=$root/scripts/lint-policy.sh
 measure_lib=$root/scripts/measure-lib.sh
 measure=$root/scripts/measure.sh
 virtual_session=$root/scripts/virtual-session.sh
+default_handler=$root/scripts/default-handler.sh
 pkgbuild=$root/packaging/arch/PKGBUILD
 icon=$root/packaging/linux/io.github.lexy898.FourByFour.svg
+desktop_file=$root/packaging/linux/io.github.lexy898.FourByFour.desktop
 
 # Do not leak a surrounding git hook or agent session into the temp repos.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE CLAUDE_PROJECT_DIR X4_STOP_CHECK_CMD X4_TOOLCHAIN_ID_CMD
@@ -1414,6 +1417,422 @@ xlink a link outside the file: https://example.invalid/a.svg#a
 EOF
 }
 
+# The default-handler cases run the script in a throwaway desktop: its own home, config, data and
+# cache dirs, a share with the 4x4 desktop file and a stand-in torrent client (deluge) that the
+# system picks until a default is set, stand-in executables on PATH (xdg-mime answers only for an
+# app whose executable exists), and nothing of the caller's environment (env -i: no D-Bus, display,
+# KDE session or XDG dir of the owner). Neither the owner's mimeapps.list nor the owner's session is
+# reachable from it. The script asks on /dev/tty: setsid takes the terminal away, a pty gives one.
+desktop_id=io.github.lexy898.FourByFour.desktop
+desktop=
+desktop_env=()
+
+# A mimeapps.list with other entries, an association to deluge and a default for another app.
+mimeapps_seed='[Added Associations]
+application/x-bittorrent=deluge.desktop;
+text/plain=kate.desktop;
+
+[Default Applications]
+text/plain=kate.desktop
+x-scheme-handler/http=firefox.desktop
+
+[Removed Associations]
+image/png=gwenview.desktop;
+'
+# The same list after `xdg-mime default` for 4x4, on a desktop that is not KDE.
+mimeapps_with_4x4="[Added Associations]
+application/x-bittorrent=deluge.desktop;
+text/plain=kate.desktop;
+
+[Default Applications]
+text/plain=kate.desktop
+x-scheme-handler/http=firefox.desktop
+application/x-bittorrent=$desktop_id
+x-scheme-handler/magnet=$desktop_id
+
+[Removed Associations]
+image/png=gwenview.desktop;
+"
+
+need_default_handler_tools() {
+    local tool
+    for tool in xdg-mime setsid python3; do
+        command -v "$tool" >/dev/null 2>&1 || fail "$tool not found; the default-handler cases need it"
+    done
+}
+
+# new_desktop: sets $desktop to a new throwaway desktop and $desktop_env to the command that runs
+# another command inside it.
+new_desktop() {
+    need_default_handler_tools
+    desktop=$(mktemp -d "$tmp_root/desktop.XXXXXX")
+    mkdir -p "$desktop"/{home,config,data,cache,etc,bin,share/applications}
+    printf '#!/bin/sh\n' >"$desktop/bin/4x4"
+    printf '#!/bin/sh\n' >"$desktop/bin/deluge-gtk"
+    chmod +x "$desktop/bin/4x4" "$desktop/bin/deluge-gtk"
+    printf '[Desktop Entry]\nType=Application\nName=Deluge\nExec=deluge-gtk %%U\nMimeType=%s\n' \
+        'application/x-bittorrent;x-scheme-handler/magnet;' >"$desktop/share/applications/deluge.desktop"
+    printf '[MIME Cache]\napplication/x-bittorrent=deluge.desktop;%s;\nx-scheme-handler/magnet=deluge.desktop;%s;\n' \
+        "$desktop_id" "$desktop_id" >"$desktop/share/applications/mimeinfo.cache"
+    cp "$desktop_file" "$desktop/share/applications/" 2>/dev/null || fail "no desktop file at $desktop_file"
+    desktop_env=(env -i "PATH=$desktop/bin:$PATH" "HOME=$desktop/home" "XDG_CONFIG_HOME=$desktop/config"
+        "XDG_DATA_HOME=$desktop/data" "XDG_CACHE_HOME=$desktop/cache" "XDG_CONFIG_DIRS=$desktop/etc"
+        "XDG_DATA_DIRS=$desktop/share" XDG_CURRENT_DESKTOP=X-Generic)
+}
+
+# What the system opens <mime type> with in the desktop.
+desktop_default_for() { # <mime type>
+    "${desktop_env[@]}" xdg-mime query default "$1"
+}
+
+# Without a terminal: setsid gives the script a session that has none.
+run_default_handler() { # <argument>...
+    run_with_input '' setsid --wait "${desktop_env[@]}" "$default_handler" "$@"
+}
+
+# With a pty as its terminal, on which <answer> is typed once the question is asked; $stdout holds
+# what the terminal showed.
+run_default_handler_on_terminal() { # <answer> <argument>...
+    local answer=$1
+    shift
+    run_with_input '' python3 -I -c '
+import os
+import pty
+import select
+import sys
+import time
+
+answer, command = sys.argv[1], sys.argv[2:]
+pid, terminal = pty.fork()
+if pid == 0:
+    os.execvp(command[0], command)
+shown = b""
+asked = False
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    if not select.select([terminal], [], [], 0.2)[0]:
+        continue
+    try:
+        chunk = os.read(terminal, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    shown += chunk
+    if not asked and shown.rstrip().endswith(b"[y/N]"):
+        os.write(terminal, answer.encode() + b"\n")
+        asked = True
+else:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    sys.stdout.buffer.write(shown)
+    sys.exit("the script did not finish in 30 seconds")
+sys.stdout.buffer.write(shown)
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+' "$answer" "${desktop_env[@]}" "$default_handler" "$@"
+}
+
+expect_file() { # <path> <expected content, exactly>
+    cmp -s "$1" <(printf '%s' "$2") || fail "unexpected content in $1: $(cat "$1")"
+}
+
+# Nothing but mimeapps.list was written, and no temporary copy of it is left.
+expect_only_the_list_written() {
+    local written
+    written=$(cd "$desktop" && find home data cache etc config -mindepth 1 | LC_ALL=C sort | paste -sd ' ')
+    [[ $written == "config/mimeapps.list" ]] || fail "expected only config/mimeapps.list, found: $written"
+}
+
+test_default_handler_makes_4x4_the_default_for_torrents_and_magnet_links() {
+    new_desktop
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    [[ $(desktop_default_for application/x-bittorrent) == deluge.desktop ]] ||
+        fail "the desktop did not start with deluge for torrents"
+    run_default_handler --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_with_4x4"
+    expect_only_the_list_written
+    expect_contains "application/x-bittorrent: $desktop_id" "$stdout" stdout
+    expect_contains "x-scheme-handler/magnet: $desktop_id" "$stdout" stdout
+    [[ $(desktop_default_for application/x-bittorrent) == "$desktop_id" ]] || fail "torrents do not open with 4x4"
+    [[ $(desktop_default_for x-scheme-handler/magnet) == "$desktop_id" ]] || fail "magnet links do not open with 4x4"
+}
+
+test_default_handler_works_without_a_mimeapps_list() {
+    new_desktop
+    run_default_handler --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "
+[Default Applications]
+application/x-bittorrent=$desktop_id
+x-scheme-handler/magnet=$desktop_id
+"
+    [[ $(desktop_default_for x-scheme-handler/magnet) == "$desktop_id" ]] || fail "magnet links do not open with 4x4"
+}
+
+test_default_handler_undo_restores_the_list_byte_for_byte() {
+    new_desktop
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_default_handler --yes
+    expect_status 0
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    expect_only_the_list_written
+    expect_contains "application/x-bittorrent: deluge.desktop" "$stdout" stdout
+    expect_contains "x-scheme-handler/magnet: deluge.desktop" "$stdout" stdout
+}
+
+# `xdg-mime default` on KDE (xdg-utils 1.2.1, KDE_SESSION_VERSION 6) also writes [Added
+# Associations]: puts the app first in the list of a type that has one, adds a bare line for a type
+# that has none. The list below is such output, with the [Default Applications] lines as the
+# generic writer makes them (one of them with the closing ";" other writers use).
+test_default_handler_undo_removes_what_xdg_mime_writes_on_kde() {
+    new_desktop
+    printf '%s' "[Added Associations]
+application/x-bittorrent=$desktop_id;deluge.desktop;
+text/plain=kate.desktop;
+x-scheme-handler/magnet=$desktop_id
+
+[Default Applications]
+text/plain=kate.desktop
+application/x-bittorrent=$desktop_id
+x-scheme-handler/magnet=$desktop_id;
+
+[Removed Associations]
+image/png=gwenview.desktop;
+" >"$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "[Added Associations]
+application/x-bittorrent=deluge.desktop;
+text/plain=kate.desktop;
+
+[Default Applications]
+text/plain=kate.desktop
+
+[Removed Associations]
+image/png=gwenview.desktop;
+"
+}
+
+test_default_handler_undo_keeps_other_apps_entries_for_the_same_types() {
+    new_desktop
+    printf '%s' "[Default Applications]
+application/x-bittorrent=deluge.desktop
+x-scheme-handler/magnet=${desktop_id}.old
+text/plain=$desktop_id
+
+[Other]
+application/x-bittorrent=$desktop_id
+" >"$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "[Default Applications]
+application/x-bittorrent=deluge.desktop
+x-scheme-handler/magnet=${desktop_id}.old
+text/plain=$desktop_id
+
+[Other]
+application/x-bittorrent=$desktop_id
+"
+}
+
+test_default_handler_undo_keeps_a_missing_final_newline() {
+    new_desktop
+    printf '%s' "[Default Applications]
+application/x-bittorrent=$desktop_id
+text/plain=kate.desktop" >"$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "[Default Applications]
+text/plain=kate.desktop"
+    printf '%s' "[Default Applications]
+text/plain=kate.desktop
+application/x-bittorrent=$desktop_id" >"$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "[Default Applications]
+text/plain=kate.desktop
+"
+}
+
+test_default_handler_undo_works_after_4x4_is_uninstalled() {
+    new_desktop
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_default_handler --yes
+    expect_status 0
+    rm "$desktop/share/applications/$desktop_id" "$desktop/bin/4x4"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+}
+
+test_default_handler_undo_with_nothing_to_undo_leaves_the_list_alone() {
+    new_desktop
+    run_default_handler --undo --yes
+    expect_status 0
+    [[ -z $(ls -A "$desktop/config") ]] || fail "the undo created a list: $(ls -A "$desktop/config")"
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    touch -d '2001-02-03 04:05:06' "$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    [[ $(stat -c %Y "$desktop/config/mimeapps.list") == "$(date -d '2001-02-03 04:05:06' +%s)" ]] ||
+        fail "the undo rewrote a list that had nothing of 4x4's"
+}
+
+test_default_handler_undo_edits_the_target_of_a_symlinked_list() {
+    new_desktop
+    mkdir "$desktop/dotfiles"
+    printf '%s' "$mimeapps_with_4x4" >"$desktop/dotfiles/mimeapps.list"
+    ln -s ../dotfiles/mimeapps.list "$desktop/config/mimeapps.list"
+    run_default_handler --undo --yes
+    expect_status 0
+    expect_file "$desktop/dotfiles/mimeapps.list" "$mimeapps_seed"
+    [[ -L $desktop/config/mimeapps.list ]] || fail "the symlink was replaced by a file"
+}
+
+test_default_handler_without_yes_and_without_a_terminal_changes_nothing() {
+    new_desktop
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_default_handler
+    expect_status 1
+    expect_contains "no terminal" "$stderr" stderr
+    expect_contains "--yes" "$stderr" stderr
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    printf '%s' "$mimeapps_with_4x4" >"$desktop/config/mimeapps.list"
+    run_default_handler --undo
+    expect_status 1
+    expect_contains "no terminal" "$stderr" stderr
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_with_4x4"
+    expect_only_the_list_written
+}
+
+test_default_handler_acts_only_on_a_yes_typed_on_the_terminal() {
+    local answer
+    new_desktop
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    for answer in n no "" " " yep 4x4; do
+        run_default_handler_on_terminal "$answer"
+        expect_status 1
+        expect_contains "Make 4x4 the default app for .torrent files and magnet links?" "$stdout" "the question"
+        expect_contains "application/x-bittorrent: now deluge.desktop" "$stdout" "the question"
+        expect_contains "not confirmed" "$stdout" "the refusal"
+        expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    done
+    run_default_handler_on_terminal y
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_with_4x4"
+    run_default_handler_on_terminal n --undo
+    expect_status 1
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_with_4x4"
+    run_default_handler_on_terminal Yes --undo
+    expect_status 0
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+}
+
+test_default_handler_refuses_when_4x4_is_not_installed() {
+    new_desktop
+    rm "$desktop/share/applications/$desktop_id"
+    run_default_handler --yes
+    expect_status 1
+    expect_contains "$desktop_id is not installed" "$stderr" stderr
+    [[ -z $(find "$desktop/config" "$desktop/home" "$desktop/data" "$desktop/cache" -mindepth 1) ]] ||
+        fail "the script wrote something: $(find "$desktop" -name 'mimeapps*')"
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_default_handler_on_terminal y
+    expect_status 1
+    expect_contains "$desktop_id is not installed" "$stdout" "the refusal"
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+}
+
+# 4x4's desktop file in the user's own applications dir counts as installed too.
+test_default_handler_finds_4x4_in_the_users_data_dir() {
+    new_desktop
+    mkdir -p "$desktop/data/applications"
+    mv "$desktop/share/applications/$desktop_id" "$desktop/data/applications/"
+    run_default_handler --yes
+    expect_status 0
+    expect_contains "x-scheme-handler/magnet: $desktop_id" "$stdout" stdout
+}
+
+# A list for the current desktop outranks mimeapps.list: the script says that 4x4 did not win.
+test_default_handler_reports_a_choice_that_another_list_overrides() {
+    new_desktop
+    printf '[Default Applications]\napplication/x-bittorrent=deluge.desktop\n' \
+        >"$desktop/config/x-generic-mimeapps.list"
+    run_default_handler --yes
+    expect_status 1
+    expect_contains "application/x-bittorrent: deluge.desktop" "$stdout" stdout
+    expect_contains "x-scheme-handler/magnet: $desktop_id" "$stdout" stdout
+    expect_contains "application/x-bittorrent" "$stderr" stderr
+    expect_contains "still opens with another app" "$stderr" stderr
+    [[ $stderr != *x-scheme-handler/magnet* ]] || fail "the script blamed the magnet type too: $stderr"
+}
+
+# The 4x4 executable is missing from PATH: xdg-mime ignores the desktop file then.
+test_default_handler_reports_a_choice_that_does_not_take_effect() {
+    new_desktop
+    rm "$desktop/bin/4x4"
+    run_default_handler --yes
+    expect_status 1
+    expect_contains "still opens with another app" "$stderr" stderr
+    expect_contains "undo" "$stderr" stderr
+}
+
+test_default_handler_refuses_to_run_as_root() {
+    new_desktop
+    if ! unshare -r true 2>/dev/null; then
+        skip "unprivileged user namespaces are not available"
+        return
+    fi
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_with_input '' unshare -r "${desktop_env[@]}" "$default_handler" --yes
+    expect_status 1
+    expect_contains "root" "$stderr" stderr
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+    run_with_input '' unshare -r "${desktop_env[@]}" "$default_handler" --undo --yes
+    expect_status 1
+    expect_contains "root" "$stderr" stderr
+}
+
+# `just default-handler` with a stand-in script that only records its arguments: the recipe hands
+# every argument over as given, so that the real script sees --undo and --yes.
+test_default_handler_recipe_passes_its_arguments_to_the_script() {
+    local dir
+    dir=$(mktemp -d "$tmp_root/default-handler-recipe.XXXXXX")
+    mkdir "$dir/scripts"
+    cp "$root/justfile" "$dir/"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s/arguments"\n' "$dir" >"$dir/scripts/default-handler.sh"
+    chmod +x "$dir/scripts/default-handler.sh"
+    run_with_input '' just --justfile "$dir/justfile" default-handler --undo --yes "two words"
+    expect_status 0
+    [[ $(<"$dir/arguments") == $'--undo\n--yes\ntwo words' ]] ||
+        fail "the script got other arguments: $(<"$dir/arguments")"
+}
+
+test_default_handler_rejects_unknown_options() {
+    new_desktop
+    printf '%s' "$mimeapps_seed" >"$desktop/config/mimeapps.list"
+    run_default_handler --remove --yes
+    expect_status 2
+    expect_contains "usage: scripts/default-handler.sh [--undo] [--yes]" "$stderr" stderr
+    run_default_handler --yes extra
+    expect_status 2
+    expect_file "$desktop/config/mimeapps.list" "$mimeapps_seed"
+}
+
+test_default_handler_names_a_missing_xdg_mime() {
+    local bin
+    new_desktop
+    bin=$(mktemp -d "$tmp_root/bin.XXXXXX")
+    run_with_input '' env -i "PATH=$bin" "HOME=$desktop/home" "$BASH" "$default_handler" --yes
+    expect_status 127
+    expect_contains "xdg-mime not found" "$stderr" stderr
+    expect_contains "xdg-utils" "$stderr" stderr
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -1496,11 +1915,38 @@ cases=(
     package_recipe_builds_the_committed_master_under_the_cache_dir
     icon_is_a_square_svg_without_text_images_or_links
     icon_check_catches_what_does_not_belong_in_an_icon
+    default_handler_makes_4x4_the_default_for_torrents_and_magnet_links
+    default_handler_works_without_a_mimeapps_list
+    default_handler_undo_restores_the_list_byte_for_byte
+    default_handler_undo_removes_what_xdg_mime_writes_on_kde
+    default_handler_undo_keeps_other_apps_entries_for_the_same_types
+    default_handler_undo_keeps_a_missing_final_newline
+    default_handler_undo_works_after_4x4_is_uninstalled
+    default_handler_undo_with_nothing_to_undo_leaves_the_list_alone
+    default_handler_undo_edits_the_target_of_a_symlinked_list
+    default_handler_without_yes_and_without_a_terminal_changes_nothing
+    default_handler_acts_only_on_a_yes_typed_on_the_terminal
+    default_handler_refuses_when_4x4_is_not_installed
+    default_handler_finds_4x4_in_the_users_data_dir
+    default_handler_reports_a_choice_that_another_list_overrides
+    default_handler_reports_a_choice_that_does_not_take_effect
+    default_handler_refuses_to_run_as_root
+    default_handler_recipe_passes_its_arguments_to_the_script
+    default_handler_rejects_unknown_options
+    default_handler_names_a_missing_xdg_mime
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
 
+# With arguments, only the cases whose names contain one of them run.
 for case_name in "${cases[@]}"; do
+    if (($# > 0)); then
+        selected=
+        for pattern in "$@"; do
+            [[ $case_name == *"$pattern"* ]] && selected=1
+        done
+        [[ -n $selected ]] || continue
+    fi
     skipped=
     "test_$case_name"
     if [[ -n $skipped ]]; then
