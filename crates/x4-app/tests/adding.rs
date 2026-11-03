@@ -1775,6 +1775,30 @@ fn a_click_on_the_selected_row_ends_the_wait_for_the_new_torrent(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn a_key_that_moves_nowhere_in_the_table_ends_the_wait_for_the_new_torrent(
+    cx: &mut TestAppContext,
+) {
+    let window = Window::open(cx);
+    let other = torrent("Other");
+    window.send(vec![other.clone()], cx);
+    window.click(("row", 0_usize), cx);
+    let content = show();
+    let hash = hash_of(&content);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Err(AddError::Unconfirmed), cx);
+    assert!(!window.dialog_open(cx));
+
+    // Down on the last row leaves the selection as it was, but it is the user's choice.
+    window.press("down", cx);
+    assert_eq!(window.selected(cx), std::slice::from_ref(&other.hash));
+    window.send(vec![other.clone(), listed("Show", &hash)], cx);
+
+    assert_eq!(window.selected(cx), std::slice::from_ref(&other.hash));
+}
+
+#[gpui_kit::test]
 fn a_sort_change_ends_the_wait_for_the_new_torrent(cx: &mut TestAppContext) {
     /// The size column, whose header sorts by size.
     const SIZE_COLUMN: usize = 1;

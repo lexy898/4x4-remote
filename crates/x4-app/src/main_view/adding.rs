@@ -314,7 +314,9 @@ impl MainView {
         let selects = outcome.select.is_some();
         let choices = self.list_choices(cx);
         let now = cx.background_executor().now();
-        if !self.adds.pending.answered(id, outcome.select, choices, now) && selects {
+        // Every answer is taken, whatever it names: it ends what the add was sent with.
+        let waits = self.adds.pending.answered(id, outcome.select, choices, now);
+        if selects && !waits {
             tracing::debug!("the user chose in the list meanwhile; the torrent is not selected");
         }
         if shown {
