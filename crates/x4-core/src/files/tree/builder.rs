@@ -3,12 +3,13 @@
 //! entries in display order.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use x4_rpc::{FilePriority, HashString};
 
 use super::super::names::name_order;
 use super::super::{NodeKey, PriorityView, WantedState};
-use super::{FOLDER_COST, FileTree, INDEX_COST, NODE_COST, Node, parts};
+use super::{FOLDER_COST, FileTree, INDEX_COST, NODE_COST, Node, Shape, parts};
 use crate::details::FileEntry;
 use crate::playable::Playable;
 
@@ -32,21 +33,20 @@ impl Node {
             size: 0,
             done: 0,
             // Replaced by the first file that is added; a node exists only for a shown file.
-            wanted: WantedState::All,
             priority: PriorityView::One(FilePriority::Normal),
             files: Vec::new(),
             playable: None,
         }
     }
 
-    /// Adds a shown file to the sums of this folder.
-    fn absorb(&mut self, file: &Shown) {
+    /// Adds a shown file to the sums of this folder, whose wanted state is `wanted`.
+    fn absorb(&mut self, wanted: &mut WantedState, file: &Shown) {
         if self.files.is_empty() {
-            self.wanted = file.wanted;
+            *wanted = file.wanted;
             self.priority = file.priority;
         } else {
-            if self.wanted != file.wanted {
-                self.wanted = WantedState::Mixed;
+            if *wanted != file.wanted {
+                *wanted = WantedState::Mixed;
             }
             if self.priority != file.priority {
                 self.priority = PriorityView::Mixed;
@@ -73,6 +73,8 @@ impl Node {
 /// large to show.
 pub(super) struct Builder<'a> {
     nodes: Vec<Node>,
+    /// The wanted state of each node, at its index.
+    wanted: Vec<WantedState>,
     top: Vec<usize>,
     /// The folder with this name in this folder (or at the first level).
     folders: HashMap<(Option<usize>, &'a str), usize>,
@@ -94,6 +96,7 @@ impl<'a> Builder<'a> {
     pub(super) fn new(budget: usize) -> Self {
         Self {
             nodes: Vec::new(),
+            wanted: Vec::new(),
             top: Vec::new(),
             folders: HashMap::new(),
             by_key: HashMap::new(),
@@ -171,11 +174,11 @@ impl<'a> Builder<'a> {
         if !self.room_for_index(leaf) {
             return;
         }
-        if let Some(node) = self.nodes.get_mut(leaf) {
-            node.absorb(&shown);
+        if let (Some(node), Some(wanted)) = (self.nodes.get_mut(leaf), self.wanted.get_mut(leaf)) {
+            node.absorb(wanted, &shown);
             // Only a file that is being downloaded has a use for a prefix to play, and only once
-            // some of it plays: "0 B" would say nothing.
-            node.playable = (entry.wanted && done < entry.length && entry.playable_from_start > 0)
+            // some of it plays: "0 B" would say nothing. Whether it is wanted is up to the row.
+            node.playable = (done < entry.length && entry.playable_from_start > 0)
                 .then(|| Playable::of(entry.playable_from_start, entry.length));
         }
         let mut above = parent;
@@ -183,10 +186,12 @@ impl<'a> Builder<'a> {
             if !self.room_for_index(index) {
                 return;
             }
-            let Some(folder) = self.nodes.get_mut(index) else {
+            let (Some(folder), Some(wanted)) =
+                (self.nodes.get_mut(index), self.wanted.get_mut(index))
+            else {
                 break;
             };
-            folder.absorb(&shown);
+            folder.absorb(wanted, &shown);
             above = folder.parent;
         }
     }
@@ -296,6 +301,7 @@ impl<'a> Builder<'a> {
         }
         self.by_key.insert(key.clone(), index);
         self.nodes.push(Node::new(key, name, parent, is_folder));
+        self.wanted.push(WantedState::All);
         match parent.and_then(|parent| self.nodes.get_mut(parent)) {
             Some(parent) => parent.children.push(index),
             None => self.top.push(index),
@@ -352,9 +358,12 @@ impl<'a> Builder<'a> {
         sort_entries(&self.nodes, &mut self.top);
         FileTree {
             hash,
-            nodes: self.nodes,
-            top: self.top,
-            by_key: self.by_key,
+            shape: Arc::new(Shape {
+                nodes: self.nodes,
+                top: self.top,
+                by_key: self.by_key,
+            }),
+            wanted: self.wanted,
             too_large: false,
         }
     }

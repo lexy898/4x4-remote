@@ -3,6 +3,7 @@
 mod builder;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use x4_rpc::{FilePriority, HashString};
 
@@ -26,8 +27,8 @@ use builder::Builder;
 pub const TREE_BUDGET: usize = 32 * 1024 * 1024;
 
 /// What a folder or a file counts against [`TREE_BUDGET`] besides the bytes of its key and its
-/// name and its list of files: the node, its place in the map of keys and in the list of its
-/// folder, and the allocations of its key and its name. About what one takes.
+/// name and its list of files: the node and its wanted state, its place in the map of keys and in
+/// the list of its folder, and the allocations of its key and its name. About what one takes.
 const NODE_COST: usize = 320;
 
 /// What a folder counts besides: its list of entries and its place in the map of folders.
@@ -38,8 +39,8 @@ const INDEX_COST: usize = size_of::<usize>();
 
 /// The most files a [`FileTree`] is made for, padding files included: 50 000.
 ///
-/// A tree takes some hundreds of bytes for each file, and is made again after each click in the
-/// add dialog, so a torrent of half a million tiny files would take hundreds of MiB. Beyond this
+/// A tree takes some hundreds of bytes for each file, and is made again at each read of the
+/// details, so a torrent of half a million tiny files would take hundreds of MiB. Beyond this
 /// the Files tab says the list is too large to show, and the add dialog adds the torrent with all
 /// its files, without a choice.
 pub const MAX_CHOOSABLE_FILES: usize = 50_000;
@@ -56,7 +57,9 @@ pub const MAX_CHOOSABLE_FILES: usize = 50_000;
 ///
 /// A tree is a snapshot: it is made again from the details after every read, and the keys of the
 /// nodes stay the same. It remembers the torrent it was made for, so an action drawn from it
-/// names that torrent however the details have changed since.
+/// names that torrent however the details have changed since. A copy of a tree shares its folders
+/// and files with it and has its own wanted states, the one thing that a click in the add dialog
+/// changes; so copying costs a byte for each node.
 ///
 /// **The app builds every file action through [`toggle_wanted_action`](Self::toggle_wanted_action),
 /// [`priority_action`](Self::priority_action) and
@@ -67,13 +70,22 @@ pub const MAX_CHOOSABLE_FILES: usize = 50_000;
 #[derive(Debug, Clone)]
 pub struct FileTree {
     hash: HashString,
+    /// The folders and files, which stay as they were made.
+    shape: Arc<Shape>,
+    /// Whether the files of each node are wanted, at the index of the node.
+    wanted: Vec<WantedState>,
+    /// Whether the tree would have taken more than [`TREE_BUDGET`] or had more than
+    /// [`MAX_CHOOSABLE_FILES`] files: it is then empty.
+    too_large: bool,
+}
+
+/// The folders and files of a [`FileTree`], shared by its copies.
+#[derive(Debug, Default)]
+struct Shape {
     nodes: Vec<Node>,
     /// The nodes at the first level, in display order.
     top: Vec<usize>,
     by_key: HashMap<NodeKey, usize>,
-    /// Whether the tree would have taken more than [`TREE_BUDGET`] or had more than
-    /// [`MAX_CHOOSABLE_FILES`] files: it is then empty.
-    too_large: bool,
 }
 
 /// A folder or a file.
@@ -90,12 +102,11 @@ pub(super) struct Node {
     pub(super) size: u64,
     /// The bytes of them that are downloaded, never more than `size`.
     pub(super) done: u64,
-    pub(super) wanted: WantedState,
     pub(super) priority: PriorityView,
     /// The indices of all files below, padding files included, or the file's own; ascending.
     pub(super) files: Vec<usize>,
-    /// What plays from the start; a file only, and only while it is wanted and incomplete and
-    /// some of its start has come.
+    /// What plays from the start; a file only, and only while it is incomplete and some of its
+    /// start has come. It is shown only while the file is wanted.
     pub(super) playable: Option<Playable>,
 }
 
@@ -161,9 +172,8 @@ impl FileTree {
     fn too_large(hash: HashString) -> Self {
         Self {
             hash,
-            nodes: Vec::new(),
-            top: Vec::new(),
-            by_key: HashMap::new(),
+            shape: Arc::default(),
+            wanted: Vec::new(),
             too_large: true,
         }
     }
@@ -178,7 +188,7 @@ impl FileTree {
     /// the tree is [too large](Self::is_too_large) to show.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.top.is_empty()
+        self.shape.top.is_empty()
     }
 
     /// Whether the tree was not made because it would be too large: it has more than
@@ -193,16 +203,66 @@ impl FileTree {
     /// Whether a file that is shown is wanted; padding files do not count. `false` for an empty
     /// tree.
     pub(crate) fn wants_a_shown_file(&self) -> bool {
-        self.top
-            .iter()
-            .filter_map(|&index| self.nodes.get(index))
-            .any(|node| node.wanted != WantedState::None)
+        self.shape.top.iter().any(|&index| {
+            self.wanted(index)
+                .is_some_and(|wanted| wanted != WantedState::None)
+        })
+    }
+
+    /// Makes the files of the node `key` all wanted, or none of them, as a click on its checkbox
+    /// in the add dialog does, and gives `false`, changing nothing, when `key` is not a node of
+    /// this tree.
+    ///
+    /// The node and every node below it take the new state, and each folder above it the state
+    /// of its entries, which is the state of the files below it; nothing else changes. So the
+    /// tree is as one made again from the files with that choice would be, without being made
+    /// again: a click costs no more than the nodes it reaches, and the folders above them.
+    pub(crate) fn set_wanted(&mut self, key: &NodeKey, wanted: bool) -> bool {
+        let Some(&clicked) = self.shape.by_key.get(key) else {
+            return false;
+        };
+        let state = if wanted {
+            WantedState::All
+        } else {
+            WantedState::None
+        };
+        let (shape, states) = (&*self.shape, &mut self.wanted);
+        let mut below = vec![clicked];
+        while let Some(index) = below.pop() {
+            if let Some(slot) = states.get_mut(index) {
+                *slot = state;
+            }
+            if let Some(node) = shape.nodes.get(index) {
+                below.extend_from_slice(&node.children);
+            }
+        }
+        let mut above = shape.nodes.get(clicked).and_then(|node| node.parent);
+        while let Some(index) = above {
+            let Some(folder) = shape.nodes.get(index) else {
+                break;
+            };
+            let entries = folder
+                .children
+                .iter()
+                .filter_map(|&child| states.get(child));
+            let state = sum_of(entries.copied());
+            let Some(slot) = states.get_mut(index) else {
+                break;
+            };
+            // The folders further up have the states of their entries already.
+            if *slot == state {
+                break;
+            }
+            *slot = state;
+            above = folder.parent;
+        }
+        true
     }
 
     /// Whether `key` names a node of this tree.
     #[must_use]
     pub fn contains(&self, key: &NodeKey) -> bool {
-        self.by_key.contains_key(key)
+        self.shape.by_key.contains_key(key)
     }
 
     /// The indices of the files an action on the node reaches: the file itself, or every file
@@ -219,7 +279,7 @@ impl FileTree {
     /// and the value from one tree.
     #[must_use]
     pub fn indices(&self, key: &NodeKey) -> Option<NonEmptyIndices> {
-        self.target(key).map(|(_, files)| files)
+        self.target(key).map(|(_, _, files)| files)
     }
 
     /// What a click on the checkbox of the node `key` asks for: the files it reaches, padding
@@ -232,8 +292,8 @@ impl FileTree {
     /// node of this tree (a padding file is not).
     #[must_use]
     pub fn wanted_toggle(&self, key: &NodeKey) -> Option<(NonEmptyIndices, bool)> {
-        let (node, files) = self.target(key)?;
-        Some((files, node.wanted.toggled()))
+        let (index, _, files) = self.target(key)?;
+        Some((files, self.wanted(index)?.toggled()))
     }
 
     /// The action that a click on the checkbox of the node `key` asks for: the
@@ -258,7 +318,7 @@ impl FileTree {
     /// this tree.
     #[must_use]
     pub fn priority_action(&self, key: &NodeKey, priority: FilePriority) -> Option<Action> {
-        let (_, files) = self.target(key)?;
+        let (_, _, files) = self.target(key)?;
         Some(Action::SetFilePriority {
             hash: self.hash.clone(),
             files: files.into_vec(),
@@ -273,7 +333,7 @@ impl FileTree {
     /// `key` is not a node of this tree.
     #[must_use]
     pub fn step_priority_action(&self, key: &NodeKey, up: bool) -> Option<Action> {
-        let (node, files) = self.target(key)?;
+        let (_, node, files) = self.target(key)?;
         Some(Action::SetFilePriority {
             hash: self.hash.clone(),
             files: files.into_vec(),
@@ -281,26 +341,52 @@ impl FileTree {
         })
     }
 
-    /// The node `key` names and the files an action on it reaches; `None` for a key that is not
-    /// in this tree or a node without files.
-    fn target(&self, key: &NodeKey) -> Option<(&Node, NonEmptyIndices)> {
-        let node = self.nodes.get(*self.by_key.get(key)?)?;
-        Some((node, NonEmptyIndices::new(node.files.clone())?))
+    /// The node `key` names, at its index, and the files an action on it reaches; `None` for a
+    /// key that is not in this tree or a node without files.
+    fn target(&self, key: &NodeKey) -> Option<(usize, &Node, NonEmptyIndices)> {
+        let index = *self.shape.by_key.get(key)?;
+        let node = self.shape.nodes.get(index)?;
+        Some((index, node, NonEmptyIndices::new(node.files.clone())?))
     }
 
     /// The node at `index`.
     pub(super) fn node(&self, index: usize) -> Option<&Node> {
-        self.nodes.get(index)
+        self.shape.nodes.get(index)
+    }
+
+    /// Whether the files of the node at `index` are wanted.
+    pub(super) fn wanted(&self, index: usize) -> Option<WantedState> {
+        self.wanted.get(index).copied()
     }
 
     /// The index of the node `key` names.
     pub(super) fn position(&self, key: &NodeKey) -> Option<usize> {
-        self.by_key.get(key).copied()
+        self.shape.by_key.get(key).copied()
     }
 
     /// The nodes at the first level, in display order.
     pub(super) fn top(&self) -> &[usize] {
-        &self.top
+        &self.shape.top
+    }
+
+    /// Whether this tree and `other` share their folders and files, as a tree does with its
+    /// copies.
+    #[cfg(test)]
+    pub(crate) fn shares_files_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shape, &other.shape)
+    }
+}
+
+/// The state of a folder whose entries are in the states `entries`: all wanted, none, or mixed,
+/// as the files below them are.
+fn sum_of(mut entries: impl Iterator<Item = WantedState>) -> WantedState {
+    let Some(first) = entries.next() else {
+        return WantedState::None;
+    };
+    if entries.all(|entry| entry == first) {
+        first
+    } else {
+        WantedState::Mixed
     }
 }
 

@@ -92,7 +92,9 @@ impl FileTreeView {
         }
         self.shown(tree)
             .into_iter()
-            .filter_map(|(index, depth)| Some(self.row(tree.node(index)?, depth)))
+            .filter_map(|(index, depth)| {
+                Some(self.row(tree.node(index)?, tree.wanted(index)?, depth))
+            })
             .collect()
     }
 
@@ -320,7 +322,8 @@ impl FileTreeView {
         tree.position(self.cursor.as_ref()?)
     }
 
-    fn row(&self, node: &Node, depth: usize) -> FileRow {
+    /// The row of `node`, whose wanted state is `wanted`, `depth` folders deep.
+    fn row(&self, node: &Node, wanted: WantedState, depth: usize) -> FileRow {
         let progress = fraction_of(node.done, node.size);
         FileRow {
             key: node.key.clone(),
@@ -336,9 +339,10 @@ impl FileTreeView {
             size: human_size(node.size),
             percent: percent(progress),
             progress,
-            wanted: node.wanted,
+            wanted,
             priority: node.priority,
-            playable: node.playable,
+            // A file that is not wanted is not downloaded, so nothing of it is to play.
+            playable: node.playable.filter(|_| wanted == WantedState::All),
         }
     }
 }

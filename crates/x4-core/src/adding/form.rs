@@ -201,7 +201,7 @@ impl AddForm {
                 path,
                 name: parsed.name,
                 choice: match (tree, parsed.files) {
-                    (Ok(tree), Some(files)) => Ok(FileChoice::new(files, tree)),
+                    (Ok(tree), Some(files)) => Ok(FileChoice::new(files.len(), tree)),
                     // A tree is made only of files, so this does not happen.
                     (Ok(_), None) => Err(NoChoiceReason::Ambiguous),
                     (Err(reason), _) => Err(reason),
@@ -220,10 +220,12 @@ impl AddForm {
 
     /// The tree of the files to choose from, whose checkboxes show the choice: `None` for a
     /// magnet link, whose files are known only once its metadata arrives, and for a `.torrent`
-    /// that can be added only with all its files ([`choice_unavailable`](Self::choice_unavailable)).
+    /// that can be added only with all its files
+    /// ([`choice_unavailable`](Self::choice_unavailable)).
     ///
-    /// The tree is shared, so the dialog can keep it for the rows it draws. A click makes a new
-    /// one; a tree kept stays as it was drawn.
+    /// The tree is shared, so the dialog can keep it for the rows it draws, and a tree kept stays
+    /// as it was drawn. A click changes the form's tree where it is, or, while the dialog keeps
+    /// it, a copy that shares the folders and files with it and has wanted states of its own.
     #[must_use]
     pub fn tree(&self) -> Option<&Arc<FileTree>> {
         match &self.source {
@@ -238,6 +240,9 @@ impl AddForm {
     /// become wanted, or not wanted when all of them are. A folder takes its padding files with
     /// it, as in the details panel. Nothing changes for a key that is not a node of the tree, or
     /// when there is no tree.
+    ///
+    /// The tree is neither made nor sorted again: a click costs no more than the files and
+    /// folders it reaches, and the folders above them.
     pub fn toggle_wanted(&mut self, key: &NodeKey) {
         if let Source::Torrent {
             choice: Ok(choice), ..

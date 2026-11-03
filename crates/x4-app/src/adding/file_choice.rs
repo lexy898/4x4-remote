@@ -2,9 +2,9 @@
 //! ([`file_list`](crate::file_list)) with the checkboxes and the sizes, and no progress or
 //! priority, which mean nothing before the torrent is added.
 //!
-//! x4-core's [`AddForm`](x4_core::AddForm) holds the choice and makes a new tree after each click;
-//! the list draws that tree with the folders the user opened and the cursor kept, as the Files tab
-//! does. A click acts only on the tree of its own torrent: the dialog shows one torrent after
+//! x4-core's [`AddForm`](x4_core::AddForm) holds the choice, and each click changes the wanted
+//! states of its tree; the list draws that tree with the folders the user opened and the cursor
+//! kept, as the Files tab does. A click acts only on the tree of its own torrent: the dialog shows one torrent after
 //! another, and the same path in the next one is another file. The keys are the Files tab's, but
 //! `+` and `-` do nothing: no priorities are set when a torrent is added.
 //!

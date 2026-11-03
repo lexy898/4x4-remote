@@ -10,13 +10,14 @@ use crate::metainfo::MetaFile;
 
 /// Which files of a `.torrent` are wanted, and the tree that shows them.
 ///
-/// Each file keeps the index the daemon will give it: its position in the parse. The tree is made
-/// again from the files after each change, so its checkboxes always show the choice; a tree handed
-/// out before stays as it was, like the details panel's tree of an older read.
+/// Each file keeps the index the daemon will give it: its position in the parse. A click changes
+/// the wanted states of the tree where it is, so its checkboxes always show the choice, and the
+/// tree is neither made nor sorted again. A tree handed out before stays as it was, like the
+/// details panel's tree of an older read: the click then changes a copy, which shares the folders
+/// and files with it and has wanted states of its own.
 pub(super) struct FileChoice {
-    /// The files at the daemon's indices (`files[i].index == i`), as the tree is made from:
-    /// nothing downloaded, the normal priority, and wanted as chosen.
-    files: Vec<FileEntry>,
+    /// Whether each file is wanted, at the daemon's index, padding files included.
+    wanted: Vec<bool>,
     tree: Arc<FileTree>,
 }
 
@@ -50,15 +51,13 @@ impl FileChoice {
         (!tree.is_too_large()).then(|| Arc::new(tree))
     }
 
-    /// The files `files`, every one of them wanted, shown by `tree`, their
+    /// The `count` files of a torrent, every one of them wanted, shown by `tree`, their
     /// [`first_tree`](Self::first_tree).
-    pub(super) fn new(files: Vec<MetaFile>, tree: Arc<FileTree>) -> Self {
-        let files = files
-            .into_iter()
-            .enumerate()
-            .map(|(index, file)| entry(index, file.path, file.length))
-            .collect();
-        Self { files, tree }
+    pub(super) fn new(count: usize, tree: Arc<FileTree>) -> Self {
+        Self {
+            wanted: vec![true; count],
+            tree,
+        }
     }
 
     /// The tree that shows the files and the choice.
@@ -74,21 +73,22 @@ impl FileChoice {
             return;
         };
         for &index in indices.as_slice() {
-            if let Some(file) = self.files.get_mut(index) {
-                file.wanted = wanted;
+            if let Some(file) = self.wanted.get_mut(index) {
+                *file = wanted;
             }
         }
-        // The tree costs what the first one did, which fitted with the copy of the files besides.
-        self.tree = Arc::new(FileTree::of_files(self.tree.hash().clone(), &self.files));
+        // A copy, when the dialog keeps the tree it drew, takes a byte for each node.
+        Arc::make_mut(&mut self.tree).set_wanted(key, wanted);
     }
 
     /// The indices of the files not wanted, in ascending order, each once and each less than the
     /// number of files.
     pub(super) fn unwanted(&self) -> Vec<usize> {
-        self.files
+        self.wanted
             .iter()
-            .filter(|file| !file.wanted)
-            .map(|file| file.index)
+            .enumerate()
+            .filter(|&(_, &wanted)| !wanted)
+            .map(|(index, _)| index)
             .collect()
     }
 
@@ -96,9 +96,9 @@ impl FileChoice {
     /// that may still be do not count), or no file at all is. A torrent of padding files only
     /// shows nothing, so it is never ready either.
     pub(super) fn nothing_wanted(&self) -> bool {
-        // The second test follows from the first while the tree is made from these files. It
-        // stays as a guard, so that a request never leaves out every file.
-        !self.tree.wants_a_shown_file() || self.files.iter().all(|file| !file.wanted)
+        // The second test follows from the first while the tree shows these files. It stays as a
+        // guard, so that a request never leaves out every file.
+        !self.tree.wants_a_shown_file() || self.wanted.iter().all(|&wanted| !wanted)
     }
 }
 

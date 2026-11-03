@@ -4,6 +4,7 @@ use std::sync::Arc;
 use x4_rpc::{AddSource, DownloadDir, DownloadDirError, HashString, MagnetError, MagnetLink};
 
 use super::*;
+use crate::details::FileEntry;
 use crate::files::{FileRow, FileTreeView, NonEmptyIndices, RowKind, WantedState};
 use crate::limits::KbPerSecond;
 use crate::metainfo::{MetaFile, ParsedTorrent};
@@ -121,7 +122,11 @@ fn key(path: &str) -> NodeKey {
 
 /// Every row of the form's tree, with every folder open.
 fn rows(form: &AddForm) -> Vec<FileRow> {
-    let tree = form.tree().unwrap();
+    rows_of(form.tree().unwrap())
+}
+
+/// Every row of `tree`, with every folder open.
+fn rows_of(tree: &FileTree) -> Vec<FileRow> {
     let mut view = FileTreeView::new(tree);
     loop {
         let closed: Vec<NodeKey> = view
@@ -250,6 +255,164 @@ fn unchecking_a_folder_unwants_its_pad_files_too() {
         form.toggle_wanted(&key(hidden));
         assert_eq!(unwanted(&form), Vec::<usize>::new(), "{hidden:?}");
     }
+}
+
+/// Files of every kind a tree treats in its own way: folders in folders, padding files of both
+/// kinds, a folder of padding only, a path listed twice, a file of a folder's name, a file
+/// without a name, and two folders at the first level.
+const ODD_FILES: [(&str, u64); 12] = [
+    ("T/b/E10.mkv", 10),
+    ("T/b/E2.mkv", 20),
+    ("T/.pad/0", 3),
+    ("T/a.txt", 1),
+    ("T/b/_____padding_file_1", 2),
+    ("T/only_pads/_____padding_file_2", 2),
+    ("T/a.txt", 4),
+    ("T/x", 5),
+    ("T/x/y", 6),
+    ("T/b/c/d/deep.bin", 7),
+    ("", 9),
+    ("U/z.bin", 8),
+];
+
+/// The indices of the files the form leaves out now, even when that is all of them.
+fn left_out(form: &AddForm) -> Vec<usize> {
+    match &form.source {
+        Source::Torrent {
+            choice: Ok(choice), ..
+        } => choice.unwanted(),
+        _ => panic!("a torrent with a choice of files"),
+    }
+}
+
+/// The tree of `files` made afresh, every one wanted but those at `unwanted`.
+fn made_afresh(files: &[(&str, u64)], unwanted: &[usize]) -> FileTree {
+    let entries: Vec<FileEntry> = files
+        .iter()
+        .enumerate()
+        .map(|(index, &(path, length))| FileEntry {
+            index,
+            name: path.to_owned(),
+            length,
+            bytes_completed: 0,
+            wanted: !unwanted.contains(&index),
+            priority: x4_rpc::FilePriority::Normal,
+            playable_from_start: 0,
+        })
+        .collect();
+    FileTree::of_files(hash(), &entries)
+}
+
+/// Asserts that `tree` shows the rows of `expected`, and that each of `keys` names the same
+/// files, with the same click, in both.
+fn assert_same_tree(tree: &FileTree, expected: &FileTree, keys: &[NodeKey], label: &str) {
+    assert_eq!(rows_of(tree), rows_of(expected), "{label}");
+    assert_eq!(
+        tree.wants_a_shown_file(),
+        expected.wants_a_shown_file(),
+        "{label}"
+    );
+    for node in keys {
+        assert_eq!(
+            tree.contains(node),
+            expected.contains(node),
+            "{label} {node:?}"
+        );
+        assert_eq!(
+            tree.indices(node),
+            expected.indices(node),
+            "{label} {node:?}"
+        );
+        assert_eq!(
+            tree.wanted_toggle(node),
+            expected.wanted_toggle(node),
+            "{label} {node:?}"
+        );
+    }
+}
+
+#[test]
+fn after_each_click_the_tree_is_the_one_made_from_the_choice() {
+    let mut form = form_of(&ODD_FILES);
+    let keys: Vec<NodeKey> = rows(&form)
+        .into_iter()
+        .map(|row| row.key)
+        .chain(
+            [
+                "T/.pad",
+                "T/.pad/0",
+                "T/only_pads",
+                "T/b/_____padding_file_1",
+                "T/none",
+            ]
+            .map(key),
+        )
+        .collect();
+    let mut seed: u64 = 7;
+    for click in 0..300 {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let clicked = &keys[usize::try_from(seed >> 33).unwrap() % keys.len()];
+        // The dialog keeps the tree it drew while the click is applied.
+        let drawn = Arc::clone(form.tree().unwrap());
+        let drawn_rows = rows_of(&drawn);
+
+        form.toggle_wanted(clicked);
+
+        let label = format!("click {click} on {clicked:?}");
+        assert_eq!(rows_of(&drawn), drawn_rows, "{label}: the tree drawn stays");
+        assert!(
+            form.tree().unwrap().shares_files_with(&drawn),
+            "{label}: only the wanted states are copied"
+        );
+        let expected = made_afresh(&ODD_FILES, &left_out(&form));
+        assert_same_tree(form.tree().unwrap(), &expected, &keys, &label);
+    }
+}
+
+#[test]
+fn a_click_changes_the_tree_itself_when_nothing_else_keeps_it() {
+    let mut form = form_of(&ODD_FILES);
+    let before = Arc::as_ptr(form.tree().unwrap());
+
+    form.toggle_wanted(&key("T/b"));
+
+    assert_eq!(Arc::as_ptr(form.tree().unwrap()), before);
+    assert_eq!(left_out(&form), [0, 1, 4, 9]);
+}
+
+#[test]
+fn a_click_on_names_crafted_to_compare_slowly_is_quick() {
+    let mut form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), names_crafted_to_compare_slowly()).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+    let file = key(&format!("T/{}7", "a1".repeat(300)));
+    // As in the dialog, which keeps the tree it drew.
+    let drawn = Arc::clone(form.tree().unwrap());
+    let at = drawn.indices(&file).unwrap().into_vec();
+    let start = std::time::Instant::now();
+
+    form.toggle_wanted(&file);
+    form.toggle_wanted(&key("T"));
+    form.toggle_wanted(&file);
+
+    let clicked = start.elapsed();
+    // Each click made the tree again and sorted the names again: these three took 0.4 s in a
+    // release build and 4.8 s in a debug one. Now some 3 ms in a debug build.
+    assert!(
+        clicked < std::time::Duration::from_millis(500),
+        "{clicked:?}"
+    );
+    assert_eq!(unwanted(&form), at);
+    assert_eq!(
+        drawn.wanted_toggle(&file).map(|(_, wanted)| wanted),
+        Some(false),
+        "the tree drawn stays as it was"
+    );
+    assert!(form.tree().unwrap().shares_files_with(&drawn));
 }
 
 #[test]
