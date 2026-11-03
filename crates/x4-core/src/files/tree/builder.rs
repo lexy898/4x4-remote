@@ -73,6 +73,8 @@ pub(super) struct Builder<'a> {
     /// The folder with this name in this folder (or at the first level).
     folders: HashMap<(Option<usize>, &'a str), usize>,
     by_key: HashMap<NodeKey, usize>,
+    /// For each path that was taken, the suffix its next copy tries first.
+    suffixes: HashMap<NodeKey, usize>,
     /// The bytes of the keys made so far. A node and `by_key` share the bytes of its key.
     key_bytes: usize,
     budget: usize,
@@ -88,6 +90,7 @@ impl<'a> Builder<'a> {
             top: Vec::new(),
             folders: HashMap::new(),
             by_key: HashMap::new(),
+            suffixes: HashMap::new(),
             key_bytes: 0,
             budget,
             over_budget: false,
@@ -209,14 +212,25 @@ impl<'a> Builder<'a> {
     /// The key for a node at `path`. A path that is taken (the daemon lists a path twice, or a
     /// file has the name of a folder) gets a suffix that no real path can have, so that an action
     /// on a row never reaches the files of another.
-    fn unique_key(&self, path: &str) -> NodeKey {
-        let mut key = NodeKey::new(path);
-        let mut copy = 1_usize;
-        while self.by_key.contains_key(&key) {
-            key = NodeKey::new(&format!("{path}\0{copy}"));
-            copy += 1;
+    ///
+    /// The copies of a path are numbered from 1 in the order they come. Each path remembers the
+    /// number its next copy takes, so that 50 000 copies of one path do not try every number
+    /// before theirs: that took minutes.
+    fn unique_key(&mut self, path: &str) -> NodeKey {
+        let key = NodeKey::new(path);
+        let Some((taken, _)) = self.by_key.get_key_value(&key) else {
+            return key;
+        };
+        let next = self.suffixes.entry(taken.clone()).or_insert(1);
+        loop {
+            let copy = NodeKey::new(&format!("{path}\0{next}"));
+            *next += 1;
+            // A number is skipped only for a path that holds the suffix itself, as a crafted
+            // name may: each such node makes one number be skipped, once.
+            if !self.by_key.contains_key(&copy) {
+                return copy;
+            }
         }
-        key
     }
 
     /// Orders every folder's entries and the first level, and sorts the file lists; or, once

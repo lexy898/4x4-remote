@@ -833,6 +833,45 @@ fn up_to_50_000_files_can_be_chosen_from() {
 }
 
 #[test]
+fn a_torrent_of_50_000_paths_the_tree_shows_alike_loads_in_bounded_time() {
+    // The parser keeps "a//a" and "a/a" apart, and the tree shows both as "a/a": these are 50 000
+    // copies of one path 17 folders deep, each under a key with its own suffix. Finding each
+    // suffix by trying them all from the first took minutes, and as long again for each click.
+    let paths: Vec<Vec<String>> = (0..50_000_u32)
+        .map(|n| {
+            let path: String = std::iter::once("a")
+                .chain((0..16).map(|bit| if (n >> bit) & 1 == 1 { "//a" } else { "/a" }))
+                .collect();
+            vec![path]
+        })
+        .collect();
+    let bytes = folder_torrent("T", &paths);
+    let shown = format!("T/{}", ["a"; 17].join("/"));
+    let start = std::time::Instant::now();
+
+    let mut form = AddForm::new(
+        LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
+        DEFAULT_DIR.to_owned(),
+        true,
+    );
+
+    let loaded = start.elapsed();
+    let tree = form.tree().unwrap();
+    assert!(!tree.is_too_large());
+    assert_eq!(
+        tree.indices(&key(&shown)).map(NonEmptyIndices::into_vec),
+        Some(vec![0])
+    );
+    let start = std::time::Instant::now();
+    form.toggle_wanted(&key(&format!("{shown}\u{0}7")));
+    let clicked = start.elapsed();
+    assert_eq!(unwanted(&form), [7]);
+    // Some 100 ms each in a release build; the bounds only say they end.
+    assert!(loaded < std::time::Duration::from_secs(10), "{loaded:?}");
+    assert!(clicked < std::time::Duration::from_secs(10), "{clicked:?}");
+}
+
+#[test]
 fn a_real_shaped_torrent_loads_with_its_tree() {
     // 5 000 episodes, four levels deep with the torrent's folder, with long names.
     let paths: Vec<Vec<String>> = (0..5_000)

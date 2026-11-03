@@ -139,3 +139,36 @@ fn more_than_50_000_files_are_too_large_to_show() {
     // One more, and no tree is made at all, however short the paths.
     assert_refused_cheaply(&numbered(MAX_CHOOSABLE_FILES + 1));
 }
+
+/// The details of the files at `paths`, each one byte long and wanted.
+fn details_at(paths: &[String]) -> TorrentDetails {
+    let files: Vec<(&str, u64, u64, bool, x4_rpc::FilePriority)> = paths
+        .iter()
+        .map(|path| (path.as_str(), 1, 0, true, Normal))
+        .collect();
+    details(&hash(), &files)
+}
+
+#[test]
+fn a_path_listed_50_000_times_is_shown_in_bounded_time() {
+    // The daemon may list a path more than once; each copy is its own row, under a key with a
+    // suffix. Finding each suffix by trying them all from the first took minutes.
+    let paths = vec!["T/a".to_owned(); MAX_CHOOSABLE_FILES];
+    let listed = details_at(&paths);
+    let start = Instant::now();
+
+    let tree = FileTree::new(&listed);
+
+    let elapsed = start.elapsed();
+    assert!(!tree.is_too_large());
+    assert_eq!(
+        indices(&tree, "T"),
+        Some((0..MAX_CHOOSABLE_FILES).collect())
+    );
+    assert_eq!(indices(&tree, "T/a"), Some(vec![0]));
+    assert_eq!(indices(&tree, "T/a\u{0}1"), Some(vec![1]));
+    assert_eq!(indices(&tree, "T/a\u{0}49999"), Some(vec![49_999]));
+    assert_eq!(indices(&tree, "T/a\u{0}50000"), None);
+    // Some 30 ms in a release build; the bound only says it ends.
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+}

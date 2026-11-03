@@ -35,6 +35,34 @@ fn paths_that_clash_still_get_distinct_keys_and_their_own_files() {
 }
 
 #[test]
+fn a_path_that_holds_a_suffix_itself_still_gets_a_key_of_its_own() {
+    // A repeated path gets the suffix "\0" and a number, which a crafted name may hold already.
+    let tree = tree_of(&[
+        ("T/a", 1, 0, true, Normal),
+        ("T/a\u{0}1", 2, 0, true, Normal),
+        ("T/a", 3, 0, true, Normal),
+        ("T/a", 4, 0, true, Normal),
+    ]);
+
+    let rows = open_all(&tree).rows(&tree);
+
+    assert_eq!(
+        shape(&rows),
+        [
+            ("T", 0),
+            ("T/a", 1),
+            ("T/a\u{0}2", 1),
+            ("T/a\u{0}3", 1),
+            ("T/a\u{0}1", 1)
+        ]
+    );
+    assert_eq!(indices(&tree, "T/a"), Some(vec![0]));
+    assert_eq!(indices(&tree, "T/a\u{0}1"), Some(vec![1]));
+    assert_eq!(indices(&tree, "T/a\u{0}2"), Some(vec![2]));
+    assert_eq!(indices(&tree, "T/a\u{0}3"), Some(vec![3]));
+}
+
+#[test]
 fn empty_path_components_are_ignored() {
     let tree = tree_of(&[
         ("T//a.mkv", 1, 0, true, Normal),
