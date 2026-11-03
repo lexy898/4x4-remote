@@ -11,16 +11,25 @@
 //!   details panel.
 //! - [`AddForm::check`] gives the [`AddCheck`] that tells whether Add may send it, and the
 //!   [`TorrentAdd`](x4_rpc::TorrentAdd) it sends.
-//! - [`folder_picks`] lists the folders the folder field offers.
+//! - [`folder_picks`] lists the folders the folder field offers; [`FormDefaults`] gives each form
+//!   of a run its folder and "Start immediately"; [`FreeSpaceCache`] decides when the free space
+//!   of the folder is asked for and keeps the answers.
+//! - [`add_outcome`] says what follows the daemon's answer to an add (an [`AddOutcome`]).
 //!
 //! Nothing here sends anything: the app sends the request of an [`AddCheck::Ready`] only when the
 //! user presses Add.
 
 mod choice;
+mod defaults;
 mod folders;
 mod form;
+mod free_space;
+mod outcome;
 mod queue;
 
+pub use defaults::{FormDefaults, TakenDefaults};
 pub use folders::{MAX_FOLDER_PICKS, folder_picks};
 pub use form::{AddCheck, AddForm, LoadedItem, LoadedTorrent, NoChoiceReason};
+pub use free_space::{FREE_SPACE_DELAY, FreeSpaceCache};
+pub use outcome::{AddNotice, AddOutcome, FormStep, SentAdd, add_outcome};
 pub use queue::{AddItem, AddQueue, QUEUE_CAP};
