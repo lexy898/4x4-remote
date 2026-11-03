@@ -1421,61 +1421,139 @@ test_package_installs_the_binary_desktop_file_icon_and_licenses() {
     [[ $listing == "$expected" ]] || fail "unexpected files in the package: $listing"
 }
 
-# `just package` with a stand-in makepkg on PATH, which writes its arguments, its working dir and
-# the variables the recipe sets to makepkg.log, keeps the PKGBUILD it was given, rewrites pkgver=
-# in it as makepkg does, and lists the package as `--packagelist` does. The checkout has another
-# branch checked out, with a commit and an uncommitted change of its own; only master is built.
-test_package_recipe_builds_the_committed_master_under_the_cache_dir() {
-    local dir repo cache master run
-    dir=$(mktemp -d "$tmp_root/package-recipe.XXXXXX")
-    repo=$dir/checkout
-    cache=$dir/home/.cache/4x4-pkg
-    mkdir -p "$dir/bin" "$dir/home" "$repo/packaging/arch"
-    cp "$root/justfile" "$repo/"
-    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# master\n' >"$repo/packaging/arch/PKGBUILD"
-    git -C "$repo" init -q -b master
-    commit_all "$repo" "feat: the tip of master"
-    master=$(git -C "$repo" log -1 --format='%h %s' master)
-    git -C "$repo" switch -q -c feature
-    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# feature\n' >"$repo/packaging/arch/PKGBUILD"
-    commit_all "$repo" "feat: a feature"
-    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted\n' >"$repo/packaging/arch/PKGBUILD"
-    cat >"$dir/bin/makepkg" <<EOF
+# A checkout for `just package` in <dir>/checkout with the repository's justfile and a master
+# branch without commits, an empty home in <dir>/home, and a stand-in makepkg in <dir>/bin. The
+# stand-in writes its arguments, its working dir and the variables the recipe sets to makepkg.log;
+# with --force it lists what the build and sources dirs hold to cache-seen, keeps the PKGBUILD it
+# was given and rewrites pkgver= in it as makepkg does; with --packagelist it lists the package.
+package_dir=
+package_repo=
+package_cache=
+new_package_env() {
+    package_dir=$(mktemp -d "$tmp_root/package-recipe.XXXXXX")
+    package_repo=$package_dir/checkout
+    package_cache=$package_dir/home/.cache/4x4-pkg
+    mkdir -p "$package_dir/bin" "$package_dir/home" "$package_repo"
+    cp "$root/justfile" "$package_repo/"
+    git -C "$package_repo" init -q -b master
+    cat >"$package_dir/bin/makepkg" <<EOF
 #!/usr/bin/env bash
 {
     echo "args: \$*"
     echo "pwd: \$PWD"
     for name in X4_REPO BUILDDIR SRCDEST PKGDEST; do echo "\$name: \${!name-unset}"; done
-} >>"$dir/makepkg.log"
+} >>"$package_dir/makepkg.log"
 if [[ \$* == --force ]]; then
-    cp PKGBUILD "$dir/built-PKGBUILD"
+    find "\$BUILDDIR" "\$SRCDEST" -mindepth 1 | LC_ALL=C sort >"$package_dir/cache-seen"
+    cp PKGBUILD "$package_dir/built-PKGBUILD"
     sed -i 's/^pkgver=.*/pkgver=0.1.0.r2.gbbbbbbb/' PKGBUILD
 elif [[ \$* == --packagelist ]]; then
     echo "\$PKGDEST/4x4-git-\$(sed -n 's/^pkgver=//p' PKGBUILD)-1-x86_64.pkg.tar.zst"
 fi
 EOF
-    chmod +x "$dir/bin/makepkg"
-    run_with_input '' env -u XDG_CACHE_HOME HOME="$dir/home" PATH="$dir/bin:$PATH" \
-        just --justfile "$repo/justfile" package
+    chmod +x "$package_dir/bin/makepkg"
+}
+
+# Commits a PKGBUILD with <text> after its pkgver= line to the branch checked out.
+commit_build_file() { # <text> <message>
+    mkdir -p "$package_repo/packaging/arch"
+    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# %s\n' "$1" >"$package_repo/packaging/arch/PKGBUILD"
+    commit_all "$package_repo" "$2"
+}
+
+# `just package` in the checkout, with the stand-in makepkg first on PATH, the empty home and no
+# XDG_CACHE_HOME, so the cache is the home's ~/.cache/4x4-pkg.
+run_package() {
+    run_with_input '' env -u XDG_CACHE_HOME HOME="$package_dir/home" PATH="$package_dir/bin:$PATH" \
+        just --justfile "$package_repo/justfile" package
+}
+
+# The checkout has another branch checked out, with a commit and an uncommitted change of its own;
+# only master is built.
+test_package_recipe_builds_the_committed_master_under_the_cache_dir() {
+    local master cache run
+    new_package_env
+    cache=$package_cache
+    commit_build_file master "feat: the tip of master"
+    master=$(git -C "$package_repo" log -1 --format='%h %s' master)
+    git -C "$package_repo" switch -q -c feature
+    commit_build_file feature "feat: a feature"
+    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted\n' >"$package_repo/packaging/arch/PKGBUILD"
+    run_package
     expect_status 0
     expect_contains "building master: $master" "$stdout" stdout
     [[ ${stdout##*$'\n'} == "$cache/packages/4x4-git-0.1.0.r2.gbbbbbbb-1-x86_64.pkg.tar.zst" ]] ||
         fail "expected the package's path last, got: $stdout"
     run="pwd: $cache
-X4_REPO: $repo
+X4_REPO: $package_repo
 BUILDDIR: $cache/build
 SRCDEST: $cache/sources
 PKGDEST: $cache/packages"
-    [[ $(<"$dir/makepkg.log") == "args: --force"$'\n'"$run"$'\n'"args: --packagelist"$'\n'"$run" ]] ||
-        fail "expected makepkg --force, then --packagelist, in the cache dir; got: $(<"$dir/makepkg.log")"
-    [[ $(<"$dir/built-PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# master' ]] ||
-        fail "makepkg was not given master's PKGBUILD: $(<"$dir/built-PKGBUILD")"
-    [[ $(<"$repo/packaging/arch/PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted' ]] ||
-        fail "the checkout's PKGBUILD changed: $(<"$repo/packaging/arch/PKGBUILD")"
+    [[ $(<"$package_dir/makepkg.log") == "args: --force"$'\n'"$run"$'\n'"args: --packagelist"$'\n'"$run" ]] ||
+        fail "expected makepkg --force, then --packagelist, in the cache dir; got: $(<"$package_dir/makepkg.log")"
+    [[ $(<"$package_dir/built-PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# master' ]] ||
+        fail "makepkg was not given master's PKGBUILD: $(<"$package_dir/built-PKGBUILD")"
+    [[ $(<"$package_repo/packaging/arch/PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted' ]] ||
+        fail "the checkout's PKGBUILD changed: $(<"$package_repo/packaging/arch/PKGBUILD")"
     [[ -d $cache/build && -d $cache/sources && -d $cache/packages ]] ||
         fail "expected build, sources and packages in $cache: $(ls -A "$cache")"
-    [[ $(ls -A "$dir/home") == .cache && $(ls -A "$dir/home/.cache") == 4x4-pkg ]] ||
-        fail "the recipe wrote outside ~/.cache/4x4-pkg: $(cd "$dir/home" && find . | paste -sd ' ')"
+    [[ $(ls -A "$package_dir/home") == .cache && $(ls -A "$package_dir/home/.cache") == 4x4-pkg ]] ||
+        fail "the recipe wrote outside ~/.cache/4x4-pkg: $(cd "$package_dir/home" && find . | paste -sd ' ')"
+}
+
+# Before the branch that adds the PKGBUILD is merged into master, and with no master at all, the
+# recipe stops before it writes anything, says what to do, and never runs makepkg.
+test_package_recipe_stops_when_master_has_no_build_file() {
+    local what
+    new_package_env
+    commit_all "$package_repo" "feat: master before the packaging"
+    git -C "$package_repo" switch -q -c packaging
+    commit_build_file packaging "build: package it"
+    for what in "a master without the PKGBUILD" "no master"; do
+        [[ $what == "no master" ]] && git -C "$package_repo" branch -q -D master
+        run_package
+        expect_status 1
+        expect_contains "builds the local master branch, which has no packaging/arch/PKGBUILD" \
+            "$stderr" "stderr with $what"
+        expect_contains "merge the branch that adds it into master, then run git switch master &&" \
+            "$stderr" "stderr with $what"
+        expect_contains "git pull, then just package" "$stderr" "stderr with $what"
+        [[ $stdout != *"building master"* ]] || fail "with $what, the recipe went on: $stdout"
+        [[ ! -e $package_dir/makepkg.log ]] || fail "with $what, makepkg ran"
+        [[ -z $(ls -A "$package_dir/home") ]] ||
+            fail "with $what, the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
+    done
+}
+
+# makepkg refuses a source mirror made from another checkout (this one moved, or an agent's clone),
+# and the working copy made from it cannot follow this checkout's commits: both go before makepkg
+# runs, and the packages and the rest of the build dir stay. A mirror of this checkout stays too.
+test_package_recipe_starts_over_from_a_source_mirror_of_another_checkout() {
+    local mirror src
+    new_package_env
+    commit_build_file master "feat: the tip of master"
+    mirror=$package_cache/sources/4x4
+    src=$package_cache/build/4x4-git/src
+    git init -q --bare "$mirror"
+    git --git-dir="$mirror" config remote.origin.url "file://$package_dir/elsewhere"
+    mkdir -p "$src/4x4/target" "$package_cache/packages"
+    touch "$package_cache/build/4x4-git/kept" "$package_cache/packages/4x4-git-old-1-x86_64.pkg.tar.zst"
+    run_package
+    expect_status 0
+    expect_contains "the source mirror in $package_cache was made from another checkout; starting over" \
+        "$stdout" stdout
+    [[ $(<"$package_dir/cache-seen") == "$package_cache/build/4x4-git"$'\n'"$package_cache/build/4x4-git/kept" ]] ||
+        fail "expected only the rest of the build dir when makepkg ran, got: $(<"$package_dir/cache-seen")"
+    [[ -e $package_cache/packages/4x4-git-old-1-x86_64.pkg.tar.zst ]] || fail "an older package was removed"
+
+    git init -q --bare "$mirror"
+    git --git-dir="$mirror" config remote.origin.url "file://$package_repo"
+    mkdir -p "$src/4x4/target"
+    run_package
+    expect_status 0
+    [[ $stdout != *"starting over"* ]] || fail "the recipe started over from this checkout's mirror: $stdout"
+    grep -qxF "$mirror" "$package_dir/cache-seen" && grep -qxF "$src/4x4/target" "$package_dir/cache-seen" ||
+        fail "this checkout's mirror and working copy went: $(<"$package_dir/cache-seen")"
 }
 
 need_python3() {
@@ -2062,6 +2140,8 @@ cases=(
     package_version_is_the_workspace_version_with_the_commit_count_and_hash
     package_installs_the_binary_desktop_file_icon_and_licenses
     package_recipe_builds_the_committed_master_under_the_cache_dir
+    package_recipe_stops_when_master_has_no_build_file
+    package_recipe_starts_over_from_a_source_mirror_of_another_checkout
     icon_is_a_square_svg_without_text_images_or_links
     icon_check_catches_what_does_not_belong_in_an_icon
     default_handler_makes_4x4_the_default_for_torrents_and_magnet_links

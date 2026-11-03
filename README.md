@@ -78,30 +78,8 @@ and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quit
 
 ## Install
 
-On Arch Linux, 4x4 installs as the package `4x4-git`, built from this checkout:
-
-```bash
-just package
-sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
-```
-
-`just package` builds the package with `makepkg` (from `packaging/arch/PKGBUILD`) and prints the
-path of the file it made as its last line; that file is what `pacman -U` installs. The version
-names the commit it was built from, such as `0.1.0.r231.g1a2b3c4` (the workspace version, the number
-of commits and the commit). The build needs the tools and libraries of
-[Build from source](#build-from-source); makepkg names any package that is missing, and
-`just package` never installs anything itself. The first build takes about four minutes. Everything it makes stays
-in `~/.cache/4x4-pkg` (crates come from cargo's own cache, `~/.cargo`): the build dir keeps the
-compiled crates, about 2 GiB, so later builds are faster, and all of it is safe to delete.
-
-The package is always built from the commits of the local `master` branch: not from the working
-tree, so uncommitted changes are left out, and not from the branch checked out; the first line
-`just package` prints names the commit it builds. The package installs `/usr/bin/4x4`, its desktop file in
-`/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
-application menu with its icon at once, without logging out.
-
-To update, bring `master` up to date and run the same two commands again; pacman replaces the
-installed version:
+On Arch Linux, 4x4 installs as the package `4x4-git`, built from the local `master` branch of this
+checkout, so build it once what you want is merged into `master`:
 
 ```bash
 git switch master
@@ -109,6 +87,27 @@ git pull
 just package
 sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
 ```
+
+`just package` builds the package with `makepkg` (from `packaging/arch/PKGBUILD`) and prints the
+path of the file it made as its last line; that file is what `pacman -U` installs. The version
+names the commit it was built from, such as `0.1.0.r231.g1a2b3c4` (the workspace version, the
+number of commits and the commit). The build needs the tools and libraries of
+[Build from source](#build-from-source); makepkg names any package that is missing, and
+`just package` never installs anything itself. The first build takes about four minutes.
+Everything it makes stays in `~/.cache/4x4-pkg` (crates come from cargo's own cache, `~/.cargo`):
+the build dir keeps the compiled crates, about 2 GiB, so later builds are faster, and all of it is
+safe to delete.
+
+The package is always built from the commits of the local `master` branch: not from the working
+tree, so uncommitted changes are left out, and not from the branch checked out; the first line
+`just package` prints names the commit it builds. While `master` has no `packaging/arch/PKGBUILD`,
+`just package` stops before it writes anything and says to merge and pull first. After the
+checkout has moved to another directory, the next build starts over from it and takes the full
+four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
+`/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
+application menu with its icon at once, without logging out.
+
+To update, run the same four commands again; pacman replaces the installed version.
 
 To uninstall, run `sudo pacman -R 4x4-git`. Your `config.toml`, `state.toml` and logs stay (see
 [Files and logs](#files-and-logs)).

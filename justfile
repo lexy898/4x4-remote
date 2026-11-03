@@ -86,15 +86,33 @@ release:
 package:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "building master: $(git log -1 --format='%h %s' master)"
+    # Everything built comes from the local master branch, its PKGBUILD as well as its sources;
+    # without them, nothing is written.
+    if ! git cat-file -e refs/heads/master:packaging/arch/PKGBUILD 2>/dev/null; then
+        echo "just package builds the local master branch, which has no packaging/arch/PKGBUILD:" \
+            "merge the branch that adds it into master, then run git switch master && git pull," \
+            "then just package" >&2
+        exit 1
+    fi
+    commit=$(git log -1 --format='%h %s' refs/heads/master)
+    echo "building master: $commit"
+    repo="{{justfile_directory()}}"
     cache="${XDG_CACHE_HOME:-$HOME/.cache}/4x4-pkg"
     mkdir -p "$cache/build" "$cache/sources" "$cache/packages"
     # makepkg rewrites pkgver= in the PKGBUILD it runs, so it runs a copy, and master's, as the
     # sources it builds are.
-    git show master:packaging/arch/PKGBUILD >"$cache/PKGBUILD"
+    git show refs/heads/master:packaging/arch/PKGBUILD >"$cache/PKGBUILD"
+    # makepkg refuses a source mirror made from another checkout (this one moved, or a clone), and
+    # the working copy made from that mirror cannot follow this checkout's commits: both go, and the
+    # build starts over.
+    mirror=$cache/sources/4x4
+    origin=$(git config --file "$mirror/config" --get remote.origin.url 2>/dev/null || true)
+    if [[ -d $mirror && $origin != "file://$repo" ]]; then
+        echo "the source mirror in $cache was made from another checkout; starting over"
+        rm -rf "$mirror" "$cache/build/4x4-git/src"
+    fi
     cd "$cache"
-    export X4_REPO="{{justfile_directory()}}" BUILDDIR="$cache/build" \
-        SRCDEST="$cache/sources" PKGDEST="$cache/packages"
+    export X4_REPO="$repo" BUILDDIR="$cache/build" SRCDEST="$cache/sources" PKGDEST="$cache/packages"
     makepkg --force
     makepkg --packagelist
 
