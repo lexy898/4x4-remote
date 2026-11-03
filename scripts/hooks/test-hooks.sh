@@ -1702,6 +1702,29 @@ test_package_recipe_stops_when_master_has_no_build_file() {
     done
 }
 
+# Outside a git repository (a copy made without .git, or a checkout git refuses to read), git's own
+# message is shown and the recipe stops: it must not send the owner off to merge and pull.
+test_package_recipe_stops_outside_a_git_repository() {
+    local plain=
+    new_package_env
+    plain=$package_dir/plain
+    mkdir "$plain"
+    cp "$root/justfile" "$plain/"
+    run_with_input '' env -u XDG_CACHE_HOME GIT_CEILING_DIRECTORIES="$package_dir" \
+        HOME="$package_dir/home" PATH="$package_dir/bin:$PATH" \
+        just --justfile "$plain/justfile" package
+    expect_status 1
+    expect_contains "not a git repository" "$stderr" stderr
+    expect_contains "just package builds the local master branch of the checkout it is in, which is not a git repository" \
+        "$stderr" stderr
+    [[ $stderr != *"merge the branch"* && $stderr != *"git pull"* ]] ||
+        fail "the recipe sent the owner to merge and pull: $stderr"
+    [[ $stdout != *"building master"* ]] || fail "the recipe went on: $stdout"
+    [[ ! -e $package_dir/makepkg.log ]] || fail "makepkg ran"
+    [[ -z $(ls -A "$package_dir/home") ]] ||
+        fail "the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
+}
+
 # makepkg refuses a source mirror made from another checkout (this one moved, or an agent's clone),
 # and the working copy made from it cannot follow this checkout's commits: both go before makepkg
 # runs, and the packages and the rest of the build dir stay. A mirror of this checkout stays too.
@@ -1808,6 +1831,9 @@ test_icon_check_catches_what_does_not_belong_in_an_icon() {
     printf '%s viewBox="0 0 16 16"><use xlink:href="https://example.invalid/a.svg#a"/></svg>\n' \
         "$svg" >"$dir/xlink.svg"
     printf '%s viewBox="0 0 16 16"><script>alert(1)</script></svg>\n' "$svg" >"$dir/script.svg"
+    # A <script> of another namespace runs too (XHTML's), so the check looks at the name alone.
+    printf '%s viewBox="0 0 16 16"><script xmlns="http://www.w3.org/1999/xhtml"/></svg>\n' "$svg" \
+        >"$dir/xhtml-script.svg"
     printf '%s viewBox="0 0 16 16"><style>rect { fill: red }</style></svg>\n' "$svg" >"$dir/style.svg"
     printf '%s viewBox="0 0 16 16"><foreignObject width="16" height="16"/></svg>\n' "$svg" \
         >"$dir/foreign-object.svg"
@@ -1829,6 +1855,7 @@ image a <image> element
 link a link outside the file: other.svg#a
 xlink a link outside the file: https://example.invalid/a.svg#a
 script a <script> element
+xhtml-script a <script> element
 style a <style> element
 foreign-object a <foreignObject> element
 url a url() outside the file: other.svg#g
@@ -2580,6 +2607,7 @@ cases=(
     package_installs_the_binary_desktop_file_icon_and_licenses
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
+    package_recipe_stops_outside_a_git_repository
     package_recipe_starts_over_from_a_source_mirror_of_another_checkout
     icon_is_a_plain_square_svg
     icon_check_catches_what_does_not_belong_in_an_icon

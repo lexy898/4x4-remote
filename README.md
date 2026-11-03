@@ -100,7 +100,8 @@ safe to delete.
 The package is always built from the commits of the local `master` branch: not from the working
 tree, so uncommitted changes are left out, and not from the branch checked out; the first line
 `just package` prints names the commit it builds. While `master` has no `packaging/arch/PKGBUILD`,
-`just package` stops before it writes anything and says to merge and pull first. After the
+`just package` stops before it writes anything and says to merge and pull first; outside a git
+repository (a copy of the files without `.git`) it stops the same way, with git's message. After the
 checkout has moved to another directory, the next build starts over from it and takes the full
 four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
 `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the

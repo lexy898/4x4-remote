@@ -87,7 +87,13 @@ package:
     #!/usr/bin/env bash
     set -euo pipefail
     # Everything built comes from the local master branch, its PKGBUILD as well as its sources;
-    # without them, nothing is written.
+    # without them, nothing is written. A directory that git cannot read as a repository (a copy
+    # without .git, or one git refuses) must not look like a master without the PKGBUILD.
+    if ! git rev-parse --git-dir >/dev/null; then
+        echo "just package builds the local master branch of the checkout it is in, which is not a" \
+            "git repository (git's message is above)" >&2
+        exit 1
+    fi
     if ! git cat-file -e refs/heads/master:packaging/arch/PKGBUILD 2>/dev/null; then
         echo "just package builds the local master branch, which has no packaging/arch/PKGBUILD:" \
             "merge the branch that adds it into master, then run git switch master && git pull," \
