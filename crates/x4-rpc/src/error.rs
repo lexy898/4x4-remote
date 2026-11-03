@@ -30,6 +30,15 @@ pub enum RpcError {
     /// where the daemon would read nothing as everything (an empty file list).
     #[error("cannot encode the request: {0}")]
     InvalidRequest(String),
+    /// A `torrent_add` of a magnet link with file choices (`files_unwanted`, `priority_high`,
+    /// `priority_low`). A magnet's file list is empty when it is added and rebuilt when the
+    /// metadata arrives, so the daemon would drop them (T/torrent.cc:858-866); the request is
+    /// never sent.
+    #[error(
+        "torrent_add: a magnet link cannot carry file choices, which the daemon drops once it has \
+         the metadata"
+    )]
+    MagnetWithFileChoices,
     /// The body is not a JSON-RPC 2.0 response to the request: not JSON, a different id,
     /// neither `result` nor `error`, or a `result` of the wrong shape.
     #[error("invalid response: {0}")]

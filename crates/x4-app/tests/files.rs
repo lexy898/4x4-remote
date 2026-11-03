@@ -39,6 +39,8 @@ const PLAYABLE: &str = "file-playable";
 const SEQUENTIAL: &str = "file-sequential";
 /// What the Files tab says while a torrent has no metadata.
 const NO_METADATA: &str = "files-no-metadata";
+/// What the Files tab says instead of a file list too large to show.
+const TOO_LARGE: &str = "files-too-large";
 /// What the Files tab says until the details come.
 const PENDING: &str = "files-pending";
 /// The id of an open menu.
@@ -1057,6 +1059,77 @@ fn a_torrent_without_metadata_says_its_files_come_later(cx: &mut TestAppContext)
     );
     assert!(!window.shown(NO_METADATA, cx));
     assert!(window.row_shown("Album/a.flac", cx));
+}
+
+#[gpui_kit::test]
+fn a_file_list_too_large_to_show_says_so(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let deep = downloading("deep");
+    window.send(vec![deep.clone()], cx);
+    window.click_row(0, cx);
+
+    // 20 000 folders one in the other: a tree of some 400 MiB, which is not made.
+    let path = "a/".repeat(20_000) + "f";
+    window.send_details(
+        details(
+            &deep.hash,
+            &[(path.as_str(), MIB, 0, true, FilePriority::Normal)],
+        ),
+        cx,
+    );
+    assert_eq!(
+        window.label(TOO_LARGE, cx).as_deref(),
+        Some("This torrent's file list is too large to show")
+    );
+    assert!(!window.shown(FILE_LIST, cx));
+    assert!(!window.shown(NO_METADATA, cx));
+    // Downloading in order can still be chosen.
+    window.act(cx, |window, cx| window.click(SEQUENTIAL, cx));
+    assert_eq!(
+        window.sent_action().1,
+        Action::SetSequential {
+            hash: deep.hash.clone(),
+            enabled: true
+        }
+    );
+
+    // A list that fits is shown again.
+    window.send_details(
+        details(
+            &deep.hash,
+            &[("Album/a.flac", MIB, 0, true, FilePriority::Normal)],
+        ),
+        cx,
+    );
+    assert!(!window.shown(TOO_LARGE, cx));
+    assert!(window.row_shown("Album/a.flac", cx));
+}
+
+#[gpui_kit::test]
+fn more_than_50_000_files_are_too_large_to_show(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let big = downloading("big");
+    window.send(vec![big.clone()], cx);
+    window.click_row(0, cx);
+
+    let paths: Vec<String> = (0..=50_000).map(|n| format!("Big/{n}.bin")).collect();
+    let files: Vec<(&str, u64, u64, bool, FilePriority)> = paths
+        .iter()
+        .map(|path| (path.as_str(), KIB, 0, true, FilePriority::Normal))
+        .collect();
+    window.send_details(details(&big.hash, &files), cx);
+
+    assert_eq!(
+        window.label(TOO_LARGE, cx).as_deref(),
+        Some("This torrent's file list is too large to show")
+    );
+    assert!(!window.shown(FILE_LIST, cx));
+    assert!(window.shown(SEQUENTIAL, cx));
+
+    // 50 000 files are shown.
+    window.send_details(details(&big.hash, files.get(..50_000).unwrap()), cx);
+    assert!(!window.shown(TOO_LARGE, cx));
+    assert!(window.row_shown("Big", cx));
 }
 
 #[gpui_kit::test]

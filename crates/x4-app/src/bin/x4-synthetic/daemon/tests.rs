@@ -17,6 +17,7 @@ use x4_rpc::{
 
 use super::*;
 
+mod adding;
 mod details;
 mod file_set;
 mod pieces;
@@ -112,6 +113,7 @@ fn each_answer_is_logged_at_debug_with_its_bytes_both_ways() {
             .post(&HttpRequest {
                 body,
                 session_id: None,
+                timeout: None,
             })
             .ok();
     });
@@ -236,6 +238,7 @@ fn post(daemon: &SyntheticDaemon, body: &str) -> Value {
         .post(&HttpRequest {
             body: body.as_bytes(),
             session_id: None,
+            timeout: None,
         })
         .expect("an answer");
     assert_eq!(response.status, 200);
@@ -243,14 +246,14 @@ fn post(daemon: &SyntheticDaemon, body: &str) -> Value {
 }
 
 #[test]
-fn adding_and_unknown_methods_are_refused_and_change_nothing() {
+fn unknown_methods_are_refused_and_change_nothing() {
     let daemon = SyntheticDaemon::new(COUNT, Activity::Static);
     let before = post(
         &daemon,
         r#"{"jsonrpc":"2.0","id":1,"method":"torrent_get","params":{}}"#,
     );
 
-    for method in ["torrent_add", "torrent_set_location", "blocklist_update"] {
+    for method in ["torrent_set_location", "blocklist_update"] {
         let answer = post(
             &daemon,
             &format!(r#"{{"jsonrpc":"2.0","id":9,"method":"{method}","params":{{}}}}"#),
@@ -671,6 +674,7 @@ fn a_request_that_is_not_json_is_a_transport_error() {
     let answer = daemon.post(&HttpRequest {
         body: b"<html>",
         session_id: None,
+        timeout: None,
     });
     assert!(
         matches!(answer, Err(TransportError::Io(ref message)) if message.contains("not JSON")),
@@ -739,7 +743,10 @@ fn the_service_connects_and_lists_every_torrent() {
             Ok(Event::MagnetLinks { result, .. }) => {
                 assert!(result.is_ok(), "a magnet read failed: {result:?}");
             }
-            Ok(Event::Details(_)) => {}
+            Ok(Event::AddFinished { result, .. }) => {
+                assert!(result.is_ok(), "an add failed: {result:?}");
+            }
+            Ok(Event::Details(_) | Event::FreeSpace { .. }) => {}
             Err(error) => panic!("no connected snapshot with the whole list: {error}"),
         }
     };
@@ -770,7 +777,8 @@ fn wait_for<T>(
         match event {
             Event::ActionFinished { result, .. } => assert!(result.is_ok(), "{result:?}"),
             Event::MagnetLinks { result, .. } => assert!(result.is_ok(), "{result:?}"),
-            Event::Snapshot(_) | Event::Details(_) => {}
+            Event::AddFinished { result, .. } => assert!(result.is_ok(), "{result:?}"),
+            Event::Snapshot(_) | Event::Details(_) | Event::FreeSpace { .. } => {}
         }
     }
 }

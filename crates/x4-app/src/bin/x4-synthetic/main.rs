@@ -16,6 +16,11 @@
 //!   there, as a click would, for screenshots of a selected row.
 //! - `--extend K`, after `--select N`, then extends the selection `K` rows down, as Shift+Down
 //!   pressed `K` times would, for screenshots of several selected rows.
+//! - `--add PATH_OR_MAGNET`, which may be given several times, asks the window to add each
+//!   `.torrent` file or magnet link at the start, as launch arguments would, for screenshots of
+//!   the add dialog. The arguments are told apart as launch arguments are, and the ones 4x4 does
+//!   not open make their notification. Nothing is added until Add is pressed, and then only to
+//!   the made-up daemon.
 //! - `--right-click`, after `--select N` (and `--extend K`), then right-clicks the row `N` with
 //!   the mouse, which opens its context menu, for screenshots of the menu.
 //! - `--press KEY`, which may be given several times, presses each key in turn once the list is
@@ -31,6 +36,7 @@ mod daemon;
 mod frames;
 
 use std::env;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -38,6 +44,7 @@ use gpui_kit::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point,
     point, px,
 };
+use x4_app::adding::{AddRequest, AddRequests, launch_requests};
 use x4_app::app::{self, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
@@ -74,6 +81,7 @@ fn main() -> anyhow::Result<()> {
         extend = options.extend,
         right_click = options.right_click,
         press = ?options.press,
+        adds = options.add.len(),
         "synthetic daemon"
     );
     let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
@@ -83,9 +91,15 @@ fn main() -> anyhow::Result<()> {
         state_writable: false,
         state_path: None,
         config_problem: None,
+        adds: AddRequests::new(),
     };
+    let adds = startup.adds.sender.clone();
     let scroll = options.scroll;
+    let cwd = env::current_dir()?;
     app::run_driven(started, startup, move |window, view, cx| {
+        if !options.add.is_empty() {
+            ask_to_add(&adds, &options.add, &cwd);
+        }
         if options.select.is_some() || !options.press.is_empty() {
             drive_when_listed(window, view.clone(), options, cx);
         }
@@ -141,6 +155,18 @@ fn drive_when_listed(
         }
     })
     .detach();
+}
+
+/// Asks the main window, through its channel `adds`, to add `args`, with the requests the same
+/// launch arguments run in `cwd` would make ([`launch_requests`]): the `.torrent` files and magnet
+/// links in one request, the rest in another, which the window shows as one notification.
+fn ask_to_add(adds: &async_channel::Sender<AddRequest>, args: &[String], cwd: &Path) {
+    tracing::info!(arguments = args.len(), "asking to add torrents");
+    for request in launch_requests(args, cwd) {
+        if adds.try_send(request).is_err() {
+            tracing::error!("the window stopped taking torrents to add");
+        }
+    }
 }
 
 /// Presses `keys` in `window`, as the keyboard would: the keystroke goes through the key bindings
@@ -261,6 +287,8 @@ struct Options {
     right_click: bool,
     /// The keys to press in turn, in gpui's spelling.
     press: Vec<String>,
+    /// The `.torrent` files and magnet links to ask to add at the start.
+    add: Vec<String>,
 }
 
 impl Options {
@@ -300,9 +328,15 @@ impl Options {
                     })?;
                     options.press.push(keys);
                 }
+                "--add" => {
+                    let item = args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--add needs a .torrent file or a magnet link")
+                    })?;
+                    options.add.push(item);
+                }
                 other => anyhow::bail!(
                     "unknown argument {other:?}; the options are --static, --scroll, --select N, \
-                     --extend K, --right-click and --press KEY"
+                     --extend K, --right-click, --press KEY and --add PATH_OR_MAGNET"
                 ),
             }
         }
@@ -335,6 +369,7 @@ mod tests {
                 extend: 0,
                 right_click: false,
                 press: Vec::new(),
+                add: Vec::new(),
             }
         );
     }
@@ -350,6 +385,7 @@ mod tests {
                 extend: 0,
                 right_click: false,
                 press: Vec::new(),
+                add: Vec::new(),
             }
         );
     }
@@ -397,6 +433,16 @@ mod tests {
         assert!(missing.to_string().contains("ctrl-p"), "{missing}");
         let invalid = parse(&["--press", "p-ctrl"]).expect_err("the key comes last");
         assert!(invalid.to_string().contains("\"p-ctrl\""), "{invalid}");
+    }
+
+    #[test]
+    fn add_takes_files_and_links_in_order() {
+        let link = format!("magnet:?xt=urn:btih:{}", "a".repeat(40));
+        let options =
+            parse(&["--add", "show.torrent", "--add", &link, "--static"]).expect("two items");
+        assert_eq!(options.add, ["show.torrent", link.as_str()]);
+        let missing = parse(&["--add"]).expect_err("nothing to add");
+        assert!(missing.to_string().contains("magnet link"), "{missing}");
     }
 
     #[test]

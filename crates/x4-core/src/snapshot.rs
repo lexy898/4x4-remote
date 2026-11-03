@@ -80,6 +80,7 @@ impl From<&RpcError> for ConnectionError {
             | RpcError::SessionIdRejected
             | RpcError::InvalidResponse(_)
             | RpcError::InvalidRequest(_)
+            | RpcError::MagnetWithFileChoices
             | RpcError::Selection(_)
             | RpcError::UnsupportedServer { .. } => Self::Protocol(error.to_string()),
         }
@@ -112,6 +113,9 @@ pub struct SessionSummary {
     pub alt_speed_down_kbps: KbPerSecond,
     /// The alternative upload limit, which applies while `alt_speed_enabled` is on.
     pub alt_speed_up_kbps: KbPerSecond,
+    /// Whether the daemon starts an added torrent at once unless told otherwise; the default of
+    /// starting it in the add dialog.
+    pub start_added_torrents: bool,
 }
 
 impl From<&SessionInfo> for SessionSummary {
@@ -132,6 +136,7 @@ impl From<&SessionInfo> for SessionSummary {
             },
             alt_speed_down_kbps: KbPerSecond(info.alt_speed_down_kbps),
             alt_speed_up_kbps: KbPerSecond(info.alt_speed_up_kbps),
+            start_added_torrents: info.start_added_torrents,
         }
     }
 }
@@ -234,6 +239,7 @@ mod tests {
         protocol(RpcError::SessionIdRejected);
         protocol(RpcError::InvalidResponse("not JSON".to_owned()));
         protocol(RpcError::InvalidRequest("bad value".to_owned()));
+        protocol(RpcError::MagnetWithFileChoices);
         protocol(RpcError::UnsupportedServer {
             reason: UnsupportedReason::Version("5.4.0".to_owned()),
         });
@@ -278,8 +284,21 @@ mod tests {
                 },
                 alt_speed_down_kbps: KbPerSecond(20),
                 alt_speed_up_kbps: KbPerSecond(10),
+                start_added_torrents: info.start_added_torrents,
             }
         );
+    }
+
+    #[test]
+    fn session_summary_tells_whether_added_torrents_start() {
+        for start in [true, false] {
+            let info = SessionInfo {
+                start_added_torrents: start,
+                ..session_info((0, false), (0, false), false)
+            };
+
+            assert_eq!(SessionSummary::from(&info).start_added_torrents, start);
+        }
     }
 
     #[test]

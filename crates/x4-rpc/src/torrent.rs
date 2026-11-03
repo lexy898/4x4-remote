@@ -4,13 +4,18 @@
 //! Records keep the server's raw values (bytes, bytes/s, seconds, Unix times, the `-1`/`-2`
 //! sentinels of `eta` and `upload_ratio`); turning them into the app's model is `x4-core`'s job.
 
+use std::fmt;
+use std::sync::Arc;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT;
 use serde::de::{Error as _, Unexpected};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::download_dir::DownloadDir;
 use crate::error::RpcError;
 use crate::ids::{HashString, TorrentId};
+use crate::magnet::MagnetLink;
 
 /// A key of the `fields` array of `torrent_get`; serializes as its wire name (`hash_string`, …).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -564,12 +569,31 @@ pub struct TorrentSet {
 }
 
 /// Where a torrent to add comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The daemon reads `filename` as a URL to fetch or a path on its own disk too, so only a
+/// validated [`MagnetLink`] is ever sent there; the content of a `.torrent` file always goes as
+/// `metainfo`.
+///
+/// Its `Debug` shows a link as [`MagnetLink`] does, and the content only by its length.
+#[derive(Clone, PartialEq, Eq)]
 pub enum AddSource {
-    /// A magnet link (or a URL of a `.torrent` the server fetches), sent as `filename`.
-    Magnet(String),
-    /// The content of a `.torrent` file, sent base64-encoded as `metainfo`.
-    Metainfo(Vec<u8>),
+    /// A magnet link, sent as `filename`.
+    Magnet(MagnetLink),
+    /// The content of a `.torrent` file, sent base64-encoded as `metainfo`. It is shared, not
+    /// copied, with whoever read the file.
+    Metainfo(Arc<[u8]>),
+}
+
+impl fmt::Debug for AddSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Magnet(link) => f.debug_tuple("Magnet").field(link).finish(),
+            Self::Metainfo(content) => f
+                .debug_struct("Metainfo")
+                .field("len", &content.len())
+                .finish(),
+        }
+    }
 }
 
 /// A `torrent_add` request; `None` and empty lists are left out of the request.
@@ -581,7 +605,7 @@ pub struct TorrentAdd {
     /// The magnet link or metainfo.
     pub source: AddSource,
     /// Where on the server to download to; `None` uses the session's default directory.
-    pub download_dir: Option<String>,
+    pub download_dir: Option<DownloadDir>,
     /// Add without starting.
     pub paused: bool,
     /// Indices of files not to download.
@@ -911,5 +935,42 @@ mod tests {
             Pieces::decode_base64("not base64!"),
             Err(RpcError::InvalidResponse(_))
         ));
+    }
+
+    #[test]
+    fn the_debug_text_of_an_add_shows_neither_the_link_nor_the_content() {
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let link = format!(
+            "magnet:?xt=urn:btih:{hash}&dn=x&tr=http%3A%2F%2Ft.example%2Fa%3Fpasskey%3DSECRET"
+        );
+        let content = b"d4:infod4:name6:SECRETee".to_vec();
+        let add = |source| TorrentAdd {
+            source,
+            download_dir: None,
+            paused: false,
+            files_unwanted: Vec::new(),
+            priority_high: Vec::new(),
+            priority_low: Vec::new(),
+            sequential_download: None,
+        };
+        let magnet = add(AddSource::Magnet(MagnetLink::parse(&link).unwrap()));
+        let metainfo = add(AddSource::Metainfo(Arc::from(content.as_slice())));
+
+        for text in [format!("{magnet:?}"), format!("{magnet:#?}")] {
+            for secret in ["magnet:?", "t.example", "passkey", "SECRET"] {
+                assert!(!text.contains(secret), "{secret} in {text}");
+            }
+            assert!(text.contains(hash), "{text}");
+            assert!(text.contains(&format!("len: {}", link.len())), "{text}");
+        }
+        for text in [format!("{metainfo:?}"), format!("{metainfo:#?}")] {
+            // The bytes as `Vec<u8>` prints them: `[100, 52, …]`.
+            assert!(
+                !text.contains("100, 52") && !text.contains("100,\n"),
+                "{text}"
+            );
+            assert!(!text.contains("SECRET"), "{text}");
+            assert!(text.contains(&format!("len: {}", content.len())), "{text}");
+        }
     }
 }

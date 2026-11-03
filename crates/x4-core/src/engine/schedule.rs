@@ -143,7 +143,10 @@ impl Engine {
                 self.details_answered_at(now);
                 return;
             }
-            Request::CheckServer | Request::Action(..) | Request::MagnetLinks(..) => return,
+            Request::CheckServer
+            | Request::Action(..)
+            | Request::MagnetLinks(..)
+            | Request::FolderFreeSpace(_) => return,
         };
         timer.answered(now);
     }

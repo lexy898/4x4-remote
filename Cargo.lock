@@ -265,6 +265,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "getrandom 0.4.3",
+ "raw-window-handle",
  "serde",
  "serde_repr",
  "wayland-backend",
@@ -299,9 +300,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -8771,6 +8772,7 @@ name = "x4-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ashpd",
  "async-channel",
  "base64 0.23.1",
  "chrono",
@@ -8780,6 +8782,8 @@ dependencies = [
  "gpui-kit",
  "i18n-embed",
  "i18n-embed-fl",
+ "libc",
+ "raw-window-handle",
  "rust-embed",
  "serde_json",
  "tempfile",
@@ -8803,6 +8807,7 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
+ "url",
  "x4-core",
  "x4-rpc",
 ]

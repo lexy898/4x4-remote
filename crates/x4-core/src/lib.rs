@@ -28,10 +28,34 @@
 //! The details panel under the table is decided here as well. [`details_target`] says which
 //! torrent it is about (a [`DetailsTarget`]), and [`general_model`] gives the values of its
 //! General tab, with the [`TrackerSummary`] of [`tracker_summary`]. A [`FileTree`] turns the files
-//! of the [`TorrentDetails`] into folders and files with their sums; a [`FileTreeView`] keeps
+//! of the [`TorrentDetails`] into folders and files with their sums (or into none, for more than
+//! [`MAX_CHOOSABLE_FILES`] files or a tree beyond [`TREE_BUDGET`]); a [`FileTreeView`] keeps
 //! which folders are open and where the cursor is and lists the [`FileRow`]s to draw; and
 //! [`FileTree::indices`] gives the files an action on a row reaches, as [`NonEmptyIndices`], which
 //! cannot be empty because the daemon reads an empty list as all files.
+//!
+//! Adding a torrent starts here as well: [`parse_torrent`] reads a `.torrent` file of at most
+//! [`MAX_TORRENT_FILE_BYTES`], strictly, into a [`ParsedTorrent`] with its info hash and its
+//! [`MetaFile`]s at the indices the daemon will give them, or into no files at all when the daemon
+//! could number them otherwise, and refuses with a [`MetainfoError`] what the daemon would.
+//! [`launch::classify`] tells what each argument 4x4 is launched with asks for: a magnet link, a
+//! `.torrent` file to read, or a [`launch::RejectedArg`] that the window explains. It never
+//! touches the file system, and it never lets a URL through.
+//!
+//! The add dialog is decided here too. An [`AddQueue`] holds what the user asked to add, as
+//! [`AddItem`]s (paths and magnet links, at most [`QUEUE_CAP`]), and its head is shown. The app
+//! reads the head's file, and [`LoadedItem::torrent`] parses it into a [`LoadedTorrent`]. An
+//! [`AddForm`] holds the folder, "Start immediately" and, for a `.torrent`, the choice of files,
+//! in a [`FileTree`] made by [`FileTree::of_files`] whose checkboxes apply
+//! [`FileTree::wanted_toggle`] to the form; a torrent whose files cannot be chosen from is added
+//! with all of them, and [`NoChoiceReason`] says why.
+//! [`AddForm::check`] gives the [`AddCheck`] that tells whether Add may send it, and the request
+//! it sends. [`folder_picks`] lists at most [`MAX_FOLDER_PICKS`] folders to offer: the session's,
+//! then the history of the [`AddState`], then those of the torrents in the list. Before anything
+//! is queued, [`dropped_files`] keeps the `.torrent` files of a drop and counts the others,
+//! [`clipboard_magnets`] takes the magnet links on the clipboard, no more than the queue holds
+//! (and [`magnet_form_items`] what "Add magnet" queues), and [`chosen_files`] reads the files a
+//! file dialog names by their URIs.
 //!
 //! The global speed limits are shown and typed in [`KibPerSecond`], while the daemon keeps them
 //! in [`KbPerSecond`]: [`parse_limit`] reads what the user typed (or the [`LimitError`] why not),
@@ -42,13 +66,13 @@
 //! [`limit_needs_value`] tells when it was switched on without a speed.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
-//! the app writes (window, columns, sort order, filter, theme), read tolerantly and repaired by
-//! [`UiState::parse`] (see also [`UiState::normalized`]); [`set_column_shown`],
-//! [`move_shown_column`] and [`set_shown_widths`] apply what the user does to its columns, which
-//! the table counts by [`shown_columns`]. [`Config`] is the owner's `config.toml`, which the app
-//! only reads. Both turn text into values and back; reading and writing the files is left to the
-//! app. A [`ConfigError`] names the [`TextPosition`] of a parse error as numbers, so the app can
-//! word it.
+//! the app writes (window, columns, sort order, filter, theme, details panel, and the folders
+//! torrents were added to), read tolerantly and repaired by [`UiState::parse`] (see also
+//! [`UiState::normalized`]); [`set_column_shown`], [`move_shown_column`] and [`set_shown_widths`]
+//! apply what the user does to its columns, which the table counts by [`shown_columns`].
+//! [`Config`] is the owner's `config.toml`, which the app only reads. Both turn text into values
+//! and back; reading and writing the files is left to the app. A [`ConfigError`] names the
+//! [`TextPosition`] of a parse error as numbers, so the app can word it.
 //!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
@@ -65,7 +89,13 @@
 //! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
 //! their progress and, once a minute, their trackers ([`DetailsRead`]), and nothing while the
 //! window is hidden. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
-//! on [`Command::ReadMagnetLinks`], under the same rules as an action.
+//! on [`Command::ReadMagnetLinks`], under the same rules as an action. An [`Action::Add`] is
+//! answered with [`Event::AddFinished`]: the torrent [`Added`] (or found already there), or the
+//! [`AddError`] why not. An add that gets no answer within its long timeout is
+//! [`AddError::Unconfirmed`], which does not drop the connection: the next lists tell whether it
+//! was added. [`Command::FreeSpace`] asks how much room a folder on the server has, for the folder
+//! the user is choosing; a folder that does not exist yet is answered with the room in its
+//! nearest parent that does ([`FreeSpaceAnswer`]), with few calls to the daemon.
 //!
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
@@ -77,13 +107,16 @@
 //! `x4-rpc`'s `test-support`, whose recorded fixtures the builders work with.
 
 mod action;
+mod adding;
 mod config;
 mod details;
 mod engine;
 mod files;
 mod filter;
 mod format;
+pub mod launch;
 mod limits;
+mod metainfo;
 mod model;
 mod playable;
 pub mod service;
@@ -97,15 +130,26 @@ mod toml_error;
 mod ui_state;
 mod view;
 
-pub use action::{Action, ActionError, ActionId, Direction, FileChange, FileTarget};
+pub use action::{
+    Action, ActionError, ActionId, AddError, Added, Direction, FileChange, FileTarget,
+};
+pub use adding::{
+    AddCheck, AddForm, AddItem, AddNotice, AddOutcome, AddQueue, ChosenFiles, ClipboardItems,
+    DroppedFiles, FREE_SPACE_DELAY, FormDefaults, FormStep, FreeSpaceCache, FreeSpaceFollow,
+    ListChoices, LoadedItem, LoadedTorrent, MAX_FOLDER_PICKS, NoChoiceReason,
+    PENDING_SELECTION_LIFE, PendingSelection, QUEUE_CAP, Reveal, SentAdd, TakenDefaults,
+    add_outcome, chosen_files, clipboard_magnets, dropped_files, folder_picks, magnet_form_items,
+    stopped_outcome,
+};
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
 pub use engine::{
-    Command, DetailsRead, Engine, EngineConfig, Event, Request, Response, Visibility,
+    Command, DetailsRead, Engine, EngineConfig, Event, FreeSpaceAnswer, Request, Response,
+    Visibility,
 };
 pub use files::{
-    FileRow, FileTree, FileTreeView, NodeKey, NonEmptyIndices, PriorityView, RowKind, WantedState,
-    next_priority,
+    FileRow, FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, NonEmptyIndices, PriorityView,
+    RowKind, TREE_BUDGET, WantedState, next_priority,
 };
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
@@ -116,6 +160,7 @@ pub use limits::{
     KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB, kbps_to_kib,
     kib_to_kbps, limit_edit, limit_needs_value, limit_prefill, parse_limit,
 };
+pub use metainfo::{MAX_TORRENT_FILE_BYTES, MetaFile, MetainfoError, ParsedTorrent, parse_torrent};
 pub use model::{Eta, ModelError, Ratio, Torrent};
 pub use playable::{Playable, file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
@@ -124,10 +169,10 @@ pub use state::{Attention, DisplayState, QueueKind, attention, classify, is_acti
 pub use store::{Converted, SkipReason, SkippedRecord, Store, torrents_from_records};
 pub use toml_error::TextPosition;
 pub use ui_state::{
-    ColumnState, DetailsState, DetailsTab, MAX_COLUMN_WIDTH, MAX_DETAILS_HEIGHT, MIN_COLUMN_WIDTH,
-    MIN_DETAILS_HEIGHT, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, ParsedUiState, SortState, ThemeChoice,
-    UI_STATE_VERSION, UiState, UiStateError, WindowState, default_columns, move_shown_column,
-    set_column_shown, set_shown_widths, shown_columns,
+    AddState, ColumnState, DetailsState, DetailsTab, MAX_COLUMN_WIDTH, MAX_DETAILS_HEIGHT,
+    MAX_RECENT_FOLDERS, MIN_COLUMN_WIDTH, MIN_DETAILS_HEIGHT, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+    ParsedUiState, SortState, ThemeChoice, UI_STATE_VERSION, UiState, UiStateError, WindowState,
+    default_columns, move_shown_column, set_column_shown, set_shown_widths, shown_columns,
 };
 pub use view::{
     Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,

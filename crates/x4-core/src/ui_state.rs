@@ -1,5 +1,5 @@
 //! What the app remembers between runs: the window, the columns, the sort order, the filter, the
-//! theme and the details panel, kept in `state.toml`.
+//! theme, the details panel and the folders torrents were added to, kept in `state.toml`.
 //!
 //! This file is the app's own, so it is rewritten whenever something changes, and nobody is
 //! expected to edit it. It must still never keep the app from starting: unknown keys, unknown
@@ -11,6 +11,7 @@
 //! [`UiState`] and back, and applies the changes the user makes to the table's columns (the
 //! `columns` module).
 
+mod add;
 mod columns;
 mod details;
 mod wire;
@@ -22,6 +23,7 @@ use crate::sort::{SortDirection, SortKey};
 use crate::toml_error::describe;
 use crate::view::{ColumnId, ViewState};
 
+pub use add::{AddState, MAX_RECENT_FOLDERS};
 pub use columns::{move_shown_column, set_column_shown, set_shown_widths, shown_columns};
 pub use details::{DetailsState, DetailsTab, MAX_DETAILS_HEIGHT, MIN_DETAILS_HEIGHT};
 
@@ -72,6 +74,9 @@ pub struct UiState {
     /// The details panel under the table. A file from before the panel existed has none, and the
     /// default applies.
     pub details: DetailsState,
+    /// What the add dialog remembers. A file from before it existed has none, and the history is
+    /// empty.
+    pub add: AddState,
 }
 
 impl Default for UiState {
@@ -86,6 +91,7 @@ impl Default for UiState {
             filter: Filter::default(),
             theme: ThemeChoice::default(),
             details: DetailsState::default(),
+            add: AddState::default(),
         }
     }
 }
@@ -295,10 +301,13 @@ impl UiState {
     ///   or with a size that is not a number, takes the default size.
     /// - The details panel is 110 to 2000 pixels high; a height that is not a number takes the
     ///   default one.
+    /// - The history of folders holds at most 10 folders the daemon can use, normalized, each
+    ///   once; the others are dropped.
     #[must_use]
     pub fn normalized(mut self) -> Self {
         self.window = self.window.normalized();
         self.details = self.details.normalized();
+        self.add = self.add.normalized();
 
         let mut columns: Vec<ColumnState> = Vec::with_capacity(ColumnId::ALL.len());
         for column in self.columns {

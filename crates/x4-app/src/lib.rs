@@ -5,30 +5,37 @@
 //! [`main_view::MainView`]. The view pumps the service's events without blocking the UI thread,
 //! and lays out a toolbar (the `toolbar` module) with the search box (the `search` module), the
 //! filter sidebar (the `sidebar` module), the torrent table ([`torrent_table`]), the details panel
-//! under it (the `details_panel` module) and the status bar (the `status_bar` module); the
+//! under it (the `details_panel` module), whose Files tab draws the shared list of a torrent's
+//! files (the `file_list` module), and the status bar (the `status_bar` module); the
 //! `theme` module holds the light and dark theme and the colors of states, and the `icons` module
 //! the icons beyond gpui-component's own. [`actions`] holds what
 //! can be done to the selected torrents, the `context_menu` module the menu of a right-click on
 //! them, the `removal` module the dialogs that ask before they are removed, the `clipboard` module
 //! the copies of their hashes and magnet links, and the `key_repeats` module tells a press of
 //! their keys from the repeats of a held key. The `speed_limits` module is the popover of the
-//! status bar that sets the daemon's speed limits. [`paths`] finds the config, state and log
+//! status bar that sets the daemon's speed limits. [`adding`] holds the requests to add torrents
+//! and the add dialog that offers them one at a time. [`paths`] finds the config, state and log
 //! locations, [`logging`] logs to stderr and a daily file there, and the `files` module reads
 //! `config.toml` and reads and writes `state.toml`; the `saving` module decides when the window's
 //! state is written, and the `window_state` module turns the window's bounds into the size to
-//! remember and back. The `4x4` binary finds the paths, starts the logging and calls
-//! [`app::run`]. [`keymap`] is the one table of key bindings, with the actions the keys run.
+//! remember and back. [`instance`] keeps one 4x4 per user: a later launch hands its arguments to
+//! the first one and exits. The `4x4` binary finds the paths, starts the logging, hands its
+//! arguments over or calls [`app::run`] with them. [`keymap`] is the one table of key bindings,
+//! with the actions the keys run.
 //! Every text the windows show comes from the Fluent messages in `i18n/`, through the `i18n`
 //! module.
 
 pub mod actions;
+pub mod adding;
 pub mod app;
 mod clipboard;
 mod context_menu;
 mod details_panel;
+mod file_list;
 mod files;
 mod i18n;
 mod icons;
+pub mod instance;
 mod key_repeats;
 pub mod keymap;
 pub mod logging;

@@ -9,6 +9,7 @@ pub mod scrub;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 
@@ -86,6 +87,7 @@ impl Transport for FakeTransport {
             method: method.to_owned(),
             params: params.clone(),
             session_id: request.session_id.map(str::to_owned),
+            timeout: request.timeout,
         });
         // Only the responder is locked here, so a handler may call `requests()`.
         let response = match &mut *lock(&self.shared.responder) {
@@ -116,6 +118,9 @@ pub struct RecordedRequest {
     pub params: Value,
     /// The `X-Transmission-Session-Id` the request carried.
     pub session_id: Option<String>,
+    /// The timeout the request asked for in place of the transport's own; `None` when it took
+    /// the transport's.
+    pub timeout: Option<Duration>,
 }
 
 /// HTTP 200 with a JSON-RPC success response carrying `result`; a [`FakeTransport`] fills in the

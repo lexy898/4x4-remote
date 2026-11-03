@@ -51,6 +51,9 @@ fn customized() -> UiState {
             height: 333.3,
             tab: DetailsTab::Files,
         },
+        add: AddState {
+            recent_folders: vec!["/data/films".to_owned(), "/data/Музыка".to_owned()],
+        },
         ..UiState::default()
     }
 }
@@ -82,6 +85,8 @@ fn ui_state_default_is_the_first_run() {
             tab: DetailsTab::General
         }
     );
+    assert_eq!(state.add, AddState::default());
+    assert_eq!(state.add.recent_folders, Vec::<String>::new());
 }
 
 #[test]
@@ -186,6 +191,9 @@ direction = "ascending"
 open = true
 height = 273.0
 tab = "general"
+
+[add]
+recent_folders = []
 "#
     );
 }

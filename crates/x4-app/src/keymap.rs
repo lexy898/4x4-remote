@@ -7,14 +7,16 @@
 //!
 //! - the torrent actions, the selection keys among them, work in the torrent list (`TorrentList`)
 //!   while no menu of it is open (`!PopupMenu`): the context menu is drawn inside the list, and
-//!   Delete there must not act on the torrents behind it. The search box lies outside the list, so
-//!   Ctrl+A, Ctrl+C, Delete or Space there edit or copy its text and never reach the torrents;
+//!   Delete there must not act on the torrents behind it. So does Ctrl+V, which adds the magnet
+//!   links on the clipboard. The search box lies outside the list, so Ctrl+A, Ctrl+C, Ctrl+V,
+//!   Delete or Space there edit, copy or paste its text and never reach the torrents;
 //! - the window's own keys (Ctrl+F, `/`, Ctrl+T and Ctrl+L for the turtle and the speed limits,
-//!   and Alt+Enter, Alt+1 and Alt+2 for the details panel and its tabs) work in the whole main
-//!   window (`MainWindow`), the search box included: its text field binds none of these keys.
-//!   The popover of the limits (`SpeedLimits`) lets through only the keys of the status bar and
-//!   those that take the focus out of it, which closes it; Alt+Enter, Alt+1 and Alt+2 do nothing
-//!   there, so that the details panel does not change behind it;
+//!   Alt+Enter, Alt+1 and Alt+2 for the details panel and its tabs, and Ctrl+O and Ctrl+U, which
+//!   add a `.torrent` file and a magnet link) work in the whole main window (`MainWindow`), the
+//!   search box included: its text field binds none of these keys. The popover of the limits
+//!   (`SpeedLimits`) lets through only the keys of the status bar and those that take the focus
+//!   out of it, which closes it; Alt+Enter, Alt+1, Alt+2, Ctrl+O and Ctrl+U do nothing there, so
+//!   that nothing changes or opens behind it;
 //! - the keys of the Files tab work in its file list (`FileList`) while no menu of it is open: the
 //!   arrows, Home, End, Page Up and Page Down move its cursor and open and close folders, Space
 //!   downloads or skips the row under the cursor, and `+` and `-` step its priority. The list lies
@@ -24,6 +26,11 @@
 //! - in the footer of a removal dialog (`RemovalDialogFooter`), Enter is bound to nothing, so that
 //!   it presses the button that has the focus. The dialog's own Enter would confirm the dialog
 //!   whatever has the focus, and Enter on a focused Cancel must never delete files;
+//! - in the add dialog (`AddTorrent`), Enter is bound to nothing too: the dialog's own Enter would
+//!   close it from any field. A text field of the dialog still adds on Enter, through its own
+//!   event, and a focused button is pressed by it. Alt+Down opens the history of the folder field
+//!   (`FolderField`). The dialog lies beside the main window's content, so none of the window's
+//!   keys reach behind it; the keys of its file list are those of the Files tab;
 //! - only Ctrl+Q has no context. A binding without one also fires in a text field, before the
 //!   field's own binding of the same key, so it would take the key from the search box.
 //!
@@ -35,8 +42,9 @@
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
 //! again here in its context, later, so that ours win (see [`BINDINGS`]). While a menu is open (the
 //! context menu, or a menu of the toolbar), its own Up, Down, Enter and Escape go first, and Tab,
-//! Shift+Tab, Ctrl+F, `/`, Ctrl+L, Ctrl+T, Alt+Enter, Alt+1 and Alt+2 do nothing, nor do Home,
-//! End, Page Up and Page Down in the context menu: the menu keeps the keys until it closes.
+//! Shift+Tab, Ctrl+F, `/`, Ctrl+L, Ctrl+T, Alt+Enter, Alt+1, Alt+2, Ctrl+O and Ctrl+U do nothing,
+//! nor do Home, End, Page Up and Page Down in the context menu: the menu keeps the keys until it
+//! closes.
 
 #[cfg(test)]
 mod tests;
@@ -119,6 +127,14 @@ actions!(
         RaiseFilePriority,
         /// Lowers the priority of the file or folder under the file cursor by one step.
         LowerFilePriority,
+        /// Opens the history of folders under the folder field of the add dialog.
+        OpenFolderHistory,
+        /// Opens the file dialog that chooses `.torrent` files to add.
+        AddTorrentFiles,
+        /// Adds the magnet links on the clipboard, or opens the add dialog's form for one.
+        AddMagnetLink,
+        /// Adds the magnet links on the clipboard, or says that it holds none.
+        PasteMagnetLinks,
     ]
 );
 
@@ -153,6 +169,14 @@ pub(crate) const FILE_LIST_CONTEXT: &str = "FileList";
 /// Where the file list's keys work: in it, while no menu of it is open. A priority menu is drawn
 /// inside the list, so without `!PopupMenu` its arrows would move the file cursor behind it.
 const FILES: &str = "FileList && !PopupMenu";
+/// The key context of the add dialog's content, inside gpui-component's `Dialog`.
+pub(crate) const ADD_DIALOG_CONTEXT: &str = "AddTorrent";
+/// The key context of the folder field of the add dialog, around its text field and the button of
+/// its history.
+pub(crate) const FOLDER_FIELD_CONTEXT: &str = "FolderField";
+/// The folder field while its history is not open: the history's menu is drawn inside the field,
+/// and keeps its own keys.
+const FOLDER_FIELD: &str = "FolderField && !PopupMenu";
 
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
@@ -191,6 +215,18 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "ctrl-l",
         action: || Box::new(EditSpeedLimits),
+        context: Some(MAIN_CONTEXT),
+    },
+    // Transmission's keys for opening a .torrent file and a link. Neither is bound in a text field,
+    // so both work from the search box too.
+    Binding {
+        keys: "ctrl-o",
+        action: || Box::new(AddTorrentFiles),
+        context: Some(MAIN_CONTEXT),
+    },
+    Binding {
+        keys: "ctrl-u",
+        action: || Box::new(AddMagnetLink),
         context: Some(MAIN_CONTEXT),
     },
     // Alt+Enter is Transmission's key for a torrent's properties. Enter alone is a different key:
@@ -256,9 +292,9 @@ pub const BINDINGS: &[Binding] = &[
     // A menu is modal. Up and Down in it move its highlight (the menu's own bindings are deeper).
     // Neither Tab, Shift+Tab, Ctrl+F, `/` nor Ctrl+L (which opens the speed limits) may take the
     // focus out of an open menu, which does not close when it loses the focus: the keys of the
-    // list or the search box would then act behind it. Ctrl+T, Alt+Enter, Alt+1 and Alt+2 do
-    // nothing behind it either. A test holds every key bound outside a menu to this, unless its
-    // context leaves menus out.
+    // list or the search box would then act behind it. Ctrl+T, Alt+Enter, Alt+1, Alt+2, Ctrl+O and
+    // Ctrl+U do nothing behind it either. A test holds every key bound outside a menu to this,
+    // unless its context leaves menus out.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
@@ -304,9 +340,20 @@ pub const BINDINGS: &[Binding] = &[
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
-    // The popover of the speed limits keeps the keys of the details panel too, as a menu does.
-    // Ctrl+T and Ctrl+L belong to the status bar beside it, and Ctrl+F and `/` take the focus out,
-    // which closes the popover; those stay. A test holds every other window key to this.
+    Binding {
+        keys: "ctrl-o",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
+        keys: "ctrl-u",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    // The popover of the speed limits keeps the keys of the details panel and of adding torrents
+    // too, as a menu does. Ctrl+T and Ctrl+L belong to the status bar beside it, and Ctrl+F and `/`
+    // take the focus out, which closes the popover; those stay. A test holds every other window key
+    // to this.
     Binding {
         keys: "alt-enter",
         action: || Box::new(NoAction),
@@ -319,6 +366,16 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         keys: "alt-2",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "ctrl-o",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "ctrl-u",
         action: || Box::new(NoAction),
         context: Some(SPEED_LIMITS_CONTEXT),
     },
@@ -403,8 +460,8 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(TORRENTS),
     },
     // The actions on the selected torrents, with Transmission's keys where it has one. Verify is
-    // Ctrl+Shift+R rather than Transmission's Ctrl+V, which stays free for pasting a magnet link:
-    // a check reads every byte of the data, hours on a small server.
+    // Ctrl+Shift+R rather than Transmission's Ctrl+V, which pastes magnet links here (below): a
+    // check reads every byte of the data, hours on a small server.
     Binding {
         keys: "ctrl-s",
         action: || Box::new(StartTorrents),
@@ -455,6 +512,12 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "ctrl-shift-c",
         action: || Box::new(CopyHashes),
+        context: Some(TORRENTS),
+    },
+    // The search box lies outside the list and keeps its own Ctrl+V, which pastes text into it.
+    Binding {
+        keys: "ctrl-v",
+        action: || Box::new(PasteMagnetLinks),
         context: Some(TORRENTS),
     },
     // The file list of the Files tab. It lies outside the torrent list, so these never reach the
@@ -522,6 +585,20 @@ pub const BINDINGS: &[Binding] = &[
         keys: "enter",
         action: || Box::new(NoAction),
         context: Some(REMOVAL_FOOTER_CONTEXT),
+    },
+    // The same in the add dialog, where the dialog's own Enter would close it from a field: a
+    // field's Enter adds through the field's own event, a focused button is pressed by it, and
+    // elsewhere Enter does nothing.
+    Binding {
+        keys: "enter",
+        action: || Box::new(NoAction),
+        context: Some(ADD_DIALOG_CONTEXT),
+    },
+    // The text field binds Alt+Down to nothing of its own.
+    Binding {
+        keys: "alt-down",
+        action: || Box::new(OpenFolderHistory),
+        context: Some(FOLDER_FIELD),
     },
 ];
 

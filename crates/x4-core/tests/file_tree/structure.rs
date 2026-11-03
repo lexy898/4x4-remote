@@ -1,5 +1,7 @@
 //! What the rows of the tree show, and the files an action on each reaches.
 
+use std::sync::Arc;
+
 use x4_core::{FileTree, FileTreeView, PriorityView, RowKind, WantedState, human_size};
 use x4_rpc::FilePriority::{High, Low, Normal};
 
@@ -280,7 +282,7 @@ fn playable_is_shown_only_for_wanted_incomplete_files_with_a_start_to_play() {
     for (file, playable) in details.files.iter_mut().zip([100, 40, 0, 40, 0]) {
         file.playable_from_start = playable;
     }
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details));
 
     let rows = FileTreeView::new(&tree).rows(&tree);
 

@@ -1,15 +1,17 @@
 //! One row of the file list, as x4-core's [`FileRow`] decides it, on one line: indented by its
 //! depth, with an expander for a folder, its checkbox, its name (and after the name of a file that
-//! downloads, muted, how much of it plays from the start), its size, its progress and its priority
-//! button. A long name is cut short before that part is.
+//! downloads, muted, how much of it plays from the start), and the columns its host asks for
+//! ([`Columns`]): its size, its progress and its priority button. A long name is cut short before
+//! that part is.
 //!
 //! The ids of a row and of its parts are keyed by the row's [`NodeKey`], never by its place in the
 //! list: the toolkit keeps state under them (a button's focus, a menu), and a place would hand one
 //! file's state to another as the list scrolls or a folder opens.
 //!
 //! Each control takes the tree of the frame it is drawn in, so a click acts on what was on screen
-//! even when a newer read has come since. The checkbox and the priority button are not tab stops
-//! and never take the focus, which stays in the list.
+//! even when a newer tree has come since. The checkbox and the priority button are not tab stops
+//! and never take the focus, which stays in the list. Their clicks go to the list's
+//! [`FileListHost`].
 
 use std::sync::Arc;
 
@@ -28,7 +30,7 @@ use gpui_kit::{
 use x4_core::{FileRow, FileTree, NodeKey, PriorityView, RowKind, WantedState};
 use x4_rpc::FilePriority;
 
-use super::super::DetailsPanel;
+use super::FileListHost;
 use crate::i18n::{
     file_progress_label, files_wanted_label, percent_text, playable_text, priority_label,
     priority_text, size_text,
@@ -37,7 +39,7 @@ use crate::theme::{PROGRESS_TRACK_OPACITY, tabular_digits};
 use crate::torrent_table::{BAR_HEIGHT, bar_fraction};
 
 /// The height of a row: one line, with the controls' room around it.
-pub(super) const ROW_HEIGHT: f32 = 28.;
+pub(crate) const ROW_HEIGHT: f32 = 28.;
 /// How far each level of folders indents its entries.
 const INDENT: f32 = 16.;
 /// The width of the expander, and of the space a file leaves for it.
@@ -52,16 +54,29 @@ const PRIORITY_WIDTH: f32 = 92.;
 /// The priorities of the menu, in its order.
 const PRIORITIES: [FilePriority; 3] = [FilePriority::Low, FilePriority::Normal, FilePriority::High];
 
+/// The columns a row draws after its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Columns {
+    /// The size of the file, or of the files below the folder.
+    pub(crate) size: bool,
+    /// A bar of the progress and the percent beside it.
+    pub(crate) progress: bool,
+    /// The button that shows the priority and opens its menu.
+    pub(crate) priority: bool,
+}
+
 /// What every row of a frame shares.
-pub(super) struct Drawn {
+pub(crate) struct Drawn {
     /// The tree the rows are of, which their controls act on.
-    pub(super) tree: Arc<FileTree>,
+    pub(crate) tree: Arc<FileTree>,
     /// The row the cursor is on.
-    pub(super) cursor: Option<NodeKey>,
-    /// Whether the controls can act: the daemon is connected.
-    pub(super) enabled: bool,
+    pub(crate) cursor: Option<NodeKey>,
+    /// Whether the controls can act, such as while the daemon is connected.
+    pub(crate) enabled: bool,
     /// The color of the progress bars, the torrent's state's.
-    pub(super) color: Hsla,
+    pub(crate) color: Hsla,
+    /// The columns drawn after the name.
+    pub(crate) columns: Columns,
 }
 
 /// The element id of the row of `key`.
@@ -72,8 +87,12 @@ fn row_id(key: &NodeKey) -> ElementId {
     )
 }
 
-/// The row `row`, drawn in `drawn`, whose clicks go to the panel of `cx`.
-pub(super) fn file_row(row: &FileRow, drawn: &Drawn, cx: &Context<'_, DetailsPanel>) -> AnyElement {
+/// The row `row`, drawn in `drawn`, whose clicks go to the host of `cx`.
+pub(crate) fn file_row<H: FileListHost>(
+    row: &FileRow,
+    drawn: &Drawn,
+    cx: &Context<'_, H>,
+) -> AnyElement {
     let theme = cx.theme();
     let at_cursor = drawn.cursor.as_ref() == Some(&row.key);
     let expanded = match row.kind {
@@ -95,24 +114,32 @@ pub(super) fn file_row(row: &FileRow, drawn: &Drawn, cx: &Context<'_, DetailsPan
         .gap_2()
         .when(at_cursor, |row| row.bg(theme.list_active))
         .hover(|style| style.bg(theme.list_hover))
-        .on_click(cx.listener(move |panel, _, _, cx| panel.click_file_row(&tree, &key, cx)))
+        .on_click(cx.listener(move |host, _, _, cx| host.click_file_row(&tree, &key, cx)))
         .child(div().flex_none().w(px(INDENT * level(row.depth) + 4.)))
         .child(expander(row, expanded, drawn, cx))
         .child(wanted_box(row, drawn, theme, cx))
         .child(name_cell(row, theme))
-        .child(
-            div()
-                .flex_none()
-                .w(px(SIZE_WIDTH))
-                .whitespace_nowrap()
-                .text_right()
-                .text_xs()
-                .font_features(tabular_digits())
-                .text_color(theme.muted_foreground)
-                .child(size_text(row.size)),
-        )
-        .child(progress_cell(row, drawn, theme))
-        .child(priority_button(row, drawn, cx))
+        .when(drawn.columns.size, |cells| {
+            cells.child(
+                div()
+                    .id("file-size")
+                    .flex_none()
+                    .w(px(SIZE_WIDTH))
+                    .whitespace_nowrap()
+                    .text_right()
+                    .text_xs()
+                    .font_features(tabular_digits())
+                    .text_color(theme.muted_foreground)
+                    .child(size_text(row.size))
+                    .test_support(),
+            )
+        })
+        .when(drawn.columns.progress, |cells| {
+            cells.child(progress_cell(row, drawn, theme))
+        })
+        .when(drawn.columns.priority, |cells| {
+            cells.child(priority_button(row, drawn, cx))
+        })
         .into_any_element()
 }
 
@@ -122,11 +149,11 @@ fn level(depth: usize) -> f32 {
 }
 
 /// The chevron that opens and closes a folder; the same room, empty, for a file.
-fn expander(
+fn expander<H: FileListHost>(
     row: &FileRow,
     expanded: Option<bool>,
     drawn: &Drawn,
-    cx: &Context<'_, DetailsPanel>,
+    cx: &Context<'_, H>,
 ) -> AnyElement {
     let room = div()
         .flex_none()
@@ -150,20 +177,20 @@ fn expander(
             })
             .xsmall(),
         )
-        .on_click(cx.listener(move |panel, _, _, cx| {
+        .on_click(cx.listener(move |host, _, _, cx| {
             // The row's own click would put the cursor back where it was.
             cx.stop_propagation();
-            panel.click_expander(&tree, &key, cx);
+            host.click_expander(&tree, &key, cx);
         }))
         .into_any_element()
 }
 
 /// The checkbox of whether the row is downloaded: checked, empty, or a dash for a folder of both.
-fn wanted_box(
+fn wanted_box<H: FileListHost>(
     row: &FileRow,
     drawn: &Drawn,
     theme: &Theme,
-    cx: &Context<'_, DetailsPanel>,
+    cx: &Context<'_, H>,
 ) -> impl IntoElement {
     let state = match row.wanted {
         WantedState::All => CheckboxState::Checked,
@@ -177,7 +204,7 @@ fn wanted_box(
     };
     let filled = mark.is_some();
     let enabled = drawn.enabled;
-    let panel = cx.weak_entity();
+    let host = cx.weak_entity();
     let (tree, key) = (Arc::clone(&drawn.tree), row.key.clone());
     let accent = if enabled {
         theme.primary
@@ -195,8 +222,8 @@ fn wanted_box(
         .on_change(move |_, _, _, cx| {
             // The row's own click would put the cursor there again, and that is all.
             cx.stop_propagation();
-            if let Err(error) = panel.update(cx, |panel, cx| panel.click_wanted(&tree, &key, cx)) {
-                tracing::debug!(%error, "a checkbox was clicked after the panel closed");
+            if let Err(error) = host.update(cx, |host, cx| host.click_wanted(&tree, &key, cx)) {
+                tracing::debug!(%error, "a checkbox was clicked after its list closed");
             }
         })
         .child(
@@ -302,12 +329,12 @@ fn progress_cell(row: &FileRow, drawn: &Drawn, theme: &Theme) -> impl IntoElemen
 
 /// The button that shows the row's priority and opens the menu of the three, with the current
 /// one checked; a folder of several shows "Mixed" and checks none.
-fn priority_button(
+fn priority_button<H: FileListHost>(
     row: &FileRow,
     drawn: &Drawn,
-    cx: &Context<'_, DetailsPanel>,
+    cx: &Context<'_, H>,
 ) -> impl IntoElement {
-    let panel = cx.weak_entity();
+    let host = cx.weak_entity();
     let (tree, key, current) = (Arc::clone(&drawn.tree), row.key.clone(), row.priority);
     div().flex_none().w(px(PRIORITY_WIDTH)).child(
         Button::new("file-priority")
@@ -321,17 +348,17 @@ fn priority_button(
             // The menu is built when it opens, from the tree of the frame it opened on.
             .dropdown_menu(move |menu, _, _| {
                 PRIORITIES.into_iter().fold(menu, |menu, priority| {
-                    let (panel, tree, key) = (panel.clone(), Arc::clone(&tree), key.clone());
+                    let (host, tree, key) = (host.clone(), Arc::clone(&tree), key.clone());
                     menu.item(
                         PopupMenuItem::new(priority_text(PriorityView::One(priority)))
                             .checked(current == PriorityView::One(priority))
                             .on_click(move |_, _, cx| {
-                                if let Err(error) = panel.update(cx, |panel, cx| {
-                                    panel.choose_priority(&tree, &key, priority, cx);
+                                if let Err(error) = host.update(cx, |host, cx| {
+                                    host.choose_priority(&tree, &key, priority, cx);
                                 }) {
                                     tracing::debug!(
                                         %error,
-                                        "a priority was chosen after the panel closed"
+                                        "a priority was chosen after its list closed"
                                     );
                                 }
                             }),

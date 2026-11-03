@@ -141,6 +141,22 @@ pub(super) struct Torrent {
     pub(super) touched: bool,
     /// A verify the torrent is going through.
     verify: Option<Verify>,
+    /// The folder a client chose when it added the torrent; `None` is [`DOWNLOAD_DIR`].
+    pub(super) dir: Option<String>,
+}
+
+/// What a `torrent_add` gives a new torrent: what its content says, and what the client asked.
+pub(super) struct NewTorrent {
+    pub(super) id: u32,
+    pub(super) hash: String,
+    pub(super) name: String,
+    /// Its files, or none for a magnet link without its metadata.
+    pub(super) plan: Plan,
+    /// The size of its files, in KiB; 0 without metadata.
+    pub(super) total_kib: u32,
+    /// Where it downloads to; `None` is the session's folder.
+    pub(super) dir: Option<String>,
+    pub(super) paused: bool,
 }
 
 /// A verify under way: how many more polls of the recently active torrents it takes, and what the
@@ -200,11 +216,75 @@ impl Torrent {
             files: None,
             touched: false,
             verify: None,
+            dir: None,
         };
         if activity == Activity::Ticking {
             torrent.tick(random);
         }
         torrent
+    }
+
+    /// A torrent a client has just added, with none of its data: stopped if it was added paused,
+    /// and otherwise started, which for a magnet link means looking for its metadata.
+    ///
+    /// It is newer than every torrent made up at the start, and the next poll of the recently
+    /// active torrents reports it.
+    pub(super) fn from_add(new: NewTorrent) -> Self {
+        let NewTorrent {
+            id,
+            hash,
+            name,
+            plan,
+            total_kib,
+            dir,
+            paused,
+        } = new;
+        let mut torrent = Self {
+            id,
+            hash,
+            name,
+            kind: Kind::Paused,
+            total_kib,
+            left_kib: total_kib,
+            rate_down: 0,
+            rate_up: 0,
+            peers_connected: 0,
+            peers_getting_from_us: 0,
+            peers_sending_to_us: 0,
+            ratio_thousandths: 0,
+            added_after: ADDED_SPAN.saturating_add(id),
+            recheck_thousandths: 0,
+            sequential: false,
+            plan,
+            trackers: Trackers::of(
+                Kind::Paused,
+                &mut Lcg::stream(id, metainfo::TRACKERS_STREAM),
+            ),
+            files: None,
+            touched: true,
+            verify: None,
+            dir,
+        };
+        if !paused {
+            torrent.start(false);
+        }
+        torrent
+    }
+
+    /// Whether the torrent's rates or progress change from poll to poll. A magnet link without its
+    /// metadata has nothing to download yet, so it does not.
+    pub(super) fn moves(&self) -> bool {
+        self.kind.moves() && self.plan.has_metadata()
+    }
+
+    /// The folder the torrent downloads to.
+    pub(super) fn download_dir(&self) -> &str {
+        self.dir.as_deref().unwrap_or(DOWNLOAD_DIR)
+    }
+
+    /// The torrent as `torrent_add` reports it: its id, name and hash.
+    pub(super) fn summary(&self) -> Value {
+        json!({ "id": self.id, "name": self.name, "hash_string": self.hash })
     }
 
     /// New rates, peers and progress, as on the next poll of a busy daemon.
@@ -248,9 +328,10 @@ impl Torrent {
         self.touched = true;
     }
 
-    /// What a torrent runs as: downloading while it lacks data, seeding once it has it all.
+    /// What a torrent runs as: downloading while it lacks data, seeding once it has it all. A
+    /// magnet link without its metadata lacks data, though nothing is left to download as yet.
     fn running(&self) -> Kind {
-        if self.left_kib > 0 {
+        if self.left_kib > 0 || !self.plan.has_metadata() {
             Kind::Downloading
         } else {
             Kind::Seeding
@@ -341,6 +422,7 @@ impl Torrent {
     /// The torrent with every field of the app's list.
     fn list_record(&self) -> Value {
         let (error, error_string) = self.kind.error();
+        let metadata = self.plan.has_metadata();
         let total = u64::from(self.total_kib) * KIB;
         let wanted_kib = self.size_when_done_kib();
         let left = u64::from(self.left_kib) * KIB;
@@ -352,8 +434,8 @@ impl Torrent {
         };
         json!({
             "added_date": added,
-            "done_date": if left == 0 { added + 3600 } else { 0 },
-            "download_dir": DOWNLOAD_DIR,
+            "done_date": if left == 0 && metadata { added + 3600 } else { 0 },
+            "download_dir": self.download_dir(),
             "error": error,
             "error_string": error_string,
             "eta": eta,
@@ -362,13 +444,16 @@ impl Torrent {
             "is_finished": false,
             "labels": [],
             "left_until_done": left,
-            "metadata_percent_complete": 1.0,
+            "metadata_percent_complete": if metadata { 1.0 } else { 0.0 },
             "name": self.name,
             "peers_connected": self.peers_connected,
             "peers_getting_from_us": self.peers_getting_from_us,
             "peers_sending_to_us": self.peers_sending_to_us,
-            // Nothing wanted is nothing left to do, so it is all done.
-            "percent_done": if wanted_kib == 0 {
+            // Nothing wanted is nothing left to do, so it is all done; but of a torrent whose files
+            // are not known yet nothing is done.
+            "percent_done": if !metadata {
+                0.0
+            } else if wanted_kib == 0 {
                 1.0
             } else {
                 f64::from(wanted_kib.saturating_sub(self.left_kib)) / f64::from(wanted_kib)

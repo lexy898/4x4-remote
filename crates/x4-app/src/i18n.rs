@@ -14,8 +14,9 @@
 //! language pick the wording. Nor does it format dates: [`date_time_text`] writes the parts of a
 //! moment in the local time zone, and the message `date-time` orders them.
 //!
-//! The `details` module holds the texts of the details panel that carry values, and the `files`
-//! module those of its Files tab.
+//! The `details` module holds the texts of the details panel that carry values, the `files`
+//! module those of its Files tab, and the `adding` module those of the add dialog and of what
+//! became of a torrent to add.
 
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,6 +39,10 @@ use crate::app::ConfigProblem;
 use crate::clipboard::MagnetFailure;
 use crate::speed_limits::LimitFeedback;
 
+pub(crate) use adding::{
+    add_notice_text, add_reason_text, add_title_text, chosen_not_local_text, dropped_others_text,
+    free_space_line_text, load_failure_text, no_choice_text, queue_full_text, rejected_text,
+};
 pub(crate) use details::{
     created_text, details_placeholder_text, error_texts, pieces_text, size_with_wanted_text,
     tracker_problem_text, trackers_text,
@@ -47,6 +52,7 @@ pub(crate) use files::{
     priority_text,
 };
 
+mod adding;
 mod details;
 mod files;
 #[cfg(test)]

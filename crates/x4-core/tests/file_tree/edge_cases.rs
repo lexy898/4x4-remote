@@ -1,6 +1,8 @@
 //! Torrents with odd paths, a lot of files, or data that disagrees with itself: the tree must
 //! still name the right files and never an empty list.
 
+use std::sync::Arc;
+
 use x4_core::{Action, FileTree, FileTreeView, PriorityView, RowKind, WantedState, human_size};
 use x4_rpc::FilePriority::{High, Low, Normal};
 
@@ -32,6 +34,34 @@ fn paths_that_clash_still_get_distinct_keys_and_their_own_files() {
     assert_eq!(files_of("x", RowKind::File), [vec![2]]);
     assert_eq!(files_of("x", RowKind::Folder { expanded: true }), [vec![3]]);
     assert_eq!(indices(&tree, "T"), Some(vec![0, 1, 2, 3]));
+}
+
+#[test]
+fn a_path_that_holds_a_suffix_itself_still_gets_a_key_of_its_own() {
+    // A repeated path gets the suffix "\0" and a number, which a crafted name may hold already.
+    let tree = tree_of(&[
+        ("T/a", 1, 0, true, Normal),
+        ("T/a\u{0}1", 2, 0, true, Normal),
+        ("T/a", 3, 0, true, Normal),
+        ("T/a", 4, 0, true, Normal),
+    ]);
+
+    let rows = open_all(&tree).rows(&tree);
+
+    assert_eq!(
+        shape(&rows),
+        [
+            ("T", 0),
+            ("T/a", 1),
+            ("T/a\u{0}2", 1),
+            ("T/a\u{0}3", 1),
+            ("T/a\u{0}1", 1)
+        ]
+    );
+    assert_eq!(indices(&tree, "T/a"), Some(vec![0]));
+    assert_eq!(indices(&tree, "T/a\u{0}1"), Some(vec![1]));
+    assert_eq!(indices(&tree, "T/a\u{0}2"), Some(vec![2]));
+    assert_eq!(indices(&tree, "T/a\u{0}3"), Some(vec![3]));
 }
 
 #[test]
@@ -79,7 +109,7 @@ fn a_large_torrent_keeps_every_index_exactly_once_and_in_order() {
         })
         .collect();
 
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details));
     let rows = open_all(&tree).rows(&tree);
 
     assert_eq!(indices(&tree, "T"), Some((0..2_000).collect()));
@@ -105,7 +135,7 @@ fn every_row_names_a_non_empty_list_of_files_that_exist() {
         ("T/sub/deep/c.mkv", 1, 0, true, Normal),
         ("T/sub/deep/_____padding_file_6", 1, 0, true, Normal),
     ]);
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details.clone()));
 
     for row in open_all(&tree).rows(&tree) {
         let indices = tree
@@ -180,7 +210,7 @@ fn indices_and_actions_carry_the_index_of_the_entry_not_its_position() {
     for (file, index) in details.files.iter_mut().zip([10, 20, 30, 25]) {
         file.index = index;
     }
-    let tree = FileTree::new(&details);
+    let tree = FileTree::new(&Arc::new(details));
 
     assert_eq!(indices(&tree, "T"), Some(vec![10, 20, 25, 30]));
     assert_eq!(indices(&tree, "T/sub"), Some(vec![20, 25, 30]));
@@ -209,5 +239,230 @@ fn indices_and_actions_carry_the_index_of_the_entry_not_its_position() {
             files: vec![10],
             priority: High,
         })
+    );
+}
+
+/// `names` in a shuffled order, the same every time.
+fn shuffled(mut names: Vec<String>) -> Vec<String> {
+    let mut seed: u64 = 42;
+    for at in (1..names.len()).rev() {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let other = usize::try_from(seed >> 33).unwrap_or(0) % (at + 1);
+        names.swap(at, other);
+    }
+    names
+}
+
+/// 14 000 names alike in their first 600 bytes, `a1` 300 times, and each with its own number
+/// after them, in a shuffled order: 8.9 MB of names, within the budget.
+pub(super) fn names_crafted_to_compare_slowly() -> Vec<String> {
+    shuffled(
+        (0..14_000)
+            .map(|n| format!("{}{n}", "a1".repeat(300)))
+            .collect(),
+    )
+}
+
+/// The tree of the files `T/<name>` for each of `names`, and how long it took to make.
+fn timed_tree_of(names: &[String]) -> (FileTree, std::time::Duration) {
+    let paths: Vec<String> = names.iter().map(|name| format!("T/{name}")).collect();
+    let files: Vec<super::Spec<'_>> = paths
+        .iter()
+        .map(|path| (path.as_str(), 1, 0, true, Normal))
+        .collect();
+    let crafted = Arc::new(details_of(&files));
+    let start = std::time::Instant::now();
+    let tree = FileTree::new(&crafted);
+    (tree, start.elapsed())
+}
+
+/// The names of each crafted shape that a tree is made of.
+const CRAFTED: u32 = 36_000;
+
+/// [`CRAFTED`] names of `letter` `times` times and each its own number, in a shuffled order.
+fn alike_but_for_a_number(letter: &str, times: usize) -> Vec<String> {
+    shuffled(
+        (0..CRAFTED)
+            .map(|n| format!("{}{n}", letter.repeat(times)))
+            .collect(),
+    )
+}
+
+/// [`CRAFTED`] names of `times` letters, `lower` or `upper` by the bits of each name's own
+/// number in the first 16, in a shuffled order.
+fn alike_but_for_their_case([lower, upper]: [char; 2], times: u32) -> Vec<String> {
+    shuffled(
+        (0..CRAFTED)
+            .map(|n| {
+                (0..times)
+                    .map(|bit| {
+                        if bit < 16 && (n >> bit) & 1 == 1 {
+                            upper
+                        } else {
+                            lower
+                        }
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// [`CRAFTED`] names of `times` letters, each `lower` or `upper` at random.
+fn in_random_case([lower, upper]: [char; 2], times: usize) -> Vec<String> {
+    let mut seed: u64 = 7;
+    (0..CRAFTED)
+        .map(|_| {
+            (0..times)
+                .map(|_| {
+                    seed = seed
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    if seed >> 63 == 1 { upper } else { lower }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// [`CRAFTED`] names of 120 `İ`, of which each of the first 16 is `i̇` (`i` and a combining dot
+/// above, which `İ` folds into) by the bits of the name's own number, in a shuffled order.
+fn dotted_i_by_bits() -> Vec<String> {
+    shuffled(
+        (0..CRAFTED)
+            .map(|n| {
+                (0..120)
+                    .map(|bit| {
+                        if bit < 16 && (n >> bit) & 1 == 1 {
+                            "i\u{307}"
+                        } else {
+                            "İ"
+                        }
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// [`CRAFTED`] names of `İ` or `i̇` by the parity of their own number, then `é` 120 times and the
+/// number, in a shuffled order.
+fn dotted_i_first() -> Vec<String> {
+    shuffled(
+        (0..CRAFTED)
+            .map(|n| {
+                let first = if n % 2 == 0 { "İ" } else { "i\u{307}" };
+                format!("{first}{}{n}", "é".repeat(120))
+            })
+            .collect(),
+    )
+}
+
+/// Asserts that a tree of `names`, crafted to compare slowly, is made within `most` in a release
+/// build, at one try.
+///
+/// The work of each comparison is bounded by counts, in the unit tests of the order of names; a
+/// time depends on the machine and on what else runs on it, so these checks are run by hand,
+/// never in CI, and in a release build: a debug one takes several times as long.
+fn assert_made_within(names: &[String], most: std::time::Duration) {
+    let (tree, took) = timed_tree_of(names);
+    assert!(!tree.is_too_large());
+    assert!(took < most, "{took:?}, at most {most:?}");
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_beyond_ascii_alike_but_for_a_number_is_made_in_time() {
+    // "é" 128 times, 256 bytes, and a number: each comparison folded every letter of both names
+    // to lower case, and a tree of 36 000 of them took 2 s, at every read of the details.
+    assert_made_within(
+        &alike_but_for_a_number("é", 128),
+        std::time::Duration::from_millis(500),
+    );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_beyond_ascii_alike_but_for_their_case_is_made_in_time() {
+    // 128 letters, "é" or "É" by the bits of a number in the first 16: each comparison folded
+    // every letter of both names, and again for the tie of their case; 3.8 s for 36 000.
+    assert_made_within(
+        &alike_but_for_their_case(['é', 'É'], 128),
+        std::time::Duration::from_millis(500),
+    );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_beyond_ascii_in_random_case_is_made_in_time() {
+    // 128 letters, "é" or "É" at random: every letter may differ.
+    assert_made_within(
+        &in_random_case(['é', 'É'], 128),
+        std::time::Duration::from_millis(1_000),
+    );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_fullwidth_names_in_random_case_is_made_in_time() {
+    // 85 fullwidth letters, "ａ" or "Ａ" at random, 255 bytes: each letter of three bytes is
+    // looked up in Unicode's tables, for the first 64 of each name.
+    assert_made_within(
+        &in_random_case(['ａ', 'Ａ'], 85),
+        std::time::Duration::from_millis(1_500),
+    );
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_that_differ_at_a_dotted_capital_i_is_made_in_time() {
+    // Two names that differ at an "İ" fold the rest of both: through Unicode's tables, letter by
+    // letter, a tree of 36 000 took 1.5 s.
+    assert_made_within(&dotted_i_by_bits(), std::time::Duration::from_millis(1_000));
+}
+
+#[test]
+#[ignore = "release timing: cargo test --release -- --ignored"]
+fn a_tree_of_names_that_start_with_a_dotted_capital_i_or_not_is_made_in_time() {
+    // "İ" or "i̇" and then 120 letters beyond ASCII, which two names of either kind fold all of.
+    assert_made_within(&dotted_i_first(), std::time::Duration::from_millis(600));
+}
+
+#[test]
+fn names_crafted_to_compare_slowly_are_ordered_in_bounded_time() {
+    // Each name has 600 runs of letters and digits to compare by number and without case; a
+    // tree of them took 1.7 s to sort in a release build, at every read of the details.
+    let paths: Vec<String> = names_crafted_to_compare_slowly()
+        .iter()
+        .map(|name| format!("T/{name}"))
+        .collect();
+    let files: Vec<super::Spec<'_>> = paths
+        .iter()
+        .map(|path| (path.as_str(), 1, 0, true, Normal))
+        .collect();
+    let crafted = Arc::new(details_of(&files));
+    let start = std::time::Instant::now();
+
+    let tree = FileTree::new(&crafted);
+
+    let elapsed = start.elapsed();
+    // Some 70 ms in a release build and 3 s in a debug one, where it took 55 s.
+    assert!(elapsed < std::time::Duration::from_secs(20), "{elapsed:?}");
+    assert!(!tree.is_too_large());
+    // Past their first 32 runs the names compare byte by byte, so their numbers come in the
+    // order of their digits.
+    let rows = FileTreeView::new(&tree).rows(&tree);
+    let alike = "a1".repeat(300);
+    let names: Vec<&str> = rows
+        .iter()
+        .skip(1)
+        .take(4)
+        .map(|row| row.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["0", "1", "10", "100"].map(|n| format!("{alike}{n}"))
     );
 }

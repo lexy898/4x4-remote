@@ -1,6 +1,6 @@
 //! What the user asks the daemon to do, and why it may not happen.
 
-use x4_rpc::{FilePriority, HashString, RemoveData, TorrentAdd};
+use x4_rpc::{AddOutcome, FilePriority, HashString, RemoveData, RpcError, TorrentAdd};
 
 use crate::limits::KbPerSecond;
 use crate::snapshot::ConnectionError;
@@ -81,7 +81,9 @@ pub enum Action {
         /// The limit, switched on; `None` switches it off.
         limit: Option<KbPerSecond>,
     },
-    /// Add a torrent.
+    /// Add a torrent. It is answered with [`Event::AddFinished`](crate::Event::AddFinished),
+    /// which carries the torrent added or found, not with
+    /// [`Event::ActionFinished`](crate::Event::ActionFinished).
     Add(TorrentAdd),
 }
 
@@ -119,6 +121,71 @@ pub enum ActionError {
     /// The daemon did not carry the action out; holds why.
     #[error("the daemon did not carry out the action: {0}")]
     Rpc(ConnectionError),
+}
+
+/// The torrent an [`Action::Add`] added, or that the daemon already had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Added {
+    /// Its info hash, by which the list knows it.
+    pub hash: HashString,
+    /// Its name, as the daemon reports it.
+    pub name: String,
+    /// Whether the daemon already had it. Then it applied nothing of the add: not the folder, not
+    /// whether to start, not the files left out.
+    pub duplicate: bool,
+}
+
+impl From<AddOutcome> for Added {
+    fn from(outcome: AddOutcome) -> Self {
+        let (torrent, duplicate) = match outcome {
+            AddOutcome::Added(torrent) => (torrent, false),
+            AddOutcome::Duplicate(torrent) => (torrent, true),
+        };
+        Self {
+            hash: torrent.hash,
+            name: torrent.name,
+            duplicate,
+        }
+    }
+}
+
+/// Why an [`Action::Add`] added nothing, or why it is not known whether it did.
+///
+/// The UI picks its text by variant, through its i18n layer; the `Display` text is for logs.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AddError {
+    /// The daemon is not connected, so the torrent was not sent; it is not queued either.
+    #[error("the daemon is not connected; the torrent was not sent")]
+    NotConnected,
+    /// The daemon did not answer within [`x4_rpc::ADD_TIMEOUT`], so it is not known whether it
+    /// added the torrent: it may still be reading it. The connection is kept, and the torrent
+    /// shows in the list if it was added.
+    #[error("the daemon did not confirm the add in time; the torrent may still be added")]
+    Unconfirmed,
+    /// The daemon refused the torrent; holds its explanation, such as `unrecognized info` for a
+    /// torrent it cannot read.
+    #[error("the daemon refused the torrent: {0}")]
+    Daemon(String),
+    /// The add did not get through, for a reason other than the daemon's refusal: the daemon
+    /// cannot be reached, does not accept this host or answered in a way 4x4 cannot use, or the
+    /// request was not valid to send (a magnet link with file choices). It never holds a
+    /// [`ConnectionError::Server`], which is [`AddError::Daemon`].
+    ///
+    /// When the connection broke while the torrent was on its way, the daemon may have added it
+    /// all the same. Adding it again is harmless: the daemon then answers that it has it.
+    #[error("the torrent could not be added: {0}")]
+    Failed(ConnectionError),
+}
+
+impl AddError {
+    /// The error of an add whose call got an answer, or failed, with `error`; a timeout of the
+    /// add itself is [`AddError::Unconfirmed`], which the engine decides.
+    pub(crate) fn of_call(error: &RpcError) -> Self {
+        match ConnectionError::from(error) {
+            ConnectionError::Server(why) => Self::Daemon(why),
+            other => Self::Failed(other),
+        }
+    }
 }
 
 impl Action {
@@ -244,7 +311,7 @@ impl Action {
 
 #[cfg(test)]
 mod tests {
-    use x4_rpc::AddSource;
+    use x4_rpc::{AddSource, MagnetLink};
 
     use super::*;
 
@@ -252,7 +319,10 @@ mod tests {
 
     fn add() -> TorrentAdd {
         TorrentAdd {
-            source: AddSource::Magnet("magnet:?xt=urn:btih:example".to_owned()),
+            source: AddSource::Magnet(
+                MagnetLink::parse("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+                    .unwrap(),
+            ),
             download_dir: None,
             paused: false,
             files_unwanted: Vec::new(),

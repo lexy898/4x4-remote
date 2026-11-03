@@ -225,6 +225,7 @@ mod tests {
             speed_limit_up: off,
             alt_speed_down_kbps: KbPerSecond(0),
             alt_speed_up_kbps: KbPerSecond(0),
+            start_added_torrents: true,
         }
     }
 

@@ -14,6 +14,16 @@ publish = false
 x4-rpc = { path = "crates/x4-rpc" }
 x4-core = { path = "crates/x4-core" }
 anyhow = "1.0.104"
+# The desktop's file dialog through the xdg-desktop-portal, with a filter for .torrent files and a
+# title of our own (Linux only), parented to the window it opens over (`raw_handle`: the X11 window
+# id, or a Wayland surface exported through xdg-foreign, hence `wayland`). gpui already pulls in
+# this version and every crate these features need; ours adds no crate.
+ashpd = { version = "0.13.13", default-features = false, features = [
+  "async-io",
+  "file_chooser",
+  "raw_handle",
+  "wayland",
+] }
 # The worker thread sends events to the UI, which awaits them on its executor.
 async-channel = "2.5.0"
 base64 = "0.23.1"
@@ -29,11 +39,18 @@ gpui-kit = "=0.8.1"
 # Fluent messages for every user-visible string; `fl!` checks ids and arguments at compile time.
 i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
 i18n-embed-fl = "0.10.1"
+# `O_NONBLOCK` for opening a .torrent file, so that a FIFO swapped in after the first look never
+# blocks the open. gpui already pulls it in.
+libc = "0.2.191"
+# The window and display handles that parent the file dialog (Linux only). gpui already pulls in
+# this version.
+raw-window-handle = "0.6.2"
 # Embeds the .ftl files into the binary (read from disk in debug builds).
 rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# SHA-1 for the metainfo the live tests create (dev-dependency only).
+# SHA-1: the info hash of a .torrent file (x4-core), and the piece hashes of the metainfo the
+# live tests create.
 sha1 = "0.11.0"
 # The UI state is written to a temporary file first and renamed over the old one.
 tempfile = "3.27.0"
@@ -46,6 +63,9 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # Plain HTTP only: the daemon is reached over http:// on the local network, so no TLS stack.
 ureq = { version = "3.5.0", default-features = false }
+# file:// launch arguments become local paths (x4-core). gpui already pulls it in; `std` is the
+# feature `Url::to_file_path` needs.
+url = { version = "2.5.8", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

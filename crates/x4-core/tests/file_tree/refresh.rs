@@ -1,8 +1,10 @@
 //! What the state of a view keeps when the tree is made again.
 
+use std::sync::Arc;
+
 use x4_core::test_support::details;
 use x4_core::{FileTree, FileTreeView, WantedState};
-use x4_rpc::FilePriority::{High, Normal};
+use x4_rpc::FilePriority::{High, Low, Normal};
 
 use super::{Spec, indices, key, open_all, other_hash, row, shape, tree_of};
 
@@ -220,7 +222,7 @@ fn a_view_given_another_torrent_starts_fresh() {
         ("T/a.mkv", 1, 0, true, Normal),
     ];
     let first = tree_of(&files);
-    let second = FileTree::new(&details(&other_hash(), &files));
+    let second = FileTree::new(&Arc::new(details(&other_hash(), &files)));
     let fresh = [("T", 0), ("T/sub", 1), ("T/a.mkv", 1)];
 
     let mut view = open_all(&first);
@@ -256,7 +258,7 @@ fn a_key_press_on_another_torrent_acts_on_a_fresh_view_of_it() {
         ("T/a.mkv", 1, 0, true, Normal),
     ];
     let first = tree_of(&files);
-    let second = FileTree::new(&details(&other_hash(), &files));
+    let second = FileTree::new(&Arc::new(details(&other_hash(), &files)));
     let mut view = open_all(&first);
     view.set_cursor(&first, &key("T/sub/b.mkv"));
 
@@ -274,7 +276,7 @@ fn the_cursor_of_a_view_is_none_for_another_torrents_tree() {
         ("T/a.mkv", 1, 0, true, Normal),
     ];
     let first = tree_of(&files);
-    let second = FileTree::new(&details(&other_hash(), &files));
+    let second = FileTree::new(&Arc::new(details(&other_hash(), &files)));
     let mut view = open_all(&first);
     view.set_cursor(&first, &key("T/sub/b.mkv"));
 
@@ -293,4 +295,72 @@ fn the_cursor_of_a_view_is_none_for_another_torrents_tree() {
     // Reading does not hand the view to the other torrent.
     assert_eq!(view.cursor(&first), Some(&key("T/sub/b.mkv")));
     assert!(view.is_expanded(&first, &key("T/sub")));
+}
+
+#[test]
+fn a_tree_kept_across_reads_shows_each_read_as_a_new_tree_of_it_would() {
+    // Folders three deep, a file beside folders, padding files, an empty path and a repeated one.
+    let paths = [
+        "T/b/x/1.mkv",
+        "T/b/x/2.mkv",
+        "T/b/y/1.mkv",
+        "T/a.mkv",
+        "T/b/.pad/0",
+        "T/_____padding_file_1",
+        "T/c/only.mkv",
+        "T/a.mkv",
+        "",
+        "T/b/x/10.mkv",
+    ];
+    let mut seed: u64 = 3;
+    let mut next = move |below: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) % below
+    };
+    let priorities = [Low, Normal, High];
+    let mut read = || {
+        let files: Vec<Spec<'_>> = paths
+            .iter()
+            .map(|path| {
+                let priority = priorities.get(usize::try_from(next(3)).unwrap_or(0));
+                (
+                    *path,
+                    100,
+                    next(101),
+                    next(3) > 0,
+                    *priority.unwrap_or(&Normal),
+                )
+            })
+            .collect();
+        let mut read = details(&super::hash(), &files);
+        for file in &mut read.files {
+            file.playable_from_start = next(101);
+        }
+        Arc::new(read)
+    };
+    let mut tree = FileTree::new(&read());
+
+    for _ in 0..100 {
+        let read = read();
+        let refreshed = tree.refreshed(&read).expect("the same files");
+        let fresh = FileTree::new(&read);
+
+        assert!(refreshed.shares_files_with(&tree));
+        let rows = open_all(&fresh).rows(&fresh);
+        assert_eq!(open_all(&refreshed).rows(&refreshed), rows);
+        for row in &rows {
+            assert_eq!(
+                refreshed.toggle_wanted_action(&row.key),
+                fresh.toggle_wanted_action(&row.key)
+            );
+            assert_eq!(
+                refreshed.step_priority_action(&row.key, false),
+                fresh.step_priority_action(&row.key, false)
+            );
+            assert_eq!(refreshed.indices(&row.key), fresh.indices(&row.key));
+        }
+        tree = refreshed;
+    }
 }

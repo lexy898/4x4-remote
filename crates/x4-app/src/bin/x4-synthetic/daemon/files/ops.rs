@@ -1,12 +1,9 @@
-//! The file lists of a `torrent_set`, as Transmission 4.1 reads them.
+//! The file lists of a `torrent_set` and of a `torrent_add`, as Transmission 4.1 reads them.
 
 use serde_json::Value;
 
-use super::super::Refusal;
+use super::super::refusal::{FILE_INDEX_OUT_OF_RANGE, Refusal};
 use super::FileState;
-
-/// The JSON-RPC error code of a file index outside the torrent's files (`FILE_IDX_OOR`).
-const FILE_INDEX_OUT_OF_RANGE: i64 = 6;
 
 /// What a list of file indices in a `torrent_set` selects.
 enum Which {
@@ -27,7 +24,8 @@ enum Step {
 }
 
 /// The file lists of a `torrent_set`, in the order the daemon applies them: unwanted, wanted,
-/// then the priorities high, low and normal, so that a later list wins for a file in both.
+/// then the priorities high, low and normal, so that a later list wins for a file in both. A
+/// `torrent_add` applies the priorities in the order low, normal and high.
 pub(in super::super) struct FileOps {
     steps: Vec<(Step, Which)>,
 }
@@ -39,6 +37,15 @@ impl FileOps {
         ("priority_high", Step::High),
         ("priority_low", Step::Low),
         ("priority_normal", Step::Normal),
+    ];
+
+    /// The lists of a `torrent_add`, in the order its priorities are applied.
+    const ADD_KEYS: [(&'static str, Step); 5] = [
+        ("files_unwanted", Step::Unwanted),
+        ("files_wanted", Step::Wanted),
+        ("priority_low", Step::Low),
+        ("priority_normal", Step::Normal),
+        ("priority_high", Step::High),
     ];
 
     /// The file lists in the `params` of a `torrent_set`.
@@ -65,7 +72,46 @@ impl FileOps {
         Ok(Self { steps })
     }
 
-    /// Whether the call names no file list.
+    /// The file lists in the `params` of a `torrent_add` of a torrent with `file_count` files.
+    ///
+    /// The daemon is more lenient here than in a `torrent_set`. A list that is not a list is not
+    /// there, an empty one selects nothing instead of every file, and an index outside the files
+    /// is ignored: the rest of an unwanted or wanted list holds, and a list of priorities with
+    /// such an index is ignored as a whole. None of it is an error.
+    pub(in super::super) fn for_add(params: Option<&Value>, file_count: usize) -> Self {
+        let mut steps = Vec::new();
+        for (key, step) in Self::ADD_KEYS {
+            let Some(list) = params
+                .and_then(|params| params.get(key))
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            let listed: Vec<i64> = list.iter().filter_map(Value::as_i64).collect();
+            let inside =
+                |index: &i64| usize::try_from(*index).is_ok_and(|index| index < file_count);
+            let kept: Vec<i64> = if matches!(step, Step::Unwanted | Step::Wanted) {
+                listed.iter().copied().filter(inside).collect()
+            } else if listed.iter().all(inside) {
+                listed.clone()
+            } else {
+                Vec::new()
+            };
+            if kept.len() != listed.len() {
+                tracing::debug!(
+                    list = key,
+                    ignored = listed.len() - kept.len(),
+                    "the synthetic daemon ignored file indices outside the torrent"
+                );
+            }
+            if !kept.is_empty() {
+                steps.push((step, Which::Listed(kept)));
+            }
+        }
+        Self { steps }
+    }
+
+    /// Whether there is no list to apply.
     pub(in super::super) fn is_empty(&self) -> bool {
         self.steps.is_empty()
     }
@@ -90,10 +136,7 @@ impl FileOps {
             Which::Listed(listed) => listed.iter().any(outside),
         });
         if any_outside {
-            return Err(Refusal {
-                code: FILE_INDEX_OUT_OF_RANGE,
-                message: "file index out of range".to_owned(),
-            });
+            return Err(Refusal::daemon(FILE_INDEX_OUT_OF_RANGE, None, None));
         }
         Ok(())
     }

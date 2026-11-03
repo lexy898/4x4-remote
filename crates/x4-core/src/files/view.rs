@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use x4_rpc::HashString;
 
-use super::tree::Node;
+use super::tree::{Node, Progress};
 use super::{FileTree, NodeKey, PriorityView, WantedState};
 use crate::format::{HumanSize, human_size};
 use crate::playable::Playable;
@@ -92,7 +92,14 @@ impl FileTreeView {
         }
         self.shown(tree)
             .into_iter()
-            .filter_map(|(index, depth)| Some(self.row(tree.node(index)?, depth)))
+            .filter_map(|(index, depth)| {
+                Some(self.row(
+                    tree.node(index)?,
+                    tree.progress(index)?,
+                    tree.wanted(index)?,
+                    depth,
+                ))
+            })
             .collect()
     }
 
@@ -240,7 +247,7 @@ impl FileTreeView {
         }
     }
 
-    /// Fits the state to a tree that was made again, as after every read of the details: the
+    /// Fits the state to the tree of a later read of the details, made again or kept: the
     /// folders that are open stay open and the cursor stays, unless their nodes are gone. The
     /// first time the tree has anything to show, its first level opens.
     ///
@@ -320,8 +327,10 @@ impl FileTreeView {
         tree.position(self.cursor.as_ref()?)
     }
 
-    fn row(&self, node: &Node, depth: usize) -> FileRow {
-        let progress = fraction_of(node.done, node.size);
+    /// The row of `node`, of which the read says `read` and whose wanted state is `wanted`,
+    /// `depth` folders deep.
+    fn row(&self, node: &Node, read: &Progress, wanted: WantedState, depth: usize) -> FileRow {
+        let progress = fraction_of(read.done, node.size);
         FileRow {
             key: node.key.clone(),
             depth,
@@ -336,9 +345,10 @@ impl FileTreeView {
             size: human_size(node.size),
             percent: percent(progress),
             progress,
-            wanted: node.wanted,
-            priority: node.priority,
-            playable: node.playable,
+            wanted,
+            priority: read.priority,
+            // A file that is not wanted is not downloaded, so nothing of it is to play.
+            playable: read.playable.filter(|_| wanted == WantedState::All),
         }
     }
 }

@@ -8,17 +8,18 @@ use std::time::Instant;
 
 use x4_rpc::{HashString, RpcError, TorrentGetResponse};
 
-use super::{Engine, Event};
+use super::{Engine, Event, Request};
 use crate::action::{ActionError, ActionId};
 use crate::snapshot::ConnectionError;
 
 impl Engine {
-    /// Takes the answer to the read of `hashes`' magnet links at `now`. It is a read, so a
-    /// success brings no poll forward; a failure says what it says about the connection, as an
-    /// action's does.
+    /// Takes the answer to `request`, the read of `hashes`' magnet links, at `now`. It is a
+    /// read, so a success brings no poll forward; a failure says what it says about the
+    /// connection, as an action's does.
     pub(super) fn magnet_links_read(
         &mut self,
         now: Instant,
+        request: &Request,
         id: ActionId,
         hashes: &[HashString],
         result: Result<TorrentGetResponse, RpcError>,
@@ -42,7 +43,7 @@ impl Engine {
                     id,
                     result: Err(ActionError::Rpc(ConnectionError::from(&error))),
                 }];
-                events.extend(self.call_failed(now, &error));
+                events.extend(self.call_failed(now, request, &error));
                 events
             }
         }

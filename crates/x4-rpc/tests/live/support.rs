@@ -6,13 +6,22 @@
 //! - a [`TestTorrent`] exists only for a torrent `torrent_add` reported as newly added under the
 //!   info hash of the metainfo this run built (or, when the reply was lost, that the daemon lists
 //!   under that hash), and every selection it builds holds nothing but that hash;
+//! - a test torrent downloads into its [`TestFolder`]: the test directory itself, or a folder
+//!   this run names directly inside it, which must not exist yet and which the daemon creates.
+//!   Every request that adds a test torrent names that folder and carries this run's own
+//!   metainfo, or a magnet link of its info hash, and is checked for both before it is sent;
 //! - [`TestTorrent::remove_with_data`], [`TestTorrent::remove_keeping_data`] and the drop guard
 //!   share one removal path, the only `torrent_remove` of the live tests. It removes a torrent
-//!   only after the daemon has confirmed that the torrent lives in the test directory, and asks
+//!   only after the daemon has confirmed that the torrent lives in its very [`TestFolder`]
+//!   ([`TestFolder::is`]: exactly that folder, and never one with a control character), and asks
 //!   for `RemoveData::Delete` only for `remove_with_data` and the guard;
-//! - only files and directories this run created are deleted locally. When the daemon was told to
-//!   keep the data, the file is handed to the test as a [`KeptFile`], which deletes it, on every
-//!   path.
+//! - only files and directories this run created are deleted locally, and what the daemon creates
+//!   for a test torrent in this run's own folder of the test directory. When the daemon was told
+//!   to keep the data, the file is handed to the test as a [`KeptFile`], which deletes it, on
+//!   every path.
+//!
+//! The folder, the checks of an add request, the local data and the kept file are modules of
+//! their own in `support/`.
 //!
 //! x4-core's live tests include this file and `metainfo.rs` too, so that their torrents follow the
 //! same rules. The offline tests of both are in `support_tests.rs` and `metainfo_tests.rs`, which
@@ -20,16 +29,32 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use x4_rpc::{
-    AddOutcome, AddSource, Client, DEFAULT_TIMEOUT, FilePriority, GetIds, HashString, RemoveData,
-    Status, TorrentAdd, TorrentField, TorrentId, TorrentRecord, TorrentSelection, UreqTransport,
+    AddOutcome, AddSource, Client, DEFAULT_TIMEOUT, DownloadDir, FilePriority, GetIds, HashString,
+    MagnetLink, RemoveData, RpcError, Status, TorrentAdd, TorrentField, TorrentId, TorrentRecord,
+    TorrentSelection, UreqTransport,
 };
+
+#[path = "support/folder.rs"]
+mod folder;
+#[path = "support/gates.rs"]
+mod gates;
+#[path = "support/kept_file.rs"]
+mod kept_file;
+#[path = "support/local_data.rs"]
+mod local_data;
+
+pub(crate) use folder::{TestFolder, folder_exists};
+pub(crate) use gates::{check_add_again, check_first_add};
+pub(crate) use kept_file::KeptFile;
+pub(crate) use local_data::LocalData;
 
 use crate::metainfo::{
     Metainfo, multi_file_metainfo, random_bytes, random_seed, single_file_metainfo,
@@ -55,44 +80,54 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SEEDING_AFTER_ADD: Duration = Duration::from_secs(60);
 /// How long the daemon may take to drop a removed torrent and delete its file.
 const REMOVAL_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long the daemon's temporary folder of a deletion may keep the test directory non-empty.
-const DIR_REMOVAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// The fields a test reads about its own torrent.
 const OWN_FIELDS: &[TorrentField] = &[
     TorrentField::Id,
     TorrentField::HashString,
+    TorrentField::Name,
     TorrentField::Status,
     TorrentField::PercentDone,
+    TorrentField::MetadataPercentComplete,
     TorrentField::Error,
     TorrentField::ErrorString,
     TorrentField::DownloadDir,
     TorrentField::SequentialDownload,
     TorrentField::FileStats,
 ];
+/// The JSON-RPC error code of `free_space` for a folder the daemon cannot read, such as one that
+/// does not exist (`SYSTEM_ERROR`, with "No such file or directory" as its detail).
+pub(crate) const NO_SUCH_FOLDER: i64 = 5;
 
 /// Where the live tests run: the daemon, and one test directory seen from both sides.
 #[derive(Debug, Clone)]
 pub(crate) struct LiveEnv {
     /// `X4_LIVE_URL`: the daemon's RPC endpoint.
     pub(crate) url: String,
-    /// `X4_LIVE_REMOTE_DIR`: the test directory as the daemon sees it.
-    pub(crate) remote_dir: String,
+    /// `X4_LIVE_REMOTE_DIR`: the test directory as the daemon sees it, in the normalized form
+    /// in which it is sent and compared.
+    pub(crate) remote_dir: DownloadDir,
     /// `X4_LIVE_LOCAL_DIR`: the same directory as mounted on this machine.
     pub(crate) local_dir: PathBuf,
 }
 
 impl LiveEnv {
     /// Reads the environment `just test-live` sets.
+    #[expect(
+        clippy::panic,
+        reason = "a live test cannot run without its environment"
+    )]
     pub(crate) fn from_env() -> Self {
+        let remote_dir = required_var("X4_LIVE_REMOTE_DIR");
         let env = Self {
             url: required_var("X4_LIVE_URL"),
-            remote_dir: required_var("X4_LIVE_REMOTE_DIR"),
+            remote_dir: DownloadDir::new(&remote_dir).unwrap_or_else(|error| {
+                panic!("X4_LIVE_REMOTE_DIR is not a folder ({error}): {remote_dir:?}")
+            }),
             local_dir: PathBuf::from(required_var("X4_LIVE_LOCAL_DIR")),
         };
         assert!(
-            env.remote_dir.starts_with('/') && !env.remote_dir.trim_end_matches('/').is_empty(),
-            "X4_LIVE_REMOTE_DIR must be an absolute directory below the root: {:?}",
-            env.remote_dir
+            env.remote_dir.as_str() != "/",
+            "X4_LIVE_REMOTE_DIR must be an absolute directory below the root: {remote_dir:?}"
         );
         assert!(
             env.local_dir.is_absolute() && env.local_dir.parent().is_some(),
@@ -123,6 +158,174 @@ fn live_client(url: &str) -> Client<UreqTransport> {
     Client::new(UreqTransport::new(url, DEFAULT_TIMEOUT))
 }
 
+/// A torrent this run made, not added yet: its metainfo, the folder it is to download into, and
+/// its data on this machine. [`TestTorrent::add`] adds it.
+#[derive(Debug)]
+pub(crate) struct OwnTorrent {
+    metainfo: Metainfo,
+    /// The name of its file or of its folder, `4x4-live-<hex>`, unique to this run.
+    name: String,
+    folder: TestFolder,
+    data: LocalData,
+}
+
+impl OwnTorrent {
+    /// A random 3 MiB file, written into the test directory, as a trackerless single-file
+    /// torrent that downloads there.
+    #[expect(
+        clippy::expect_used,
+        reason = "a live test stops at the first failure; the guards clean up"
+    )]
+    pub(crate) fn single_file(client: &mut Client<UreqTransport>, env: &LiveEnv) -> Self {
+        assert_test_dir_is_dedicated(client, &env.remote_dir);
+        let seed = random_seed();
+        let name = format!("4x4-live-{seed:016x}.bin");
+        let data = random_bytes(seed, FILE_SIZE);
+        let metainfo = single_file_metainfo(&name, &data, PIECE_LENGTH);
+        let local = LocalData::write_file(&env.local_dir, &name, &data)
+            .expect("cannot write the test file into X4_LIVE_LOCAL_DIR");
+        Self {
+            metainfo,
+            name,
+            folder: TestFolder::test_dir(&env.remote_dir),
+            data: local,
+        }
+    }
+
+    /// The [`MULTI_FILES`], random, written into a new folder of the test directory, as a
+    /// trackerless multi-file torrent that downloads there.
+    #[expect(
+        clippy::expect_used,
+        reason = "a live test stops at the first failure; the guards clean up"
+    )]
+    pub(crate) fn multi_file(client: &mut Client<UreqTransport>, env: &LiveEnv) -> Self {
+        assert_test_dir_is_dedicated(client, &env.remote_dir);
+        let seed = random_seed();
+        let name = format!("4x4-live-{seed:016x}");
+        let total = MULTI_FILES.iter().map(|(_, size)| size).sum();
+        let data = random_bytes(seed, total);
+        let files = split_into(&data, &MULTI_FILES);
+        let metainfo = multi_file_metainfo(&name, &files, MULTI_PIECE_LENGTH);
+        let local = LocalData::write_folder(&env.local_dir, &name, &files)
+            .expect("cannot write the test files into X4_LIVE_LOCAL_DIR");
+        Self {
+            metainfo,
+            name,
+            folder: TestFolder::test_dir(&env.remote_dir),
+            data: local,
+        }
+    }
+
+    /// A trackerless multi-file torrent of `files` (each a path in the torrent's folder,
+    /// `/`-separated, and a size) of random data that this run does not write, to download into
+    /// `folder`: the daemon has none of its data, and its files are only those the daemon makes
+    /// ([`LocalData::unwritten`]).
+    ///
+    /// A folder of this run's own in the test directory must not exist yet: the daemon must
+    /// answer `free_space` for it with [`NO_SUCH_FOLDER`].
+    #[expect(
+        clippy::expect_used,
+        reason = "a live test stops at the first failure; nothing was added yet"
+    )]
+    pub(crate) fn unwritten(
+        client: &mut Client<UreqTransport>,
+        env: &LiveEnv,
+        folder: TestFolder,
+        files: &[(&str, usize)],
+    ) -> Self {
+        assert_test_dir_is_dedicated(client, &env.remote_dir);
+        assert!(
+            folder.test_dir == env.remote_dir,
+            "{folder:?} is not in the test directory {:?}",
+            env.remote_dir
+        );
+        if folder.subfolder().is_some() {
+            assert_eq!(
+                folder_exists(client, &folder),
+                Ok(false),
+                "this run's folder {:?} must not exist before the test; not using it",
+                folder.remote()
+            );
+        }
+        let seed = random_seed();
+        let name = format!("4x4-live-{seed:016x}");
+        let total = files.iter().map(|(_, size)| size).sum();
+        let data = random_bytes(seed, total);
+        let parts = split_into(&data, files);
+        let metainfo = multi_file_metainfo(&name, &parts, MULTI_PIECE_LENGTH);
+        let names: Vec<&str> = files.iter().map(|&(file, _)| file).collect();
+        let local = LocalData::unwritten(&env.local_dir, folder.subfolder(), &name, &names)
+            .expect("cannot use X4_LIVE_LOCAL_DIR");
+        Self {
+            metainfo,
+            name,
+            folder,
+            data: local,
+        }
+    }
+
+    /// The name of its file, or of its folder.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The content of its `.torrent` file.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.metainfo.bytes
+    }
+
+    /// The request that adds it from its metainfo into its folder, paused or started, with the
+    /// files at `files_unwanted` left out.
+    pub(crate) fn metainfo_request(&self, paused: bool, files_unwanted: Vec<usize>) -> TorrentAdd {
+        TorrentAdd {
+            source: AddSource::Metainfo(Arc::from(self.metainfo.bytes.as_slice())),
+            download_dir: Some(self.folder.remote().clone()),
+            paused,
+            files_unwanted,
+            priority_high: Vec::new(),
+            priority_low: Vec::new(),
+            sequential_download: None,
+        }
+    }
+
+    /// The request that adds it from a magnet link of its info hash and its name into its
+    /// folder, paused or started.
+    #[expect(
+        clippy::panic,
+        reason = "a live test stops at the first failure; nothing was added yet"
+    )]
+    pub(crate) fn magnet_request(&self, paused: bool) -> TorrentAdd {
+        let text = format!(
+            "magnet:?xt=urn:btih:{}&dn={}",
+            self.metainfo.info_hash, self.name
+        );
+        let link = MagnetLink::parse(&text)
+            .unwrap_or_else(|error| panic!("the test's magnet link {text} is refused: {error}"));
+        TorrentAdd {
+            source: AddSource::Magnet(link),
+            download_dir: Some(self.folder.remote().clone()),
+            paused,
+            files_unwanted: Vec::new(),
+            priority_high: Vec::new(),
+            priority_low: Vec::new(),
+            sequential_download: None,
+        }
+    }
+}
+
+/// `data` cut into the pieces `files` give, each with its name, in their order.
+fn split_into<'a>(data: &'a [u8], files: &[(&'a str, usize)]) -> Vec<(&'a str, &'a [u8])> {
+    let mut rest = data;
+    files
+        .iter()
+        .map(|&(file, size)| {
+            let (this, after) = rest.split_at(size);
+            rest = after;
+            (file, this)
+        })
+        .collect()
+}
+
 /// A torrent this test created: a random file, or a folder of random files, in the test
 /// directory, added to the daemon.
 ///
@@ -136,7 +339,7 @@ pub(crate) struct TestTorrent {
     id: TorrentId,
     add: TorrentAdd,
     url: String,
-    remote_dir: String,
+    folder: TestFolder,
     data: LocalData,
     /// Set once the daemon no longer has the torrent.
     removed: bool,
@@ -145,71 +348,50 @@ pub(crate) struct TestTorrent {
 impl TestTorrent {
     /// Writes a random 3 MiB file into the test directory, adds it as a trackerless single-file
     /// torrent (started, so the daemon verifies the data) and waits until it seeds.
-    #[expect(
-        clippy::expect_used,
-        reason = "a live test stops at the first failure; the guards clean up"
-    )]
     pub(crate) fn create(client: &mut Client<UreqTransport>, env: &LiveEnv) -> Self {
-        assert_test_dir_is_dedicated(client, &env.remote_dir);
-        let seed = random_seed();
-        let name = format!("4x4-live-{seed:016x}.bin");
-        let data = random_bytes(seed, FILE_SIZE);
-        let metainfo = single_file_metainfo(&name, &data, PIECE_LENGTH);
-        let local = LocalData::write_file(&env.local_dir, &name, &data)
-            .expect("cannot write the test file into X4_LIVE_LOCAL_DIR");
-        Self::add(client, env, metainfo, local)
+        let own = OwnTorrent::single_file(client, env);
+        let request = own.metainfo_request(false, Vec::new());
+        let torrent = Self::add(client, env, own, &request);
+        torrent.wait_for(client, Status::Seeding, SEEDING_AFTER_ADD);
+        torrent
     }
 
     /// Writes the [`MULTI_FILES`], random, into a new folder of the test directory, adds the
     /// folder as a trackerless multi-file torrent (started, so the daemon verifies the data) and
     /// waits until it seeds.
-    #[expect(
-        clippy::expect_used,
-        reason = "a live test stops at the first failure; the guards clean up"
-    )]
     pub(crate) fn create_multi_file(client: &mut Client<UreqTransport>, env: &LiveEnv) -> Self {
-        assert_test_dir_is_dedicated(client, &env.remote_dir);
-        let seed = random_seed();
-        let name = format!("4x4-live-{seed:016x}");
-        let total = MULTI_FILES.iter().map(|(_, size)| size).sum();
-        let data = random_bytes(seed, total);
-        let mut rest = data.as_slice();
-        let files: Vec<(&str, &[u8])> = MULTI_FILES
-            .iter()
-            .map(|&(file, size)| {
-                let (this, after) = rest.split_at(size);
-                rest = after;
-                (file, this)
-            })
-            .collect();
-        let metainfo = multi_file_metainfo(&name, &files, MULTI_PIECE_LENGTH);
-        let local = LocalData::write_folder(&env.local_dir, &name, &files)
-            .expect("cannot write the test files into X4_LIVE_LOCAL_DIR");
-        Self::add(client, env, metainfo, local)
+        let own = OwnTorrent::multi_file(client, env);
+        let request = own.metainfo_request(false, Vec::new());
+        let torrent = Self::add(client, env, own, &request);
+        torrent.wait_for(client, Status::Seeding, SEEDING_AFTER_ADD);
+        torrent
     }
 
-    /// Adds `metainfo`, the torrent whose data this run wrote as `local`, to download into the
-    /// test directory, and waits until it seeds.
+    /// Adds `own`, a torrent this run made, with `request`, and arms the guard; waits for
+    /// nothing else.
+    ///
+    /// Before anything is sent, `request` must name the torrent's own [`TestFolder`] and carry
+    /// its metainfo, or a magnet link of its info hash: a test cannot add anything else, nor into
+    /// any other folder. The daemon must answer that it added the torrent under that hash.
     #[expect(
         clippy::panic,
         reason = "a live test stops at the first failure; the guards clean up"
     )]
-    fn add(
+    pub(crate) fn add(
         client: &mut Client<UreqTransport>,
         env: &LiveEnv,
-        metainfo: Metainfo,
-        local: LocalData,
+        own: OwnTorrent,
+        request: &TorrentAdd,
     ) -> Self {
+        let OwnTorrent {
+            metainfo,
+            folder,
+            data: local,
+            ..
+        } = own;
+        check_first_add(request, &folder, &metainfo);
         let hash = metainfo.info_hash;
-        let add = TorrentAdd {
-            source: AddSource::Metainfo(metainfo.bytes),
-            download_dir: Some(env.remote_dir.clone()),
-            paused: false,
-            files_unwanted: Vec::new(),
-            priority_high: Vec::new(),
-            priority_low: Vec::new(),
-            sequential_download: None,
-        };
+        let add = request.clone();
         let id = match client.torrent_add(&add) {
             Ok(outcome) => {
                 accept_added(&outcome, &hash).unwrap_or_else(|problem| panic!("{problem}"))
@@ -232,23 +414,25 @@ impl TestTorrent {
                     }
                 };
                 // Unwinding drops the guard, which removes the torrent.
-                let _guard = listed_id.map(|id| Self::guard(hash.clone(), id, add, env, local));
+                let _guard = listed_id
+                    .map(|id| Self::guard(hash.clone(), id, add, env, folder.clone(), local));
                 panic!("torrent_add of {hash} failed: {error}; {what_now} (lookup: {lookup:?})");
             }
         };
         // The guard is armed before anything else can fail.
-        let torrent = Self::guard(hash, id, add, env, local);
+        let torrent = Self::guard(hash, id, add, env, folder, local);
         torrent.announce();
-        torrent.wait_for(client, Status::Seeding, SEEDING_AFTER_ADD);
         torrent
     }
 
-    /// The guard of the torrent `hash` the daemon added from `add`, with the local `data`.
+    /// The guard of the torrent `hash` the daemon added from `add` into `folder`, with the local
+    /// `data`.
     fn guard(
         hash: HashString,
         id: TorrentId,
         add: TorrentAdd,
         env: &LiveEnv,
+        folder: TestFolder,
         data: LocalData,
     ) -> Self {
         Self {
@@ -256,10 +440,27 @@ impl TestTorrent {
             id,
             add,
             url: env.url.clone(),
-            remote_dir: env.remote_dir.clone(),
+            folder,
             data,
             removed: false,
         }
+    }
+
+    /// Sends `request` once more for this torrent, as a second add of it: it must carry the same
+    /// metainfo or a magnet link of the same hash, and name `folder`, the test directory or a
+    /// folder of this run in it. The daemon's answer is the test's to check.
+    ///
+    /// # Errors
+    ///
+    /// The [`RpcError`] of `torrent_add`.
+    pub(crate) fn add_again(
+        &self,
+        client: &mut Client<UreqTransport>,
+        request: &TorrentAdd,
+        folder: &TestFolder,
+    ) -> Result<AddOutcome, RpcError> {
+        check_add_again(&self.add, &self.hash, &self.folder, request, folder);
+        client.torrent_add(request)
     }
 
     /// Names the torrent and its file on stderr as soon as the daemon has it: an interrupted run
@@ -334,18 +535,50 @@ impl TestTorrent {
         status: Status,
         timeout: Duration,
     ) -> TorrentRecord {
+        self.wait_until(client, timeout, |record| record.status == Some(status))
+            .0
+    }
+
+    /// Reads the torrent every [`POLL_INTERVAL`] until `done` holds for its record; returns that
+    /// record and every status seen meanwhile, in order. Fails after `timeout`.
+    pub(crate) fn wait_until(
+        &self,
+        client: &mut Client<UreqTransport>,
+        timeout: Duration,
+        mut done: impl FnMut(&TorrentRecord) -> bool,
+    ) -> (TorrentRecord, Vec<Status>) {
         let deadline = Instant::now() + timeout;
+        let mut seen = Vec::new();
         loop {
             let record = self.record(client);
-            if record.status == Some(status) {
-                return record;
+            seen.extend(record.status);
+            if done(&record) {
+                return (record, seen);
             }
             assert!(
                 Instant::now() < deadline,
-                "test torrent {} did not reach {status:?} within {timeout:?}; last seen: \
-                 {record:?}",
+                "test torrent {} did not get there within {timeout:?}; statuses seen: {seen:?}; \
+                 last seen: {record:?}",
                 self.hash
             );
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// Reads the torrent every [`POLL_INTERVAL`] for `duration`; returns every status seen, in
+    /// order.
+    pub(crate) fn statuses_for(
+        &self,
+        client: &mut Client<UreqTransport>,
+        duration: Duration,
+    ) -> Vec<Status> {
+        let until = Instant::now() + duration;
+        let mut seen = Vec::new();
+        loop {
+            seen.extend(self.record(client).status);
+            if Instant::now() >= until {
+                return seen;
+            }
             thread::sleep(POLL_INTERVAL);
         }
     }
@@ -413,14 +646,15 @@ impl TestTorrent {
         let Some(record) = torrent_by_hash(client, &self.hash)? else {
             return Ok(());
         };
-        // Only a torrent in the test directory is removed, and its data deleted, whatever
-        // happened before.
+        // Only a torrent in its own folder of the test directory is removed, and its data
+        // deleted, whatever happened before.
         let download_dir = record.download_dir.as_deref().unwrap_or_default();
-        if download_dir.trim_end_matches('/') != self.remote_dir.trim_end_matches('/') {
+        if !self.folder.is(download_dir) {
             return Err(format!(
-                "test torrent {} is in {download_dir:?}, not in the test directory {:?}; \
-                 not deleting its data",
-                self.hash, self.remote_dir
+                "test torrent {} is in {download_dir:?}, not in its folder {:?} of the test \
+                 directory; not deleting its data",
+                self.hash,
+                self.folder.remote()
             ));
         }
         client
@@ -462,192 +696,6 @@ impl Drop for TestTorrent {
                 self.hash
             ));
         }
-    }
-}
-
-/// The test torrent's data in the local test directory: the file of a single-file torrent, or the
-/// folder of a multi-file one and the files in it.
-///
-/// Deletes only what this run created: each file once it was created, the folder once it was
-/// created and its files are gone, and the test directory if this run created it and nothing else
-/// is in it. Dropping it deletes them too, so a test that fails before its torrent is added leaves
-/// nothing behind either.
-#[derive(Debug)]
-pub(crate) struct LocalData {
-    /// What the daemon names after the torrent: its file, or its folder.
-    path: PathBuf,
-    /// The test directory.
-    dir: PathBuf,
-    /// The files this run created and has not deleted yet.
-    files: Vec<PathBuf>,
-    /// Set from creating the folder of a multi-file torrent until it is removed.
-    owns_folder: bool,
-    /// Set from creating the test directory until it is removed.
-    owns_dir: bool,
-}
-
-impl LocalData {
-    /// Creates `dir/name` (never overwriting a file) holding `data`, flushed to the server.
-    ///
-    /// `dir` itself is created if missing, but not its parents: a missing parent means the
-    /// mount is not there.
-    pub(crate) fn write_file(dir: &Path, name: &str, data: &[u8]) -> io::Result<Self> {
-        let mut local = Self::in_dir(dir, name)?;
-        local.create_file(local.path.clone(), data)?;
-        Ok(local)
-    }
-
-    /// Creates the folder `dir/name`, which must not exist yet, and in it each of `files`, a name
-    /// and its data, flushed to the server.
-    ///
-    /// `dir` itself is created if missing, but not its parents, as in
-    /// [`LocalData::write_file`].
-    pub(crate) fn write_folder(
-        dir: &Path,
-        name: &str,
-        files: &[(&str, &[u8])],
-    ) -> io::Result<Self> {
-        let mut local = Self::in_dir(dir, name)?;
-        fs::create_dir(&local.path)?;
-        local.owns_folder = true;
-        for (file, data) in files {
-            local.create_file(local.path.join(file), data)?;
-        }
-        Ok(local)
-    }
-
-    /// Nothing yet but the test directory `dir`, created if missing, for the data `name`.
-    fn in_dir(dir: &Path, name: &str) -> io::Result<Self> {
-        let owns_dir = match fs::create_dir(dir) {
-            Ok(()) => true,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
-            Err(error) => return Err(error),
-        };
-        Ok(Self {
-            path: dir.join(name),
-            dir: dir.to_owned(),
-            files: Vec::new(),
-            owns_folder: false,
-            owns_dir,
-        })
-    }
-
-    /// Creates the file `path`, never overwriting one, with `data`.
-    fn create_file(&mut self, path: PathBuf, data: &[u8]) -> io::Result<()> {
-        let mut file = File::create_new(&path)?;
-        self.files.push(path);
-        file.write_all(data)?;
-        // On NFS, make sure the server has the data before the daemon reads it.
-        file.sync_all()
-    }
-
-    pub(crate) fn is_clean(&self) -> bool {
-        self.files.is_empty() && !self.owns_folder && !self.owns_dir
-    }
-
-    /// Whether every file this run created is gone, as when the daemon deleted them.
-    pub(crate) fn files_are_gone(&self) -> bool {
-        self.files.iter().all(|file| file_is_gone(file))
-    }
-
-    /// Moves what this run owns into a new `LocalData`, which deletes it from then on; this one
-    /// is left clean.
-    pub(crate) fn hand_over(&mut self) -> Self {
-        Self {
-            path: self.path.clone(),
-            dir: self.dir.clone(),
-            files: std::mem::take(&mut self.files),
-            owns_folder: std::mem::take(&mut self.owns_folder),
-            owns_dir: std::mem::take(&mut self.owns_dir),
-        }
-    }
-
-    /// Deletes the files, the folder and the directory this run created; returns what went wrong.
-    pub(crate) fn delete(&mut self) -> Vec<String> {
-        let mut problems = Vec::new();
-        self.files.retain(|file| match fs::remove_file(file) {
-            Ok(()) => false,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(error) => {
-                problems.push(format!("cannot delete {}: {error}", file.display()));
-                true
-            }
-        });
-        if self.owns_folder && self.files.is_empty() {
-            match remove_empty_dir(&self.path) {
-                Ok(()) => self.owns_folder = false,
-                Err(problem) => problems.push(problem),
-            }
-        }
-        if self.owns_dir && !self.owns_folder && self.files.is_empty() {
-            match remove_empty_dir(&self.dir) {
-                Ok(()) => self.owns_dir = false,
-                Err(problem) => problems.push(problem),
-            }
-        }
-        problems
-    }
-}
-
-impl Drop for LocalData {
-    fn drop(&mut self) {
-        if self.is_clean() {
-            return;
-        }
-        let problems = self.delete();
-        if !problems.is_empty() {
-            // A failed write to stderr leaves nowhere else to report to.
-            drop(writeln!(
-                io::stderr(),
-                "live test cleanup left local files behind: {problems:#?}"
-            ));
-        }
-    }
-}
-
-/// Removes the directory `dir` once it is empty, or finds it gone: the daemon may still be
-/// deleting a torrent's data through a temporary folder in it.
-///
-/// # Errors
-///
-/// What still keeps it after [`DIR_REMOVAL_TIMEOUT`].
-fn remove_empty_dir(dir: &Path) -> Result<(), String> {
-    let mut last_error = None;
-    let removed = wait_until(DIR_REMOVAL_TIMEOUT, || match fs::remove_dir(dir) {
-        Ok(()) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-        Err(error) => {
-            last_error = Some(error);
-            false
-        }
-    });
-    match last_error {
-        Some(error) if !removed => Err(format!("cannot remove {}: {error}", dir.display())),
-        _ => Ok(()),
-    }
-}
-
-/// The data file of a test torrent that was removed while the daemon kept its data. The daemon no
-/// longer knows the file, so deleting it is the test's job: [`KeptFile::delete`] deletes it and
-/// the directory if this run created it, and dropping it deletes them too, so a failed check
-/// leaves nothing behind.
-#[derive(Debug)]
-pub(crate) struct KeptFile(pub(crate) LocalData);
-
-impl KeptFile {
-    /// The file, as mounted on this machine.
-    pub(crate) fn path(&self) -> &Path {
-        &self.0.path
-    }
-
-    /// Deletes the file, and the directory if this run created it.
-    pub(crate) fn delete(mut self) {
-        let problems = self.0.delete();
-        assert!(
-            problems.is_empty(),
-            "deleting the kept file {} failed: {problems:#?}",
-            self.0.path.display()
-        );
     }
 }
 
@@ -753,8 +801,7 @@ pub(crate) fn torrent_fields_by_hash(
     clippy::expect_used,
     reason = "a live test stops at the first failure; nothing was changed yet"
 )]
-fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: &str) {
-    let test_dir = remote_dir.trim_end_matches('/');
+fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: &DownloadDir) {
     let response = client
         .torrent_get(&GetIds::All, &[TorrentField::DownloadDir])
         .expect("torrent_get of every download directory failed");
@@ -762,10 +809,7 @@ fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: 
         .torrents
         .iter()
         .filter_map(|record| record.download_dir.as_deref())
-        .filter(|dir| {
-            let dir = dir.trim_end_matches('/');
-            dir == test_dir || dir.starts_with(&format!("{test_dir}/"))
-        })
+        .filter(|dir| is_in_test_dir(dir, remote_dir))
         .count();
     assert_eq!(
         in_test_dir, 0,
@@ -774,12 +818,30 @@ fn assert_test_dir_is_dedicated(client: &mut Client<UreqTransport>, remote_dir: 
     );
 }
 
+/// Whether a torrent's `download_dir`, as the daemon reports it, is the test directory or a
+/// folder inside it, both in their normalized forms. A folder that does not normalize (a `.` or
+/// `..` part, say) is compared by its text, without trailing slashes, so it is counted rather
+/// than missed.
+pub(crate) fn is_in_test_dir(download_dir: &str, test_dir: &DownloadDir) -> bool {
+    let normalized = DownloadDir::new(download_dir);
+    let dir = normalized
+        .as_ref()
+        .map_or(download_dir.trim_end_matches('/'), DownloadDir::as_str);
+    let test_dir = test_dir.as_str();
+    dir.strip_prefix(test_dir)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// What the tests must leave untouched on every other torrent: status, sequential download, and
 /// the priority and wanted flag of every file (`None` while a magnet link has no metadata).
 pub(crate) type Fingerprint =
     BTreeMap<HashString, (Status, bool, Option<Vec<(FilePriority, bool)>>)>;
 
 /// Reads the [`Fingerprint`] of every torrent on the daemon except `own`, the test's torrent.
+///
+/// Without `own`, as at the start of a test and after its torrent is removed, it says on stderr
+/// how many torrents the daemon lists, a count only, so a run shows that it left as many as it
+/// found.
 #[expect(
     clippy::expect_used,
     reason = "a live test stops at the first failure; the guard cleans up"
@@ -799,7 +861,7 @@ pub(crate) fn others_fingerprint(
             ],
         )
         .expect("torrent_get of every torrent failed");
-    response
+    let fingerprint: Fingerprint = response
         .torrents
         .into_iter()
         .filter_map(|record| {
@@ -823,7 +885,21 @@ pub(crate) fn others_fingerprint(
             );
             (Some(&hash) != own).then_some((hash, fingerprint))
         })
-        .collect()
+        .collect();
+    if own.is_none() {
+        report_count(fingerprint.len());
+    }
+    fingerprint
+}
+
+/// Says on stderr how many torrents the daemon lists.
+#[expect(
+    clippy::print_stderr,
+    reason = "test support: the tests install no tracing subscriber, and `just test-live` \
+              streams stderr"
+)]
+fn report_count(torrents: usize) {
+    eprintln!("live test: the daemon lists {torrents} torrents");
 }
 
 /// Fails if any torrent but `own` changed since `before` was taken, naming the changed torrents

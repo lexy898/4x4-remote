@@ -23,6 +23,7 @@ pub const SESSION_FIELDS: &[&str] = &[
     "speed_limit_up",
     "speed_limit_up_enabled",
     "sequential_download",
+    "start_added_torrents",
 ];
 
 /// The oldest `rpc_version_semver` major 4x4 supports: 6 is JSON-RPC 2.0, Transmission 4.1.
@@ -61,6 +62,9 @@ pub struct SessionInfo {
     pub speed_limit_up_enabled: bool,
     /// `sequential_download`: whether added torrents download sequentially by default.
     pub sequential_download: bool,
+    /// `start_added_torrents`: whether an added torrent starts at once when the add leaves out
+    /// `paused`.
+    pub start_added_torrents: bool,
 }
 
 /// Reads a speed in kB/s. Transmission 4.1.0 (RPC 6.0.0, which is supported) sent the limits as

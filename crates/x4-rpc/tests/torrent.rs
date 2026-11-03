@@ -2,13 +2,15 @@
 //! never sends: no `ids` meaning "all torrents", no `[]` meaning "all files"), and how the
 //! recorded fixtures and synthetic results parse.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use x4_rpc::testing::fixtures::{TORRENT_GET_DETAILS, TORRENT_GET_LIST, TORRENT_GET_RECENT};
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
 use x4_rpc::{
-    AddOutcome, AddSource, AddedTorrent, Client, ErrorKind, GetIds, HashString, Pieces, RemoveData,
-    Status, TorrentAction, TorrentAdd, TorrentField, TorrentId, TorrentRef, TorrentSelection,
-    TorrentSet,
+    AddOutcome, AddSource, AddedTorrent, Client, DownloadDir, ErrorKind, GetIds, HashString,
+    MagnetLink, Pieces, RemoveData, RpcError, Status, TorrentAction, TorrentAdd, TorrentField,
+    TorrentId, TorrentRef, TorrentSelection, TorrentSet,
 };
 
 const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -52,9 +54,12 @@ fn param_keys(params: &Value) -> Vec<String> {
     keys
 }
 
+#[expect(clippy::unwrap_used, reason = "built from a constant that is valid")]
 fn magnet_add() -> TorrentAdd {
     TorrentAdd {
-        source: AddSource::Magnet(format!("magnet:?xt=urn:btih:{HASH}")),
+        source: AddSource::Magnet(
+            MagnetLink::parse(&format!("magnet:?xt=urn:btih:{HASH}")).unwrap(),
+        ),
         download_dir: None,
         paused: false,
         files_unwanted: Vec::new(),
@@ -282,24 +287,44 @@ fn remove_sends_delete_flag() {
 }
 
 #[test]
-fn add_magnet_uses_filename() {
-    let magnet = format!("magnet:?xt=urn:btih:{HASH}");
-    let (mut client, transport) = client_answering(json!({
-        "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
-    }));
-    let add = TorrentAdd {
-        paused: true,
-        download_dir: Some("/data/torrents/video".to_owned()),
-        ..magnet_add()
+fn the_add_request_sends_a_magnet_as_filename_and_a_file_as_metainfo() {
+    let sent = |source: AddSource| {
+        let (mut client, transport) = client_answering(json!({
+            "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
+        }));
+        let add = TorrentAdd {
+            source,
+            paused: true,
+            download_dir: Some(DownloadDir::new("//data/torrents//video/\n").unwrap()),
+            ..magnet_add()
+        };
+        client.torrent_add(&add).unwrap();
+        let request = only_request(&transport).unwrap();
+        assert_eq!(request.method, "torrent_add");
+        request.params
     };
+    let magnet = MagnetLink::parse(&format!(
+        " MAGNET:?xt=urn:btih:{HASH}&dn=a%20b&tr=udp%3A%2F%2Fx \n"
+    ))
+    .unwrap();
 
-    client.torrent_add(&add).unwrap();
-
-    let request = only_request(&transport).unwrap();
-    assert_eq!(request.method, "torrent_add");
+    // The magnet goes as it was validated: trimmed, with the scheme in lower case.
     assert_eq!(
-        request.params,
-        json!({ "filename": magnet, "paused": true, "download_dir": "/data/torrents/video" })
+        sent(AddSource::Magnet(magnet)),
+        json!({
+            "filename": format!("magnet:?xt=urn:btih:{HASH}&dn=a%20b&tr=udp%3A%2F%2Fx"),
+            "paused": true,
+            "download_dir": "/data/torrents/video",
+        })
+    );
+    // A file goes as its content, never as a name the daemon would read on its own disk.
+    assert_eq!(
+        sent(AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..]))),
+        json!({
+            "metainfo": "ZDQ6aW5mb2Q0Om5hbWUxOnhlZQ==",
+            "paused": true,
+            "download_dir": "/data/torrents/video",
+        })
     );
 }
 
@@ -309,6 +334,7 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
         "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
     }));
     let add = TorrentAdd {
+        source: AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..])),
         files_unwanted: vec![1],
         priority_high: vec![0],
         priority_low: vec![2, 3],
@@ -322,8 +348,8 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
     assert_eq!(
         param_keys(&params),
         [
-            "filename",
             "files_unwanted",
+            "metainfo",
             "paused",
             "priority_high",
             "priority_low",
@@ -338,13 +364,42 @@ fn add_omits_download_dir_when_none_and_sends_file_choices() {
 }
 
 #[test]
+fn a_magnet_with_file_choices_is_refused_and_nothing_is_sent() {
+    for add in [
+        TorrentAdd {
+            files_unwanted: vec![1],
+            ..magnet_add()
+        },
+        TorrentAdd {
+            priority_high: vec![0],
+            ..magnet_add()
+        },
+        TorrentAdd {
+            priority_low: vec![2],
+            ..magnet_add()
+        },
+    ] {
+        let (mut client, transport) = client_answering(json!({
+            "torrent_added": { "id": 9, "name": "x", "hash_string": HASH }
+        }));
+
+        assert_eq!(
+            client.torrent_add(&add),
+            Err(RpcError::MagnetWithFileChoices),
+            "{add:?}"
+        );
+        assert_eq!(transport.requests(), [], "{add:?}");
+    }
+}
+
+#[test]
 fn add_metainfo_is_base64() {
     let metainfo = b"d4:infod6:lengthi3e4:name5:x.bine12:piece lengthi16384eee".to_vec();
     let (mut client, transport) = client_answering(json!({
         "torrent_added": { "id": 9, "name": "x.bin", "hash_string": HASH }
     }));
     let add = TorrentAdd {
-        source: AddSource::Metainfo(metainfo),
+        source: AddSource::Metainfo(Arc::from(metainfo)),
         ..magnet_add()
     };
 
@@ -393,7 +448,7 @@ fn add_without_an_outcome_is_invalid() {
     let outcome = client.torrent_add(&magnet_add());
 
     assert!(
-        matches!(outcome, Err(x4_rpc::RpcError::InvalidResponse(_))),
+        matches!(outcome, Err(RpcError::InvalidResponse(_))),
         "{outcome:?}"
     );
 }
@@ -444,7 +499,7 @@ fn malformed_hash_in_an_add_response_is_invalid() {
     let outcome = client.torrent_add(&magnet_add());
 
     assert!(
-        matches!(outcome, Err(x4_rpc::RpcError::InvalidResponse(_))),
+        matches!(outcome, Err(RpcError::InvalidResponse(_))),
         "{outcome:?}"
     );
 }

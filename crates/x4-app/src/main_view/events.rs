@@ -26,8 +26,12 @@ impl MainView {
                 Event::MagnetLinks { id, result } => {
                     self.magnet_links_read(id, result, window, cx);
                 }
+                Event::AddFinished { id, result } => self.add_finished(id, result, window, cx),
+                Event::FreeSpace { path, answer } => self.free_space_read(path, answer, cx),
             }
         }
+        // After the batch, so that the dialog and the selection see its newest snapshot.
+        self.follow_adds(window, cx);
         if changed {
             cx.notify();
         }
@@ -58,7 +62,11 @@ pub(super) async fn pump(
             return;
         }
     }
-    if let Err(error) = view.update(cx, MainView::service_stopped) {
+    if let Err(error) = view.update_in(cx, |view, window, cx| {
+        view.service_stopped(cx);
+        view.adds_service_stopped(window, cx);
+        view.follow_adds(window, cx);
+    }) {
         tracing::debug!(%error, "the service stopped after the window closed");
     }
 }
@@ -114,6 +122,8 @@ mod tests {
                 Event::Snapshot(snapshot) => format!("snapshot {}", snapshot.rate_down),
                 Event::ActionFinished { id, .. } => format!("action {}", id.0),
                 Event::MagnetLinks { id, .. } => format!("magnet links {}", id.0),
+                Event::AddFinished { id, .. } => format!("add {}", id.0),
+                Event::FreeSpace { path, .. } => format!("free space {}", path.as_str()),
                 Event::Details(_) => "details".to_owned(),
             })
             .collect()

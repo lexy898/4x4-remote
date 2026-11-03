@@ -1,11 +1,13 @@
 //! Application startup: the config and the saved state, the service, the global Quit action and
 //! the key bindings of [`keymap`](crate::keymap), the main window and the first-frame log.
 //!
-//! [`run`] is the front door the `4x4` binary uses: it reads the files and starts the service
-//! against the configured daemon. [`run_with`] takes a [`Startup`] built by its caller instead,
-//! so that a demo or a measurement can run the window against a service of its own, and
-//! [`run_driven`] also hands it the open window to drive. [`launch`] opens the window of a
-//! [`Startup`] in an application that runs already, such as a test's.
+//! [`run`] is the front door the `4x4` binary uses: it reads the files, starts the service
+//! against the configured daemon, queues the requests of the binary's own arguments and, in the
+//! first 4x4 of the user, answers the launches after it ([`instance`](crate::instance)).
+//! [`run_with`] takes a [`Startup`] built by its caller instead, so that a demo or a measurement
+//! can run the window against a service of its own, and [`run_driven`] also hands it the open
+//! window to drive. [`launch`] opens the window of a [`Startup`] in an application that runs
+//! already, such as a test's.
 
 use std::cell::RefCell;
 use std::env;
@@ -27,19 +29,24 @@ use x4_core::{
 use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
+use crate::adding::{AddRequest, AddRequests};
 use crate::files::{FilesError, read_config, read_ui_state};
 use crate::icons::AppAssets;
+use crate::instance::{Listener, Serving};
 use crate::keymap::{Quit, key_bindings};
 use crate::main_view::MainView;
 use crate::paths::AppPaths;
 use crate::theme::apply_theme;
 use crate::window_state::opening_bounds;
 
-/// Identifies the application to the desktop environment (the Wayland `app_id`).
-const APP_ID: &str = "io.github.lexy898.FourByFour";
+/// Identifies the application to the desktop environment: the Wayland `app_id`, the X11
+/// `WM_CLASS`, the name of the `.desktop` file, and the names of the single instance's lock and
+/// socket.
+pub const APP_ID: &str = "io.github.lexy898.FourByFour";
 /// The id of development runs, so that window rules written for test windows (placing them on
-/// a particular screen without focus) never catch the owner's real window.
-const DEVEL_APP_ID: &str = "io.github.lexy898.FourByFour.Devel";
+/// a particular screen without focus) never catch the owner's real window, and so that a
+/// development run never hands its arguments to the owner's 4x4.
+pub const DEVEL_APP_ID: &str = "io.github.lexy898.FourByFour.Devel";
 /// Set to `1` to give a release build the development id, as `just measure` does.
 const DEVEL_ENV: &str = "X4_DEVEL";
 
@@ -62,6 +69,12 @@ pub struct Startup {
     /// Why `config.toml` is not used, if it is not. The window shows it until the user
     /// dismisses it.
     pub config_problem: Option<ConfigProblem>,
+    /// The channel of the requests to add torrents. The window listens on its receiver and keeps
+    /// its sender for the sources inside it
+    /// ([`MainView::add_requests`](crate::main_view::MainView::add_requests)); the sources outside
+    /// it, such as the launch arguments and later launches, send into clones of its sender, taken
+    /// before the start.
+    pub adds: AddRequests,
 }
 
 impl Startup {
@@ -85,6 +98,7 @@ impl Startup {
             state_writable,
             state_path,
             config_problem: None,
+            adds: AddRequests::new(),
         }
     }
 
@@ -151,7 +165,10 @@ impl ConfigProblem {
 
 /// Runs the application until it quits: reads the config and the saved state from `paths`
 /// (`None` when the home directory is unknown), starts the service against the configured
-/// daemon and hands over to [`run_with`].
+/// daemon, and runs the window as [`run_with`] does, with `requests`, those of the binary's own
+/// arguments, waiting for it. With `instance`, the place of the first 4x4 of the user, it answers
+/// the launches after it from the start: their requests join the same channel, after `requests`.
+/// When it quits, it removes the socket of `instance` and then lets go of its lock.
 ///
 /// The service only starts a thread here; the window opens at once and shows the connection
 /// being made, so the first frame never waits for the daemon.
@@ -159,7 +176,12 @@ impl ConfigProblem {
 /// # Errors
 ///
 /// Returns an error if the main window cannot be opened.
-pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
+pub fn run(
+    started: Instant,
+    paths: Option<&AppPaths>,
+    requests: Vec<AddRequest>,
+    instance: Option<Listener>,
+) -> anyhow::Result<()> {
     let (config, config_problem) = paths.map_or_else(
         || (Config::default(), None),
         |paths| load_config(&paths.config_file),
@@ -167,13 +189,17 @@ pub fn run(started: Instant, paths: Option<&AppPaths>) -> anyhow::Result<()> {
     let client = Client::new(UreqTransport::new(&config.connection.url, DEFAULT_TIMEOUT));
     // Spawning only starts the thread; the state file is read while it connects.
     let service = service::spawn(client, EngineConfig::default());
-    run_with(
-        started,
-        Startup {
-            config_problem,
-            ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))
-        },
-    )
+    let startup = Startup {
+        config_problem,
+        ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))
+    };
+    // The channel keeps them until the window listens.
+    for request in requests {
+        if startup.adds.sender.try_send(request).is_err() {
+            tracing::error!("the window's channel closed before it opened; an argument is lost");
+        }
+    }
+    run_app(started, startup, instance, |_, _, _| {})
 }
 
 /// Runs the application until it quits with what `startup` holds: initializes the UI, opens the
@@ -189,6 +215,9 @@ pub fn run_with(started: Instant, startup: Startup) -> anyhow::Result<()> {
 /// [`run_with`], which also hands the main window and its view to `drive` once the window is
 /// open, before its first frame, so that a demo or a measurement can drive the real window.
 ///
+/// On Linux the window asks for `.torrent` files through the desktop's own file dialog, with a
+/// filter for them (the portal's); [`launch`] alone leaves it gpui's, which a test answers.
+///
 /// # Errors
 ///
 /// Returns an error if the main window cannot be opened.
@@ -197,15 +226,34 @@ pub fn run_driven(
     startup: Startup,
     drive: impl FnOnce(AnyWindowHandle, Entity<MainView>, &mut App) + 'static,
 ) -> anyhow::Result<()> {
+    run_app(started, startup, None, drive)
+}
+
+/// [`run_driven`], which also answers the launches after this one with `instance`, the place of
+/// the first 4x4 of the user, until the application quits.
+fn run_app(
+    started: Instant,
+    startup: Startup,
+    instance: Option<Listener>,
+    drive: impl FnOnce(AnyWindowHandle, Entity<MainView>, &mut App) + 'static,
+) -> anyhow::Result<()> {
     let launch_error = Rc::new(RefCell::new(None));
     let launch_error_slot = Rc::clone(&launch_error);
+    let serving = Rc::new(RefCell::new(None));
+    let serving_slot = Rc::clone(&serving);
     // The component icons (the sidebar's, the search box's, the toolbar's, the menus' checks) and
     // the few the app adds; not the whole catalog.
     gpui_kit::application()
         .with_assets(AppAssets)
         .run(move |cx| {
             init(cx);
+            // Only now that the platform exists: creating it took the activation token out of
+            // the environment, which is safe only while no other thread may read it.
+            if let Some(listener) = instance {
+                serving_slot.replace(serve_later_launches(listener, &startup.adds));
+            }
             let opened = launch(startup, cx).and_then(|(window, view)| {
+                use_desktop_file_dialog(&view, cx);
                 log_first_frame(window, started, cx)?;
                 drive(window, view, cx);
                 Ok(())
@@ -217,7 +265,32 @@ pub fn run_driven(
                 cx.spawn(async |cx| cx.update(|cx| cx.quit())).detach();
             }
         });
+    // Removes the socket, then lets go of the lock, so that the next launch takes over at once.
+    drop(serving.take());
     launch_error.take().map_or(Ok(()), Err)
+}
+
+/// Has `listener` answer the launches after this one, which send their requests into `adds`.
+/// If it cannot, they run on their own.
+fn serve_later_launches(listener: Listener, adds: &AddRequests) -> Option<Serving> {
+    listener
+        .serve(adds.sender.clone())
+        .inspect_err(|error| {
+            tracing::warn!(%error, "later launches cannot hand over to this 4x4 and run on their own");
+        })
+        .ok()
+}
+
+/// Has `view` ask for `.torrent` files through the desktop's own file dialog, where 4x4 has one:
+/// the `FileChooser` portal on Linux, which filters them and has a title of 4x4's. Elsewhere gpui's
+/// dialog stays.
+fn use_desktop_file_dialog(view: &Entity<MainView>, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    view.update(cx, |view, _| {
+        view.set_file_picker(Rc::new(crate::adding::PortalPicker));
+    });
+    #[cfg(not(target_os = "linux"))]
+    let _ = (view, cx);
 }
 
 /// Reads `config.toml`. A file that cannot be used gives the defaults and the problem for the
@@ -253,7 +326,8 @@ fn load_ui_state(path: &Path) -> (UiState, bool) {
 
 /// Opens the main window for `startup`, at the remembered size and maximized if it was. A service
 /// that could not start, and a config problem, are shown in the status bar. The window saves its
-/// UI state to `startup.state_path` if it may. Call [`init`] first.
+/// UI state to `startup.state_path` if it may, and takes the requests to add torrents that arrive
+/// on `startup.adds`. Call [`init`] first.
 ///
 /// # Errors
 ///
@@ -269,6 +343,7 @@ pub fn launch(
         state_writable: _,
         state_path: _,
         config_problem,
+        adds,
     } = startup;
     let (events, commands, service) = match service {
         Ok(service) => (service.events().clone(), service.commands(), Some(service)),
@@ -283,14 +358,17 @@ pub fn launch(
     };
     let failed = service.is_none();
     let (window, view) = open_window(events, commands, service, &ui, state_file, cx)?;
-    view.update(cx, |view, cx| {
-        if failed {
-            view.service_failed(cx);
-        }
-        if let Some(problem) = config_problem {
-            view.show_config_problem(problem, cx);
-        }
-    });
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            if failed {
+                view.service_failed(cx);
+            }
+            if let Some(problem) = config_problem {
+                view.show_config_problem(problem, cx);
+            }
+            view.listen_for_adds(adds, window, cx);
+        });
+    })?;
     Ok((window, view))
 }
 
@@ -365,8 +443,9 @@ fn main_window_options(ui: &UiState, cx: &App) -> WindowOptions {
 }
 
 /// The Wayland `app_id` of this run: the development id in debug builds and when `X4_DEVEL=1`,
-/// the real one otherwise.
-pub(crate) fn app_id() -> &'static str {
+/// the real one otherwise. The single instance's lock and socket are named after it.
+#[must_use]
+pub fn app_id() -> &'static str {
     app_id_for(cfg!(debug_assertions), env::var_os(DEVEL_ENV).as_deref())
 }
 
@@ -404,11 +483,12 @@ mod tests {
     use gpui_kit::test::TestWindowExt as _;
     use x4_core::test_support::torrent;
     use x4_core::{
-        ConnectionState, DisplayState, Filter, Snapshot, TextPosition, ThemeChoice, Torrent,
-        WindowState,
+        AddItem, ConnectionState, DisplayState, Filter, Snapshot, TextPosition, ThemeChoice,
+        Torrent, WindowState,
     };
 
     use super::*;
+    use crate::adding::AddRequest;
 
     /// A start whose service could not be started, with `config_problem`.
     fn failed_start(config_problem: Option<ConfigProblem>) -> Startup {
@@ -418,6 +498,7 @@ mod tests {
             state_writable: false,
             state_path: None,
             config_problem,
+            adds: AddRequests::new(),
         }
     }
 
@@ -555,6 +636,46 @@ mod tests {
             window.click("config-problem-dismiss", cx);
             window.render_frame(cx);
             assert!(window.try_find("config-problem").is_none());
+        })
+        .expect("the window is open");
+    }
+
+    #[gpui_kit::test]
+    fn a_request_sent_into_the_startup_channel_opens_the_add_dialog(cx: &mut TestAppContext) {
+        let startup = failed_start(None);
+        let adds = startup.adds.sender.clone();
+        let (window, _) = launched(startup, cx);
+
+        adds.send_blocking(AddRequest::Items(vec![AddItem::Magnet(None)]))
+            .expect("the window listens");
+        cx.run_until_parked();
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("add-title").label(), Some("Add torrent"));
+            assert!(window.try_find("add-link").is_some(), "the magnet form");
+        })
+        .expect("the window is open");
+    }
+
+    #[gpui_kit::test]
+    fn the_sources_inside_the_window_send_into_the_startup_channel(cx: &mut TestAppContext) {
+        let startup = failed_start(None);
+        let outside = startup.adds.sender.clone();
+        let (window, view) = launched(startup, cx);
+        let inside = cx.update(|cx| view.read(cx).add_requests().clone());
+
+        assert!(inside.same_channel(&outside), "one channel, the startup's");
+        assert_eq!(outside.receiver_count(), 1, "which the window drains");
+        inside
+            .send_blocking(AddRequest::Items(vec![AddItem::Magnet(None)]))
+            .expect("the window listens");
+        cx.run_until_parked();
+
+        assert!(outside.is_empty(), "taken");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("add-title").label(), Some("Add torrent"));
         })
         .expect("the window is open");
     }
@@ -704,5 +825,68 @@ mod tests {
     fn the_two_ids_differ_only_in_the_devel_suffix() {
         assert_eq!(APP_ID, "io.github.lexy898.FourByFour");
         assert_eq!(DEVEL_APP_ID, format!("{APP_ID}.Devel"));
+    }
+
+    /// The keys of the `[Desktop Entry]` group of the desktop file named after the app id, with
+    /// their values, in the file's order.
+    fn desktop_entry() -> Vec<(String, String)> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/linux")
+            .join(format!("{APP_ID}.desktop"));
+        let text = fs::read_to_string(&path).expect("the desktop file is named after the app id");
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some("[Desktop Entry]"), "one group, first");
+        lines
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                assert!(!line.starts_with('['), "no other group: {line}");
+                let (key, value) = line.split_once('=').expect("key=value");
+                (key.to_owned(), value.to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_desktop_file_names_the_app_id_exec_and_mime_types() {
+        let entry = desktop_entry();
+        let value = |key: &str| {
+            let values: Vec<&str> = entry
+                .iter()
+                .filter(|(found, _)| found == key)
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert!(values.len() <= 1, "{key} once");
+            values.first().copied()
+        };
+
+        assert_eq!(value("Type"), Some("Application"));
+        assert_eq!(value("Name"), Some(PRODUCT_NAME));
+        assert_eq!(
+            value("Exec"),
+            Some("4x4 %U"),
+            "one process for every file and link"
+        );
+        assert_eq!(value("TryExec"), Some("4x4"));
+        assert_eq!(
+            value("MimeType"),
+            Some("application/x-bittorrent;x-scheme-handler/magnet;")
+        );
+        assert_eq!(value("StartupWMClass"), Some(APP_ID));
+        assert_eq!(value("Icon"), Some(APP_ID));
+        assert_eq!(value("Categories"), Some("Network;FileTransfer;P2P;"));
+        assert_eq!(value("SingleMainWindow"), Some("true"));
+        assert_eq!(value("Terminal"), Some("false"));
+        for key in ["GenericName", "Comment"] {
+            let text = value(key).unwrap_or_default();
+            assert!(
+                !text.is_empty() && text.is_ascii(),
+                "{key}: English text, {text:?}"
+            );
+        }
+        assert_eq!(value("DBusActivatable"), None, "launched by Exec only");
+        assert!(
+            entry.iter().all(|(key, _)| !key.contains('[')),
+            "no translations yet"
+        );
     }
 }

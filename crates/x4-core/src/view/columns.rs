@@ -1,6 +1,7 @@
 //! The table's columns and the user's choices of what to see.
 
-use crate::filter::Filter;
+use crate::filter::{Filter, matches_search};
+use crate::model::Torrent;
 use crate::sort::{SortDirection, SortKey};
 
 /// A column of the torrent table.
@@ -141,11 +142,100 @@ impl ViewState {
             self.sort_direction = column.first_direction();
         }
     }
+
+    /// This view, changed so that it shows `torrent`, as after the torrent was added: the filter
+    /// goes back to [`Filter::All`] if it hides the torrent, and the search is cleared if it does.
+    /// What shows the torrent stays, and so does the sort order. `None` when the view shows the
+    /// torrent already.
+    #[must_use]
+    pub fn revealing(&self, torrent: &Torrent) -> Option<Self> {
+        let filter_hides = !self.filter.matches(torrent);
+        let search_hides = !matches_search(&torrent.name, &self.search);
+        (filter_hides || search_hides).then(|| Self {
+            filter: if filter_hides {
+                Filter::All
+            } else {
+                self.filter
+            },
+            search: if search_hides {
+                String::new()
+            } else {
+                self.search.clone()
+            },
+            ..self.clone()
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::DisplayState;
+    use crate::test_support::torrent;
+
+    #[test]
+    fn revealing_a_torrent_clears_only_what_hides_it() {
+        let paused = Torrent {
+            state: DisplayState::Paused,
+            ..torrent("Season 2")
+        };
+        let sorted = ViewState {
+            sort_key: SortKey::Size,
+            sort_direction: SortDirection::Descending,
+            ..ViewState::default()
+        };
+
+        assert_eq!(sorted.revealing(&paused), None, "shown already");
+        let shown_by_both = ViewState {
+            filter: Filter::Paused,
+            search: "season".to_owned(),
+            ..sorted.clone()
+        };
+        assert_eq!(shown_by_both.revealing(&paused), None);
+
+        let filtered = ViewState {
+            filter: Filter::Downloading,
+            search: "season".to_owned(),
+            ..sorted.clone()
+        };
+        assert_eq!(
+            filtered.revealing(&paused),
+            Some(ViewState {
+                filter: Filter::All,
+                ..filtered.clone()
+            }),
+            "the search that shows it stays"
+        );
+
+        let searched = ViewState {
+            filter: Filter::Paused,
+            search: "film".to_owned(),
+            ..sorted.clone()
+        };
+        assert_eq!(
+            searched.revealing(&paused),
+            Some(ViewState {
+                search: String::new(),
+                ..searched.clone()
+            }),
+            "the filter that shows it stays"
+        );
+
+        let both = ViewState {
+            filter: Filter::Seeding,
+            search: "film".to_owned(),
+            ..sorted.clone()
+        };
+        assert_eq!(
+            both.revealing(&paused),
+            Some(ViewState {
+                filter: Filter::All,
+                search: String::new(),
+                ..sorted
+            }),
+            "the sort order stays"
+        );
+    }
 
     #[test]
     fn view_state_starts_with_everything_sorted_by_name() {

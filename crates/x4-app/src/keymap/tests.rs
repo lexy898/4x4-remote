@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 use gpui_kit::{Action as _, KeyBindingContextPredicate, KeyContext, NoAction};
 
 use super::{
-    ANY_MENU, BINDINGS, Binding, FILE_LIST_CONTEXT, FILES, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT,
-    SEARCH_CONTEXT, SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU,
-    TORRENT_LIST_CONTEXT, TORRENTS,
+    ADD_DIALOG_CONTEXT, ANY_MENU, BINDINGS, Binding, FILE_LIST_CONTEXT, FILES, FOLDER_FIELD,
+    FOLDER_FIELD_CONTEXT, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT,
+    SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS,
 };
 
 const README: &str = include_str!("../../../../README.md");
@@ -24,6 +24,7 @@ const OUTSIDE_TEXT: &str = "anywhere but a text field";
 const IN_THE_SEARCH_BOX: &str = "in the search box";
 const IN_THE_TABLE: &str = "in the table";
 const IN_THE_FILE_LIST: &str = "in the file list";
+const IN_THE_FOLDER_FIELD: &str = "in the folder field";
 const BOUND_PLACES: &[&str] = &[
     ANYWHERE,
     IN_THE_WINDOW,
@@ -31,9 +32,15 @@ const BOUND_PLACES: &[&str] = &[
     IN_THE_SEARCH_BOX,
     IN_THE_TABLE,
     IN_THE_FILE_LIST,
+    IN_THE_FOLDER_FIELD,
 ];
 /// The places of the README's table of keys where the keys are the toolkit's own.
-const TOOLKIT_PLACES: &[&str] = &["in a menu", "in a removal dialog", "in the speed limits"];
+const TOOLKIT_PLACES: &[&str] = &[
+    "in a menu",
+    "in a removal dialog",
+    "in the speed limits",
+    "in the add dialog",
+];
 
 /// Where the README says that `keys`, bound in `context`, work.
 fn place(keys: &str, context: Option<&str>) -> &'static str {
@@ -47,6 +54,7 @@ fn place(keys: &str, context: Option<&str>) -> &'static str {
         Some(SEARCH_CONTEXT) => IN_THE_SEARCH_BOX,
         Some(TABLE_CONTEXT | TABLE_NO_MENU | TORRENTS) => IN_THE_TABLE,
         Some(FILES) => IN_THE_FILE_LIST,
+        Some(FOLDER_FIELD) => IN_THE_FOLDER_FIELD,
         Some(other) => panic!("the README has no place for keys bound in {other:?}"),
     }
 }
@@ -207,8 +215,9 @@ fn keys_are_spelled_as_the_readme_writes_them() {
 }
 
 /// The key contexts around an open menu, from the window down to the menu: the context menu,
-/// which is drawn inside the table, a menu of the toolbar (Remove, Columns), and the priority menu
-/// of a row of the file list, which is drawn inside the list.
+/// which is drawn inside the table, a menu of the toolbar (Remove, Columns), the priority menu
+/// of a row of the file list, which is drawn inside the list, and the history of the add dialog's
+/// folder field, which is drawn inside the field.
 const OPEN_MENUS: &[&[&str]] = &[
     &[
         MAIN_CONTEXT,
@@ -220,6 +229,15 @@ const OPEN_MENUS: &[&[&str]] = &[
     &[
         MAIN_CONTEXT,
         FILE_LIST_CONTEXT,
+        "Popover",
+        "PopoverContent",
+        "PopupMenu",
+    ],
+    &[
+        "Root",
+        "Dialog",
+        ADD_DIALOG_CONTEXT,
+        FOLDER_FIELD_CONTEXT,
         "Popover",
         "PopoverContent",
         "PopupMenu",
@@ -332,6 +350,94 @@ fn every_other_window_key_does_nothing_in_the_open_speed_limits() {
         acting.is_empty(),
         "keys that act while the speed limits are open, (keys, where bound, around the focus): \
          {acting:?}; bind them to `NoAction` in `SPEED_LIMITS_CONTEXT`"
+    );
+}
+
+/// The key contexts around the focus in the open add dialog, from the window down, each with the
+/// keys that act there: on its buttons and its checkbox, in its link field, in its folder field,
+/// in its file list, and in the open history of the folder field. The dialog lies beside the main
+/// window's content, under the root, so `MainWindow` is not among them.
+const OPEN_ADD_DIALOG: &[(&[&str], &[&str])] = &[
+    (&["Root", "Dialog", ADD_DIALOG_CONTEXT], &["ctrl-q"]),
+    (
+        &["Root", "Dialog", ADD_DIALOG_CONTEXT, "Input"],
+        &["ctrl-q"],
+    ),
+    (
+        &[
+            "Root",
+            "Dialog",
+            ADD_DIALOG_CONTEXT,
+            FOLDER_FIELD_CONTEXT,
+            "Input",
+        ],
+        &["ctrl-q", "alt-down"],
+    ),
+    (
+        &["Root", "Dialog", ADD_DIALOG_CONTEXT, FILE_LIST_CONTEXT],
+        &[
+            "ctrl-q", "up", "down", "home", "end", "pageup", "pagedown", "left", "right", "space",
+            "+", "-",
+        ],
+    ),
+    (
+        &[
+            "Root",
+            "Dialog",
+            ADD_DIALOG_CONTEXT,
+            FOLDER_FIELD_CONTEXT,
+            "Popover",
+            "PopoverContent",
+            "PopupMenu",
+        ],
+        &["ctrl-q"],
+    ),
+];
+
+/// The open add dialog keeps every key of the window: only Ctrl+Q, the keys of its file list in
+/// the list and Alt+Down in its folder field act in it; its Enter is bound to nothing, so that the
+/// dialog's own Enter never closes it.
+#[test]
+fn the_open_dialog_keeps_every_window_key() {
+    for &(stack, expected) in OPEN_ADD_DIALOG {
+        let acting: BTreeSet<&str> = keys_acting_in(&[stack], &[], &[])
+            .into_iter()
+            .map(|(keys, _, _)| keys)
+            .collect();
+        let expected: BTreeSet<&str> = expected.iter().copied().collect();
+        assert_eq!(acting, expected, "the keys that act in {stack:?}");
+    }
+    let enter_kept = BINDINGS.iter().any(|binding| {
+        binding.keys == "enter"
+            && is_no_action(binding)
+            && binding.context == Some(ADD_DIALOG_CONTEXT)
+    });
+    assert!(enter_kept, "Enter is bound to nothing in the add dialog");
+}
+
+/// The key contexts around the focus in the search box, from the window down.
+const IN_THE_SEARCH_BOX_STACK: &[&str] = &[MAIN_CONTEXT, SEARCH_CONTEXT, "Input"];
+
+/// The search box lies outside the torrent list, so the list's Ctrl+V, which adds the magnet links
+/// on the clipboard, never takes the key from the text field, which pastes text with it; nor does
+/// any other key of the list.
+#[test]
+fn the_search_box_keeps_its_own_paste() {
+    let acting: BTreeSet<&str> = keys_acting_in(&[IN_THE_SEARCH_BOX_STACK], &[], &[])
+        .into_iter()
+        .map(|(keys, _, _)| keys)
+        .collect();
+    assert!(!acting.contains("ctrl-v"), "{acting:?}");
+    assert!(!acting.contains("ctrl-c"), "{acting:?}");
+    let search: Vec<KeyContext> = IN_THE_SEARCH_BOX_STACK
+        .iter()
+        .map(|context| KeyContext::parse(context).expect("a key context parses"))
+        .collect();
+    assert_eq!(predicate(TORRENTS).depth_of(&search), None);
+    // The window's keys to add torrents work there.
+    assert!(
+        acting.contains("ctrl-o") && acting.contains("ctrl-u"),
+        "{acting:?}"
     );
 }
 

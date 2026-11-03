@@ -729,7 +729,7 @@ mod tests {
             .iter()
             .map(|&(name, wanted, priority)| (name, 1, 0, wanted, priority))
             .collect();
-        FileTree::new(&details(&hash("a"), &files))
+        FileTree::new(&std::sync::Arc::new(details(&hash("a"), &files)))
     }
 
     #[test]

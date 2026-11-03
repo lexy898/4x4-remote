@@ -1,6 +1,8 @@
 //! The file actions the tree builds itself, so that the hash, the files and the new value always
 //! come from the tree that was drawn.
 
+use std::sync::Arc;
+
 use x4_core::test_support::details;
 use x4_core::{Action, FileTree};
 use x4_rpc::FilePriority::{self, High, Low, Normal};
@@ -37,8 +39,8 @@ fn a_file_action_takes_hash_files_and_value_from_its_own_tree() {
         ("T/sub/b.mkv", 1, 0, true, High),
         ("T/a.mkv", 1, 0, false, Normal),
     ];
-    let a = FileTree::new(&details(&hash(), &a_files));
-    let b = FileTree::new(&details(&other_hash(), &b_files));
+    let a = FileTree::new(&Arc::new(details(&hash(), &a_files)));
+    let b = FileTree::new(&Arc::new(details(&other_hash(), &b_files)));
 
     // A file: A's file is wanted, B's is not.
     let file = key("T/a.mkv");
@@ -117,10 +119,10 @@ fn a_key_unknown_to_the_tree_gives_no_action() {
     }
 
     // A key of another torrent's tree means nothing here.
-    let other = FileTree::new(&details(
+    let other = FileTree::new(&Arc::new(details(
         &other_hash(),
         &[("T/only_in_the_other.mkv", 1, 0, true, Normal)],
-    ));
+    )));
     assert_eq!(
         tree.toggle_wanted_action(&key("T/only_in_the_other.mkv")),
         None

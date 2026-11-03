@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=4x4
+GenericName=Torrent Client
+Comment=Control a remote Transmission daemon
+Exec=4x4 %U
+TryExec=4x4
+Icon=io.github.lexy898.FourByFour
+Terminal=false
+Categories=Network;FileTransfer;P2P;
+Keywords=torrent;bittorrent;transmission;magnet;
+MimeType=application/x-bittorrent;x-scheme-handler/magnet;
+StartupNotify=true
+StartupWMClass=io.github.lexy898.FourByFour
+SingleMainWindow=true

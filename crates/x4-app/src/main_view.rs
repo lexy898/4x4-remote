@@ -32,6 +32,12 @@
 //! torrents are removed, with or without their files. Their hashes and magnet links can be copied
 //! (the `copying` module). The `menu` module carries out the items of the context menu.
 //!
+//! Torrents to add come as requests from their sources and wait in a queue; the add dialog shows
+//! them one at a time, and nothing is added without the user's Add (the `adding` module). The
+//! sources inside the window are the toolbar's Add file and Add magnet, Ctrl+O, Ctrl+U, Ctrl+V in
+//! the list, the file dialog, the clipboard, and `.torrent` files dropped anywhere on the window,
+//! which is highlighted while they hover.
+//!
 //! The status bar's turtle switches the daemon's alternative speed limits, and its limits button
 //! opens a popover that sets the normal ones (the `speed_controls` module); Ctrl+T and Ctrl+L do
 //! the same from the keyboard.
@@ -43,6 +49,7 @@
 //! the window size and the details panel) is saved a second after the last change, and when the
 //! window closes or the app quits (the `persistence` module).
 
+mod adding;
 mod copying;
 mod details;
 mod events;
@@ -64,8 +71,8 @@ use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    MouseDownEvent, ParentElement as _, Pixels, Render, SharedString,
+    App, AppContext as _, Context, Entity, ExternalPaths, Focusable as _, InteractiveElement as _,
+    IntoElement, MouseDownEvent, ParentElement as _, Pixels, Render, SharedString,
     StatefulInteractiveElement as _, Styled, Subscription, Task, TestSupportExt as _, Window, div,
     px,
 };
@@ -78,6 +85,7 @@ use x4_core::{
 use x4_rpc::HashString;
 
 use crate::actions::PendingActions;
+use crate::adding::{AddRequests, drop_highlight_layer, hover_while_dragging};
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
 use crate::details_panel::DetailsPanel;
@@ -96,6 +104,8 @@ use crate::torrent_table::{
     TorrentTable, follow_table, new_table_state, right_click, show_column, show_rows,
     watch_right_click,
 };
+pub(crate) use adding::AddButton;
+use adding::on_add_actions;
 use details::on_details_actions;
 use persistence::Saver;
 use selection_keys::on_selection_keys;
@@ -106,6 +116,8 @@ use torrent_actions::{follow_key_repeats, on_torrent_actions};
 const ROW_HEIGHT: f32 = 44.;
 /// The height of the table's header.
 const HEADER_HEIGHT: f32 = 32.;
+/// The id of the layer that highlights the window while files are dragged over it.
+const WINDOW_DROP_TARGET: &str = "window-drop-target";
 
 /// The main window's content.
 pub struct MainView {
@@ -113,6 +125,9 @@ pub struct MainView {
     status: StatusModel,
     /// The filter, the search and the sort order the table follows.
     view: ViewState,
+    /// How many times the user has changed `view` ([`MainView::set_view`]); showing an added
+    /// torrent changes it without counting.
+    view_changes: u64,
     /// The rows of the table and the counts of the sidebar.
     model: TableModel,
     /// The torrent table, whose delegate holds the rows of `model`, the columns and the
@@ -158,6 +173,8 @@ pub struct MainView {
     selected_details: Option<HashString>,
     /// The height of the split when the panel was last fitted to it; `None` before the first fit.
     fitted_split: Option<Pixels>,
+    /// The torrents to add: the queue, the add dialog and the adds sent.
+    adds: adding::Adds,
     /// The event pump; dropping the view drops it, which cancels it.
     _events: Task<()>,
     /// Kept so that closing the window stops the service thread.
@@ -263,6 +280,7 @@ impl MainView {
         let mut view = Self {
             status: StatusModel::default(),
             view: view_state,
+            view_changes: 0,
             model: TableModel::default(),
             table,
             search,
@@ -283,12 +301,14 @@ impl MainView {
             details_split,
             selected_details: None,
             fitted_split: None,
+            adds: adding::Adds::default(),
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,
         };
         // The service starts out assuming a visible window; tell it how the window opened.
         view.report_visibility(window);
+        view.listen_for_adds(AddRequests::new(), window, cx);
         view
     }
 
@@ -341,7 +361,19 @@ impl MainView {
     /// Shows the torrents `view` asks for (the filter, the search and the sort order), from the
     /// last snapshot and without waiting for the next one, and remembers its filter and sort
     /// order in the [`UiState`]. The search is not remembered, so an edit of it saves nothing.
+    /// It is the user's choice: a change counts among the user's choices in the list, which an
+    /// added torrent waiting to be selected gives way to.
     pub fn set_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
+        if view == self.view {
+            return;
+        }
+        self.view_changes = self.view_changes.wrapping_add(1);
+        self.show_view(view, cx);
+    }
+
+    /// [`MainView::set_view`] for the window's own reasons, as to show an added torrent: not
+    /// counted as the user's choice.
+    fn show_view(&mut self, view: ViewState, cx: &mut Context<'_, Self>) {
         if view == self.view {
             return;
         }
@@ -692,9 +724,13 @@ impl Render for MainView {
             cx,
         );
         let repeats = &self.key_repeats;
-        let root = on_details_actions(
-            on_speed_actions(
-                on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+        let root = on_add_actions(
+            on_details_actions(
+                on_speed_actions(
+                    on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+                    repeats,
+                    cx,
+                ),
                 repeats,
                 cx,
             ),
@@ -712,9 +748,17 @@ impl Render for MainView {
                 focus_search(&view.search, window, cx);
             }))
             .on_action(cx.listener(Self::on_clear_search))
+            // Over the table, a row, the search box or the status bar alike; and over the add
+            // dialog too, whose own drop needs the drag to count as the mouse just as well.
+            .on_drag_move::<ExternalPaths>(hover_while_dragging)
+            .on_drop(cx.listener(|view, paths: &ExternalPaths, window, cx| {
+                view.files_dropped(paths.paths(), window, cx);
+            }))
             .child(toolbar)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(content))
             .child(status_bar)
+            // Last, so that it is painted over the content (`drop_target`).
+            .child(drop_highlight_layer(WINDOW_DROP_TARGET, px(0.)))
     }
 }
 

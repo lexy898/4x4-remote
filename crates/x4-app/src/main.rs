@@ -1,10 +1,16 @@
-//! The `4x4` binary: finds the app's directories, sets up logging and runs the application from
-//! [`x4_app::app`].
+//! The `4x4` binary: finds the app's directories and sets up logging; then hands its arguments to
+//! the 4x4 the user runs already ([`x4_app::instance`]) and exits, or runs the application from
+//! [`x4_app::app`] with them.
 
+use std::env;
+use std::path::PathBuf;
 use std::time::Instant;
 
+use x4_app::adding::launch_requests;
+use x4_app::app::app_id;
+use x4_app::instance::{self, Claim};
 use x4_app::logging::init_logging;
-use x4_app::paths::AppPaths;
+use x4_app::paths::{AppPaths, runtime_dir};
 
 fn main() -> anyhow::Result<()> {
     // Taken first so the first-frame log covers the whole startup.
@@ -12,6 +18,12 @@ fn main() -> anyhow::Result<()> {
     let paths = AppPaths::discover();
     // Kept until the end of `main`: dropping it flushes the log file.
     let _log_guard = init_logging(paths.as_ref().ok().map(|paths| paths.log_dir.as_path()))?;
+    // Before the config, the service and the window: a later launch only hands its arguments over.
+    let instance = match instance::claim(app_id(), runtime_dir().as_deref()) {
+        Claim::HandedOff => return Ok(()),
+        Claim::Primary(listener) => Some(listener),
+        Claim::Standalone(_) => None,
+    };
     let paths = match paths {
         Ok(paths) => Some(paths),
         Err(error) => {
@@ -19,5 +31,10 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
-    x4_app::app::run(started, paths.as_ref())
+    let cwd = env::current_dir().unwrap_or_else(|error| {
+        tracing::warn!(%error, "the working directory is unknown; relative paths given are refused");
+        PathBuf::new()
+    });
+    let requests = launch_requests(env::args_os().skip(1), &cwd);
+    x4_app::app::run(started, paths.as_ref(), requests, instance)
 }
