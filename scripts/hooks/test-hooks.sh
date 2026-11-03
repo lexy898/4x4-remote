@@ -434,6 +434,62 @@ test_guard_blocks_unquoted_heredoc_substitution() {
         $'git commit -m "$(cat <<EOF\n$(git commit -n)\nEOF\n)"'
 }
 
+# Changing the default apps is the owner's (AGENTS.md, Hard Rules): the guard refuses every way of
+# running scripts/default-handler.sh, and xdg-mime's `default`. It does not look into `just`'s
+# own options (`just --show default-handler` is refused too: an agent reads the justfile instead).
+test_guard_blocks_the_default_handler_recipe() {
+    expect_blocked 'just default-handler' 'just default-handler --undo --yes' \
+        'just --justfile justfile default-handler --yes' 'cd /tmp && just default-handler' \
+        'FOO=1 just default-handler' 'env X=1 just default-handler --yes' \
+        'sudo -u alexey just default-handler' 'timeout 5 just default-handler' \
+        '/usr/bin/just default-handler' 'bash -c "just default-handler --yes"' \
+        'echo "$(just default-handler --yes)"' 'true && just default-handler'
+}
+
+test_guard_blocks_the_default_handler_script() {
+    expect_blocked 'scripts/default-handler.sh' 'scripts/default-handler.sh --yes' \
+        './scripts/default-handler.sh --undo' '/home/alexey/garage/4x4/scripts/default-handler.sh --yes' \
+        'bash scripts/default-handler.sh --yes' 'bash -x scripts/default-handler.sh' \
+        'sh ./scripts/default-handler.sh --undo' 'env HOME=/tmp/x bash scripts/default-handler.sh --yes' \
+        'source scripts/default-handler.sh' '. scripts/default-handler.sh --yes' \
+        'bash -c "scripts/default-handler.sh --yes"'
+}
+
+test_guard_blocks_xdg_mime_default() {
+    expect_blocked 'xdg-mime default a.desktop application/x-bittorrent' \
+        '/usr/bin/xdg-mime default a.desktop x-scheme-handler/magnet' \
+        'env HOME=/tmp/x xdg-mime default a.desktop text/plain' \
+        'sudo xdg-mime default a.desktop text/plain' 'bash -c "xdg-mime default a.desktop text/plain"'
+}
+
+test_guard_allows_reading_and_testing_the_default_handler() {
+    expect_allowed 'grep default-handler README.md' 'cat scripts/default-handler.sh' \
+        'ls scripts/default-handler.sh' 'git add scripts/default-handler.sh' \
+        'chmod +x scripts/default-handler.sh' 'bash -n scripts/default-handler.sh' \
+        'bash -xn scripts/default-handler.sh' 'echo just default-handler' \
+        'git commit -m "feat: just default-handler, then xdg-mime default"' \
+        'just --list' 'just test-hooks' 'just package' 'just check' \
+        'bash scripts/hooks/test-hooks.sh default_handler' \
+        'xdg-mime query default application/x-bittorrent' 'xdg-mime query default x-scheme-handler/magnet' \
+        'xdg-mime --version'
+}
+
+test_guard_tells_the_agent_to_ask_the_owner_about_default_apps() {
+    local command
+    for command in 'just default-handler' 'scripts/default-handler.sh --yes' \
+        'xdg-mime default a.desktop text/plain'; do
+        run_guard "$command"
+        expect_status 2
+        expect_contains "guard-bash: blocked:" "$stderr" "stderr for: $command"
+        expect_contains "owner" "$stderr" "stderr for: $command"
+        expect_contains "AGENTS.md" "$stderr" "stderr for: $command"
+        expect_contains "just default-handler" "$stderr" "stderr for: $command"
+        [[ $stderr != *"Fix the failing check"* ]] || fail "advice about gates for: $command: $stderr"
+    done
+    run_guard 'git commit -n'
+    expect_contains "Fix the failing check" "$stderr" "the advice for a gate bypass"
+}
+
 test_guard_ignores_other_tools() {
     run_with_input '{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}' "$guard_hook"
     expect_status 0
@@ -2354,6 +2410,11 @@ cases=(
     guard_blocks_ambiguous_close_paren
     guard_blocks_substitution_after_ambiguous_close_paren
     guard_blocks_unquoted_heredoc_substitution
+    guard_blocks_the_default_handler_recipe
+    guard_blocks_the_default_handler_script
+    guard_blocks_xdg_mime_default
+    guard_allows_reading_and_testing_the_default_handler
+    guard_tells_the_agent_to_ask_the_owner_about_default_apps
     guard_ignores_other_tools
     lint_policy_passes_clean_tree
     lint_policy_rejects_inner_allow_and_expect
