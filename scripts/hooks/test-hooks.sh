@@ -4,7 +4,7 @@
 # and its target/.agent-hooks state are never touched. Prints "ok <case>" per case, or
 # "skip <case>: <why>" for a case that needs a tool this machine lacks (makepkg off Arch Linux),
 # and exits 1 on the first failure. Arguments select the cases to run, by part of their name:
-# `bash scripts/hooks/test-hooks.sh default_handler`.
+# `bash scripts/hooks/test-hooks.sh default_handler`; an argument that matches no case exits 1.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -2375,6 +2375,23 @@ test_default_handler_names_a_missing_xdg_mime() {
     expect_contains "xdg-utils" "$stderr" stderr
 }
 
+# The runner runs the cases whose names contain an argument, and stops at once when an argument
+# names none (a typo would run nothing and still look green).
+test_runner_selects_cases_by_name_and_rejects_a_filter_that_matches_none() {
+    run_with_input '' bash "$root/scripts/hooks/test-hooks.sh" check_tools_passes
+    expect_status 0
+    [[ $stdout == "ok check_tools_passes_when_all_present" ]] ||
+        fail "expected only the check_tools case to run, got: $stdout"
+    run_with_input '' bash "$root/scripts/hooks/test-hooks.sh" no_such_case_at_all
+    expect_status 1
+    expect_contains "no case matches: no_such_case_at_all" "$stderr" stderr
+    [[ -z $stdout ]] || fail "a case ran although the filter matched none: $stdout"
+    run_with_input '' bash "$root/scripts/hooks/test-hooks.sh" check_tools_passes a_typo_in_a_name
+    expect_status 1
+    expect_contains "no case matches: a_typo_in_a_name" "$stderr" stderr
+    [[ -z $stdout ]] || fail "a case ran although one filter matched none: $stdout"
+}
+
 cases=(
     format_hook_formats_rust_file
     format_hook_ignores_non_rust
@@ -2498,11 +2515,23 @@ cases=(
     default_handler_recipe_passes_its_arguments_to_the_script
     default_handler_rejects_unknown_options
     default_handler_names_a_missing_xdg_mime
+    runner_selects_cases_by_name_and_rejects_a_filter_that_matches_none
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )
 
-# With arguments, only the cases whose names contain one of them run.
+# With arguments, only the cases whose names contain one of them run. An argument that matches no
+# case stops the run before any case starts: a typo would otherwise run nothing and look green.
+for pattern in "$@"; do
+    matched=
+    for case_name in "${cases[@]}"; do
+        [[ $case_name == *"$pattern"* ]] && matched=1
+    done
+    if [[ -z $matched ]]; then
+        echo "no case matches: $pattern" >&2
+        exit 1
+    fi
+done
 for case_name in "${cases[@]}"; do
     if (($# > 0)); then
         selected=
