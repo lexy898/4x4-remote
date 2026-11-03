@@ -2,7 +2,9 @@
 //! wanted toggle as data, which the dialog applies to its own choice of files.
 
 use x4_core::test_support::details;
-use x4_core::{Action, FileTree, NodeKey, TorrentDetails};
+use x4_core::{
+    Action, FileTree, NodeKey, PriorityView, RowKind, TorrentDetails, WantedState, human_size,
+};
 use x4_rpc::FilePriority::{High, Low, Normal};
 
 use super::{Spec, hash, indices, key, open_all, other_hash, tree_of};
@@ -73,6 +75,74 @@ fn assert_same_tree(made: &FileTree, expected: &FileTree, label: &str) {
     }
 }
 
+#[test]
+fn a_tree_of_bare_entries_has_the_rows_and_files_of_the_details_panel() {
+    let files = details(&hash(), &ODD_FILES).files;
+
+    let tree = FileTree::of_files(hash(), &files);
+
+    let folder = RowKind::Folder { expanded: true };
+    let file = RowKind::File;
+    let (all, none, mixed) = (WantedState::All, WantedState::None, WantedState::Mixed);
+    let one = PriorityView::One;
+    let rows: Vec<_> = open_all(&tree)
+        .rows(&tree)
+        .into_iter()
+        .map(|row| {
+            let shown = (row.key.as_str().to_owned(), row.depth, row.kind, row.name);
+            (shown, row.wanted, row.priority, row.size)
+        })
+        .collect();
+    let expected = [
+        // Folders first, then files, by name with numbers in order; padding hidden; the file
+        // named like a folder, the repeated path and the nameless file each with a key of their
+        // own.
+        (("T", 0, folder, "T"), mixed, PriorityView::Mixed, 46),
+        (("T/b", 1, folder, "b"), mixed, PriorityView::Mixed, 30),
+        (("T/b/E2.mkv", 2, file, "E2.mkv"), none, one(Low), 20),
+        (("T/b/E10.mkv", 2, file, "E10.mkv"), all, one(High), 10),
+        (("T/x\u{0}1", 1, folder, "x"), all, one(Normal), 6),
+        (("T/x/y", 2, file, "y"), all, one(Normal), 6),
+        (("T/a.txt", 1, file, "a.txt"), all, one(Normal), 1),
+        (("T/a.txt\u{0}1", 1, file, "a.txt"), none, one(Normal), 4),
+        (("T/x", 1, file, "x"), all, one(Low), 5),
+        (("U", 0, folder, "U"), all, one(High), 8),
+        (("U/z.bin", 1, file, "z.bin"), all, one(High), 8),
+        (("", 0, file, ""), all, one(Normal), 7),
+    ]
+    .map(|((path, depth, kind, name), wanted, priority, size)| {
+        let shown = (path.to_owned(), depth, kind, name.to_owned());
+        (shown, wanted, priority, human_size(size))
+    });
+    assert_eq!(rows, expected);
+
+    // A folder reaches every file below it, padding included, even padding in a folder of
+    // padding only; a file reaches itself.
+    for (path, files) in [
+        ("T", vec![0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        ("T/b", vec![0, 1, 4]),
+        ("T/x\u{0}1", vec![8]),
+        ("T/x", vec![7]),
+        ("T/a.txt", vec![3]),
+        ("T/a.txt\u{0}1", vec![6]),
+        ("U", vec![10]),
+        ("", vec![9]),
+    ] {
+        assert_eq!(indices(&tree, path), Some(files), "{path:?}");
+    }
+    for hidden in [
+        "T/.pad",
+        "T/.pad/0",
+        "T/b/_____padding_file_1",
+        "T/only_pads",
+    ] {
+        assert_eq!(indices(&tree, hidden), None, "{hidden}");
+    }
+}
+
+/// The details panel's constructor is the bare one today, so this guards against a later split of
+/// the two; what the tree holds is pinned by
+/// `a_tree_of_bare_entries_has_the_rows_and_files_of_the_details_panel`.
 #[test]
 fn the_details_tree_is_unchanged_by_the_new_constructor() {
     let mut downloading = details(&hash(), &ODD_FILES);
