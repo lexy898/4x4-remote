@@ -9,11 +9,12 @@ use x4_rpc::{FilePriority, HashString};
 use super::names::is_padding;
 use super::{NodeKey, NonEmptyIndices, PriorityView, WantedState, next_priority};
 use crate::action::Action;
-use crate::details::TorrentDetails;
+use crate::details::{FileEntry, TorrentDetails};
 use crate::playable::Playable;
 use builder::Builder;
 
-/// The files of one torrent's details as folders and files.
+/// The files of one torrent as folders and files: those of its details, or those of a `.torrent`
+/// about to be added.
 ///
 /// The torrent's own top folder is the first level. Each node is found by its [`NodeKey`], its
 /// path inside the torrent, and each folder carries the sums of the files below it: their size
@@ -69,9 +70,21 @@ impl FileTree {
     /// empty.
     #[must_use]
     pub fn new(details: &TorrentDetails) -> Self {
+        Self::of_files(details.hash.clone(), &details.files)
+    }
+
+    /// The tree of the files `files` of the torrent `hash`, each at its own
+    /// [`index`](FileEntry::index).
+    ///
+    /// This is how the add dialog shows the files of a `.torrent` that is not added yet: nothing
+    /// is downloaded, and `wanted` is what the user chose so far. The details panel's tree,
+    /// [`new`](Self::new), is made the same way. A file whose path is empty is shown, without a
+    /// name, like any other.
+    #[must_use]
+    pub fn of_files(hash: HashString, files: &[FileEntry]) -> Self {
         let mut builder = Builder::default();
         let mut padding = Vec::new();
-        for entry in &details.files {
+        for entry in files {
             let mut parts: Vec<&str> = entry
                 .name
                 .split('/')
@@ -92,7 +105,7 @@ impl FileTree {
         for (index, parts) in &padding {
             builder.add_padding(*index, parts);
         }
-        builder.finish(details.hash.clone())
+        builder.finish(hash)
     }
 
     /// The torrent whose details the tree was made from.
@@ -130,18 +143,32 @@ impl FileTree {
         self.target(key).map(|(_, files)| files)
     }
 
-    /// The action that a click on the checkbox of the node `key` asks for: all its files are
-    /// wanted, or none of them when all are wanted now ([`WantedState::toggled`]).
+    /// What a click on the checkbox of the node `key` asks for: the files it reaches, padding
+    /// files included, and whether they are to be wanted. All of them are wanted, or none of them
+    /// when all are wanted now ([`WantedState::toggled`]).
+    ///
+    /// Both come from this tree. The details panel sends them to the daemon through
+    /// [`toggle_wanted_action`](Self::toggle_wanted_action); the add dialog applies them to its
+    /// own choice of files, which nothing has been sent for yet. It is `None` when `key` is not a
+    /// node of this tree (a padding file is not).
+    #[must_use]
+    pub fn wanted_toggle(&self, key: &NodeKey) -> Option<(NonEmptyIndices, bool)> {
+        let (node, files) = self.target(key)?;
+        Some((files, node.wanted.toggled()))
+    }
+
+    /// The action that a click on the checkbox of the node `key` asks for: the
+    /// [`wanted_toggle`](Self::wanted_toggle) of the node, for this tree's torrent.
     ///
     /// The torrent, the files and the value all come from this tree, so they cannot belong to
     /// different reads. It is `None` when `key` is not a node of this tree (a padding file is not).
     #[must_use]
     pub fn toggle_wanted_action(&self, key: &NodeKey) -> Option<Action> {
-        let (node, files) = self.target(key)?;
+        let (files, wanted) = self.wanted_toggle(key)?;
         Some(Action::SetFilesWanted {
             hash: self.hash.clone(),
             files: files.into_vec(),
-            wanted: node.wanted.toggled(),
+            wanted,
         })
     }
 

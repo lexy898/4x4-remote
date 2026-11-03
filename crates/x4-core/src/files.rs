@@ -1,11 +1,13 @@
-//! The files of the selected torrent as a tree, decided here so the Files tab only draws it.
+//! The files of the selected torrent as a tree, decided here so the Files tab only draws it, and
+//! the files of a `.torrent` about to be added, for the add dialog.
 //!
 //! [`FileTree::new`] cuts the flat list of [`TorrentDetails`](crate::TorrentDetails) into folders
-//! at the `/` of the paths. Each node is found by its [`NodeKey`], its path in the torrent, and
-//! each folder carries the sums of the files below it: their size and the bytes done, whether
-//! they are wanted ([`WantedState`]) and at which priority ([`PriorityView`]). The torrent's own
-//! top folder is the first level. Padding files (BEP 47), which only align the pieces, are hidden,
-//! but a folder's actions reach them with the rest of its files.
+//! at the `/` of the paths; [`FileTree::of_files`] does the same for a bare list of files. Each
+//! node is found by its [`NodeKey`], its path in the torrent, and each folder carries the sums of
+//! the files below it: their size and the bytes done, whether they are wanted ([`WantedState`])
+//! and at which priority ([`PriorityView`]). The torrent's own top folder is the first level.
+//! Padding files (BEP 47), which only align the pieces, are hidden, but a folder's actions reach
+//! them with the rest of its files.
 //!
 //! A [`FileTreeView`] is the part that the user changes: which folders are open and where the
 //! keyboard cursor is. It lists the visible [`FileRow`]s in order, folders first and then by name
@@ -13,9 +15,10 @@
 //!
 //! A click on a row becomes an action through [`FileTree::toggle_wanted_action`],
 //! [`FileTree::priority_action`] or [`FileTree::step_priority_action`], so the torrent, the files
-//! and the new value all come from the tree that was drawn. The list of files is a
-//! [`NonEmptyIndices`], which cannot be empty, because the daemon reads an empty list as "all
-//! files".
+//! and the new value all come from the tree that was drawn. The add dialog, which has nothing to
+//! send yet, takes the files and the value of a click on a checkbox from
+//! [`FileTree::wanted_toggle`]. The list of files is a [`NonEmptyIndices`], which cannot be
+//! empty, because the daemon reads an empty list as "all files".
 
 use std::sync::Arc;
 
