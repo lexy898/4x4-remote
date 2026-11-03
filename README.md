@@ -78,7 +78,7 @@ and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quit
 ## Install
 
 On Arch Linux, 4x4 installs as the package `4x4-git`, built from the local `master` branch of this
-checkout, so build it once what you want is merged into `master`:
+checkout, so build it after what you want is merged into `master`:
 
 ```bash
 git switch master
@@ -109,8 +109,10 @@ application menu with its icon at once, without logging out.
 
 To update, run the same four commands again; pacman replaces the installed version.
 
-To uninstall, run `sudo pacman -R 4x4-git`. Your `config.toml`, `state.toml` and logs stay (see
-[Files and logs](#files-and-logs)).
+To uninstall, first run `just default-handler --undo` if you made 4x4 the default app for
+`.torrent` files and magnet links (described below), then `sudo pacman -R 4x4-git`. Your
+`config.toml`, `state.toml` and logs stay (see [Files and logs](#files-and-logs)). The build files
+in `~/.cache/4x4-pkg`, about 2 GiB, can be deleted: `rm -rf ~/.cache/4x4-pkg`.
 
 To open `.torrent` files and magnet links with 4x4, in Dolphin and in a browser, make it their
 default app once after installing:
