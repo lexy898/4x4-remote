@@ -1610,21 +1610,25 @@ RUSTUP_TOOLCHAIN: stable"
 }
 
 # package() in a stand-in of makepkg's $srcdir and $pkgdir, with a stand-in binary and the
-# repository's own desktop file, icon and licenses: exactly those five files, with pacman's modes.
-test_package_installs_the_binary_desktop_file_icon_and_licenses() {
+# repository's own desktop files (4x4's, and the hidden one that gives the windows of the debug
+# build the icon), icon and licenses: exactly those six files, with pacman's modes.
+test_package_installs_the_binary_desktop_files_icon_and_licenses() {
     local dir checkout listing expected
     dir=$(mktemp -d "$tmp_root/package-files.XXXXXX")
     checkout=$dir/src/4x4
     mkdir -p "$checkout/target/release" "$checkout/packaging/linux" "$dir/pkg"
     printf '#!/bin/sh\n' >"$checkout/target/release/4x4"
     cp "$root/packaging/linux/io.github.lexy898.FourByFour.desktop" "$checkout/packaging/linux/"
+    cp "$root/packaging/linux/io.github.lexy898.FourByFour.Devel.desktop" \
+        "$checkout/packaging/linux/" 2>/dev/null || fail "no desktop file for the debug build"
     cp "$icon" "$checkout/packaging/linux/" 2>/dev/null || fail "no icon at $icon"
     cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$checkout/"
     run_with_input '' env -C "$dir/src" X4_REPO="$dir" srcdir="$dir/src" pkgdir="$dir/pkg" \
         bash -e -c 'source "$1" && package' _ "$pkgbuild"
     expect_status 0
     listing=$(cd "$dir/pkg" && find . -type f -printf '%m %p\n' | LC_ALL=C sort)
-    expected="644 ./usr/share/applications/io.github.lexy898.FourByFour.desktop
+    expected="644 ./usr/share/applications/io.github.lexy898.FourByFour.Devel.desktop
+644 ./usr/share/applications/io.github.lexy898.FourByFour.desktop
 644 ./usr/share/icons/hicolor/scalable/apps/io.github.lexy898.FourByFour.svg
 644 ./usr/share/licenses/4x4-git/LICENSE-APACHE
 644 ./usr/share/licenses/4x4-git/LICENSE-MIT
@@ -2668,7 +2672,7 @@ cases=(
     package_version_is_the_workspace_version_with_the_commit_count_and_hash
     package_version_stops_without_a_workspace_version
     package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped
-    package_installs_the_binary_desktop_file_icon_and_licenses
+    package_installs_the_binary_desktop_files_icon_and_licenses
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
     package_recipe_stops_outside_a_git_repository

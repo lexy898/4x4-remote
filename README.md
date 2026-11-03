@@ -105,7 +105,8 @@ repository (a copy of the files without `.git`) it stops the same way, with git'
 checkout has moved to another directory, the next build starts over from it and takes the full
 four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
 `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
-application menu with its icon at once, without logging out.
+application menu with its icon at once, without logging out. It also installs a second, hidden
+desktop file for debug builds (described below).
 
 To update, run the same four commands again; pacman replaces the installed version.
 
@@ -148,6 +149,13 @@ id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links 
 window rules for the one never catch the other. But both read the same `config.toml` and write the
 same `state.toml` and log: whichever saves last decides the window size, columns and filter the next
 start remembers.
+
+KDE and GNOME take a window's icon from the desktop file named after its app id, so the package also
+installs `io.github.lexy898.FourByFour.Devel.desktop`, which gives the windows of `just run` the
+same icon in the title bar and the task manager. It is hidden from the menu and search, opens no
+files or links, and starting it, as the task manager's "Start New Instance" does, raises the
+running debug window instead of opening another. Until the package is installed, debug windows show
+the desktop's generic icon.
 
 The icon, a rose under a resin dome, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
 installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small

@@ -827,12 +827,12 @@ mod tests {
         assert_eq!(DEVEL_APP_ID, format!("{APP_ID}.Devel"));
     }
 
-    /// The keys of the `[Desktop Entry]` group of the desktop file named after the app id, with
-    /// their values, in the file's order.
-    fn desktop_entry() -> Vec<(String, String)> {
+    /// The keys of the `[Desktop Entry]` group of the desktop file named after `id`, with their
+    /// values, in the file's order.
+    fn desktop_entry(id: &str) -> Vec<(String, String)> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../packaging/linux")
-            .join(format!("{APP_ID}.desktop"));
+            .join(format!("{id}.desktop"));
         let text = fs::read_to_string(&path).expect("the desktop file is named after the app id");
         let mut lines = text.lines();
         assert_eq!(lines.next(), Some("[Desktop Entry]"), "one group, first");
@@ -846,18 +846,21 @@ mod tests {
             .collect()
     }
 
+    /// The value of `key` in a desktop entry, which may give each key once.
+    fn entry_value<'a>(entry: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        let values: Vec<&str> = entry
+            .iter()
+            .filter(|(found, _)| found == key)
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert!(values.len() <= 1, "{key} once");
+        values.first().copied()
+    }
+
     #[test]
     fn the_desktop_file_names_the_app_id_exec_and_mime_types() {
-        let entry = desktop_entry();
-        let value = |key: &str| {
-            let values: Vec<&str> = entry
-                .iter()
-                .filter(|(found, _)| found == key)
-                .map(|(_, value)| value.as_str())
-                .collect();
-            assert!(values.len() <= 1, "{key} once");
-            values.first().copied()
-        };
+        let entry = desktop_entry(APP_ID);
+        let value = |key: &str| entry_value(&entry, key);
 
         assert_eq!(value("Type"), Some("Application"));
         assert_eq!(value("Name"), Some(PRODUCT_NAME));
@@ -888,5 +891,36 @@ mod tests {
             entry.iter().all(|(key, _)| !key.contains('[')),
             "no translations yet"
         );
+    }
+
+    /// KDE and GNOME find a window's icon through the desktop file named after its app id, so the
+    /// windows of `just run` need one of their own. It lends them the installed icon and nothing
+    /// else: hidden from menus and search, never a handler of files or links, and a new start
+    /// from it hands over to the running debug build, as a second launch of 4x4 does.
+    #[test]
+    fn the_debug_builds_desktop_file_lends_its_windows_the_icon_only() {
+        let entry = desktop_entry(DEVEL_APP_ID);
+        let value = |key: &str| entry_value(&entry, key);
+
+        assert_eq!(value("Type"), Some("Application"));
+        assert!(
+            value("Name")
+                .is_some_and(|name| name.starts_with(PRODUCT_NAME) && name != PRODUCT_NAME),
+            "told apart from 4x4: {:?}",
+            value("Name")
+        );
+        assert_eq!(value("Icon"), Some(APP_ID), "the icon the package installs");
+        assert_eq!(value("StartupWMClass"), Some(DEVEL_APP_ID));
+        assert_eq!(value("NoDisplay"), Some("true"), "never in menus or search");
+        assert_eq!(value("MimeType"), None, "never opens files or links");
+        assert_eq!(
+            value("Exec"),
+            Some(format!("env {DEVEL_ENV}=1 4x4 %U").as_str()),
+            "the development id, so a new start hands over to the debug build"
+        );
+        assert_eq!(value("TryExec"), Some("4x4"));
+        assert_eq!(value("Terminal"), Some("false"));
+        assert_eq!(value("SingleMainWindow"), Some("true"));
+        assert_eq!(value("DBusActivatable"), None, "launched by Exec only");
     }
 }
