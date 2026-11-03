@@ -23,9 +23,8 @@ desktop's file dialog or dropped on the window, and from magnet links on the cli
 that picks the folder on the server (with its free space and the folders used lately), the files to
 download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
 file or a link, hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built
-from this checkout and shows in the application menu with its icon, a placeholder until the real
-one is drawn; one command makes it the default app for `.torrent` files and magnet links, and
-undoes that again (see [Install](#install)).
+from this checkout and shows in the application menu with its icon; one command makes it the
+default app for `.torrent` files and magnet links, and undoes that again (see [Install](#install)).
 
 ## What it will do
 
@@ -140,8 +139,8 @@ window rules for the one never catch the other. But both read the same `config.t
 same `state.toml` and log: whichever saves last decides the window size, columns and filter the next
 start remembers.
 
-The icon, `packaging/linux/io.github.lexy898.FourByFour.svg`, is a placeholder for now. It is one
-SVG, installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small
+The icon, a rose under a resin dome, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
+installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small
 sizes would be installed under the same name into `16x16/apps`, `22x22/apps`, `24x24/apps` and
 `32x32/apps` of `hicolor` too, four more `install` lines in the PKGBUILD's `package()`; KDE takes
 the icon of a fixed size when one matches the size it draws, and the scalable one for every other.

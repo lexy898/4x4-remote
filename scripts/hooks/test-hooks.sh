@@ -1615,8 +1615,9 @@ need_python3() {
 }
 
 # What makes <file> unfit as the app icon, one problem per line: it is not XML, its root is not an
-# SVG <svg>, its viewBox is missing or not square, or it has a <text> (whose font differs from
-# desktop to desktop), an <image> or a link to anything outside the file.
+# SVG <svg>, its viewBox is missing or not square, or it has an element the icon loaders of the
+# desktops do not all draw alike or at all (<text>, whose font differs from desktop to desktop,
+# <image>, <script>, <style>, <foreignObject>), a link or a url() to anything outside the file.
 svg_icon_problems() { # <file>
     python3 -I - "$1" <<'EOF'
 import re
@@ -1625,6 +1626,8 @@ import xml.etree.ElementTree as ET
 
 SVG = "{http://www.w3.org/2000/svg}"
 LINKS = ("href", "{http://www.w3.org/1999/xlink}href")
+FORBIDDEN = ("text", "image", "script", "style", "foreignObject")
+URL = re.compile(r"""url\(\s*['"]?([^'")\s]*)""", re.IGNORECASE)
 
 try:
     root = ET.parse(sys.argv[1]).getroot()
@@ -1640,31 +1643,38 @@ except ValueError:
 if len(box) != 4 or box[2] <= 0 or box[2] != box[3]:
     print(f"the viewBox is not square: {root.get('viewBox')!r}")
 for element in root.iter():
-    name = element.tag.removeprefix(SVG)
-    if name in ("text", "image"):
+    # In any namespace: an XHTML <script> runs as well as an SVG one.
+    name = element.tag.rsplit("}", 1)[-1]
+    if name in FORBIDDEN:
         print(f"a <{name}> element")
     for attribute in LINKS:
         link = element.get(attribute)
         if link is not None and not link.startswith("#"):
             print(f"a link outside the file: {link}")
+    for value in element.attrib.values():
+        for target in URL.findall(value):
+            if not target.startswith("#"):
+                print(f"a url() outside the file: {target}")
 EOF
 }
 
-test_icon_is_a_square_svg_without_text_images_or_links() {
+test_icon_is_a_plain_square_svg() {
     local problems
     need_python3
     problems=$(svg_icon_problems "$icon")
     [[ -z $problems ]] || fail "$icon: $problems"
 }
 
-# The icon check itself catches each kind of unfit SVG, and passes a fit one with a link inside it.
+# The icon check itself catches each kind of unfit SVG, and passes a fit one with a title, a
+# gradient and links inside the file.
 test_icon_check_catches_what_does_not_belong_in_an_icon() {
     local dir svg name problem problems
     need_python3
     dir=$(mktemp -d "$tmp_root/icon.XXXXXX")
     svg='<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'
-    printf '%s viewBox="0 0 16 16"><rect id="a" width="16" height="16"/><use href="#a"/></svg>\n' \
-        "$svg" >"$dir/fit.svg"
+    printf '%s viewBox="0 0 16 16"><title>4x4</title><defs><linearGradient id="g"/></defs>%s</svg>\n' \
+        "$svg" '<rect id="a" width="16" height="16" fill="url(#g)"/><use href="#a" stroke="url( '"'#g'"' )"/>' \
+        >"$dir/fit.svg"
     printf '%s viewBox="0 0 16 16"><rect' "$svg" >"$dir/broken.svg"
     printf '<svg viewBox="0 0 16 16"/>\n' >"$dir/no-namespace.svg"
     printf '%s viewBox="0 0 16 8"/>\n' "$svg" >"$dir/wide.svg"
@@ -1674,6 +1684,13 @@ test_icon_check_catches_what_does_not_belong_in_an_icon() {
     printf '%s viewBox="0 0 16 16"><use href="other.svg#a"/></svg>\n' "$svg" >"$dir/link.svg"
     printf '%s viewBox="0 0 16 16"><use xlink:href="https://example.invalid/a.svg#a"/></svg>\n' \
         "$svg" >"$dir/xlink.svg"
+    printf '%s viewBox="0 0 16 16"><script>alert(1)</script></svg>\n' "$svg" >"$dir/script.svg"
+    printf '%s viewBox="0 0 16 16"><style>rect { fill: red }</style></svg>\n' "$svg" >"$dir/style.svg"
+    printf '%s viewBox="0 0 16 16"><foreignObject width="16" height="16"/></svg>\n' "$svg" \
+        >"$dir/foreign-object.svg"
+    printf '%s viewBox="0 0 16 16"><rect fill="url(other.svg#g)"/></svg>\n' "$svg" >"$dir/url.svg"
+    printf '%s viewBox="0 0 16 16"><rect style="fill: URL('"'https://example.invalid/g'"')"/></svg>\n' \
+        "$svg" >"$dir/style-url.svg"
     problems=$(svg_icon_problems "$dir/fit.svg")
     [[ -z $problems ]] || fail "the check rejected a fit icon: $problems"
     while read -r name problem; do
@@ -1688,6 +1705,11 @@ text a <text> element
 image a <image> element
 link a link outside the file: other.svg#a
 xlink a link outside the file: https://example.invalid/a.svg#a
+script a <script> element
+style a <style> element
+foreign-object a <foreignObject> element
+url a url() outside the file: other.svg#g
+style-url a url() outside the file: https://example.invalid/g
 EOF
 }
 
@@ -2198,7 +2220,7 @@ cases=(
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
     package_recipe_starts_over_from_a_source_mirror_of_another_checkout
-    icon_is_a_square_svg_without_text_images_or_links
+    icon_is_a_plain_square_svg
     icon_check_catches_what_does_not_belong_in_an_icon
     default_handler_makes_4x4_the_default_for_torrents_and_magnet_links
     default_handler_works_without_a_mimeapps_list
