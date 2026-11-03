@@ -152,10 +152,10 @@ start remembers.
 
 KDE and GNOME take a window's icon from the desktop file named after its app id, so the package also
 installs `io.github.lexy898.FourByFour.Devel.desktop`, which gives the windows of `just run` the
-same icon in the title bar and the task manager. It is hidden from the menu and search, opens no
-files or links, and starting it, as the task manager's "Start New Instance" does, raises the
-running debug window instead of opening another. Until the package is installed, debug windows show
-the desktop's generic icon.
+same icon in the title bar and the task manager. It is hidden from the menu and search and opens
+no files or links. Its command runs the installed 4x4 under the development id (`X4_DEVEL=1`), which
+hands over to a running debug build, as a second start of 4x4 does, or opens a window of its own
+when none runs. Until the package is installed, debug windows show the desktop's generic icon.
 
 The icon, a rose under a resin dome, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
 installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small

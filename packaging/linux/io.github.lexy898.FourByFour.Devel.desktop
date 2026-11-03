@@ -1,8 +1,8 @@
 [Desktop Entry]
 # Gives the windows of debug builds (`just run`, app id io.github.lexy898.FourByFour.Devel) the
 # installed icon: KDE and GNOME find a window's icon through the desktop file named after its app
-# id. Hidden from menus and search and never a handler; a new start from it hands over to the
-# running debug build.
+# id. Hidden from menus and search and never a handler; its command runs the installed 4x4 under
+# the development id, which hands over to a running debug build.
 Type=Application
 Name=4x4 (debug build)
 Comment=A development run of 4x4 from its source checkout

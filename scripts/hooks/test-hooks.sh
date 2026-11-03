@@ -2491,8 +2491,10 @@ test_default_handler_reports_a_choice_that_another_list_overrides() {
 }
 
 # Sets the desktop's PATH to links to the programs of the caller's PATH, the first of each name as
-# a lookup finds it, but none named 4x4: the 4x4 package may be installed where the cases run.
+# a lookup finds it, but none named 4x4: the 4x4 package may be installed where the cases run, in
+# /usr/bin beside sh, python3 and the tools xdg-mime calls, so that dir cannot simply be left out.
 hide_installed_4x4() {
+    local i
     python3 -I - "$desktop/system-bin" <<'EOF'
 import os
 import sys
@@ -2512,7 +2514,11 @@ for directory in os.environ["PATH"].split(":"):
         if os.path.isfile(program) and os.access(program, os.X_OK):
             os.symlink(program, link)
 EOF
-    desktop_env[2]="PATH=$desktop/bin:$desktop/system-bin"
+    for i in "${!desktop_env[@]}"; do
+        if [[ ${desktop_env[i]} == PATH=* ]]; then
+            desktop_env[i]="PATH=$desktop/bin:$desktop/system-bin"
+        fi
+    done
 }
 
 # The 4x4 executable is missing from PATH: xdg-mime ignores the desktop file then.
