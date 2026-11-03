@@ -181,7 +181,8 @@ done
 first_frame_ms=$(sed -n 's/.*first frame rendered.*elapsed_ms=\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
 [[ -n $first_frame_ms ]] || fail "the app did not log 'first frame rendered' within ${settle_seconds} s"
 
-binary_bytes=$(stat -c %s "$binary")
+# -L: a symlink (such as one to the installed binary) reports the size of its target, not its own.
+binary_bytes=$(stat -L -c %s "$binary")
 
 report_line "$first_frame_ms" "$snapshot/smaps_rollup" "$snapshot/status" "$snapshot/maps" "$binary_bytes" ||
     fail "could not read the memory figures of pid $app_pid"

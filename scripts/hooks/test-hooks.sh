@@ -1089,6 +1089,19 @@ test_measure_measures_the_given_binary_and_builds_nothing() {
     [[ ! -e $dir/args-4x4.txt && ! -e $dir/args-x4-synthetic.txt ]] || fail "a binary of the build ran"
 }
 
+# /usr/bin/4x4 or a build's output may be a symlink; the size reported is the file's, not the link's.
+test_measure_reports_the_size_of_the_file_a_binary_symlink_points_to() {
+    local dir
+    dir=$(new_measure_env)
+    mkdir "$dir/real"
+    write_measured_stand_in "$dir/real/4x4" "$dir" installed
+    truncate -s 3145728 "$dir/real/4x4"
+    ln -s real/4x4 "$dir/link"
+    run_measure_script "$dir" --binary "$dir/link"
+    expect_status 0
+    [[ $stdout =~ \ binary_mib=3\.0$ ]] || fail "expected the size of the file behind the link, got: $stdout"
+}
+
 # A relative --binary names a file from the caller's directory, as TMPDIR does, not from the
 # repository the script changes into.
 test_measure_takes_a_relative_binary_from_the_callers_directory() {
@@ -2542,6 +2555,7 @@ cases=(
     measure_gives_the_app_an_absolute_state_dir_under_a_relative_tmpdir
     measure_rejects_unknown_options
     measure_measures_the_given_binary_and_builds_nothing
+    measure_reports_the_size_of_the_file_a_binary_symlink_points_to
     measure_takes_a_relative_binary_from_the_callers_directory
     measure_refuses_a_binary_it_cannot_run
     measure_refuses_a_binary_with_the_synthetic_demo
