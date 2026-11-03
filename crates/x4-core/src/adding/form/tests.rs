@@ -582,6 +582,60 @@ fn a_magnet_form_never_sends_unwanted_files() {
     assert_eq!(ready(&torrent_form).source, AddSource::Metainfo(content()));
 }
 
+/// The form of a `.torrent` read from `path`, named `name`, with one file of 5 bytes.
+fn named_form(path: &str, name: &str) -> AddForm {
+    let item = LoadedItem::Torrent(LoadedTorrent {
+        path: PathBuf::from(path),
+        parsed: ParsedTorrent {
+            name: name.to_owned(),
+            hash: hash(),
+            total_size: None,
+            files: None,
+        },
+        bytes: content(),
+        tree: Err(NoChoiceReason::Ambiguous),
+    });
+    AddForm::new(item, DEFAULT_DIR.to_owned(), true)
+}
+
+#[test]
+fn the_form_names_its_torrent_with_its_size_and_hash() {
+    let form = form_of(&[("T/a", 10), ("T/b", 20)]);
+    assert_eq!(form.display_name().as_deref(), Some("T"));
+    assert_eq!(form.total_size(), Some(30));
+    assert_eq!(form.hash(), Some(&hash()));
+
+    // A `.torrent` without a name of its own goes by its file's, and without that by its hash.
+    let unnamed = named_form(PATH, "");
+    assert_eq!(unnamed.display_name().as_deref(), Some("t.torrent"));
+    assert_eq!(unnamed.total_size(), None, "the parse could not tell");
+    let nameless = named_form("/", "");
+    assert_eq!(nameless.display_name().as_deref(), Some(hash().as_str()));
+
+    // A magnet link by its display name, or its hash; its size is not known before it is added.
+    let magnet = magnet_form(Some(link()));
+    assert_eq!(magnet.display_name().as_deref(), Some("Film"));
+    assert_eq!(magnet.total_size(), None);
+    assert_eq!(magnet.hash(), Some(link().hash()));
+    let bare = MagnetLink::parse(&format!("magnet:?xt=urn:btih:{}", "ef".repeat(20))).unwrap();
+    let unnamed_magnet = magnet_form(Some(bare.clone()));
+    assert_eq!(
+        unnamed_magnet.display_name().as_deref(),
+        Some(bare.hash().as_str())
+    );
+
+    // The link as it is typed: nothing while it is not valid.
+    let mut typed = magnet_form(None);
+    assert_eq!(typed.display_name(), None);
+    assert_eq!(typed.hash(), None);
+    typed.set_link(link().as_str());
+    assert_eq!(typed.display_name().as_deref(), Some("Film"));
+    assert_eq!(typed.hash(), Some(link().hash()));
+    typed.set_link("magnet:?dn=Film");
+    assert_eq!(typed.display_name(), None);
+    assert_eq!(typed.hash(), None);
+}
+
 #[test]
 fn the_tree_can_be_kept_while_the_form_changes() {
     let mut form = form_of(&[("T/a", 1), ("T/b", 1)]);

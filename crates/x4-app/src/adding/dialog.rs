@@ -29,6 +29,7 @@
 //! passes them on to the record of the key held. The repeats of a held key press none of its
 //! buttons.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -85,20 +86,12 @@ pub(crate) struct Outgoing {
     pub(crate) name: String,
 }
 
-/// The torrent the dialog shows: the form and what is shown of it besides.
+/// The torrent the dialog shows: the item of the queue and its form.
 pub(super) struct Shown {
     /// The item of the queue it is.
     item: AddItem,
-    /// The form, which decides what Add sends.
+    /// The form, which decides what Add sends and what the torrent is called.
     pub(super) form: AddForm,
-    /// The total size of a `.torrent`'s files, when it is known.
-    total_size: Option<u64>,
-    /// The info hash of a `.torrent`.
-    hash: Option<HashString>,
-    /// The link of a magnet form as it is typed, while it is valid.
-    link: Option<MagnetLink>,
-    /// The name of the `.torrent` file, for a torrent without a name of its own.
-    file_name: Option<String>,
 }
 
 /// The content of the add dialog.
@@ -205,34 +198,15 @@ impl AddDialog {
         cx: &mut Context<'_, Self>,
     ) {
         let folder = self.folder.input.read(cx).value().to_string();
-        let (total_size, hash, link, file_name) = match &loaded {
-            LoadedItem::Torrent(torrent) => (
-                torrent.parsed().total_size,
-                Some(torrent.parsed().hash.clone()),
-                None,
-                torrent
-                    .path()
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned()),
-            ),
-            LoadedItem::Magnet(link) => {
-                let text = link.as_ref().map_or("", MagnetLink::as_str).to_owned();
-                self.link
-                    .update(cx, |input, cx| input.set_value(text, window, cx));
-                (None, None, link.clone(), None)
-            }
-        };
+        if let LoadedItem::Magnet(link) = &loaded {
+            let text = link.as_ref().map_or("", MagnetLink::as_str).to_owned();
+            self.link
+                .update(cx, |input, cx| input.set_value(text, window, cx));
+        }
         let form = AddForm::new(loaded, folder, self.start());
-        let link_wanted = form.is_magnet() && link.is_none();
+        let link_wanted = form.is_magnet() && form.hash().is_none();
         self.files.show(form.tree());
-        self.shown = Some(Shown {
-            item,
-            form,
-            total_size,
-            hash,
-            link,
-            file_name,
-        });
+        self.shown = Some(Shown { item, form });
         self.position = position;
         self.waiting = None;
         self.recheck();
@@ -385,7 +359,6 @@ impl AddDialog {
         let text = self.link.read(cx).value().to_string();
         if let Some(shown) = &mut self.shown {
             shown.form.set_link(&text);
-            shown.link = MagnetLink::parse(&text).ok();
         }
         self.recheck();
         cx.notify();
@@ -421,41 +394,21 @@ impl AddDialog {
             tracing::debug!("the form cannot be sent now; nothing sent");
             return;
         };
-        let Some(hash) = self.hash() else {
+        let Some(form) = self.shown.as_ref().map(|shown| &shown.form) else {
+            return;
+        };
+        let Some(hash) = form.hash().cloned() else {
             tracing::error!("a form ready to send has no info hash; nothing sent");
             return;
         };
-        let name = self.name().unwrap_or_else(|| hash.as_str().to_owned());
+        let name = form
+            .display_name()
+            .map_or_else(|| hash.as_str().to_owned(), Cow::into_owned);
         cx.emit(AddDialogEvent::Add(Outgoing {
             add: add.clone(),
             hash,
             name,
         }));
-    }
-
-    /// The info hash of the torrent shown: the `.torrent`'s, or the link's as it is typed.
-    fn hash(&self) -> Option<HashString> {
-        let shown = self.shown.as_ref()?;
-        shown
-            .hash
-            .clone()
-            .or_else(|| shown.link.as_ref().map(|link| link.hash().clone()))
-    }
-
-    /// The torrent's name: its own, the `.torrent` file's, or a magnet link's hash.
-    fn name(&self) -> Option<String> {
-        let shown = self.shown.as_ref()?;
-        shown
-            .form
-            .name()
-            .map(str::to_owned)
-            .or_else(|| shown.file_name.clone())
-            .or_else(|| {
-                shown
-                    .link
-                    .as_ref()
-                    .map(|link| link.hash().as_str().to_owned())
-            })
     }
 
     /// The line of the torrent's name and size, or that its file is being read.
@@ -469,8 +422,14 @@ impl AddDialog {
                     .test_support(),
             );
         };
-        let name = self.name().map(SharedString::from);
-        let size = shown.total_size.map(|size| size_text(human_size(size)));
+        let name = shown
+            .form
+            .display_name()
+            .map(|name| SharedString::from(name.into_owned()));
+        let size = shown
+            .form
+            .total_size()
+            .map(|size| size_text(human_size(size)));
         h_flex()
             .gap_3()
             .items_baseline()

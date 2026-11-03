@@ -1,5 +1,6 @@
 //! The form of the add dialog for one torrent or magnet link, and the check that gates Add.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -175,6 +176,8 @@ enum Source {
         path: PathBuf,
         name: String,
         hash: HashString,
+        /// The size of all files; `None` when the parse could not tell.
+        total_size: Option<u64>,
         bytes: Arc<[u8]>,
         /// Or why the torrent can be added only with all its files.
         choice: Result<FileChoice, NoChoiceReason>,
@@ -207,6 +210,7 @@ impl AddForm {
                     (Err(reason), _) => Err(reason),
                 },
                 hash: parsed.hash,
+                total_size: parsed.total_size,
                 bytes,
             },
             LoadedItem::Magnet(link) => Source::Magnet(link.ok_or(MagnetError::Empty)),
@@ -278,6 +282,40 @@ impl AddForm {
         match &self.source {
             Source::Torrent { name, .. } => Some(name.as_str()).filter(|name| !name.is_empty()),
             Source::Magnet(link) => link.as_ref().ok().and_then(MagnetLink::name),
+        }
+    }
+
+    /// What the dialog calls the torrent: its [`name`](Self::name), or else the name of the
+    /// `.torrent` file it was read from, or else its info hash, as the daemon shows a magnet link
+    /// without a name. `None` only for a link that is not valid, as it is typed.
+    #[must_use]
+    pub fn display_name(&self) -> Option<Cow<'_, str>> {
+        if let Some(name) = self.name() {
+            return Some(Cow::Borrowed(name));
+        }
+        if let Some(file) = self.path().and_then(Path::file_name) {
+            return Some(file.to_string_lossy());
+        }
+        self.hash().map(|hash| Cow::Borrowed(hash.as_str()))
+    }
+
+    /// The size of all the files of a `.torrent`; `None` for a magnet link, whose files come
+    /// with its metadata after it is added, and for a `.torrent` the parse could not tell.
+    #[must_use]
+    pub fn total_size(&self) -> Option<u64> {
+        match &self.source {
+            Source::Torrent { total_size, .. } => *total_size,
+            Source::Magnet(_) => None,
+        }
+    }
+
+    /// The info hash the daemon will know the torrent by: the `.torrent`'s, or the magnet link's
+    /// as it is typed. `None` while the link is not valid.
+    #[must_use]
+    pub fn hash(&self) -> Option<&HashString> {
+        match &self.source {
+            Source::Torrent { hash, .. } => Some(hash),
+            Source::Magnet(link) => link.as_ref().ok().map(MagnetLink::hash),
         }
     }
 
