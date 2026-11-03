@@ -206,11 +206,18 @@ struct Window {
 impl Window {
     /// Opens the window, active, with animations off and the state `ui`, and lets it listen for
     /// add requests. The daemon is connected, with the session and no torrents.
+    fn open_with(ui: &UiState, cx: &mut TestAppContext) -> Self {
+        let window = Self::open_unlisted(ui, cx);
+        window.send(Vec::new(), cx);
+        window
+    }
+
+    /// [`Window::open_with`], before the service has sent anything: no session, no list.
     #[expect(
         clippy::expect_used,
         reason = "a test helper: a window that does not open fails the test"
     )]
-    fn open_with(ui: &UiState, cx: &mut TestAppContext) -> Self {
+    fn open_unlisted(ui: &UiState, cx: &mut TestAppContext) -> Self {
         let (events, events_rx) = async_channel::unbounded();
         let (commands_tx, commands) = crossbeam_channel::unbounded();
         let (adds, adds_rx) = async_channel::unbounded();
@@ -227,16 +234,14 @@ impl Window {
         })
         .expect("the window is open");
         cx.run_until_parked();
-        let window = Self {
+        Self {
             handle,
             view,
             events,
             commands,
             adds,
             dir: tempfile::tempdir().expect("a directory for the test's files"),
-        };
-        window.send(Vec::new(), cx);
-        window
+        }
     }
 
     fn open(cx: &mut TestAppContext) -> Self {
@@ -267,12 +272,24 @@ impl Window {
         connection: ConnectionState,
         cx: &mut TestAppContext,
     ) {
+        self.send_session(torrents, connection, session(), cx);
+    }
+
+    /// Sends a snapshot of `torrents` with the connection in `connection` and the session
+    /// `session`.
+    fn send_session(
+        &self,
+        torrents: Vec<Torrent>,
+        connection: ConnectionState,
+        session: SessionSummary,
+        cx: &mut TestAppContext,
+    ) {
         let stale = connection != ConnectionState::Connected;
         self.send_event(
             Event::Snapshot(Arc::new(Snapshot {
                 torrents,
                 listed: true,
-                session: Some(session()),
+                session: Some(session),
                 free_space_bytes: Some(SESSION_FREE),
                 rate_down: 0,
                 rate_up: 0,
@@ -1355,4 +1372,93 @@ fn the_dialog_keeps_the_focus_held_key_from_the_table(cx: &mut TestAppContext) {
         window.act(cx, |window, _| focus.is_focused(window)),
         "the table has it back"
     );
+}
+
+#[gpui_kit::test]
+fn a_held_enter_adds_once_even_after_the_answer(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let first = window.file("first.torrent", &folder_torrent("First", &[(&["a"], MIB)]));
+    let second = window.file(
+        "second.torrent",
+        &folder_torrent("Second", &[(&["b"], MIB)]),
+    );
+    window.request_files(&[&first, &second], cx);
+
+    // A failure keeps the form, and the focus in the field: the repeats add nothing.
+    window.click(FOLDER, cx);
+    window.key_down("enter", false, cx);
+    let (id, _) = window.sent_add();
+    window.finish(id, Err(AddError::Failed(ConnectionError::Timeout)), cx);
+    window.key_down("enter", true, cx);
+    window.key_down("enter", true, cx);
+    assert_eq!(window.sent_adds(), [], "the key is still held");
+    window.key_up("enter", cx);
+
+    // An add answered while the key is held moves on, and the repeats do not add the next one.
+    window.key_down("enter", false, cx);
+    let (id, _) = window.sent_add();
+    window.finish(
+        id,
+        Ok(added(
+            &hash_of(&folder_torrent("First", &[(&["a"], MIB)])),
+            "First",
+            false,
+        )),
+        cx,
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Second"));
+    window.key_down("enter", true, cx);
+    window.key_down("enter", true, cx);
+    assert_eq!(window.sent_adds(), []);
+    window.key_up("enter", cx);
+    assert!(window.dialog_open(cx));
+}
+
+#[gpui_kit::test]
+fn a_dialog_opened_before_the_session_takes_its_defaults_later(cx: &mut TestAppContext) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    window.request_torrent("show.torrent", &show(), cx);
+
+    assert!(window.dialog_open(cx));
+    assert_eq!(window.value(FOLDER, cx).as_deref(), Some(""));
+    assert!(window.disabled(CONFIRM, cx));
+    assert_eq!(
+        window.label(REASON, cx).as_deref(),
+        Some("Not connected to the server")
+    );
+
+    let paused = SessionSummary {
+        start_added_torrents: false,
+        ..session()
+    };
+    window.send_session(Vec::new(), ConnectionState::Connected, paused.clone(), cx);
+    assert_eq!(window.value(FOLDER, cx).as_deref(), Some(SESSION_DIR));
+    assert_eq!(
+        window.checked(START, cx),
+        Some(false),
+        "as the session starts them"
+    );
+    assert_eq!(
+        window.label(FREE_SPACE, cx).as_deref(),
+        Some("800 GiB free")
+    );
+    assert!(!window.disabled(CONFIRM, cx));
+    window.click(CONFIRM, cx);
+    let add = window.sent_add().1;
+    assert!(add.paused);
+    assert_eq!(add.download_dir, None);
+}
+
+#[gpui_kit::test]
+fn a_folder_typed_before_the_session_is_kept(cx: &mut TestAppContext) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    window.request_torrent("show.torrent", &show(), cx);
+    window.retype(FOLDER, "/data/mine", cx);
+
+    window.send(Vec::new(), cx);
+
+    assert_eq!(window.value(FOLDER, cx).as_deref(), Some("/data/mine"));
+    assert_eq!(window.checked(START, cx), Some(true));
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.download_dir, Some(dir("/data/mine")));
 }
