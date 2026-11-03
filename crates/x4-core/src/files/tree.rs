@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn the_budget_counts_every_node_with_its_key_and_name_and_list() {
+    fn the_budget_counts_every_node_with_its_key_and_name_and_list_and_the_path_walked() {
         assert_eq!(TREE_BUDGET, 32 * 1024 * 1024);
         let files = details(
             &hash(),
@@ -349,8 +349,10 @@ mod tests {
         // Six nodes, two of them folders; the padding file makes none. Their keys: "T" (1 byte),
         // "T/a" (3), "T/b" (3), "T/s" and "T/s/c" (3 and 5), and last the repeat of "T/a", whose
         // key is "T/a\01" (5, more than its path): 20 bytes. Their names: 6 bytes. Their lists of
-        // files: five indices in that of "T", the padding file's last, and one in each other.
-        let cost = 6 * NODE_COST + 2 * FOLDER_COST + 20 + 6 + list_bytes(5) + 5 * list_bytes(1);
+        // files: five indices in that of "T", the padding file's last, and one in each other. The
+        // path walked, one buffer for all files: room for 1 byte, then 3 for "T/a", then 6 for
+        // "T/s/c", twice the 3 it had.
+        let cost = 6 * NODE_COST + 2 * FOLDER_COST + 20 + 6 + list_bytes(5) + 5 * list_bytes(1) + 6;
 
         let within = FileTree::of_files_within(hash(), &files, cost);
         assert!(!within.is_too_large());
@@ -378,9 +380,10 @@ mod tests {
     #[test]
     fn a_path_is_refused_for_its_count_of_folders_only_when_they_cannot_fit() {
         let files = details(&hash(), &[("T/a", 1, 0, true, Normal)]).files;
-        // A folder and a file: their nodes, the keys "T" and "T/a", the names, and a list of one
-        // index each. The budget holds one folder's cost and no more, and so does the path.
-        let cost = 2 * NODE_COST + FOLDER_COST + 4 + 2 + 2 * list_bytes(1);
+        // A folder and a file: their nodes, the keys "T" and "T/a", the names, a list of one
+        // index each, and the 3 bytes of the path walked. The budget holds one folder's cost and
+        // no more, and so does the path.
+        let cost = 2 * NODE_COST + FOLDER_COST + 4 + 2 + 2 * list_bytes(1) + 3;
         assert_eq!(cost / (NODE_COST + FOLDER_COST), 1);
 
         assert!(!FileTree::of_files_within(hash(), &files, cost).is_too_large());

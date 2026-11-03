@@ -64,12 +64,13 @@ impl Node {
 /// padding files never exists. The parent of a node always has a smaller index than the node.
 ///
 /// The tree may take `budget` bytes, as the builder counts them: [`NODE_COST`] and the bytes of
-/// the key and the name for each node, [`FOLDER_COST`] more for a folder, and [`INDEX_COST`] for
-/// each index a list of files has room for. Each key is its node's whole path, so a deep path costs the
-/// square of its depth: 20 000 folders one in the other, 40 KB of names, would take some 400 MiB.
-/// Each file is in the list of every folder above it, so 40 000 files 180 folders deep would take
-/// 60 MiB of lists. Once the next cost would pass the budget, the builder adds nothing more and
-/// [`finish`](Self::finish) gives a tree that is too large to show.
+/// the key and the name for each node, [`FOLDER_COST`] more for a folder, [`INDEX_COST`] for
+/// each index a list of files has room for, and the room of the path being walked. Each key is
+/// its node's whole path, so a deep path costs the square of its depth: 20 000 folders one in the
+/// other, 40 KB of names, would take some 400 MiB. Each file is in the list of every folder above
+/// it, so 40 000 files 180 folders deep would take 60 MiB of lists. Once the next cost would pass
+/// the budget, the builder adds nothing more and [`finish`](Self::finish) gives a tree that is too
+/// large to show.
 pub(super) struct Builder<'a> {
     nodes: Vec<Node>,
     top: Vec<usize>,
@@ -78,6 +79,9 @@ pub(super) struct Builder<'a> {
     by_key: HashMap<NodeKey, usize>,
     /// For each path that was taken, the suffix its next copy tries first.
     suffixes: HashMap<NodeKey, usize>,
+    /// The path of the folder or file being made, one buffer for every file. Its room is counted,
+    /// once: it grows to the longest path.
+    path: String,
     /// The bytes counted so far. A node and `by_key` share the bytes of its key.
     spent: usize,
     budget: usize,
@@ -94,6 +98,7 @@ impl<'a> Builder<'a> {
             folders: HashMap::new(),
             by_key: HashMap::new(),
             suffixes: HashMap::new(),
+            path: String::new(),
             spent: 0,
             budget,
             over_budget: false,
@@ -119,26 +124,35 @@ impl<'a> Builder<'a> {
             self.over_budget = true;
             return;
         }
+        let mut path = std::mem::take(&mut self.path);
+        path.clear();
+        self.add_file_at(entry, &mut path);
+        self.path = path;
+    }
+
+    /// [`add_file`](Self::add_file), with `path`, empty, as the buffer of the path walked.
+    fn add_file_at(&mut self, entry: &'a FileEntry, path: &mut String) {
         let mut rest = parts(&entry.name).peekable();
         let mut parent = None;
-        let mut path = String::new();
         let mut name = "";
         while let Some(part) = rest.next() {
-            push_component(&mut path, part);
+            if !self.push_component(path, part) {
+                return;
+            }
             if rest.peek().is_none() {
                 name = part;
                 break;
             }
             let folder = match self.folders.get(&(parent, part)) {
                 Some(&folder) => folder,
-                None => match self.add_node(parent, part, &path, true) {
+                None => match self.add_node(parent, part, path, true) {
                     Some(folder) => folder,
                     None => return,
                 },
             };
             parent = Some(folder);
         }
-        let Some(leaf) = self.add_node(parent, name, &path, false) else {
+        let Some(leaf) = self.add_node(parent, name, path, false) else {
             return;
         };
 
@@ -199,6 +213,32 @@ impl<'a> Builder<'a> {
             }
             parent = Some(folder);
         }
+    }
+
+    /// Appends `part` to `path`, with a `/` between them, and counts the room the path grows by
+    /// before it grows: `false`, with nothing appended, when that does not fit in the budget. The
+    /// room doubles, as a `String`'s does, so that a long path is not copied at every part.
+    fn push_component(&mut self, path: &mut String, part: &str) -> bool {
+        let separator = if path.is_empty() { "" } else { "/" };
+        let len = path
+            .len()
+            .saturating_add(separator.len())
+            .saturating_add(part.len());
+        let room = path.capacity();
+        if len > room {
+            let grown = len.max(room.saturating_mul(2));
+            if !self.charge(grown.saturating_sub(room)) {
+                return false;
+            }
+            path.reserve_exact(grown.saturating_sub(path.len()));
+            // In case the allocator gave more room than was asked for.
+            if !self.charge(path.capacity().saturating_sub(grown)) {
+                return false;
+            }
+        }
+        path.push_str(separator);
+        path.push_str(part);
+        true
     }
 
     /// Counts `cost` bytes; `false`, with nothing counted and the budget marked spent, when they
@@ -318,14 +358,6 @@ impl<'a> Builder<'a> {
             too_large: false,
         }
     }
-}
-
-/// Appends `part` to `path`, with a `/` between them.
-fn push_component(path: &mut String, part: &str) {
-    if !path.is_empty() {
-        path.push('/');
-    }
-    path.push_str(part);
 }
 
 /// Puts folders before files and each kind in the order of [`name_order`]; entries with the same
