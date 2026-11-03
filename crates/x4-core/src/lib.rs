@@ -28,8 +28,8 @@
 //! The details panel under the table is decided here as well. [`details_target`] says which
 //! torrent it is about (a [`DetailsTarget`]), and [`general_model`] gives the values of its
 //! General tab, with the [`TrackerSummary`] of [`tracker_summary`]. A [`FileTree`] turns the files
-//! of the [`TorrentDetails`] into folders and files with their sums (or into none, when they
-//! would take more than [`TREE_KEY_BUDGET`] to show); a [`FileTreeView`] keeps
+//! of the [`TorrentDetails`] into folders and files with their sums (or into none, for more than
+//! [`MAX_CHOOSABLE_FILES`] files or keys beyond [`TREE_KEY_BUDGET`]); a [`FileTreeView`] keeps
 //! which folders are open and where the cursor is and lists the [`FileRow`]s to draw; and
 //! [`FileTree::indices`] gives the files an action on a row reaches, as [`NonEmptyIndices`], which
 //! cannot be empty because the daemon reads an empty list as all files.
@@ -139,8 +139,8 @@ pub use engine::{
     Visibility,
 };
 pub use files::{
-    FileRow, FileTree, FileTreeView, NodeKey, NonEmptyIndices, PriorityView, RowKind,
-    TREE_KEY_BUDGET, WantedState, next_priority,
+    FileRow, FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, NonEmptyIndices, PriorityView,
+    RowKind, TREE_KEY_BUDGET, WantedState, next_priority,
 };
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{

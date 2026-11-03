@@ -20,6 +20,14 @@ use builder::Builder;
 /// 5000 files four folders deep, with long names, take well under 1 MiB.
 pub const TREE_KEY_BUDGET: usize = 16 * 1024 * 1024;
 
+/// The most files a [`FileTree`] is made for, padding files included: 50 000.
+///
+/// A tree takes some hundreds of bytes for each file, and is made again after each click in the
+/// add dialog, so a torrent of half a million tiny files would take hundreds of MiB. Beyond this
+/// the Files tab says the list is too large to show, and the add dialog adds the torrent with all
+/// its files, without a choice.
+pub const MAX_CHOOSABLE_FILES: usize = 50_000;
+
 /// The files of one torrent as folders and files: those of its details, or those of a `.torrent`
 /// about to be added.
 ///
@@ -90,9 +98,11 @@ impl FileTree {
     /// [`new`](Self::new), is made the same way. A file whose path is empty is shown, without a
     /// name, like any other.
     ///
-    /// A tree whose keys would take more than [`TREE_KEY_BUDGET`] bytes is not made: the tree
-    /// is empty, and [`is_too_large`](Self::is_too_large) says so. Making it stops as soon as the
-    /// budget is spent, so the time and memory stay bounded however deep the paths go.
+    /// A tree of more than [`MAX_CHOOSABLE_FILES`] files, or whose keys would take more than
+    /// [`TREE_KEY_BUDGET`] bytes, is not made: the tree is empty, and
+    /// [`is_too_large`](Self::is_too_large) says so. Too many files are refused before any work,
+    /// and making the tree stops as soon as the budget is spent, so the time and memory stay
+    /// bounded however many files there are and however deep their paths go.
     #[must_use]
     pub fn of_files(hash: HashString, files: &[FileEntry]) -> Self {
         Self::of_files_within(hash, files, TREE_KEY_BUDGET)
@@ -100,6 +110,9 @@ impl FileTree {
 
     /// [`of_files`](Self::of_files) with a budget of `budget` bytes for the keys.
     pub(crate) fn of_files_within(hash: HashString, files: &[FileEntry], budget: usize) -> Self {
+        if files.len() > MAX_CHOOSABLE_FILES {
+            return Self::too_large(hash);
+        }
         let mut builder = Builder::new(budget);
         let mut padding = Vec::new();
         for entry in files {
@@ -129,6 +142,17 @@ impl FileTree {
         builder.finish(hash)
     }
 
+    /// The empty tree of the torrent `hash` that says it is too large to show.
+    fn too_large(hash: HashString) -> Self {
+        Self {
+            hash,
+            nodes: Vec::new(),
+            top: Vec::new(),
+            by_key: HashMap::new(),
+            too_large: true,
+        }
+    }
+
     /// The torrent whose details the tree was made from.
     #[must_use]
     pub fn hash(&self) -> &HashString {
@@ -142,9 +166,10 @@ impl FileTree {
         self.top.is_empty()
     }
 
-    /// Whether the tree was not made because its keys would have taken more than
-    /// [`TREE_KEY_BUDGET`] bytes: its paths are nested very deeply, or there are a great many of
-    /// them. Such a tree is empty, and the Files tab says the list is too large to show.
+    /// Whether the tree was not made because it would be too large: it has more than
+    /// [`MAX_CHOOSABLE_FILES`] files, or its keys would have taken more than [`TREE_KEY_BUDGET`]
+    /// bytes, as for folders nested very deeply. Such a tree is empty, and the Files tab says the
+    /// list is too large to show.
     #[must_use]
     pub fn is_too_large(&self) -> bool {
         self.too_large

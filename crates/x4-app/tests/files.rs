@@ -1106,6 +1106,33 @@ fn a_file_list_too_large_to_show_says_so(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn more_than_50_000_files_are_too_large_to_show(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let big = downloading("big");
+    window.send(vec![big.clone()], cx);
+    window.click_row(0, cx);
+
+    let paths: Vec<String> = (0..=50_000).map(|n| format!("Big/{n}.bin")).collect();
+    let files: Vec<(&str, u64, u64, bool, FilePriority)> = paths
+        .iter()
+        .map(|path| (path.as_str(), KIB, 0, true, FilePriority::Normal))
+        .collect();
+    window.send_details(details(&big.hash, &files), cx);
+
+    assert_eq!(
+        window.label(TOO_LARGE, cx).as_deref(),
+        Some("This torrent's file list is too large to show")
+    );
+    assert!(!window.shown(FILE_LIST, cx));
+    assert!(window.shown(SEQUENTIAL, cx));
+
+    // 50 000 files are shown.
+    window.send_details(details(&big.hash, files.get(..50_000).unwrap()), cx);
+    assert!(!window.shown(TOO_LARGE, cx));
+    assert!(window.row_shown("Big", cx));
+}
+
+#[gpui_kit::test]
 fn the_playable_part_shows_for_wanted_incomplete_files(cx: &mut TestAppContext) {
     let (window, _) = window_with_show(cx);
     window.click_in_row("Show/Season 1", EXPANDER, cx);

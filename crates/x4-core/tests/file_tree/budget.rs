@@ -1,11 +1,14 @@
-//! A torrent whose file tree would take too much memory: every node is keyed by its whole path,
-//! so a deep path costs the square of its depth. The tree is not made beyond its budget; the Files
-//! tab says the list is too large instead. Real torrents stay far below it.
+//! A torrent whose file tree would take too much memory: more than 50 000 files, or keys beyond
+//! the budget (every node is keyed by its whole path, so a deep path costs the square of its
+//! depth). Such a tree is not made; the Files tab says the list is too large instead. Real
+//! torrents stay far below both.
 
 use std::time::{Duration, Instant};
 
 use x4_core::test_support::details;
-use x4_core::{FileTree, FileTreeView, NodeKey, TREE_KEY_BUDGET, TorrentDetails};
+use x4_core::{
+    FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, TREE_KEY_BUDGET, TorrentDetails,
+};
 use x4_rpc::FilePriority::Normal;
 
 use super::{hash, indices, key, open_all};
@@ -103,4 +106,29 @@ fn a_real_shaped_tree_is_not_affected() {
         .sum();
     assert!(key_bytes < TREE_KEY_BUDGET / 16, "{key_bytes}");
     assert!(tree.contains(&NodeKey::new("A Long Running Show/Season 19/Disc 4")));
+}
+
+/// The details of `count` files, `T/0` to `T/{count - 1}`.
+fn numbered(count: usize) -> TorrentDetails {
+    let paths: Vec<String> = (0..count).map(|n| format!("T/{n}")).collect();
+    let files: Vec<(&str, u64, u64, bool, x4_rpc::FilePriority)> = paths
+        .iter()
+        .map(|path| (path.as_str(), 1, 0, true, Normal))
+        .collect();
+    details(&hash(), &files)
+}
+
+#[test]
+fn more_than_50_000_files_are_too_large_to_show() {
+    assert_eq!(MAX_CHOOSABLE_FILES, 50_000);
+
+    let most = FileTree::new(&numbered(MAX_CHOOSABLE_FILES));
+    assert!(!most.is_too_large());
+    assert_eq!(
+        indices(&most, "T"),
+        Some((0..MAX_CHOOSABLE_FILES).collect())
+    );
+
+    // One more, and no tree is made at all, however short the paths.
+    assert_refused_cheaply(&numbered(MAX_CHOOSABLE_FILES + 1));
 }

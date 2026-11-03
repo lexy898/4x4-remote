@@ -223,13 +223,7 @@ impl<'a> Builder<'a> {
     /// the budget is spent, gives an empty tree that says it is too large.
     pub(super) fn finish(mut self, hash: HashString) -> FileTree {
         if self.over_budget {
-            return FileTree {
-                hash,
-                nodes: Vec::new(),
-                top: Vec::new(),
-                by_key: HashMap::new(),
-                too_large: true,
-            };
+            return FileTree::too_large(hash);
         }
         for node in &mut self.nodes {
             node.files.sort_unstable();
