@@ -4,9 +4,10 @@
 //!
 //! x4-core's [`AddForm`](x4_core::AddForm) holds the choice, and each click changes the wanted
 //! states of its tree; the list draws that tree with the folders the user opened and the cursor
-//! kept, as the Files tab does. A click acts only on the tree of its own torrent: the dialog shows one torrent after
-//! another, and the same path in the next one is another file. The keys are the Files tab's, but
-//! `+` and `-` do nothing: no priorities are set when a torrent is added.
+//! kept, as the Files tab does. A click acts only on the tree of its own torrent: the dialog
+//! shows one torrent after another, and the same path in the next one is another file. The keys
+//! are the Files tab's, but `+` and `-` do nothing: no priorities are set when a torrent is
+//! added.
 //!
 //! The list is given a height of its own, from the window's: inside the dialog's scrolling body,
 //! a list that only fills what is left would get almost nothing.
@@ -113,7 +114,8 @@ impl AddDialog {
     }
 
     /// Applies a click on the checkbox of `key`, or Space on it, to the form of the torrent of
-    /// `tree`, and shows the tree the form makes of it.
+    /// `tree`: the form changes the wanted states of its tree in place, and the list shows it
+    /// again.
     fn toggle_wanted(&mut self, tree: &FileTree, key: &NodeKey, cx: &mut Context<'_, Self>) {
         let Some(shown) = &mut self.shown else {
             return;
