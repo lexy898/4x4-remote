@@ -5,8 +5,10 @@
 //! user asks for and [`Engine::take_snapshot`] hands out the state when it changed. Every method
 //! takes the current [`Instant`], so the schedule is tested without waiting.
 
+mod adding;
 mod answers;
 mod details_reads;
+mod folder_space;
 mod magnet_links;
 mod schedule;
 #[cfg(test)]
@@ -17,18 +19,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use x4_rpc::{
-    FreeSpace, HashString, RpcError, ServerVersion, SessionInfo, SessionStats, TorrentField,
-    TorrentGetResponse, UnsupportedReason,
+    AddOutcome, DownloadDir, FreeSpace, HashString, RpcError, ServerVersion, SessionInfo,
+    SessionStats, TorrentField, TorrentGetResponse, TransportError, UnsupportedReason,
 };
 
-use crate::action::{Action, ActionError, ActionId};
+use crate::action::{Action, ActionError, ActionId, AddError, Added};
 use crate::details::{DetailsIssue, TorrentDetails};
 use crate::snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 use crate::store::Store;
 
 use answers::{RefusedPolls, SkippedSet};
 use details_reads::DetailsReads;
+use folder_space::FolderSpace;
 use schedule::Timer;
+
+pub use folder_space::FreeSpaceAnswer;
 
 /// How long the engine sleeps when nothing is scheduled.
 const IDLE_WAKEUP: Duration = Duration::from_secs(60);
@@ -100,12 +105,22 @@ pub enum Command {
     /// has stayed for [`EngineConfig::details_settle`], then only for their progress, and only
     /// while the window is visible; the UI sends `None` when nothing shows them.
     Select(Option<HashString>),
-    /// Carry out an action; [`Event::ActionFinished`] with the same id tells how it went.
+    /// Carry out an action; [`Event::ActionFinished`] with the same id tells how it went, or
+    /// [`Event::AddFinished`] for an [`Action::Add`].
     Run(ActionId, Action),
     /// Read the magnet links of these torrents once; [`Event::MagnetLinks`] with the same id
     /// brings them. Refused like [`Command::Run`]: when it names no torrent, and while the
     /// daemon is not connected.
     ReadMagnetLinks(ActionId, Vec<HashString>),
+    /// Read the free space of this folder on the server once, or of its nearest parent that
+    /// exists if it does not; [`Event::FreeSpace`] with the same folder brings the answer.
+    ///
+    /// One call is out at a time and one question makes at most three. A question replaces the
+    /// one before it that has not been answered yet, which then gets no answer; asking again
+    /// about the folder already asked about changes nothing. While the daemon is not connected
+    /// nothing is sent and the answer, [`FreeSpaceAnswer::Unknown`], comes at once; a question
+    /// waiting when the connection drops is answered so too.
+    FreeSpace(DownloadDir),
     /// Read the session, the whole list, the statistics, the free space and the selected
     /// torrent's details again now; connect again if the daemon is not connected.
     Refresh,
@@ -140,11 +155,15 @@ pub enum Request {
         /// What to read.
         kind: DetailsRead,
     },
-    /// Carry out an action; answered with [`Response::Done`].
+    /// Carry out an action; answered with [`Response::Done`], or with [`Response::Added`] for an
+    /// [`Action::Add`], which waits [`x4_rpc::ADD_TIMEOUT`] for its answer.
     Action(ActionId, Action),
     /// Read the hashes and magnet links of these torrents once; answered with
     /// [`Response::MagnetLinks`].
     MagnetLinks(ActionId, Vec<HashString>),
+    /// Read the free space of a folder for a [`Command::FreeSpace`]: the one asked about or one
+    /// of its parents; answered with [`Response::FreeSpace`].
+    FolderFreeSpace(DownloadDir),
 }
 
 /// How much of the selected torrent's details a [`Request::Details`] reads.
@@ -182,7 +201,7 @@ pub enum Response {
     Session(SessionInfo),
     /// The session statistics, for [`Request::SessionStats`].
     Stats(SessionStats),
-    /// The free space, for [`Request::FreeSpace`].
+    /// The free space, for [`Request::FreeSpace`] and [`Request::FolderFreeSpace`].
     FreeSpace(FreeSpace),
     /// The torrents, for [`Request::FullList`] and [`Request::RecentlyActive`].
     Torrents(TorrentGetResponse),
@@ -190,6 +209,8 @@ pub enum Response {
     Details(TorrentGetResponse),
     /// The action was carried out, for [`Request::Action`].
     Done,
+    /// What the daemon did with the torrent, for a [`Request::Action`] of an [`Action::Add`].
+    Added(AddOutcome),
     /// The torrents with their hashes and magnet links, for [`Request::MagnetLinks`].
     MagnetLinks(TorrentGetResponse),
 }
@@ -202,7 +223,7 @@ pub enum Event {
     Snapshot(Arc<Snapshot>),
     /// The selected torrent's details changed.
     Details(Arc<TorrentDetails>),
-    /// An action finished.
+    /// An action other than an add finished.
     ActionFinished {
         /// The id it was run with.
         id: ActionId,
@@ -216,6 +237,21 @@ pub enum Event {
         /// Each torrent's hash and magnet link, in the order they were asked for, each torrent
         /// once. A torrent the daemon no longer has, or that has no magnet link, is left out.
         result: Result<Vec<(HashString, String)>, ActionError>,
+    },
+    /// An [`Action::Add`] finished: the daemon added the torrent or already had it, or it did
+    /// not add it, or it is not known whether it did.
+    AddFinished {
+        /// The id it was run with.
+        id: ActionId,
+        /// The torrent added or found, or why not.
+        result: Result<Added, AddError>,
+    },
+    /// The answer to a [`Command::FreeSpace`].
+    FreeSpace {
+        /// The folder asked about.
+        path: DownloadDir,
+        /// How much room it has, or its nearest parent that exists.
+        answer: FreeSpaceAnswer,
     },
 }
 
@@ -239,7 +275,11 @@ pub enum Event {
 /// is later, so a slow daemon rests a full interval between turns.
 ///
 /// Actions and reads of magnet links are sent only while connected; otherwise they fail at once
-/// with [`ActionError::NotConnected`] instead of waiting.
+/// with [`ActionError::NotConnected`] (an add with [`AddError::NotConnected`]) instead of waiting.
+/// So are the questions about the free space of a folder, which are answered
+/// [`FreeSpaceAnswer::Unknown`]. An add waits longer than any other call for its answer, and
+/// getting none in that time does not drop the connection: it is
+/// [`AddError::Unconfirmed`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Engine {
     config: EngineConfig,
@@ -262,6 +302,8 @@ pub struct Engine {
     /// Actions and reads of magnet links accepted while connected and not handed out yet,
     /// oldest first.
     queued: VecDeque<Queued>,
+    /// The newest question about the free space of a folder, and its call out.
+    folder_space: FolderSpace,
     /// How many times requests were handed out; numbers the batches.
     batch: u64,
     /// The batch the last tick went out in.
@@ -305,6 +347,7 @@ impl Engine {
             tick_timer: Timer::default(),
             details_reads: DetailsReads::default(),
             queued: VecDeque::new(),
+            folder_space: FolderSpace::default(),
             batch: 0,
             tick_batch: None,
             action_batches: HashMap::new(),
@@ -341,6 +384,7 @@ impl Engine {
             }
             Command::Run(id, action) => self.accept(Queued::Action(id, action)),
             Command::ReadMagnetLinks(id, hashes) => self.accept(Queued::MagnetLinks(id, hashes)),
+            Command::FreeSpace(path) => self.ask_free_space(path),
             Command::Refresh if self.connection == ConnectionState::Connected => {
                 self.session_timer.force();
                 self.full_list_timer.force();
@@ -356,7 +400,8 @@ impl Engine {
     }
 
     /// The requests to send at `now`: the actions and reads of magnet links waiting to be sent
-    /// first, in the order they came, then the polls that are due, in a fixed order.
+    /// first, in the order they came, then the free space of a folder if a question waits for it
+    /// and no call for one is out, then the polls that are due, in a fixed order.
     ///
     /// Each poll handed out is next due one interval after `now`, whether or not its answer has
     /// come back, so a request is never handed out twice for the same turn; an answer that comes
@@ -383,18 +428,26 @@ impl Engine {
                     self.check_at = now.checked_add(self.retry_delay(self.next_attempt()));
                 }
             }
-            ConnectionState::Connected => self.due_polls(now, &mut due),
+            ConnectionState::Connected => {
+                if let Some(folder) = self.folder_space.hand_out() {
+                    due.push(Request::FolderFreeSpace(folder));
+                }
+                self.due_polls(now, &mut due);
+            }
             ConnectionState::Unsupported { .. } => {}
         }
         due
     }
 
-    /// Whether the answer to `request` still matters: a poll is out of date once the daemon is
-    /// no longer connected, and details once their torrent is no longer selected.
+    /// Whether the answer to `request` still matters: a poll or the free space of a folder is out
+    /// of date once the daemon is no longer connected, and details once their torrent is no
+    /// longer selected.
     ///
     /// The worker skips a request that is not current instead of sending it. Server checks,
     /// actions and reads of magnet links are always current: once handed out, they are always
-    /// sent, and their answer always reaches the UI.
+    /// sent, and their answer always reaches the UI. The free space of a folder is sent once
+    /// handed out while connected, even when a newer question has come since, so that only one
+    /// call is ever out.
     #[must_use]
     pub fn is_current(&self, request: &Request) -> bool {
         let connected = self.connection == ConnectionState::Connected;
@@ -404,6 +457,7 @@ impl Engine {
             Request::SessionGet
             | Request::SessionStats
             | Request::FreeSpace(_)
+            | Request::FolderFreeSpace(_)
             | Request::FullList
             | Request::RecentlyActive => connected,
         }
@@ -428,14 +482,18 @@ impl Engine {
     ) -> Vec<Event> {
         match request {
             Request::CheckServer => self.server_checked(now, result),
-            Request::Action(id, action) => self.action_finished(now, *id, action, result),
+            Request::Action(id, Action::Add(_)) => self.add_finished(now, request, *id, result),
+            Request::Action(id, action) => self.action_finished(now, request, *id, action, result),
             Request::MagnetLinks(id, hashes) => {
                 let result = match result {
                     Ok(Response::MagnetLinks(answer)) => Ok(answer),
                     Ok(other) => Err(unexpected(request, &other)),
                     Err(error) => Err(error),
                 };
-                self.magnet_links_read(now, *id, hashes, result)
+                self.magnet_links_read(now, request, *id, hashes, result)
+            }
+            Request::FolderFreeSpace(folder) => {
+                self.folder_space_read(now, request, folder, result)
             }
             poll if !self.is_current(poll) => {
                 tracing::debug!(
@@ -477,7 +535,9 @@ impl Engine {
     /// minute from `now` when nothing is scheduled.
     #[must_use]
     pub fn next_wakeup(&self, now: Instant) -> Instant {
-        if !self.queued.is_empty() {
+        let folder_due =
+            self.connection == ConnectionState::Connected && self.folder_space.is_due();
+        if !self.queued.is_empty() || folder_due {
             return now;
         }
         let earliest = match self.connection {
@@ -494,23 +554,36 @@ impl Engine {
     /// Queues an action or a read of magnet links, or refuses it at once: when it names
     /// nothing, which the daemon would read as everything, or while the daemon is not connected.
     fn accept(&mut self, queued: Queued) -> Vec<Event> {
-        let refused = if queued.selects_nothing() {
+        if let Some(refused) = queued.refused_as_empty() {
             tracing::warn!(
                 request = queued.name(),
                 "refused a request that names no torrents or no files"
             );
-            ActionError::EmptySelection
-        } else if self.connection == ConnectionState::Connected {
+            return vec![refused];
+        }
+        if self.connection == ConnectionState::Connected {
             self.queued.push_back(queued);
             return Vec::new();
-        } else {
-            tracing::debug!(
-                request = queued.name(),
-                "refused a request while not connected"
-            );
-            ActionError::NotConnected
-        };
-        vec![queued.refused(refused)]
+        }
+        tracing::debug!(
+            request = queued.name(),
+            "refused a request while not connected"
+        );
+        vec![queued.not_connected()]
+    }
+
+    /// Takes a question about the free space of `path`, or answers it at once while the daemon
+    /// is not connected.
+    fn ask_free_space(&mut self, path: DownloadDir) -> Vec<Event> {
+        if self.connection != ConnectionState::Connected {
+            tracing::debug!("answered a free-space question while not connected");
+            return vec![Event::FreeSpace {
+                path,
+                answer: FreeSpaceAnswer::Unknown,
+            }];
+        }
+        self.folder_space.ask(path);
+        Vec::new()
     }
 
     /// Starts connecting again now, from the first step of the backoff.
@@ -522,7 +595,8 @@ impl Engine {
     }
 
     /// Moves to `state`; leaving `Connected` fails the actions and reads of magnet links not
-    /// handed out yet, which are never kept for later.
+    /// handed out yet, which are never kept for later, and answers the free-space question not
+    /// answered yet as unknown.
     fn set_connection(&mut self, state: ConnectionState) -> Vec<Event> {
         if state != self.connection {
             self.connection = state;
@@ -531,10 +605,9 @@ impl Engine {
         if self.connection == ConnectionState::Connected {
             return Vec::new();
         }
-        self.queued
-            .drain(..)
-            .map(|queued| queued.refused(ActionError::NotConnected))
-            .collect()
+        let mut events: Vec<Event> = self.queued.drain(..).map(Queued::not_connected).collect();
+        events.extend(self.folder_space.disconnected());
+        events
     }
 
     fn server_checked(&mut self, now: Instant, result: Result<Response, RpcError>) -> Vec<Event> {
@@ -629,6 +702,7 @@ impl Engine {
     fn action_finished(
         &mut self,
         now: Instant,
+        request: &Request,
         id: ActionId,
         action: &Action,
         result: Result<Response, RpcError>,
@@ -636,14 +710,7 @@ impl Engine {
         let sent_in = self.action_batches.remove(&id);
         let Err(error) = result else {
             tracing::info!(action = action.name(), "action done");
-            // Its effect shows in the next tick; bring that tick forward, unless a tick already
-            // went out with the action or after it (polls follow actions in a batch).
-            let seen = sent_in
-                .zip(self.tick_batch)
-                .is_some_and(|(action_batch, tick_batch)| tick_batch >= action_batch);
-            if !seen {
-                self.tick_timer.force();
-            }
+            self.pull_tick_forward(sent_in);
             if action.changes_session() {
                 self.session_timer.force();
             }
@@ -655,45 +722,56 @@ impl Engine {
             id,
             result: Err(ActionError::Rpc(ConnectionError::from(&error))),
         }];
-        events.extend(self.call_failed(now, &error));
+        events.extend(self.call_failed(now, request, &error));
         events
     }
 
-    /// What a failed action or read of magnet links says about the connection: a daemon that
-    /// cannot be used is reconnected to, an unsupported one is given up on, and a refusal leaves
-    /// the connection as it is. Nothing is retried.
-    fn call_failed(&mut self, now: Instant, error: &RpcError) -> Vec<Event> {
-        match Failure::of(error) {
-            Failure::Unusable => self.connection_lost(now, error),
-            Failure::Unsupported(reason) => self.unsupported(reason.clone()),
-            Failure::Refused => Vec::new(),
+    /// The effect of an action sent in batch `sent_in` shows in the next tick: brings that tick
+    /// forward, unless a tick already went out with the action or after it (polls follow actions
+    /// in a batch).
+    fn pull_tick_forward(&mut self, sent_in: Option<u64>) {
+        let seen = sent_in
+            .zip(self.tick_batch)
+            .is_some_and(|(action_batch, tick_batch)| tick_batch >= action_batch);
+        if !seen {
+            self.tick_timer.force();
         }
     }
 
-    fn poll_failed(&mut self, now: Instant, poll: &Request, error: &RpcError) -> Vec<Event> {
-        match Failure::of(error) {
+    /// What a failed call says about the connection: a daemon that cannot be used is reconnected
+    /// to, an unsupported one is given up on, and a refusal, or an add that got no answer in
+    /// time, leaves the connection as it is. Nothing is retried.
+    fn call_failed(&mut self, now: Instant, request: &Request, error: &RpcError) -> Vec<Event> {
+        match Failure::of(request, error) {
             Failure::Unusable => self.connection_lost(now, error),
             Failure::Unsupported(reason) => self.unsupported(reason.clone()),
-            Failure::Refused => {
-                let news = poll
-                    .poll_kind()
-                    .is_some_and(|kind| self.refused.failed(kind));
-                if news {
-                    tracing::warn!(
-                        request = poll.name(),
-                        %error,
-                        "the daemon refused a poll; it is tried again at its next interval"
-                    );
-                } else {
-                    tracing::debug!(
-                        request = poll.name(),
-                        %error,
-                        "the daemon refused a poll again"
-                    );
-                }
-                Vec::new()
-            }
+            Failure::Refused | Failure::Unanswered => Vec::new(),
         }
+    }
+
+    /// As [`Engine::call_failed`]; a refused poll is also logged, as a warning only the first
+    /// time in a row.
+    fn poll_failed(&mut self, now: Instant, poll: &Request, error: &RpcError) -> Vec<Event> {
+        if Failure::of(poll, error) != Failure::Refused {
+            return self.call_failed(now, poll, error);
+        }
+        let news = poll
+            .poll_kind()
+            .is_some_and(|kind| self.refused.failed(kind));
+        if news {
+            tracing::warn!(
+                request = poll.name(),
+                %error,
+                "the daemon refused a poll; it is tried again at its next interval"
+            );
+        } else {
+            tracing::debug!(
+                request = poll.name(),
+                %error,
+                "the daemon refused a poll again"
+            );
+        }
+        Vec::new()
     }
 }
 
@@ -708,11 +786,20 @@ enum Queued {
 }
 
 impl Queued {
-    /// Whether it names no torrent or no file, which the daemon would read as all of them.
-    fn selects_nothing(&self) -> bool {
+    /// The event that refuses it for naming no torrent or no file, which the daemon would read as
+    /// all of them; `None` when it names some. An add names no torrents or files, so it is never
+    /// refused for this.
+    fn refused_as_empty(&self) -> Option<Event> {
         match self {
-            Self::Action(_, action) => action.selects_nothing(),
-            Self::MagnetLinks(_, hashes) => hashes.is_empty(),
+            Self::Action(_, Action::Add(_)) => None,
+            Self::Action(id, action) => action.selects_nothing().then_some(Event::ActionFinished {
+                id: *id,
+                result: Err(ActionError::EmptySelection),
+            }),
+            Self::MagnetLinks(id, hashes) => hashes.is_empty().then_some(Event::MagnetLinks {
+                id: *id,
+                result: Err(ActionError::EmptySelection),
+            }),
         }
     }
 
@@ -724,16 +811,20 @@ impl Queued {
         }
     }
 
-    /// The event that tells the UI it was not sent, and why.
-    fn refused(self, error: ActionError) -> Event {
+    /// The event that tells the UI it was not sent because the daemon is not connected.
+    fn not_connected(self) -> Event {
         match self {
+            Self::Action(id, Action::Add(_)) => Event::AddFinished {
+                id,
+                result: Err(AddError::NotConnected),
+            },
             Self::Action(id, _) => Event::ActionFinished {
                 id,
-                result: Err(error),
+                result: Err(ActionError::NotConnected),
             },
             Self::MagnetLinks(id, _) => Event::MagnetLinks {
                 id,
-                result: Err(error),
+                result: Err(ActionError::NotConnected),
             },
         }
     }
@@ -751,8 +842,8 @@ enum PollKind {
 }
 
 impl Request {
-    /// The kind of poll this is; `None` for the server check, actions and reads of magnet links,
-    /// which are not polls.
+    /// The kind of poll this is; `None` for the server check, actions, reads of magnet links
+    /// and the free space of a folder, which are not polls.
     fn poll_kind(&self) -> Option<PollKind> {
         match self {
             Self::SessionGet => Some(PollKind::SessionGet),
@@ -761,7 +852,30 @@ impl Request {
             Self::FullList => Some(PollKind::FullList),
             Self::RecentlyActive => Some(PollKind::RecentlyActive),
             Self::Details { .. } => Some(PollKind::Details),
-            Self::CheckServer | Self::Action(..) | Self::MagnetLinks(..) => None,
+            Self::CheckServer
+            | Self::Action(..)
+            | Self::MagnetLinks(..)
+            | Self::FolderFreeSpace(_) => None,
+        }
+    }
+
+    /// Whether the worker waits [`x4_rpc::ADD_TIMEOUT`] for the answer rather than the client's
+    /// usual timeout: only for an add ([`x4_rpc::Client::torrent_add`]).
+    ///
+    /// No wildcard: a new request has to decide.
+    fn waits_long(&self) -> bool {
+        match self {
+            Self::Action(_, Action::Add(_)) => true,
+            Self::CheckServer
+            | Self::SessionGet
+            | Self::SessionStats
+            | Self::FreeSpace(_)
+            | Self::FolderFreeSpace(_)
+            | Self::FullList
+            | Self::RecentlyActive
+            | Self::Details { .. }
+            | Self::Action(..)
+            | Self::MagnetLinks(..) => false,
         }
     }
 
@@ -788,6 +902,7 @@ impl Request {
             } => "details progress and trackers",
             Self::Action(..) => "action",
             Self::MagnetLinks(..) => "magnet links",
+            Self::FolderFreeSpace(_) => "folder free space",
         }
     }
 }
@@ -803,6 +918,7 @@ impl Response {
             Self::Torrents(_) => "torrents",
             Self::Details(_) => "details",
             Self::Done => "done",
+            Self::Added(_) => "added",
             Self::MagnetLinks(_) => "magnet links",
         }
     }
@@ -818,6 +934,7 @@ fn unexpected(request: &Request, response: &Response) -> RpcError {
 }
 
 /// What a failed call says about the daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure<'a> {
     /// The daemon cannot be used: it does not answer, refuses this host or does not speak
     /// JSON-RPC. Reconnect.
@@ -826,12 +943,23 @@ enum Failure<'a> {
     Unsupported(&'a UnsupportedReason),
     /// The daemon answered and refused this one call. The connection is fine.
     Refused,
+    /// An add got no answer within its own long timeout ([`x4_rpc::ADD_TIMEOUT`]). Whether the
+    /// torrent was added is not known, and the daemon may only be busy reading it, so the
+    /// connection stays as it is: the next poll tells whether the daemon answers.
+    Unanswered,
 }
 
 impl<'a> Failure<'a> {
-    /// No wildcard: a new error has to decide what it says about the daemon.
-    fn of(error: &'a RpcError) -> Self {
+    /// What `error` says about the daemon when `request` failed with it.
+    ///
+    /// The one place that decides it, the timeout of an add too: that timeout alone is no sign
+    /// of a lost connection, while the timeout of any other call is. No wildcard: a new error
+    /// has to decide what it says about the daemon.
+    fn of(request: &Request, error: &'a RpcError) -> Self {
         match error {
+            RpcError::Transport(TransportError::Timeout) if request.waits_long() => {
+                Self::Unanswered
+            }
             RpcError::Transport(_)
             | RpcError::Unauthorized
             | RpcError::Forbidden

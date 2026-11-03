@@ -1,7 +1,9 @@
 //! Tests of the engine, driven by one base `Instant` plus offsets and answered from the
 //! recorded fixtures. The details reads have their own module.
 
+mod adding;
 mod details;
+mod free_space;
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -11,8 +13,8 @@ use x4_rpc::testing::fixtures::{
     TORRENT_GET_RECENT,
 };
 use x4_rpc::{
-    AddSource, FilePriority, IdError, MagnetLink, RemoveData, TorrentAdd, TorrentId, TorrentRecord,
-    TransportError,
+    AddOutcome, AddSource, AddedTorrent, FilePriority, IdError, MagnetLink, RemoveData, TorrentAdd,
+    TorrentId, TorrentRecord, TransportError,
 };
 
 use super::*;
@@ -91,6 +93,7 @@ fn answer(request: &Request) -> Response {
         Request::FreeSpace(_) => {
             Response::FreeSpace(serde_json::from_value(fixture_result(FREE_SPACE)).unwrap())
         }
+        Request::FolderFreeSpace(folder) => free_space(folder.as_str(), 1 << 30),
         Request::FullList => Response::Torrents(list()),
         Request::RecentlyActive => Response::Torrents(recent()),
         Request::Details {
@@ -105,6 +108,11 @@ fn answer(request: &Request) -> Response {
             kind: DetailsRead::ProgressAndTrackers,
             ..
         } => Response::Details(progress_and_trackers_details()),
+        Request::Action(_, Action::Add(_)) => Response::Added(AddOutcome::Added(AddedTorrent {
+            id: TorrentId(99),
+            name: "New torrent".to_owned(),
+            hash: HashString::parse(&"a".repeat(40)).unwrap(),
+        })),
         Request::Action(..) => Response::Done,
         Request::MagnetLinks(_, hashes) => Response::MagnetLinks(TorrentGetResponse {
             torrents: hashes
@@ -821,6 +829,8 @@ fn is_current_follows_the_connection_and_the_selection() {
     ];
     let action = Request::Action(ActionId(1), stop_first());
     let read = Request::MagnetLinks(ActionId(2), vec![first()]);
+    // Not a poll, but it is sent only while connected too.
+    let folder = Request::FolderFreeSpace(DownloadDir::new(DOWNLOAD_DIR).unwrap());
     let details = Request::Details {
         hash: first(),
         kind: DetailsRead::Progress,
@@ -832,12 +842,12 @@ fn is_current_follows_the_connection_and_the_selection() {
     assert!(engine.is_current(&Request::CheckServer));
     assert!(engine.is_current(&action));
     assert!(engine.is_current(&read));
-    for poll in polls.iter().chain([&details]) {
+    for poll in polls.iter().chain([&details, &folder]) {
         assert!(!engine.is_current(poll), "{poll:?} while connecting");
     }
 
     let mut engine = loaded(base);
-    for poll in &polls {
+    for poll in polls.iter().chain([&folder]) {
         assert!(engine.is_current(poll), "{poll:?} while connected");
     }
     assert!(!engine.is_current(&details), "nothing is selected");
@@ -852,7 +862,7 @@ fn is_current_follows_the_connection_and_the_selection() {
     assert!(engine.is_current(&full_second));
 
     respond(&mut engine, base, &Request::SessionStats, Err(timeout()));
-    for poll in polls.iter().chain([&full_second]) {
+    for poll in polls.iter().chain([&full_second, &folder]) {
         assert!(!engine.is_current(poll), "{poll:?} while reconnecting");
     }
     assert!(engine.is_current(&Request::CheckServer));
@@ -970,27 +980,24 @@ fn action_success_pulls_tick_forward() {
 }
 
 #[test]
-fn add_and_remove_success_pull_tick_forward_too() {
+fn a_remove_success_pulls_the_tick_forward_too() {
     let base = Instant::now();
     let remove = Action::Remove {
         hashes: vec![first()],
         data: RemoveData::Keep,
     };
-    for action in [Action::Add(magnet()), remove] {
-        let mut engine = loaded(base);
-        let now = base + ms(500);
-        command(&mut engine, now, Command::Run(ActionId(10), action.clone()));
+    let mut engine = loaded(base);
+    let now = base + ms(500);
+    command(&mut engine, now, Command::Run(ActionId(10), remove.clone()));
 
-        let (due, events) = exchange(&mut engine, now);
+    let (due, events) = exchange(&mut engine, now);
 
-        assert_eq!(due, [Request::Action(ActionId(10), action.clone())]);
-        assert_eq!(events, [finished(10, Ok(()))]);
-        assert_eq!(
-            hand_out(&mut engine, now),
-            [Request::RecentlyActive, Request::SessionStats],
-            "{action:?}"
-        );
-    }
+    assert_eq!(due, [Request::Action(ActionId(10), remove)]);
+    assert_eq!(events, [finished(10, Ok(()))]);
+    assert_eq!(
+        hand_out(&mut engine, now),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
 }
 
 #[test]

@@ -26,6 +26,16 @@ impl MainView {
                 Event::MagnetLinks { id, result } => {
                     self.magnet_links_read(id, result, window, cx);
                 }
+                // Nothing in the window adds torrents or asks about a folder yet, so these answer
+                // no one.
+                Event::AddFinished { id, result } => tracing::warn!(
+                    id = id.0,
+                    ok = result.is_ok(),
+                    "an add finished that this window did not start"
+                ),
+                Event::FreeSpace { .. } => {
+                    tracing::debug!("ignored the free space of a folder no one asked about");
+                }
             }
         }
         if changed {
@@ -114,6 +124,8 @@ mod tests {
                 Event::Snapshot(snapshot) => format!("snapshot {}", snapshot.rate_down),
                 Event::ActionFinished { id, .. } => format!("action {}", id.0),
                 Event::MagnetLinks { id, .. } => format!("magnet links {}", id.0),
+                Event::AddFinished { id, .. } => format!("add {}", id.0),
+                Event::FreeSpace { path, .. } => format!("free space {}", path.as_str()),
                 Event::Details(_) => "details".to_owned(),
             })
             .collect()

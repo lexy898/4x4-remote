@@ -18,8 +18,8 @@ use std::time::Instant;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use x4_rpc::{
-    AddOutcome, Client, FilePriority, GetIds, HashString, RpcError, SessionSet, TorrentAction,
-    TorrentField, TorrentSelection, TorrentSet, Transport,
+    Client, FilePriority, GetIds, HashString, RpcError, SessionSet, TorrentAction, TorrentField,
+    TorrentSelection, TorrentSet, Transport,
 };
 
 use crate::action::{Action, Direction};
@@ -82,8 +82,9 @@ impl ServiceHandle {
     /// Stops the service thread and waits until it has ended.
     ///
     /// The thread first finishes the request it is sending, if any, so this can block for as long
-    /// as the client's timeout, twice if the daemon rotates its session id. It is not meant for
-    /// the UI thread, which drops the handle instead. Actions not sent yet are dropped.
+    /// as that request's timeout, twice if the daemon rotates its session id: the client's
+    /// timeout, or [`x4_rpc::ADD_TIMEOUT`] for an add. It is not meant for the UI thread, which
+    /// drops the handle instead. Actions not sent yet are dropped.
     pub fn shutdown(mut self) {
         let Some(thread) = self.thread.take() else {
             return;
@@ -169,16 +170,20 @@ pub(crate) fn execute<T: Transport>(
                 .torrent_get(&ids, kind.fields())
                 .map(Response::Details)
         }
-        Request::Action(_, action) => perform(client, action).map(|()| Response::Done),
+        Request::Action(_, action) => perform(client, action),
         Request::MagnetLinks(_, hashes) => client
             .torrent_get(&GetIds::Selection(selection(hashes)?), MAGNET_FIELDS)
             .map(Response::MagnetLinks),
+        Request::FolderFreeSpace(folder) => {
+            client.free_space(folder.as_str()).map(Response::FreeSpace)
+        }
     }
 }
 
-/// Carries out `action` with the one call that does it.
-fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), RpcError> {
-    match action {
+/// Carries out `action` with the one call that does it. An add answers with what the daemon
+/// did with the torrent; every other action with [`Response::Done`].
+fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<Response, RpcError> {
+    let done = match action {
         Action::Start(hashes) => client.torrent_action(TorrentAction::Start, &selection(hashes)?),
         Action::StartNow(hashes) => {
             client.torrent_action(TorrentAction::StartNow, &selection(hashes)?)
@@ -219,12 +224,9 @@ fn perform<T: Transport>(client: &mut Client<T>, action: &Action) -> Result<(), 
         Action::SetSpeedLimit { direction, limit } => {
             client.session_set(&speed_limit(*direction, *limit))
         }
-        Action::Add(add) => client.torrent_add(add).map(|outcome| {
-            if let AddOutcome::Duplicate(_) = outcome {
-                tracing::info!("the daemon already had the torrent it was asked to add");
-            }
-        }),
-    }
+        Action::Add(add) => return client.torrent_add(add).map(Response::Added),
+    };
+    done.map(|()| Response::Done)
 }
 
 /// The torrents `hashes` names. An empty list is an error and never goes out: the daemon reads
@@ -467,8 +469,9 @@ mod tests {
     };
     use x4_rpc::testing::{FakeTransport, RecordedRequest, ok};
     use x4_rpc::{
-        AddSource, FilePriority, HashString, HttpResponse, IdError, MagnetLink, RemoveData,
-        SESSION_FIELDS, TorrentAdd, TorrentField,
+        ADD_TIMEOUT, AddOutcome, AddSource, AddedTorrent, DownloadDir, FilePriority, HashString,
+        HttpResponse, IdError, MagnetLink, RemoveData, SESSION_FIELDS, TorrentAdd, TorrentField,
+        TorrentId,
     };
 
     use super::*;
@@ -543,6 +546,11 @@ mod tests {
                 json!({ "path": "/data/torrents/video" }),
             ),
             (
+                Request::FolderFreeSpace(DownloadDir::new("/data/new folder/").unwrap()),
+                "free_space",
+                json!({ "path": "/data/new folder" }),
+            ),
+            (
                 Request::FullList,
                 "torrent_get",
                 json!({ "fields": fields(TorrentField::LIST) }),
@@ -606,6 +614,12 @@ mod tests {
         assert!(matches!(answer(Request::SessionStats), Response::Stats(_)));
         assert!(matches!(
             answer(Request::FreeSpace("/data/torrents/video".to_owned())),
+            Response::FreeSpace(_)
+        ));
+        assert!(matches!(
+            answer(Request::FolderFreeSpace(
+                DownloadDir::new("/data/torrents/video").unwrap()
+            )),
             Response::FreeSpace(_)
         ));
         assert!(matches!(answer(Request::FullList), Response::Torrents(_)));
@@ -776,28 +790,65 @@ mod tests {
         );
     }
 
+    /// What the fixture daemon answers for every add.
+    fn added_by_daemon() -> Response {
+        Response::Added(AddOutcome::Added(AddedTorrent {
+            id: TorrentId(9),
+            name: "Torrent 9".to_owned(),
+            hash: hash("a"),
+        }))
+    }
+
     #[test]
-    fn add_sends_the_torrent() {
+    fn an_add_sends_metainfo_base64_folder_paused_and_unwanted_files() {
         let add = TorrentAdd {
-            source: AddSource::Magnet(
-                MagnetLink::parse("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
-                    .unwrap(),
-            ),
-            download_dir: None,
+            source: AddSource::Metainfo(b"d4:infod4:name1:xee".to_vec()),
+            download_dir: Some(DownloadDir::new("/data/torrents/new//").unwrap()),
             paused: true,
+            files_unwanted: vec![0, 2],
+            priority_high: Vec::new(),
+            priority_low: Vec::new(),
+            sequential_download: None,
+        };
+
+        let (result, sent) = execute_one(&Request::Action(ActionId(1), Action::Add(add)));
+
+        assert_eq!(result, Ok(added_by_daemon()));
+        assert_eq!(
+            sent,
+            [RecordedRequest {
+                method: "torrent_add".to_owned(),
+                params: json!({
+                    "metainfo": "ZDQ6aW5mb2Q0Om5hbWUxOnhlZQ==",
+                    "download_dir": "/data/torrents/new",
+                    "paused": true,
+                    "files_unwanted": [0, 2],
+                }),
+                session_id: None,
+                timeout: Some(ADD_TIMEOUT),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_magnet_add_sends_only_the_link_and_whether_it_starts() {
+        let link = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567";
+        let add = TorrentAdd {
+            source: AddSource::Magnet(MagnetLink::parse(link).unwrap()),
+            download_dir: None,
+            paused: false,
             files_unwanted: Vec::new(),
             priority_high: Vec::new(),
             priority_low: Vec::new(),
             sequential_download: None,
         };
 
-        assert_eq!(
-            sent_for(Action::Add(add)),
-            (
-                "torrent_add".to_owned(),
-                json!({ "filename": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "paused": true })
-            )
-        );
+        let (result, sent) = execute_one(&Request::Action(ActionId(1), Action::Add(add)));
+
+        assert_eq!(result, Ok(added_by_daemon()));
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].method, "torrent_add");
+        assert_eq!(sent[0].params, json!({ "filename": link, "paused": false }));
     }
 
     #[test]

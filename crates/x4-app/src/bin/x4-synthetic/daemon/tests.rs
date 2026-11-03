@@ -742,7 +742,10 @@ fn the_service_connects_and_lists_every_torrent() {
             Ok(Event::MagnetLinks { result, .. }) => {
                 assert!(result.is_ok(), "a magnet read failed: {result:?}");
             }
-            Ok(Event::Details(_)) => {}
+            Ok(Event::AddFinished { result, .. }) => {
+                assert!(result.is_ok(), "an add failed: {result:?}");
+            }
+            Ok(Event::Details(_) | Event::FreeSpace { .. }) => {}
             Err(error) => panic!("no connected snapshot with the whole list: {error}"),
         }
     };
@@ -773,7 +776,8 @@ fn wait_for<T>(
         match event {
             Event::ActionFinished { result, .. } => assert!(result.is_ok(), "{result:?}"),
             Event::MagnetLinks { result, .. } => assert!(result.is_ok(), "{result:?}"),
-            Event::Snapshot(_) | Event::Details(_) => {}
+            Event::AddFinished { result, .. } => assert!(result.is_ok(), "{result:?}"),
+            Event::Snapshot(_) | Event::Details(_) | Event::FreeSpace { .. } => {}
         }
     }
 }

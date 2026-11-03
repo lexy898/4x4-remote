@@ -11,15 +11,18 @@ use crossbeam_channel::RecvTimeoutError;
 use serde_json::{Value, json};
 use x4_core::service::{self, ServiceHandle, ServiceStopped};
 use x4_core::{
-    Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, EngineConfig, Event,
-    Snapshot,
+    Action, ActionError, ActionId, AddError, Added, Command, ConnectionError, ConnectionState,
+    EngineConfig, Event, FreeSpaceAnswer, Snapshot,
 };
 use x4_rpc::testing::fixtures::{
     FREE_SPACE, SESSION_GET, SESSION_STATS, TORRENT_GET_DETAILS, TORRENT_GET_LIST,
     TORRENT_GET_RECENT,
 };
 use x4_rpc::testing::{FakeTransport, ok};
-use x4_rpc::{Client, HashString, HttpResponse, TransportError};
+use x4_rpc::{
+    AddSource, Client, DownloadDir, HashString, HttpResponse, MagnetLink, TorrentAdd,
+    TransportError,
+};
 
 /// How long a test waits for an event before it fails.
 const WAIT: Duration = Duration::from_secs(2);
@@ -158,6 +161,188 @@ fn action_result(handle: &ServiceHandle, id: ActionId) -> Option<Result<(), Acti
         } if finished == id => Some(result),
         _ => None,
     })
+}
+
+/// The first event within [`WAIT`] that answers the action `id`, whichever kind it is.
+fn answer_to(handle: &ServiceHandle, id: ActionId) -> Option<Event> {
+    next_picked(handle, |event| match &event {
+        Event::AddFinished { id: answered, .. } | Event::ActionFinished { id: answered, .. }
+            if *answered == id =>
+        {
+            Some(event)
+        }
+        _ => None,
+    })
+}
+
+fn add_finished(id: u64, result: Result<Added, AddError>) -> Event {
+    Event::AddFinished {
+        id: ActionId(id),
+        result,
+    }
+}
+
+/// An add of `link`.
+fn magnet_add(link: MagnetLink) -> Action {
+    Action::Add(TorrentAdd {
+        source: AddSource::Magnet(link),
+        download_dir: None,
+        paused: true,
+        files_unwanted: Vec::new(),
+        priority_high: Vec::new(),
+        priority_low: Vec::new(),
+        sequential_download: None,
+    })
+}
+
+#[test]
+fn added_and_duplicate_answers_reach_the_app_with_the_hash() {
+    const NEW: &str = "00000000000000000000000000000000000000aa";
+    let fake = FakeTransport::routed(|method, params| {
+        if method != "torrent_add" {
+            return Ok(daemon(method, params));
+        }
+        // The daemon knows the torrent of the fixture list, and adds any other.
+        let link = params["filename"].as_str().unwrap_or_default();
+        Ok(if link.ends_with(FIXTURE_HASH) {
+            ok(
+                json!({ "torrent_duplicate": { "id": 1, "name": "Torrent 1", "hash_string": FIXTURE_HASH } }),
+            )
+        } else {
+            ok(json!({ "torrent_added": { "id": 99, "name": "New torrent", "hash_string": NEW } }))
+        })
+    });
+    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    snapshot_where(&handle, connected).unwrap();
+    let link = |hash: &str| MagnetLink::parse(&format!("magnet:?xt=urn:btih:{hash}")).unwrap();
+
+    handle
+        .send(Command::Run(ActionId(1), magnet_add(link(NEW))))
+        .unwrap();
+    assert_eq!(
+        answer_to(&handle, ActionId(1)),
+        Some(add_finished(
+            1,
+            Ok(Added {
+                hash: HashString::parse(NEW).unwrap(),
+                name: "New torrent".to_owned(),
+                duplicate: false,
+            })
+        ))
+    );
+
+    handle
+        .send(Command::Run(ActionId(2), magnet_add(link(FIXTURE_HASH))))
+        .unwrap();
+    assert_eq!(
+        answer_to(&handle, ActionId(2)),
+        Some(add_finished(
+            2,
+            Ok(Added {
+                hash: HashString::parse(FIXTURE_HASH).unwrap(),
+                name: "Torrent 1".to_owned(),
+                duplicate: true,
+            })
+        ))
+    );
+}
+
+#[test]
+fn start_added_torrents_comes_with_the_session() {
+    for start in [true, false] {
+        let fake = FakeTransport::routed(move |method, params| {
+            let server_check = params["fields"] == json!(["version", "rpc_version_semver"]);
+            if method != "session_get" || server_check {
+                return Ok(daemon(method, params));
+            }
+            let mut session = result_of(SESSION_GET);
+            session["start_added_torrents"] = json!(start);
+            Ok(ok(session))
+        });
+        let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
+
+        let snapshot = snapshot_where(&handle, |snapshot| snapshot.session.is_some()).unwrap();
+        handle.shutdown();
+
+        assert_eq!(
+            snapshot
+                .session
+                .as_ref()
+                .map(|session| session.start_added_torrents),
+            Some(start)
+        );
+        let asked = fake
+            .requests()
+            .into_iter()
+            .filter(|request| request.method == "session_get")
+            .any(|request| {
+                request.params["fields"]
+                    .as_array()
+                    .is_some_and(|fields| fields.contains(&json!("start_added_torrents")))
+            });
+        assert!(asked, "the session read asks for start_added_torrents");
+    }
+}
+
+#[test]
+fn free_space_of_a_new_folder_comes_from_its_parent_over_the_wire() {
+    let fake = FakeTransport::routed(|method, params| {
+        if method == "free_space" && params["path"] == "/data/torrents/video/new" {
+            let missing = json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": 5,
+                    "message": "system error",
+                    "data": {
+                        "error_string": "No such file or directory",
+                        "result": { "path": "/data/torrents/video/new", "size_bytes": -1, "total_size": -1 },
+                    },
+                },
+            });
+            return Ok(HttpResponse {
+                status: 200,
+                session_id: None,
+                body: missing.to_string().into_bytes(),
+            });
+        }
+        Ok(daemon(method, params))
+    });
+    let handle = service::spawn(Client::new(fake.clone()), ticking_every(WAIT)).unwrap();
+    // Once the status bar's own free space has come, it is next read a minute later.
+    snapshot_where(&handle, |snapshot| {
+        connected(snapshot) && snapshot.free_space_bytes.is_some()
+    })
+    .unwrap();
+    let asked = fake.requests().len();
+    let new = DownloadDir::new("/data/torrents/video/new").unwrap();
+
+    handle.send(Command::FreeSpace(new.clone())).unwrap();
+    let answer = next_picked(&handle, |event| match event {
+        Event::FreeSpace { path, answer } if path == new => Some(answer),
+        _ => None,
+    });
+    handle.shutdown();
+
+    let free = result_of(FREE_SPACE)["size_bytes"].as_u64();
+    assert_eq!(
+        answer,
+        Some(FreeSpaceAnswer::Missing {
+            parent: Some(DownloadDir::new("/data/torrents/video").unwrap()),
+            free,
+        })
+    );
+    let paths: Vec<Value> = fake.requests()[asked..]
+        .iter()
+        .filter(|request| request.method == "free_space")
+        .map(|request| request.params["path"].clone())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            json!("/data/torrents/video/new"),
+            json!("/data/torrents/video")
+        ]
+    );
 }
 
 #[test]

@@ -64,6 +64,21 @@ impl DownloadDir {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The folder that holds this one; `None` for the root `/`.
+    #[must_use]
+    pub fn parent(&self) -> Option<Self> {
+        if self.0 == "/" {
+            return None;
+        }
+        // Normalized: it starts with `/` and does not end with one.
+        let (parent, _) = self.0.rsplit_once('/')?;
+        Some(Self(if parent.is_empty() {
+            "/".to_owned()
+        } else {
+            parent.to_owned()
+        }))
+    }
 }
 
 /// Why a text is not a folder to download into.
@@ -153,5 +168,26 @@ mod tests {
                 len: MAX_DOWNLOAD_DIR_BYTES + 1
             })
         );
+    }
+
+    #[test]
+    fn the_parent_of_a_folder_is_the_folder_that_holds_it() {
+        let parent = |path: &str| {
+            DownloadDir::new(path)
+                .unwrap()
+                .parent()
+                .map(|dir| dir.as_str().to_owned())
+        };
+
+        assert_eq!(
+            parent("/data/torrents/video"),
+            Some("/data/torrents".to_owned())
+        );
+        assert_eq!(
+            parent("/data/my films /x"),
+            Some("/data/my films ".to_owned())
+        );
+        assert_eq!(parent("/data"), Some("/".to_owned()));
+        assert_eq!(parent("/"), None);
     }
 }

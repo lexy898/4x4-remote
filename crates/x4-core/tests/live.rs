@@ -115,8 +115,8 @@ impl Driven<'_> {
                     Response::Details(answer)
                 })
             }
-            Request::Action(..) | Request::MagnetLinks(..) => {
-                panic!("this test runs no action through the engine: {request:?}")
+            Request::Action(..) | Request::MagnetLinks(..) | Request::FolderFreeSpace(_) => {
+                panic!("this test runs no action and asks about no folder: {request:?}")
             }
         };
         answer.unwrap_or_else(|error| panic!("{request:?} failed: {error}"))

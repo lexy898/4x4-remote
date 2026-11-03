@@ -73,7 +73,13 @@
 //! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
 //! their progress and, once a minute, their trackers ([`DetailsRead`]), and nothing while the
 //! window is hidden. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
-//! on [`Command::ReadMagnetLinks`], under the same rules as an action.
+//! on [`Command::ReadMagnetLinks`], under the same rules as an action. An [`Action::Add`] is
+//! answered with [`Event::AddFinished`]: the torrent [`Added`] (or found already there), or the
+//! [`AddError`] why not. An add that gets no answer within its long timeout is
+//! [`AddError::Unconfirmed`], which does not drop the connection: the next lists tell whether it
+//! was added. [`Command::FreeSpace`] asks how much room a folder on the server has, for the folder
+//! the user is choosing; a folder that does not exist yet is answered with the room in its
+//! nearest parent that does ([`FreeSpaceAnswer`]), with few calls to the daemon.
 //!
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
@@ -107,11 +113,14 @@ mod toml_error;
 mod ui_state;
 mod view;
 
-pub use action::{Action, ActionError, ActionId, Direction, FileChange, FileTarget};
+pub use action::{
+    Action, ActionError, ActionId, AddError, Added, Direction, FileChange, FileTarget,
+};
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
 pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
 pub use engine::{
-    Command, DetailsRead, Engine, EngineConfig, Event, Request, Response, Visibility,
+    Command, DetailsRead, Engine, EngineConfig, Event, FreeSpaceAnswer, Request, Response,
+    Visibility,
 };
 pub use files::{
     FileRow, FileTree, FileTreeView, NodeKey, NonEmptyIndices, PriorityView, RowKind, WantedState,
