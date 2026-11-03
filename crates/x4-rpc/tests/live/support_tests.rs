@@ -1,15 +1,22 @@
-//! The offline tests of `support.rs`: accepting the added torrent, and the local data. Only
+//! The offline tests of `support.rs`: the checks of an add request, accepting the added torrent,
+//! the folders and the local data. Only
 //! x4-rpc's live tests declare this file; x4-core's include `support.rs` too and would run these a
 //! second time.
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use x4_rpc::{AddOutcome, AddedTorrent, DownloadDir, HashString, TorrentId};
+use x4_rpc::{
+    AddOutcome, AddSource, AddedTorrent, DownloadDir, HashString, MagnetLink, TorrentAdd, TorrentId,
+};
 
-use crate::metainfo::random_seed;
-use crate::support::{KeptFile, LocalData, TestFolder, accept_added, file_is_gone, is_in_test_dir};
+use crate::metainfo::{Metainfo, random_seed, single_file_metainfo};
+use crate::support::{
+    KeptFile, LocalData, TestFolder, accept_added, check_add_again, check_first_add, file_is_gone,
+    is_in_test_dir,
+};
 
 fn hash(digit: char) -> HashString {
     HashString::parse(&digit.to_string().repeat(40)).unwrap()
@@ -21,6 +28,190 @@ fn torrent(hash: HashString) -> AddedTorrent {
         name: "4x4-live-0.bin".to_owned(),
         hash,
     }
+}
+
+fn test_dir() -> DownloadDir {
+    DownloadDir::new("/mnt/hdd/torrents/4x4-test").unwrap()
+}
+
+/// A small single-file torrent of this run, named `name`.
+fn own_torrent(name: &str) -> Metainfo {
+    single_file_metainfo(name, name.as_bytes(), 16 * 1024)
+}
+
+/// The request that adds `metainfo` into `folder`, paused.
+fn add_request(metainfo: &Metainfo, folder: &TestFolder) -> TorrentAdd {
+    TorrentAdd {
+        source: AddSource::Metainfo(Arc::from(metainfo.bytes.as_slice())),
+        download_dir: Some(folder.remote().clone()),
+        paused: true,
+        files_unwanted: Vec::new(),
+        priority_high: Vec::new(),
+        priority_low: Vec::new(),
+        sequential_download: None,
+    }
+}
+
+/// The same request with a magnet link of `metainfo`'s info hash instead of the metainfo.
+fn by_magnet(request: TorrentAdd, metainfo: &Metainfo) -> TorrentAdd {
+    let link = format!("magnet:?xt=urn:btih:{}", metainfo.info_hash);
+    TorrentAdd {
+        source: AddSource::Magnet(MagnetLink::parse(&link).unwrap()),
+        ..request
+    }
+}
+
+#[test]
+fn a_first_add_of_this_runs_torrent_into_its_own_folder_passes() {
+    let own = own_torrent("4x4-live-0.bin");
+    for folder in [
+        TestFolder::test_dir(&test_dir()),
+        TestFolder::new_subfolder(&test_dir(), 1),
+    ] {
+        let request = add_request(&own, &folder);
+
+        check_first_add(&request, &folder, &own);
+        check_first_add(&by_magnet(request, &own), &folder, &own);
+    }
+}
+
+#[test]
+#[should_panic(expected = "a test torrent downloads into its own folder only; nothing was sent")]
+fn a_first_add_into_another_folder_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let folder = TestFolder::test_dir(&test_dir());
+    let elsewhere = TestFolder::new_subfolder(&test_dir(), 1);
+
+    check_first_add(&add_request(&own, &elsewhere), &folder, &own);
+}
+
+#[test]
+#[should_panic(expected = "the request does not carry this run's torrent")]
+fn a_first_add_of_another_torrent_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let other = own_torrent("4x4-live-1.bin");
+    let folder = TestFolder::test_dir(&test_dir());
+
+    check_first_add(&add_request(&other, &folder), &folder, &own);
+}
+
+#[test]
+#[should_panic(expected = "the request does not carry this run's torrent")]
+fn a_first_add_by_a_magnet_link_of_another_torrent_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let other = own_torrent("4x4-live-1.bin");
+    let folder = TestFolder::test_dir(&test_dir());
+
+    check_first_add(
+        &by_magnet(add_request(&own, &folder), &other),
+        &folder,
+        &own,
+    );
+}
+
+#[test]
+fn a_second_add_of_the_same_torrent_into_a_folder_of_the_test_directory_passes() {
+    let own = own_torrent("4x4-live-0.bin");
+    let own_folder = TestFolder::test_dir(&test_dir());
+    let first = add_request(&own, &own_folder);
+    for folder in [
+        own_folder.clone(),
+        TestFolder::new_subfolder(&test_dir(), 2),
+    ] {
+        let again = add_request(&own, &folder);
+
+        check_add_again(&first, &own.info_hash, &own_folder, &again, &folder);
+        let by_link = by_magnet(again, &own);
+        check_add_again(&first, &own.info_hash, &own_folder, &by_link, &folder);
+    }
+}
+
+#[test]
+#[should_panic(expected = "is not in the test directory of")]
+fn a_second_add_outside_the_test_directory_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let own_folder = TestFolder::test_dir(&test_dir());
+    let first = add_request(&own, &own_folder);
+    let outside = TestFolder::test_dir(&DownloadDir::new("/mnt/hdd/torrents").unwrap());
+
+    check_add_again(
+        &first,
+        &own.info_hash,
+        &own_folder,
+        &add_request(&own, &outside),
+        &outside,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "a second add names a folder of the test directory only; nothing was sent"
+)]
+fn a_second_add_into_another_folder_than_the_one_it_names_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let own_folder = TestFolder::test_dir(&test_dir());
+    let first = add_request(&own, &own_folder);
+    let subfolder = TestFolder::new_subfolder(&test_dir(), 2);
+
+    check_add_again(
+        &first,
+        &own.info_hash,
+        &own_folder,
+        &add_request(&own, &subfolder),
+        &own_folder,
+    );
+}
+
+#[test]
+#[should_panic(expected = "a second add carries this run's torrent")]
+fn a_second_add_of_another_torrent_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let other = own_torrent("4x4-live-1.bin");
+    let folder = TestFolder::test_dir(&test_dir());
+    let first = add_request(&own, &folder);
+
+    check_add_again(
+        &first,
+        &own.info_hash,
+        &folder,
+        &add_request(&other, &folder),
+        &folder,
+    );
+}
+
+#[test]
+#[should_panic(expected = "a second add carries this run's torrent")]
+fn a_second_add_by_a_magnet_link_of_another_torrent_is_never_sent() {
+    let own = own_torrent("4x4-live-0.bin");
+    let other = own_torrent("4x4-live-1.bin");
+    let folder = TestFolder::test_dir(&test_dir());
+    let first = add_request(&own, &folder);
+
+    check_add_again(
+        &first,
+        &own.info_hash,
+        &folder,
+        &by_magnet(add_request(&own, &folder), &other),
+        &folder,
+    );
+}
+
+#[test]
+#[should_panic(expected = "a second add carries this run's torrent")]
+fn a_second_add_from_metainfo_of_a_torrent_first_added_by_its_magnet_link_is_never_sent() {
+    // The metainfo cannot be compared with a magnet link's hash without parsing it, so it is
+    // refused.
+    let own = own_torrent("4x4-live-0.bin");
+    let folder = TestFolder::test_dir(&test_dir());
+    let first = by_magnet(add_request(&own, &folder), &own);
+
+    check_add_again(
+        &first,
+        &own.info_hash,
+        &folder,
+        &add_request(&own, &folder),
+        &folder,
+    );
 }
 
 #[test]

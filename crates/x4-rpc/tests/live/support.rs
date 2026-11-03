@@ -20,7 +20,8 @@
 //!   to keep the data, the file is handed to the test as a [`KeptFile`], which deletes it, on
 //!   every path.
 //!
-//! The folder, the local data and the kept file are modules of their own in `support/`.
+//! The folder, the checks of an add request, the local data and the kept file are modules of
+//! their own in `support/`.
 //!
 //! x4-core's live tests include this file and `metainfo.rs` too, so that their torrents follow the
 //! same rules. The offline tests of both are in `support_tests.rs` and `metainfo_tests.rs`, which
@@ -43,12 +44,15 @@ use x4_rpc::{
 
 #[path = "support/folder.rs"]
 mod folder;
+#[path = "support/gates.rs"]
+mod gates;
 #[path = "support/kept_file.rs"]
 mod kept_file;
 #[path = "support/local_data.rs"]
 mod local_data;
 
 pub(crate) use folder::{TestFolder, folder_exists};
+pub(crate) use gates::{check_add_again, check_first_add};
 pub(crate) use kept_file::KeptFile;
 pub(crate) use local_data::LocalData;
 
@@ -385,20 +389,8 @@ impl TestTorrent {
             data: local,
             ..
         } = own;
+        check_first_add(request, &folder, &metainfo);
         let hash = metainfo.info_hash;
-        assert_eq!(
-            request.download_dir.as_ref(),
-            Some(folder.remote()),
-            "a test torrent downloads into its own folder only; nothing was sent"
-        );
-        let carries_own = match &request.source {
-            AddSource::Metainfo(bytes) => **bytes == *metainfo.bytes,
-            AddSource::Magnet(link) => *link.hash() == hash,
-        };
-        assert!(
-            carries_own,
-            "the request does not carry this run's torrent {hash}; nothing was sent"
-        );
         let add = request.clone();
         let id = match client.torrent_add(&add) {
             Ok(outcome) => {
@@ -467,26 +459,7 @@ impl TestTorrent {
         request: &TorrentAdd,
         folder: &TestFolder,
     ) -> Result<AddOutcome, RpcError> {
-        assert!(
-            folder.test_dir == self.folder.test_dir,
-            "{folder:?} is not in the test directory of {:?}; nothing was sent",
-            self.folder
-        );
-        assert_eq!(
-            request.download_dir.as_ref(),
-            Some(folder.remote()),
-            "a second add names a folder of the test directory only; nothing was sent"
-        );
-        let same_torrent = match (&request.source, &self.add.source) {
-            (AddSource::Metainfo(again), AddSource::Metainfo(first)) => again == first,
-            (AddSource::Magnet(link), _) => *link.hash() == self.hash,
-            (AddSource::Metainfo(_), AddSource::Magnet(_)) => false,
-        };
-        assert!(
-            same_torrent,
-            "a second add carries this run's torrent {} only; nothing was sent",
-            self.hash
-        );
+        check_add_again(&self.add, &self.hash, &self.folder, request, folder);
         client.torrent_add(request)
     }
 
