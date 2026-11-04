@@ -565,9 +565,10 @@ date-time = { $year }-{ $month }-{ $day } { $hour }:{ $minute }
 
 ## The details panel under the table
 
-# The tabs of the panel, which Alt+1 and Alt+2 choose too.
+# The tabs of the panel, which Alt+1, Alt+2 and Alt+3 choose too.
 details-tab-general = General
 details-tab-files = Files
+details-tab-peers = Peers
 # What the panel says when it shows no torrent: none is selected, or several are.
 # $count: the torrents selected (a number, 2 or more).
 details-none = Select a torrent
@@ -680,6 +681,69 @@ files-percent = { $percent }%
 # $size: the formatted size, such as "12.4 GiB"; $percent: the share of the file in whole percent
 # (a number).
 files-playable = Playable from start: { $size } ({ $percent }%)
+
+## The Peers tab of the details panel
+
+# The line above the peers. Each part is shown on its own, with peers-summary-separator between
+# them: how many peers are connected; how many of them were found in each way, the most first; and
+# how many send data to us and receive data from us now. A part whose count is 0 is left out.
+# $count: a number.
+peers-summary-connected =
+    { $count ->
+        [one] { $count } peer
+       *[other] { $count } peers
+    }
+peers-source-tracker =
+    { $count ->
+        [one] { $count } from a tracker
+       *[other] { $count } from trackers
+    }
+peers-source-dht = { $count } from DHT
+peers-source-pex = { $count } from PEX
+# Local Peer Discovery: peers on the same local network.
+peers-source-lpd = { $count } from LPD
+# Peers that connected to us on their own.
+peers-source-incoming = { $count } incoming
+# Peers named in another peer's extension handshake.
+peers-source-ltep = { $count } from LTEP
+# Peers the server remembered from an earlier run.
+peers-source-resume = { $count } from the resume file
+peers-summary-sending = { $count } sending to us
+peers-summary-receiving = { $count } receiving from us
+peers-summary-separator = ·
+# What the tab says instead of the peers: the torrent is stopped, so it connects to no one; or it
+# runs and no peer is connected, as for a magnet link still looking for its metadata. Until the
+# first read has come, it says details-pending.
+peers-paused = The torrent is paused
+peers-none = No peers connected
+# The name of the list of peers, for screen readers.
+peers-list = Peers
+# The column headers. The speed columns are narrow, so their headers are only arrows; the -long names
+# are for screen readers. The column of a connection's icons has no header text, only its name for
+# screen readers.
+peers-column-country = Country
+peers-column-address = Address
+peers-column-client = Client
+peers-column-progress = Progress
+peers-column-down = ↓
+peers-column-down-long = Download speed
+peers-column-up = ↑
+peers-column-up-long = Upload speed
+peers-column-connection = Connection
+# The country of a peer whose address has none that is known, for screen readers: a private
+# address, or no GeoIP files.
+peers-country-unknown = Unknown country
+# The address of a peer, for screen readers. $address: the address as the server wrote it; $port:
+# the peer's port.
+peers-address-label = { $address }, port { $port }
+# A peer that did not say which client it runs.
+peers-client-none = —
+# The icons of a connection: their names for screen readers and their tooltips. The µTP badge has
+# peers-utp as its text.
+peers-encrypted = Encrypted connection
+peers-utp = µTP
+peers-utp-tooltip = Connected over µTP, not TCP
+peers-incoming = The peer connected to us
 
 ## The dialog that adds a torrent
 

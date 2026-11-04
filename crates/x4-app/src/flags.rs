@@ -23,18 +23,10 @@ use x4_core::{CountryCode, known_countries};
 
 /// The width and the height, in logical pixels, of the slot a flag is drawn in. They map to whole
 /// device pixels at the scales 1, 1.6 and 2 (15 by 10, 24 by 16, 30 by 20).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
 pub(crate) const FLAG_SIZE: (f32, f32) = (15.0, 10.0);
 
 /// The pictures of the flags, `XX.svg` for the code `XX`, embedded into release builds and read
 /// from disk in debug builds. The notice of the set is not among them: the package installs it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
 #[derive(RustEmbed)]
 #[folder = "assets/flags/"]
 #[include = "*.svg"]
@@ -42,10 +34,6 @@ struct Flags;
 
 /// `svg` with the size of the slot written into its root tag, or `None` when it does not start
 /// with a root tag followed by a space.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
 fn sized(svg: &[u8]) -> Option<Vec<u8>> {
     let attributes = svg.strip_prefix(b"<svg ")?;
     let size = format!(" width=\"{}\" height=\"{}\" ", FLAG_SIZE.0, FLAG_SIZE.1);
@@ -57,10 +45,6 @@ fn sized(svg: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The picture of the flag of `code` as `img()` takes it, made from the embedded file.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
 fn load(code: CountryCode) -> Option<Arc<Image>> {
     let name = format!("{}.svg", code.as_str());
     let Some(file) = Flags::get(&name) else {
@@ -83,10 +67,6 @@ fn load(code: CountryCode) -> Option<Arc<Image>> {
 /// The flags by country, made when the first one is asked for. The pictures are small, about
 /// 180 KB together. What GPUI rasterizes of the ones shown stays until the app ends: nothing
 /// evicts it in this stage, and a few dozen countries at most are shown at once.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
 static FLAGS: LazyLock<HashMap<CountryCode, Arc<Image>>> = LazyLock::new(|| {
     known_countries()
         .filter_map(|code| Some((code, load(code)?)))
@@ -95,29 +75,36 @@ static FLAGS: LazyLock<HashMap<CountryCode, Arc<Image>>> = LazyLock::new(|| {
 
 /// The flag of `code`, ready for `img()`, or `None` for a code without one: a region such as EU,
 /// or a code the lookup does not give.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
 pub(crate) fn flag_source(code: CountryCode) -> Option<ImageSource> {
     FLAGS.get(&code).cloned().map(ImageSource::from)
 }
 
+/// What the slot of a flag holds.
+pub(crate) enum Slot {
+    /// The flag of the country.
+    Flag(ImageSource),
+    /// The globe: there is no country, or no flag for it.
+    Globe,
+}
+
+/// What the slot of `code` holds: its flag, or the globe when there is no country or no flag
+/// for it (a region such as EU, or a code the lookup does not give).
+pub(crate) fn slot(code: Option<CountryCode>) -> Slot {
+    code.and_then(flag_source).map_or(Slot::Globe, Slot::Flag)
+}
+
 /// The slot of a flag: the flag of `code`, with a hairline in the theme's border color so that a
-/// mostly white flag keeps its edge, or a muted globe when there is no country or no flag for it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Peers tab is the first to draw a flag")
-)]
+/// mostly white flag keeps its edge, or a muted globe when there is no country or no flag for it
+/// ([`slot`]).
 pub(crate) fn flag(code: Option<CountryCode>, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
-    let slot = div()
+    let room = div()
         .relative()
         .flex_none()
         .w(px(FLAG_SIZE.0))
         .h(px(FLAG_SIZE.1));
-    match code.and_then(flag_source) {
-        Some(source) => slot
+    match slot(code) {
+        Slot::Flag(source) => room
             .child(img(source).w(px(FLAG_SIZE.0)).h(px(FLAG_SIZE.1)))
             .child(
                 div()
@@ -129,7 +116,7 @@ pub(crate) fn flag(code: Option<CountryCode>, cx: &App) -> impl IntoElement {
                     .border_color(theme.border),
             ),
         // As tall as the slot, and centered in it: the globe is round, the slot is not.
-        None => slot.flex().items_center().justify_center().child(
+        Slot::Globe => room.flex().items_center().justify_center().child(
             Icon::new(IconName::Globe)
                 .size(px(FLAG_SIZE.1))
                 .text_color(theme.muted_foreground),
@@ -226,6 +213,20 @@ mod tests {
         // The codes of the table that are not countries are not even codes.
         for code in ["--", "A1", "A2", "O1", "de", "DEU"] {
             assert_eq!(CountryCode::new(code), None, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_country_with_a_flag_gets_the_flag_and_anything_else_the_globe() {
+        let code = |letters: &str| CountryCode::new(letters).expect("a code");
+        assert!(matches!(slot(Some(code("DE"))), Slot::Flag(_)), "DE");
+        assert!(matches!(slot(None), Slot::Globe), "no country");
+        // A region of the set, and a code outside the table.
+        for letters in ["EU", "ZZ"] {
+            assert!(
+                matches!(slot(Some(code(letters))), Slot::Globe),
+                "{letters}"
+            );
         }
     }
 

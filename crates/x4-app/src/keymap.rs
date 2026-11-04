@@ -11,12 +11,12 @@
 //!   links on the clipboard. The search box lies outside the list, so Ctrl+A, Ctrl+C, Ctrl+V,
 //!   Delete or Space there edit, copy or paste its text and never reach the torrents;
 //! - the window's own keys (Ctrl+F, `/`, Ctrl+T and Ctrl+L for the turtle and the speed limits,
-//!   Alt+Enter, Alt+1 and Alt+2 for the details panel and its tabs, and Ctrl+O and Ctrl+U, which
-//!   add a `.torrent` file and a magnet link) work in the whole main window (`MainWindow`), the
-//!   search box included: its text field binds none of these keys. The popover of the limits
+//!   Alt+Enter, Alt+1, Alt+2 and Alt+3 for the details panel and its tabs, and Ctrl+O and Ctrl+U,
+//!   which add a `.torrent` file and a magnet link) work in the whole main window (`MainWindow`),
+//!   the search box included: its text field binds none of these keys. The popover of the limits
 //!   (`SpeedLimits`) lets through only the keys of the status bar and those that take the focus
-//!   out of it, which closes it; Alt+Enter, Alt+1, Alt+2, Ctrl+O and Ctrl+U do nothing there, so
-//!   that nothing changes or opens behind it;
+//!   out of it, which closes it; Alt+Enter, Alt+1, Alt+2, Alt+3, Ctrl+O and Ctrl+U do nothing
+//!   there, so that nothing changes or opens behind it;
 //! - the keys of the Files tab work in its file list (`FileList`) while no menu of it is open: the
 //!   arrows, Home, End, Page Up and Page Down move its cursor and open and close folders, Space
 //!   downloads or skips the row under the cursor, and `+` and `-` step its priority. The list lies
@@ -42,9 +42,9 @@
 //! binds Up, Down, Home, End, Page Up, Page Down, Tab and the side arrows, and those are bound
 //! again here in its context, later, so that ours win (see [`BINDINGS`]). While a menu is open (the
 //! context menu, or a menu of the toolbar), its own Up, Down, Enter and Escape go first, and Tab,
-//! Shift+Tab, Ctrl+F, `/`, Ctrl+L, Ctrl+T, Alt+Enter, Alt+1, Alt+2, Ctrl+O and Ctrl+U do nothing,
-//! nor do Home, End, Page Up and Page Down in the context menu: the menu keeps the keys until it
-//! closes.
+//! Shift+Tab, Ctrl+F, `/`, Ctrl+L, Ctrl+T, Alt+Enter, Alt+1, Alt+2, Alt+3, Ctrl+O and Ctrl+U do
+//! nothing, nor do Home, End, Page Up and Page Down in the context menu: the menu keeps the keys
+//! until it closes.
 
 #[cfg(test)]
 mod tests;
@@ -105,6 +105,8 @@ actions!(
         ShowGeneralTab,
         /// Shows the Files tab of the details panel.
         ShowFilesTab,
+        /// Shows the Peers tab of the details panel.
+        ShowPeersTab,
         /// Moves the cursor of the file list to the row above.
         MoveFileCursorUp,
         /// Moves the cursor of the file list to the row below.
@@ -246,6 +248,11 @@ pub const BINDINGS: &[Binding] = &[
         action: || Box::new(ShowFilesTab),
         context: Some(MAIN_CONTEXT),
     },
+    Binding {
+        keys: "alt-3",
+        action: || Box::new(ShowPeersTab),
+        context: Some(MAIN_CONTEXT),
+    },
     // Shallower than the text field's own Escape, which goes first: it closes the field's menu or
     // drops extra cursors, and passes the key on when there is nothing of that kind.
     Binding {
@@ -292,9 +299,9 @@ pub const BINDINGS: &[Binding] = &[
     // A menu is modal. Up and Down in it move its highlight (the menu's own bindings are deeper).
     // Neither Tab, Shift+Tab, Ctrl+F, `/` nor Ctrl+L (which opens the speed limits) may take the
     // focus out of an open menu, which does not close when it loses the focus: the keys of the
-    // list or the search box would then act behind it. Ctrl+T, Alt+Enter, Alt+1, Alt+2, Ctrl+O and
-    // Ctrl+U do nothing behind it either. A test holds every key bound outside a menu to this,
-    // unless its context leaves menus out.
+    // list or the search box would then act behind it. Ctrl+T, Alt+Enter, Alt+1, Alt+2, Alt+3,
+    // Ctrl+O and Ctrl+U do nothing behind it either. A test holds every key bound outside a menu to
+    // this, unless its context leaves menus out.
     Binding {
         keys: "tab",
         action: || Box::new(NoAction),
@@ -341,6 +348,11 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(ANY_MENU),
     },
     Binding {
+        keys: "alt-3",
+        action: || Box::new(NoAction),
+        context: Some(ANY_MENU),
+    },
+    Binding {
         keys: "ctrl-o",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
@@ -366,6 +378,11 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         keys: "alt-2",
+        action: || Box::new(NoAction),
+        context: Some(SPEED_LIMITS_CONTEXT),
+    },
+    Binding {
+        keys: "alt-3",
         action: || Box::new(NoAction),
         context: Some(SPEED_LIMITS_CONTEXT),
     },

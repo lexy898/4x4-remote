@@ -15,8 +15,8 @@
 //! moment in the local time zone, and the message `date-time` orders them.
 //!
 //! The `details` module holds the texts of the details panel that carry values, the `files`
-//! module those of its Files tab, and the `adding` module those of the add dialog and of what
-//! became of a torrent to add.
+//! module those of its Files tab, the `peers` module those of its Peers tab, and the `adding`
+//! module those of the add dialog and of what became of a torrent to add.
 
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -51,12 +51,14 @@ pub(crate) use files::{
     file_progress_label, files_wanted_label, percent_text, playable_text, priority_label,
     priority_text,
 };
+pub(crate) use peers::{peer_address_label, peers_empty_text, peers_summary_texts};
 
 mod adding;
 mod details;
 mod files;
 #[cfg(test)]
 mod parity;
+mod peers;
 #[cfg(test)]
 mod tests;
 

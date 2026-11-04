@@ -3,6 +3,7 @@
 
 use std::cmp::{Ordering, Reverse};
 
+use super::percent::percent_f32;
 use crate::geoip::CountryCode;
 use crate::peers::{Peer, PeerList, PeerTraits};
 use crate::state::DisplayState;
@@ -34,6 +35,24 @@ pub struct PeerSort {
     pub descending: bool,
 }
 
+impl PeerSort {
+    /// Handles a click on the header of `column`: the column the peers are sorted by already
+    /// flips its direction. Any other column starts largest first if it is
+    /// [`PeerColumn::Progress`], [`PeerColumn::Down`] or [`PeerColumn::Up`], and smallest first
+    /// (A to Z) otherwise, as the torrent list does.
+    pub fn toggle(&mut self, column: PeerColumn) {
+        if self.column == Some(column) {
+            self.descending = !self.descending;
+        } else {
+            self.column = Some(column);
+            self.descending = match column {
+                PeerColumn::Progress | PeerColumn::Down | PeerColumn::Up => true,
+                PeerColumn::Country | PeerColumn::Address | PeerColumn::Client => false,
+            };
+        }
+    }
+}
+
 /// One peer as the Peers tab draws it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeerRow {
@@ -46,8 +65,10 @@ pub struct PeerRow {
     pub address: String,
     /// The client's name, cleaned; empty when the peer did not say.
     pub client: String,
-    /// How much of the torrent the peer has, 0.0 to 1.0.
+    /// How much of the torrent the peer has, 0.0 to 1.0, for the bar.
     pub progress: f32,
+    /// The same in whole percent, rounded down: 100 only for a peer that has every piece.
+    pub percent: u8,
     /// Bytes per second from the peer to us.
     pub rate_down: u64,
     /// Bytes per second from us to the peer.
@@ -82,6 +103,7 @@ impl From<&Peer> for PeerRow {
             address: peer.address.clone(),
             client: peer.client.clone(),
             progress: peer.progress,
+            percent: percent_f32(peer.progress),
             rate_down: peer.rate_down,
             rate_up: peer.rate_up,
             traits: peer.traits,

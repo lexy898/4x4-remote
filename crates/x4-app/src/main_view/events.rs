@@ -20,8 +20,8 @@ impl MainView {
             match event {
                 Event::Snapshot(snapshot) => changed |= self.show(snapshot, cx),
                 Event::Details(details) => self.details_arrived(details, cx),
-                // No tab shows peers yet; nothing holds them.
-                Event::Peers(_) | Event::PeersCleared => {}
+                Event::Peers(peers) => self.peers_arrived(peers, cx),
+                Event::PeersCleared => self.peers_cleared(cx),
                 Event::ActionFinished { id, result } => {
                     self.action_finished(id, &result, window, cx);
                 }

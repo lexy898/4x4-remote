@@ -898,18 +898,19 @@ fn the_speed_keys_do_nothing_behind_a_toolbar_menu(cx: &mut TestAppContext) {
     assert_eq!(window.sent_actions(), [Action::SetAltSpeed(true)]);
 }
 
-/// The popover keeps the keys of the details panel, as a menu does: Alt+Enter, Alt+1 and Alt+2
-/// change nothing behind it, from a field or from a switch. Each tab key is pressed while the
-/// other tab is open, where it would change something.
+/// The popover keeps the keys of the details panel, as a menu does: Alt+Enter, Alt+1, Alt+2 and
+/// Alt+3 change nothing behind it, from a field or from a switch. Each tab key is pressed while
+/// the other tabs are open, where it would change something.
 #[gpui_kit::test]
 fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(limit(1024, true), off(), false, cx);
     assert!(window.details_shown(cx));
 
-    for (open_tab, tab_key, other_tab_key) in [
-        (DetailsTab::General, "alt-1", "alt-2"),
-        (DetailsTab::Files, "alt-2", "alt-1"),
+    for (open_tab, tab_key, other_tab_keys) in [
+        (DetailsTab::General, "alt-1", ["alt-2", "alt-3"]),
+        (DetailsTab::Files, "alt-2", ["alt-1", "alt-3"]),
+        (DetailsTab::Peers, "alt-3", ["alt-1", "alt-2"]),
     ] {
         window.press(tab_key, cx);
         let before = window.details(cx);
@@ -922,7 +923,7 @@ fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
                 window.press("shift-tab", cx);
                 assert!(window.focused(DOWN_SWITCH, cx));
             }
-            for key in ["alt-enter", other_tab_key] {
+            for key in std::iter::once("alt-enter").chain(other_tab_keys) {
                 window.press(key, cx);
                 let at = format!("{open_tab:?}, {place}, {key}");
                 assert!(window.limits_open(cx), "{at}: the popover stays");

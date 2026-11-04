@@ -21,6 +21,28 @@ pub(crate) fn percent(progress: f64) -> u8 {
     (progress * 100.0 + NOISE).floor().clamp(0.0, 99.0) as u8
 }
 
+/// Float noise of an `f32` below this still counts toward the next whole percent: an `f32` keeps
+/// about seven digits, so 57 of 100 pieces is `0.569_999_99`, and it must show 57%. It is far
+/// below what one piece of a torrent adds.
+const F32_NOISE: f64 = 1e-4;
+
+/// The whole percent a `progress` of 0.0 to 1.0 kept as an `f32` is shown as, as [`percent`]
+/// does with room for the coarser noise of an `f32`. The daemon keeps a peer's progress so.
+#[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is clamped to 0..=99 first, and a NaN casts to 0"
+)]
+pub(crate) fn percent_f32(progress: f32) -> u8 {
+    if progress >= 1.0 {
+        return 100;
+    }
+    (f64::from(progress) * 100.0 + F32_NOISE)
+        .floor()
+        .clamp(0.0, 99.0) as u8
+}
+
 /// `progress` limited to 0.0 to 1.0, so a bar never overflows its track; NaN is 0.0.
 #[must_use]
 pub(crate) fn fraction(progress: f64) -> f64 {
@@ -72,6 +94,21 @@ mod tests {
         assert_eq!(percent(0.29), 29);
         assert_eq!(percent(0.57), 57);
         assert_eq!(percent(0.58), 58);
+    }
+
+    #[test]
+    fn an_f32_progress_ignores_its_coarser_noise_too() {
+        // 0.57 as an f32 is 0.569_999_99, and 0.29 is 0.289_999_99.
+        assert_eq!(percent_f32(0.29), 29);
+        assert_eq!(percent_f32(0.57), 57);
+        assert_eq!(percent_f32(0.634), 63);
+        assert_eq!(percent_f32(0.999_9), 99);
+        assert_eq!(percent_f32(1.0 - f32::EPSILON), 99);
+        assert_eq!(percent_f32(1.0), 100);
+        assert_eq!(percent_f32(0.0), 0);
+        assert_eq!(percent_f32(-0.5), 0);
+        assert_eq!(percent_f32(1.5), 100);
+        assert_eq!(percent_f32(f32::NAN), 0);
     }
 
     #[test]

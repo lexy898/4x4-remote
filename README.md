@@ -305,12 +305,12 @@ clipboard then keeps what it had.
 The details panel under the table shows the selected torrent. With none selected it says "Select a
 torrent", and with several, how many are selected; it shows a torrent only when exactly one of the
 torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from anywhere
-in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2` open. While
-a menu or the speed limits popover is open, these three keys do nothing. The first time, the panel
-is open on the General tab, high enough for its usual rows. Drag the line between the table and the
-panel to change its height. The panel keeps that height when it is hidden and between runs; when the
-window is too low for it and the table's header and two rows, it is drawn lower, and it grows back
-with the window. When the General tab does not fit, it scrolls.
+in the window. It has three tabs, General, Files and Peers, which a click or `Alt+1`, `Alt+2` and
+`Alt+3` open. While a menu or the speed limits popover is open, these four keys do nothing. The
+first time, the panel is open on the General tab, high enough for its usual rows. Drag the line
+between the table and the panel to change its height. The panel keeps that height when it is hidden
+and between runs; when the window is too low for it and the table's header and two rows, it is drawn
+lower, and it grows back with the window. When the General tab does not fit, it scrolls.
 
 The General tab shows, from the daemon's list:
 
@@ -364,6 +364,28 @@ notification, one for downloading or skipping files, one for their priorities an
 switch. The open folders and the place in the list stay while the Files tab shows the same torrent,
 also after a visit to the General tab; when it shows another torrent, the list starts afresh, with
 only the torrent's own folder open. They are not remembered between runs.
+
+The Peers tab shows who the torrent is connected to, one line each. The line above the list counts
+the peers, then how many of them were found in each way, the most first (from trackers, DHT, PEX,
+LPD, incoming, LTEP, or the resume file of an earlier run; a way that found none is left out), then
+how many send data to us and how many receive data from us right now, as their speeds tell. Each row
+has the peer's country flag and two-letter code (a grey globe when its address has no known country,
+such as a private address, or when the GeoIP files are missing), its address (screen readers hear
+its port too), the client it says it runs ("—" when it says none), how much of the torrent it has,
+as a bar in the torrent's state color and in percent, the speeds from it and to it, in the state's
+color and bold while data moves that way, and the icons of its connection: a lock when it is
+encrypted, a "µTP" badge when it runs over µTP rather than TCP, and an arrow when the peer connected
+to us, each named in its tooltip. The busiest peers come first: by the speed they send to us, then
+the speed we send to them (both counted in whole KiB/s, so that rows do not trade places for a small
+wobble), then the most complete, so that idle rows stay put. A click on the header of the country,
+the address, the client, the progress or a speed sorts by it (the progress and the speeds largest
+first), and a second click reverses the order. Until the first read has come, the tab says "—"; for
+a paused torrent it says "The torrent is paused", and while no peer is connected, as for a magnet
+link still looking for its metadata, "No peers connected". While the daemon does not answer, the
+rows are dimmed, as the table is. The list takes no keys; the wheel scrolls it. 4x4 reads the peers
+every 3 seconds, only while the tab is open on one torrent and the window is shown. Left, or with
+the panel hidden, the tab keeps nothing, and its order goes back to the busiest first; the order is
+not remembered between runs.
 
 4x4 reads a torrent's details only while the window is shown and active, the panel is open and it
 shows one torrent, so that a small server is asked for no more than the panel needs. It reads them
@@ -581,7 +603,7 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
 | `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
 | `Alt+Enter`                                         | anywhere in the window    | shows or hides the details panel             |
-| `Alt+1`, `Alt+2`                                    | anywhere in the window    | show the panel's General or Files tab        |
+| `Alt+1`, `Alt+2`, `Alt+3`                           | anywhere in the window    | show the panel's General, Files or Peers tab |
 | `Ctrl+O`                                            | anywhere in the window    | opens the file dialog to add .torrent files  |
 | `Ctrl+U`                                            | anywhere in the window    | adds the clipboard's magnet links, or a form |
 | `Ctrl+V`                                            | in the table              | adds the magnet links on the clipboard       |
@@ -617,8 +639,8 @@ Between runs 4x4 remembers, in `state.toml`:
 - the details panel: whether it is shown, its height and the tab open in it;
 - the last 10 folders torrents were added to, which the add dialog offers.
 
-The search text, the selected torrent, the scroll position, the open folders of the Files tab and
-the torrents waiting in the add dialog are not remembered.
+The search text, the selected torrent, the scroll position, the open folders of the Files tab, the
+order of the Peers tab and the torrents waiting in the add dialog are not remembered.
 
 4x4 saves a second after the last change, so that dragging a column edge or the window edge writes
 the file once, and at once when the window is closed or 4x4 quits (`Ctrl+Q`). Typing in the search

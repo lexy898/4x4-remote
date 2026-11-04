@@ -34,14 +34,13 @@ use std::sync::Arc;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
-    UniformListScrollHandle, Window, div,
+    AnyElement, App, Context, FocusHandle, IntoElement, ParentElement as _, Styled as _,
+    UniformListScrollHandle, Window,
 };
 use x4_core::{FileRow, FileTree, FileTreeView, NodeKey, Torrent, TorrentDetails};
 use x4_rpc::FilePriority;
 
-use super::{DetailsPanel, DetailsPanelEvent};
+use super::{DetailsPanel, DetailsPanelEvent, note};
 use crate::actions::FileRequest;
 use crate::file_list::{self, Columns, Drawn, FileListHost, file_row};
 use crate::i18n::t;
@@ -165,23 +164,11 @@ impl DetailsPanel {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> AnyElement {
-        let note = |id: &'static str, text: String| {
-            div()
-                .id(id)
-                .flex_1()
-                .px_3()
-                .py_2()
-                .text_color(cx.theme().muted_foreground)
-                .aria_label(text.clone())
-                .child(text)
-                .test_support()
-                .into_any_element()
-        };
         let body = match &self.files.tree {
             // The details have not come yet; they come within a moment.
-            None => note("files-pending", t!("details-pending")),
-            Some(tree) if tree.is_too_large() => note("files-too-large", t!("files-too-large")),
-            Some(tree) if tree.is_empty() => note("files-no-metadata", t!("files-no-metadata")),
+            None => note("files-pending", t!("details-pending"), cx),
+            Some(tree) if tree.is_too_large() => note("files-too-large", t!("files-too-large"), cx),
+            Some(tree) if tree.is_empty() => note("files-no-metadata", t!("files-no-metadata"), cx),
             Some(_) => self.file_list(window, cx).into_any_element(),
         };
         v_flex()

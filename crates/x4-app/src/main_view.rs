@@ -586,8 +586,8 @@ impl MainView {
 
     /// Tells the table whether its rows are stale data, which it draws at the stale opacity, and
     /// whether the daemon is connected, which its context menu needs for most of its items; the
-    /// details panel whether its Files tab can act; and the speed limits popover whether it can
-    /// apply.
+    /// details panel whether its Files tab can act and whether its peers are stale; and the speed
+    /// limits popover whether it can apply.
     fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
         let connected = self.status.connected();
@@ -598,8 +598,10 @@ impl MainView {
                 cx.notify();
             }
         });
-        self.details_panel
-            .update(cx, |panel, cx| panel.set_connected(connected, cx));
+        self.details_panel.update(cx, |panel, cx| {
+            panel.set_connected(connected, cx);
+            panel.set_stale(stale, cx);
+        });
         self.show_speed_status(cx);
     }
 

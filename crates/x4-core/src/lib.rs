@@ -118,7 +118,8 @@
 //! daemon's choke and interest flags as [`PeerTraits`] and cleans the client name a peer chose.
 //! [`locate`] fills in the countries through a [`CountryLookup`], and [`peer_flag`] names the
 //! letters of a flag string. What the Peers tab shows is decided here too: [`peer_rows`] orders
-//! the [`PeerRow`]s as a [`PeerSort`] asks (by a [`PeerColumn`], or the busiest first),
+//! the [`PeerRow`]s as a [`PeerSort`] asks (by a [`PeerColumn`], or the busiest first; a click on
+//! a header changes it with [`PeerSort::toggle`]),
 //! [`peers_summary`] gives the [`PeersSummary`] above them, and [`peers_empty`] the [`PeersEmpty`]
 //! reason when there are none.
 //!

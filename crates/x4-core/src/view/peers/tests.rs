@@ -523,9 +523,38 @@ fn a_row_holds_what_the_view_prints() {
                 utp: true,
                 ..PeerTraits::default()
             },
+            percent: 25,
             transferring_down: true,
             transferring_up: false,
         }]
+    );
+}
+
+#[test]
+fn a_row_shows_whole_percents_and_100_only_when_the_peer_is_complete() {
+    let percents = |progress: &[f32]| -> Vec<u8> {
+        let peers = progress
+            .iter()
+            .enumerate()
+            .map(|(index, &progress)| Peer {
+                progress,
+                ..peer("192.0.2.1", u16::try_from(index).unwrap())
+            })
+            .collect();
+        let sort = PeerSort {
+            column: Some(PeerColumn::Progress),
+            descending: false,
+        };
+        peer_rows(&list(peers), sort)
+            .iter()
+            .map(|row| row.percent)
+            .collect()
+    };
+
+    // The daemon keeps a peer's progress as an `f32`: 57 of 100 pieces is 0.569_999_99.
+    assert_eq!(
+        percents(&[0.0, 0.29, 0.57, 0.634, 0.999_99, 1.0]),
+        [0, 29, 57, 63, 99, 100]
     );
 }
 
@@ -735,5 +764,61 @@ fn an_empty_list_of_any_other_torrent_says_no_one_is_connected() {
             Some(PeersEmpty::NoneConnected),
             "{state:?}"
         );
+    }
+}
+
+#[test]
+fn a_header_click_sorts_by_its_column_and_a_second_click_reverses() {
+    let mut sort = PeerSort::default();
+
+    sort.toggle(PeerColumn::Address);
+    assert_eq!(
+        sort,
+        PeerSort {
+            column: Some(PeerColumn::Address),
+            descending: false,
+        }
+    );
+    sort.toggle(PeerColumn::Address);
+    assert!(sort.descending, "reversed");
+    sort.toggle(PeerColumn::Address);
+    assert!(!sort.descending, "and back");
+}
+
+#[test]
+fn the_rates_and_the_progress_start_largest_first_and_the_texts_smallest_first() {
+    for (column, descending) in [
+        (PeerColumn::Country, false),
+        (PeerColumn::Address, false),
+        (PeerColumn::Client, false),
+        (PeerColumn::Progress, true),
+        (PeerColumn::Down, true),
+        (PeerColumn::Up, true),
+    ] {
+        let mut from_default = PeerSort::default();
+        from_default.toggle(column);
+        assert_eq!(
+            from_default,
+            PeerSort {
+                column: Some(column),
+                descending,
+            },
+            "{column:?} after the default order"
+        );
+
+        // From another column, in either direction, the column starts in its own direction.
+        for other_descending in [false, true] {
+            let other = if column == PeerColumn::Up {
+                PeerColumn::Down
+            } else {
+                PeerColumn::Up
+            };
+            let mut from_other = PeerSort {
+                column: Some(other),
+                descending: other_descending,
+            };
+            from_other.toggle(column);
+            assert_eq!(from_other, from_default, "{column:?} after {other:?}");
+        }
     }
 }
