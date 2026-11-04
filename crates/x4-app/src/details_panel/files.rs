@@ -110,10 +110,10 @@ pub(super) struct FilesTab {
     focus: FocusHandle,
     /// The scroll position of the list.
     scroll: UniformListScrollHandle,
-    /// Where a tree is made off the window's thread: on a thread of its own, in the app.
+    /// Where a tree is made off the window's thread: on a thread of its own, in the app; a test
+    /// counts the makings started.
     make_on: MakeOn,
-    /// What makes a tree there: [`FileTree::new`]; a test counts the trees made, or notes the
-    /// thread.
+    /// What makes a tree there: [`FileTree::new`]; a test notes the thread.
     make: MakeTree,
 }
 

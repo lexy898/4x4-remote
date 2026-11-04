@@ -273,7 +273,13 @@ impl DetailsPanel {
         }
     }
 
-    /// Whether the panel takes the window for one the user can see.
+    /// Whether the panel takes what it shows for stale. For the tests.
+    #[cfg(test)]
+    pub(crate) fn is_stale(&self) -> bool {
+        self.stale
+    }
+
+    /// Whether the panel takes the window for one the user can see. For the tests.
     #[cfg(test)]
     pub(crate) fn window_shown(&self) -> bool {
         self.window_shown

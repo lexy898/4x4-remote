@@ -847,6 +847,118 @@ mod tests {
         assert!(!shown(cx), "hidden");
     }
 
+    #[gpui_kit::test]
+    fn stale_data_dims_the_rows_of_the_peers_and_the_trackers_tab(cx: &mut TestAppContext) {
+        use x4_core::test_support::{details, torrent, tracker};
+        use x4_core::{
+            ConnectionError, ConnectionState, Peer, PeerList, PeerSources, PeerTraits,
+            TorrentDetails,
+        };
+
+        use crate::theme::STALE_OPACITY;
+        use crate::torrent_table::select_added;
+
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (_, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        let panel = cx.update(|cx| view.read(cx).details_panel.clone());
+        let film = torrent("film");
+        let snapshot = |connection: ConnectionState, stale: bool| {
+            Arc::new(Snapshot {
+                torrents: vec![film.clone()],
+                listed: true,
+                session: None,
+                free_space_bytes: None,
+                rate_down: 0,
+                rate_up: 0,
+                connection,
+                stale,
+            })
+        };
+        let peer = |address: &str| Peer {
+            ip: address.parse().ok(),
+            address: address.to_owned(),
+            port: 6881,
+            client: String::new(),
+            progress: 0.0,
+            rate_down: 0,
+            rate_up: 0,
+            traits: PeerTraits::default(),
+            flags: String::new(),
+            country: None,
+        };
+        // The panel shows the one torrent selected, on the Peers tab.
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.show(snapshot(ConnectionState::Connected, false), cx);
+                view.table
+                    .update(cx, |table, cx| select_added(table, film.hash.clone(), cx));
+            });
+        });
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| panel.set_tab(DetailsTab::Peers, cx));
+            view.update(cx, |view, cx| {
+                view.peers_arrived(
+                    Arc::new(PeerList {
+                        hash: film.hash.clone(),
+                        peers: vec![peer("192.0.2.1"), peer("192.0.2.2")],
+                        sources: PeerSources::default(),
+                    }),
+                    cx,
+                );
+            });
+        });
+        let peers = |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).peers_dimming(cx));
+        assert_eq!(peers(cx), (None, vec![None, None]), "fresh");
+
+        // The daemon stopped answering: what the panel shows is old.
+        let reconnecting = ConnectionState::Reconnecting {
+            attempt: 1,
+            last_error: ConnectionError::Unreachable,
+        };
+        cx.update(|cx| view.update(cx, |view, cx| view.show(snapshot(reconnecting, true), cx)));
+
+        assert!(cx.update(|cx| panel.read(cx).is_stale()));
+        assert_eq!(
+            peers(cx),
+            (Some(STALE_OPACITY), vec![Some(STALE_OPACITY); 2]),
+            "the summary and the rows of the Peers tab"
+        );
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| panel.set_tab(DetailsTab::Trackers, cx));
+            view.update(cx, |view, cx| {
+                view.details_arrived(
+                    Arc::new(TorrentDetails {
+                        trackers: vec![tracker("a.example.org:80"), tracker("b.example.org:80")],
+                        ..details(&film.hash, &[])
+                    }),
+                    cx,
+                );
+            });
+        });
+        let trackers =
+            |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).trackers_dimming(cx));
+        assert_eq!(
+            trackers(cx),
+            [Some(STALE_OPACITY); 2],
+            "the rows of the Trackers tab"
+        );
+
+        // It answers again.
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.show(snapshot(ConnectionState::Connected, false), cx);
+            });
+        });
+        assert!(!cx.update(|cx| panel.read(cx).is_stale()));
+        assert_eq!(trackers(cx), [None; 2]);
+    }
+
     /// The table dims its rows while the data is stale; an opacity on the list around it would
     /// multiply with theirs and dim every row twice.
     #[gpui_kit::test]

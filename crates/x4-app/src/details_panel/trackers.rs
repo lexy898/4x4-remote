@@ -38,7 +38,7 @@ use gpui_kit::component::{ActiveTheme as _, Theme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, ElementId, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
+    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled, Task,
     TestSupportExt as _, UniformListScrollHandle, div, px,
 };
 use x4_core::{
@@ -54,7 +54,7 @@ use crate::i18n::{
     tracker_row_label, tracker_status_text, tracker_status_words, tracker_tier_text,
     trackers_empty_text,
 };
-use crate::theme::{STALE_OPACITY, problem_note_color, tabular_digits, tracker_color};
+use crate::theme::{problem_note_color, stale_opacity, tabular_digits, tracker_color};
 
 /// The element id of what the tab says instead of the trackers.
 pub(super) const TRACKERS_EMPTY_ID: &str = "trackers-empty";
@@ -248,6 +248,18 @@ impl DetailsPanel {
 
     /// The rows of the list at `range`, as drawn now: the times counted from the clock.
     fn tracker_rows_in(&self, range: Range<usize>, cx: &App) -> Vec<AnyElement> {
+        self.styled_tracker_rows(range, cx)
+            .into_iter()
+            .map(IntoElement::into_any_element)
+            .collect()
+    }
+
+    /// The rows of the list at `range`, with their style open to the tests.
+    fn styled_tracker_rows(
+        &self,
+        range: Range<usize>,
+        cx: &App,
+    ) -> Vec<impl IntoElement + Styled + use<>> {
         let columns = columns();
         let now = (self.trackers.clock)();
         let start = range.start;
@@ -260,6 +272,15 @@ impl DetailsPanel {
             .map(|(offset, shown)| {
                 tracker_row(shown, start + offset, &columns, now, self.stale, cx)
             })
+            .collect()
+    }
+
+    /// The opacity of each row of the Trackers tab, as drawn now. For the tests.
+    #[cfg(test)]
+    pub(crate) fn trackers_dimming(&self, cx: &App) -> Vec<Option<f32>> {
+        self.styled_tracker_rows(0..self.trackers.rows.len(), cx)
+            .iter_mut()
+            .map(|row| row.style().opacity)
             .collect()
     }
 }
@@ -334,7 +355,7 @@ fn tracker_row(
     now: SystemTime,
     dimmed: bool,
     cx: &App,
-) -> AnyElement {
+) -> impl IntoElement + Styled + use<> {
     let theme = cx.theme();
     let row = &shown.row;
     let [dot, tier, tracker, last, next, seeders, leechers, downloads] = columns;
@@ -344,7 +365,7 @@ fn tracker_row(
         tracker_row_label(&row.host, row.tier),
     )
     .h(px(ROW_HEIGHT))
-    .when(dimmed, |line| line.opacity(STALE_OPACITY))
+    .when_some(stale_opacity(dimmed), Styled::opacity)
     .child(dot_cell(dot, row, theme))
     .child(text_cell(
         tier,
@@ -384,7 +405,6 @@ fn tracker_row(
         None,
     ))
     .test_support()
-    .into_any_element()
 }
 
 /// The dot in the color of what the tracker is doing; a screen reader hears the status in words.
@@ -417,7 +437,7 @@ fn text_cell(
         .role(Role::Cell)
         .aria_label(text.clone())
         .font_features(tabular_digits())
-        .when_some(color, gpui_kit::Styled::text_color)
+        .when_some(color, Styled::text_color)
         .child(div().truncate().child(text))
         .test_support()
 }

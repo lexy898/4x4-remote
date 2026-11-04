@@ -72,11 +72,36 @@ fn synthetic_details_answer_full_and_progress_fields() {
     assert!(progress.date_created.is_none() && progress.is_private.is_none());
     assert!(progress.piece_count.is_none() && progress.piece_size.is_none());
 
-    // The read with the trackers adds them and nothing else.
+    // The read with the trackers adds them and nothing else. Their times follow the wall clock,
+    // which may pass a tier's moment to announce between the two reads, so they are left out.
     let with_trackers = read(&mut client, &hash, TorrentField::DETAILS_PROGRESS_TRACKERS);
-    assert_eq!(with_trackers.tracker_stats, full.tracker_stats);
+    assert!(
+        full.tracker_stats
+            .as_ref()
+            .is_some_and(|stats| !stats.is_empty())
+    );
+    assert_eq!(
+        without_times(with_trackers.tracker_stats),
+        without_times(full.tracker_stats)
+    );
     assert_eq!(with_trackers.bytes_completed, progress.bytes_completed);
     assert!(with_trackers.files.is_none() && with_trackers.comment.is_none());
+}
+
+/// `stats` with the times of the announces and the scrapes at 0: what is left does not follow the
+/// clock.
+fn without_times(stats: Option<Vec<TrackerStatRecord>>) -> Option<Vec<TrackerStatRecord>> {
+    stats.map(|stats| {
+        stats
+            .into_iter()
+            .map(|stat| TrackerStatRecord {
+                last_announce_time: 0,
+                next_announce_time: 0,
+                last_scrape_time: 0,
+                ..stat
+            })
+            .collect()
+    })
 }
 
 #[test]
@@ -107,6 +132,8 @@ fn heavy_fields_are_sent_only_when_asked_for() {
         "bytes_completed",
         "wanted",
         "comment",
+        "peers",
+        "peers_from",
     ] {
         assert!(
             first.get(heavy).is_none(),

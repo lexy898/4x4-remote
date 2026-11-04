@@ -154,9 +154,9 @@ impl Driven<'_> {
                 .torrent_get(&GetIds::RecentlyActive, TorrentField::LIST)
                 .map(Response::Torrents),
             Request::Details { hash, kind } => {
-                assert_eq!(
-                    Some(hash),
-                    self.selected.as_ref(),
+                // The hashes are the owner's torrents': the message says only that they differ.
+                assert!(
+                    Some(hash) == self.selected.as_ref(),
                     "the engine reads only the torrent the test selected"
                 );
                 self.reads.push(*kind);
@@ -191,7 +191,11 @@ impl Driven<'_> {
     /// Hands the engine `command`, which brings no event at once.
     fn command(&mut self, command: Command) {
         let events = self.engine.handle_command(self.now, command);
-        assert_eq!(events, [], "the command brought events at once");
+        assert!(
+            events.is_empty(),
+            "the command brought events at once: {:?}",
+            kinds(&events)
+        );
     }
 
     /// Hands the engine `command`; returns the events it brings at once.
@@ -237,6 +241,24 @@ fn peers_of(events: &[Event]) -> Vec<Arc<PeerList>> {
         .filter_map(|event| match event {
             Event::Peers(list) => Some(Arc::clone(list)),
             _ => None,
+        })
+        .collect()
+}
+
+/// The kind of each of `events`, for a message: the events hold the owner's torrents, which no
+/// message may show.
+fn kinds(events: &[Event]) -> Vec<&'static str> {
+    events
+        .iter()
+        .map(|event| match event {
+            Event::Snapshot(_) => "Snapshot",
+            Event::Details(_) => "Details",
+            Event::Peers(_) => "Peers",
+            Event::PeersCleared => "PeersCleared",
+            Event::ActionFinished { .. } => "ActionFinished",
+            Event::MagnetLinks { .. } => "MagnetLinks",
+            Event::AddFinished { .. } => "AddFinished",
+            Event::FreeSpace { .. } => "FreeSpace",
         })
         .collect()
 }
@@ -579,12 +601,14 @@ fn the_peers_and_trackers_tabs_read_a_torrent_with_peers() {
     let addressed = peers.peers.iter().filter(|peer| peer.ip.is_some()).count();
 
     // The Trackers tab: the peers go, and the trackers are read and merged into the details.
-    assert_eq!(
-        driven.command_events(Command::ShowTab(DetailsTab::Trackers)),
-        [Event::PeersCleared]
+    let left = driven.command_events(Command::ShowTab(DetailsTab::Trackers));
+    assert!(
+        matches!(left.as_slice(), [Event::PeersCleared]),
+        "leaving the Peers tab sends only PeersCleared, not {:?}",
+        kinds(&left)
     );
     let events = driven.settle_events();
-    assert_eq!(peers_of(&events), []);
+    assert_eq!(peers_of(&events).len(), 0, "no peers on the Trackers tab");
     let merged = details_of(&events)
         .last()
         .map_or_else(|| full.clone(), |last| TorrentDetails::clone(last));

@@ -19,6 +19,12 @@ pub(crate) const STALE_OPACITY: f32 = 0.5;
 /// and stays readable.
 pub(crate) const DIMMED_OPACITY: f32 = 0.55;
 
+/// The opacity of what shows the daemon's data, as the rows of the Peers and the Trackers tab: the
+/// stale opacity while the data is `stale`, and none otherwise.
+pub(crate) fn stale_opacity(stale: bool) -> Option<f32> {
+    stale.then_some(STALE_OPACITY)
+}
+
 /// The opacity of a row of the table: the stale opacity while the data is `stale`, the dimmed
 /// one for an idle (`dimmed`) row, and none otherwise. Never both: a stale idle row would fade to
 /// a quarter and become hard to read.
@@ -206,6 +212,16 @@ mod tests {
             Some(STALE_OPACITY),
             "never the product of the two"
         );
+    }
+
+    #[test]
+    fn stale_data_is_dimmed_and_fresh_data_is_not() {
+        assert_eq!(stale_opacity(true), Some(STALE_OPACITY));
+        assert_eq!(stale_opacity(false), None);
+        // As a row of the table that is not idle.
+        for stale in [false, true] {
+            assert_eq!(stale_opacity(stale), row_opacity(stale, false), "{stale}");
+        }
     }
 
     /// The theme of `mode`, as gpui-component loads it.

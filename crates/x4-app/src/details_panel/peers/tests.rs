@@ -336,9 +336,29 @@ fn a_click_on_a_header_sorts_by_it_and_a_second_click_reverses(cx: &mut TestAppC
         ]
     );
 
-    // The column of the connection's icons does not sort.
+    // The column of the connection's icons does not sort: a click on it leaves the order and the
+    // mark as they were, and it gets no mark of its own.
     click_header(TRAITS, cx);
-    assert_eq!(first_row(cx).as_deref(), Some("192.0.2.9, port 1"));
+    assert_eq!(
+        drawn_rows(panel, cx),
+        [
+            "192.0.2.9, port 1",
+            "192.0.2.2, port 3",
+            "192.0.2.10, port 2"
+        ]
+    );
+    let (up_mark, traits_mark) = drawn(panel, cx, |window| {
+        let mark = |window: &mut gpui_kit::Window, column: usize| {
+            window
+                .within(PEER_HEADER_ID)
+                .within(("column", column))
+                .try_find("sort-mark")
+                .map(|mark| mark.label().map(str::to_owned))
+        };
+        (mark(window, UP), mark(window, TRAITS))
+    });
+    assert_eq!(up_mark, Some(Some("sorted ascending".to_owned())));
+    assert_eq!(traits_mark, None);
 }
 
 #[gpui_kit::test]

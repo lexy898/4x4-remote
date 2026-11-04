@@ -29,7 +29,7 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Theme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, ElementId, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
+    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled,
     TestSupportExt as _, UniformListScrollHandle, div, px, relative,
 };
 use x4_core::{
@@ -44,7 +44,7 @@ use crate::i18n::{
     peer_address_label, peers_empty_text, peers_summary_texts, percent_text, speed_text, t,
 };
 use crate::theme::{
-    PROGRESS_TRACK_OPACITY, STALE_OPACITY, rate_color, state_color, tabular_digits,
+    PROGRESS_TRACK_OPACITY, rate_color, stale_opacity, state_color, tabular_digits,
 };
 use crate::torrent_table::BAR_HEIGHT;
 
@@ -262,8 +262,9 @@ impl DetailsPanel {
 
     /// The line above the list: each part of the summary on its own, with a separator between. On
     /// a narrow panel it wraps between the parts, never inside one, and a separator goes to the
-    /// next line with the part after it, so that no line ends or starts with one alone.
-    fn peers_summary_line(&self, cx: &App) -> impl IntoElement {
+    /// next line with the part after it, so that no line ends or starts with one alone. Its style
+    /// is open to the tests, which check that it is dimmed while the data is stale.
+    fn peers_summary_line(&self, cx: &App) -> impl IntoElement + Styled + use<> {
         let separator = SharedString::from(t!("peers-summary-separator"));
         let parts = peers_summary_texts(&self.peers.summary)
             .into_iter()
@@ -288,13 +289,25 @@ impl DetailsPanel {
             .gap_y_0p5()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .when(self.stale, |line| line.opacity(STALE_OPACITY))
+            .when_some(stale_opacity(self.stale), Styled::opacity)
             .children(parts)
             .test_support()
     }
 
     /// The rows of the list at `range`, as drawn now, in the colors of the torrent's state.
     fn peer_rows_in(&self, range: Range<usize>, cx: &App) -> Vec<AnyElement> {
+        self.styled_peer_rows(range, cx)
+            .into_iter()
+            .map(IntoElement::into_any_element)
+            .collect()
+    }
+
+    /// The rows of the list at `range`, with their style open to the tests.
+    fn styled_peer_rows(
+        &self,
+        range: Range<usize>,
+        cx: &App,
+    ) -> Vec<impl IntoElement + Styled + use<>> {
         let Some(torrent) = &self.torrent else {
             return Vec::new();
         };
@@ -317,6 +330,17 @@ impl DetailsPanel {
                 )
             })
             .collect()
+    }
+
+    /// The opacity of the summary and of each row of the Peers tab, as drawn now. For the tests.
+    #[cfg(test)]
+    pub(crate) fn peers_dimming(&self, cx: &App) -> (Option<f32>, Vec<Option<f32>>) {
+        let rows = self
+            .styled_peer_rows(0..self.peers.rows.len(), cx)
+            .iter_mut()
+            .map(|row| row.style().opacity)
+            .collect();
+        (self.peers_summary_line(cx).style().opacity, rows)
     }
 }
 
@@ -395,13 +419,13 @@ fn peer_row(
     state: DisplayState,
     dimmed: bool,
     cx: &App,
-) -> AnyElement {
+) -> impl IntoElement + Styled + use<> {
     let theme = cx.theme();
     let row = &shown.row;
     let [country, address, client, progress, down, up, traits] = columns;
     let address_label = peer_address_label(&row.address, row.key.1);
     grid::row(shown.id.clone(), index, address_label.clone())
-        .when(dimmed, |line| line.opacity(STALE_OPACITY))
+        .when_some(stale_opacity(dimmed), Styled::opacity)
         .child(country_cell(country, row, cx))
         .child(
             grid::cell(address)
@@ -435,7 +459,6 @@ fn peer_row(
         ))
         .child(traits_cell(traits, row, theme))
         .test_support()
-        .into_any_element()
 }
 
 /// The flag, or the globe, and the country's code beside it, muted.

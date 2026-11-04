@@ -639,14 +639,20 @@ fn closing_the_tab_while_the_tree_is_built_drops_it(cx: &mut TestAppContext) {
     assert!(made_from_read(panel, &read, cx));
 }
 
-/// How many trees [`make_and_count`] made; only
+/// How many makings of a tree [`start_and_count`] started; only
 /// `a_newer_read_of_the_same_files_during_the_build_takes_the_finished_tree` uses it.
-static MADE: AtomicUsize = AtomicUsize::new(0);
+static STARTED: AtomicUsize = AtomicUsize::new(0);
 
-/// Makes the tree of `details`, as the app does, and counts it in [`MADE`].
-fn make_and_count(details: &Arc<TorrentDetails>) -> FileTree {
-    MADE.fetch_add(1, Ordering::SeqCst);
-    FileTree::new(details)
+/// Starts the making of the tree of `details` on the executor, as the tests do, and counts it in
+/// [`STARTED`]. It counts the starts, not the trees made, so that the count does not hang on
+/// whether a making that a second one replaced still runs to its end.
+fn start_and_count(
+    details: Arc<TorrentDetails>,
+    make: MakeTree,
+    cx: &App,
+) -> Task<Option<FileTree>> {
+    STARTED.fetch_add(1, Ordering::SeqCst);
+    make_on_the_executor(details, make, cx)
 }
 
 #[gpui_kit::test]
@@ -654,8 +660,8 @@ fn a_newer_read_of_the_same_files_during_the_build_takes_the_finished_tree(
     cx: &mut TestAppContext,
 ) {
     let panel = panel_on(DetailsTab::Files, cx);
-    change(panel, cx, |panel, _| panel.files.make = make_and_count);
-    MADE.store(0, Ordering::SeqCst);
+    change(panel, cx, |panel, _| panel.files.make_on = start_and_count);
+    STARTED.store(0, Ordering::SeqCst);
     let scans = torrent("a");
     let (first, second) = (big(&scans.hash, LAST), big(&scans.hash, LAST));
 
@@ -667,7 +673,7 @@ fn a_newer_read_of_the_same_files_during_the_build_takes_the_finished_tree(
 
     cx.run_until_parked();
     assert!(made_from_read(panel, &second, cx), "fitted to the newest");
-    assert_eq!(MADE.load(Ordering::SeqCst), 1, "one tree made");
+    assert_eq!(STARTED.load(Ordering::SeqCst), 1, "one tree made");
 }
 
 #[gpui_kit::test]
