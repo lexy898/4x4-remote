@@ -183,6 +183,131 @@ fn get_selection_sends_the_id_list() {
 }
 
 #[test]
+fn a_peers_read_names_the_peers_and_where_they_came_from() {
+    let (mut client, transport) = client_answering(json!({ "torrents": [] }));
+
+    client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::PEERS)
+        .unwrap();
+
+    assert_eq!(
+        only_request(&transport).unwrap().params,
+        json!({ "ids": [3, HASH], "fields": ["id", "hash_string", "peers", "peers_from"] })
+    );
+}
+
+#[test]
+fn a_trackers_read_names_the_tracker_stats_only() {
+    let (mut client, transport) = client_answering(json!({ "torrents": [] }));
+
+    client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::TRACKERS)
+        .unwrap();
+
+    assert_eq!(
+        only_request(&transport).unwrap().params,
+        json!({ "ids": [3, HASH], "fields": ["id", "hash_string", "tracker_stats"] })
+    );
+}
+
+/// A peer entry with the keys the client reads.
+fn peer_entry(address: &str) -> Value {
+    json!({
+        "address": address,
+        "port": 51413,
+        "client_name": "Client/1.0",
+        "flag_str": "TKEX",
+        "progress": 1.0,
+        "rate_to_client": 0,
+        "rate_to_peer": 0,
+        "is_encrypted": true,
+        "is_utp": true,
+    })
+}
+
+#[test]
+fn an_odd_peer_entry_does_not_fail_the_whole_read() {
+    let mut odd_port = peer_entry("192.0.2.2");
+    odd_port["port"] = json!("x");
+    let mut no_address = peer_entry("192.0.2.3");
+    no_address.as_object_mut().unwrap().remove("address");
+    let (mut client, _) = client_answering(json!({
+        "torrents": [{
+            "id": 3,
+            "peers": [peer_entry("192.0.2.1"), odd_port, no_address, null, 7],
+            "peers_from": { "from_dht": "x", "from_pex": 4 },
+        }]
+    }));
+
+    let response = client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::PEERS)
+        .unwrap();
+
+    let torrent = &response.torrents[0];
+    let peers = torrent.peers.as_ref().unwrap();
+    assert_eq!(peers.len(), 5);
+    assert_eq!(
+        (peers[0].address.as_str(), peers[0].port),
+        ("192.0.2.1", 51413)
+    );
+    // The odd key holds its default; the entry's other keys are still read.
+    assert_eq!((peers[1].address.as_str(), peers[1].port), ("192.0.2.2", 0));
+    assert_eq!(peers[1].client_name, "Client/1.0");
+    assert!(peers[1].is_utp);
+    assert_eq!((peers[2].address.as_str(), peers[2].port), ("", 51413));
+    assert_eq!(peers[2].flag_str, "TKEX");
+    // Entries that are not objects at all are empty records.
+    assert_eq!(peers[3], x4_rpc::PeerRecord::default());
+    assert_eq!(peers[4], x4_rpc::PeerRecord::default());
+    let from = torrent.peers_from.as_ref().unwrap();
+    assert_eq!((from.from_dht, from.from_pex), (0, 4));
+}
+
+#[test]
+fn peers_that_are_not_a_list_read_as_absent_and_do_not_fail_the_read() {
+    let (mut client, _) = client_answering(json!({
+        "torrents": [{ "id": 3, "peers": "none", "peers_from": "none" }]
+    }));
+
+    let response = client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::PEERS)
+        .unwrap();
+
+    assert_eq!(response.torrents[0].peers, None);
+    assert_eq!(response.torrents[0].peers_from, None);
+}
+
+#[test]
+fn an_odd_tracker_entry_does_not_fail_the_whole_read() {
+    let (mut client, _) = client_answering(json!({
+        "torrents": [{
+            "id": 3,
+            "tracker_stats": [
+                { "id": 1, "tier": 0, "host": "a.example:80", "announce_state": 1 },
+                { "id": "x", "tier": -1, "host": "b.example:80", "announce_state": "soon" },
+                { "host": "c.example:80", "next_announce_time": [] },
+                7,
+            ],
+        }]
+    }));
+
+    let response = client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::TRACKERS)
+        .unwrap();
+
+    let trackers = response.torrents[0].tracker_stats.as_ref().unwrap();
+    let hosts: Vec<&str> = trackers
+        .iter()
+        .map(|tracker| tracker.host.as_str())
+        .collect();
+    assert_eq!(hosts, ["a.example:80", "b.example:80", "c.example:80", ""]);
+    assert_eq!(trackers[0].announce_state, x4_rpc::TrackerState::Waiting);
+    assert_eq!(trackers[1].id, x4_rpc::TrackerId(0));
+    assert_eq!(trackers[1].announce_state, x4_rpc::TrackerState::Inactive);
+    assert_eq!(trackers[2].next_announce_time, 0);
+}
+
+#[test]
 fn actions_always_send_non_empty_ids() {
     let actions = [
         (TorrentAction::Start, "torrent_start"),

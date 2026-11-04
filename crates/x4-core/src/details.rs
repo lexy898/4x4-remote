@@ -447,6 +447,7 @@ mod tests {
             last_scrape_result: "Success".to_owned(),
             seeder_count: Some(seeder_count),
             leecher_count: Some(leecher_count),
+            ..TrackerStatRecord::default()
         }
     }
 
