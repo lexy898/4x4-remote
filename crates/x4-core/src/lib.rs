@@ -102,6 +102,13 @@
 //! [`Command`]s, which never blocks, awaits the [`Event`]s on its own executor, and drops the
 //! handle to stop the thread without waiting for it, so it never waits on the network.
 //!
+//! The countries of peers come from the legacy country files that the `geoip-database`
+//! package installs. [`CountryDb::open`] checks a file of an [`Edition`], or says with a
+//! [`GeoIpError`] why it cannot be used, and a [`GeoIp`] holds the IPv4 and the IPv6 database and
+//! gives the [`CountryCode`] of an address as a [`CountryLookup`], reading a few bytes of a file
+//! per lookup and never a whole file. [`build_country_file`] writes such a file for tests and the
+//! synthetic demo, and [`known_countries`] lists every country a lookup can give.
+//!
 //! The `test-support` feature adds the `test_support` module with builders for tests of
 //! dependent crates (a complete [`Torrent`], a recorded fixture's `result`) and turns on
 //! `x4-rpc`'s `test-support`, whose recorded fixtures the builders work with.
@@ -114,6 +121,7 @@ mod engine;
 mod files;
 mod filter;
 mod format;
+mod geoip;
 pub mod launch;
 mod limits;
 mod metainfo;
@@ -155,6 +163,10 @@ pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,
     human_speed,
+};
+pub use geoip::{
+    CountryCode, CountryDb, CountryLookup, Edition, GeoIp, GeoIpError, Source, build_country_file,
+    known_countries,
 };
 pub use limits::{
     KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB, kbps_to_kib,

@@ -1,3 +1,9 @@
 [files]
 # vendor/ holds third-party code, which is not spell-checked (vendor/gpui-pre-wgpu/PATCHED.md).
 extend-exclude = [".specs/", "**/tests/fixtures/", "target/", "vendor/"]
+
+[default]
+# The rows of the GeoIP country table (crates/x4-core/src/geoip/country_codes.rs) are ISO 3166-1
+# codes, and some of them (BA, FO, PN) read as typos. Only a line of nothing but two-letter
+# capitals after its indent is skipped.
+extend-ignore-re = ["(?m)^ {4}[A-Z]{2}( [A-Z]{2})*$"]

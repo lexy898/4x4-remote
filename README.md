@@ -1171,11 +1171,17 @@ this machine writes to it under another (for example over NFS), so both must be 
 there. A test creates it if it is missing (its parent must exist) and then removes it again; a
 directory that already existed is left in place. No torrent may already download into it.
 
+`just test-live` also runs `crates/x4-core/tests/geoip_live.rs`, which needs no daemon: it opens
+the installed GeoIP country files `GeoIP.dat` and `GeoIPv6.dat`, read-only, and checks only what
+does not change from one build of them to the next: the countries of two public DNS resolvers that
+are not anycast, and that loopback addresses have none.
+
 | Variable             | Meaning                                  | Default                                    |
 | -------------------- | ---------------------------------------- | ------------------------------------------ |
 | `X4_LIVE_URL`        | the daemon's RPC endpoint                | `http://192.168.1.5:9091/transmission/rpc` |
 | `X4_LIVE_REMOTE_DIR` | the test directory as the daemon sees it | `/mnt/hdd/torrents/4x4-test`               |
 | `X4_LIVE_LOCAL_DIR`  | the same directory on this machine       | `/mnt/pi-hdd/torrents/4x4-test`            |
+| `X4_GEOIP_DIR`       | the folder of the GeoIP country files    | `/usr/share/GeoIP`                         |
 
 ```bash
 X4_LIVE_URL=http://my-daemon:9091/transmission/rpc \
