@@ -186,18 +186,24 @@ pub(crate) struct Built {
     pub(crate) issues: Vec<DetailsIssue>,
 }
 
+/// Whether `record` is the torrent `hash`, whatever the case of the hash it carries.
+pub(crate) fn has_hash(record: &TorrentRecord, hash: &HashString) -> bool {
+    record
+        .hash_string
+        .as_deref()
+        .and_then(|raw| HashString::parse(raw).ok())
+        .is_some_and(|found| &found == hash)
+}
+
 /// The record of the torrent `hash` in a details answer, if it is there.
 pub(crate) fn find_record(
     hash: &HashString,
     response: TorrentGetResponse,
 ) -> Option<TorrentRecord> {
-    response.torrents.into_iter().find(|record| {
-        record
-            .hash_string
-            .as_deref()
-            .and_then(|raw| HashString::parse(raw).ok())
-            .is_some_and(|found| &found == hash)
-    })
+    response
+        .torrents
+        .into_iter()
+        .find(|record| has_hash(record, hash))
 }
 
 /// How many files `record` says the torrent has: its `file_count`, or the length of its `files`

@@ -14,7 +14,9 @@
 //! The details panel is decided here too: [`details_target`] tells which torrent it is about,
 //! [`general_model`] gives the values of its General tab, and [`tracker_summary`] condenses the
 //! trackers into the worst problem and the counts of those that work, fail and were not contacted
-//! yet.
+//! yet. Its Peers tab is decided here as well: [`peer_rows`] puts the peers in the order the user
+//! chose, [`peers_summary`] tells where they came from and who transfers, and [`peers_empty`]
+//! why there are none to show.
 
 mod availability;
 mod columns;
@@ -22,6 +24,7 @@ mod details_target;
 mod eta;
 mod general;
 // The file tree of the details panel rounds progress like the table does.
+mod peers;
 pub(crate) mod percent;
 mod removal;
 mod row;
@@ -35,6 +38,10 @@ pub use columns::{ColumnId, ViewState};
 pub use details_target::{DetailsTarget, details_target};
 pub use eta::{CompactDuration, EtaView, TimeUnit};
 pub use general::{ErrorView, GeneralModel, PiecesView, general_model};
+pub use peers::{
+    PeerColumn, PeerRow, PeerSort, PeerSource, PeersEmpty, PeersSummary, peer_rows, peers_empty,
+    peers_summary,
+};
 pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
 pub use selection::{Edge, Selection};

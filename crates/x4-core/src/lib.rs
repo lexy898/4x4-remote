@@ -109,6 +109,15 @@
 //! per lookup and never a whole file. [`build_country_file`] writes such a file for tests and the
 //! synthetic demo, and [`known_countries`] lists every country a lookup can give.
 //!
+//! The peers of a torrent are modeled here as well. [`build_peers`] turns a `torrent_get` answer
+//! into a [`PeerList`] of [`Peer`]s and the [`PeerSources`] they were found through; it renames the
+//! daemon's choke and interest flags as [`PeerTraits`] and cleans the client name a peer chose.
+//! [`locate`] fills in the countries through a [`CountryLookup`], and [`peer_flag`] names the
+//! letters of a flag string. What the Peers tab shows is decided here too: [`peer_rows`] orders
+//! the [`PeerRow`]s as a [`PeerSort`] asks (by a [`PeerColumn`], or the busiest first),
+//! [`peers_summary`] gives the [`PeersSummary`] above them, and [`peers_empty`] the [`PeersEmpty`]
+//! reason when there are none.
+//!
 //! The `test-support` feature adds the `test_support` module with builders for tests of
 //! dependent crates (a complete [`Torrent`], a recorded fixture's `result`) and turns on
 //! `x4-rpc`'s `test-support`, whose recorded fixtures the builders work with.
@@ -126,6 +135,7 @@ pub mod launch;
 mod limits;
 mod metainfo;
 mod model;
+mod peers;
 mod playable;
 pub mod service;
 mod snapshot;
@@ -174,6 +184,10 @@ pub use limits::{
 };
 pub use metainfo::{MAX_TORRENT_FILE_BYTES, MetaFile, MetainfoError, ParsedTorrent, parse_torrent};
 pub use model::{Eta, ModelError, Ratio, Torrent};
+pub use peers::{
+    MAX_CLIENT_CHARS, Peer, PeerFlag, PeerList, PeerSources, PeerTraits, build_peers, locate,
+    peer_flag,
+};
 pub use playable::{Playable, file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 pub use sort::{SortDirection, SortKey, sort};
@@ -188,10 +202,11 @@ pub use ui_state::{
 };
 pub use view::{
     Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,
-    GeneralModel, Indicator, PiecesView, RemovalSummary, Row, Selection, ServiceStatus,
-    SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit, ToggleKind, TrackerCount,
-    TrackerProblem, TrackerProblemKind, TrackerSummary, ViewState, availability, details_target,
-    general_model, removal_summary, status_model, table_model, toggle_kind, tracker_summary,
+    GeneralModel, Indicator, PeerColumn, PeerRow, PeerSort, PeerSource, PeersEmpty, PeersSummary,
+    PiecesView, RemovalSummary, Row, Selection, ServiceStatus, SpeedControls, StatusModel,
+    Subtitle, TableModel, TimeUnit, ToggleKind, TrackerCount, TrackerProblem, TrackerProblemKind,
+    TrackerSummary, ViewState, availability, details_target, general_model, peer_rows, peers_empty,
+    peers_summary, removal_summary, status_model, table_model, toggle_kind, tracker_summary,
     visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
