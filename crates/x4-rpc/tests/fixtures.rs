@@ -4,12 +4,13 @@
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use x4_rpc::Client;
 use x4_rpc::testing::fixtures::{
     FREE_SPACE, SESSION_GET, SESSION_STATS, TORRENT_GET_DETAILS, TORRENT_GET_LIST,
     TORRENT_GET_PEERS, TORRENT_GET_RECENT, TORRENT_GET_TRACKERS,
 };
+use x4_rpc::testing::scrub::Scrubber;
 use x4_rpc::testing::{self, FakeTransport};
 
 /// The letters of a peer's `flag_str`.
@@ -61,44 +62,56 @@ fn is_scrubbed(key: &str, text: &str) -> bool {
                     numbered(torrent, "Torrent ", "") && numbered(file, "", ".bin")
                 })
         }
-        "magnet_link" => text
-            .strip_prefix("magnet:?xt=urn:btih:")
-            .and_then(|rest| rest.split_once("&dn=Torrent+"))
-            .is_some_and(|(hash, number)| is_fake_hash(hash) && numbered(number, "", "")),
+        // A link with no info hash is redacted whole.
+        "magnet_link" => {
+            text == "redacted"
+                || text
+                    .strip_prefix("magnet:?xt=urn:btih:")
+                    .and_then(|rest| rest.split_once("&dn=Torrent+"))
+                    .is_some_and(|(hash, number)| is_fake_hash(hash) && numbered(number, "", ""))
+        }
         "download_dir" | "path" => text == "/data/torrents/video",
         // The metainfo's texts.
         "comment" | "creator" | "source" | "peer_id" => text == "redacted",
         "error_string" => text.is_empty() || text == "redacted error",
         "labels" => text == "label",
-        // The peers: a documentation address, a numbered client, the daemon's flag letters.
-        "address" => text == "redacted" || is_documentation_address(text),
+        // The peers: a documentation address (an empty one stays empty, and text that is no
+        // address is redacted), a numbered client, the daemon's flag letters.
+        "address" => text.is_empty() || text == "redacted" || is_documentation_address(text),
         "client_name" => text.is_empty() || numbered(text, "Client ", ""),
         "flag_str" => {
             text == "redacted" || text.chars().all(|letter| FLAG_LETTERS.contains(letter))
         }
-        // The trackers: a numbered example host with the port, the daemon's own answers. The
-        // hand-written `torrent_get_details` holds `redacted` for the texts.
+        // The trackers: a numbered example host, with the port when there was one, the daemon's
+        // own answers. An empty text stays empty. The hand-written `torrent_get_details` holds
+        // `redacted` for the texts.
         "host" => {
-            text == "redacted"
+            text.is_empty()
+                || text == "redacted"
+                || numbered(text, "tracker", ".example.org")
                 || text.rsplit_once(':').is_some_and(|(host, port)| {
                     numbered(host, "tracker", ".example.org") && numbered(port, "", "")
                 })
         }
         "announce" => {
-            text == "redacted" || numbered(text, "https://tracker", ".example.org/announce")
+            text.is_empty()
+                || text == "redacted"
+                || numbered(text, "https://tracker", ".example.org/announce")
         }
         "scrape" => {
             text.is_empty()
                 || text == "redacted"
                 || numbered(text, "https://tracker", ".example.org/scrape")
         }
-        "sitename" => text == "redacted" || text == "example",
+        "sitename" => text.is_empty() || text == "redacted" || text == "example",
+        // The daemon's own texts are kept; any other, which is the tracker's, is `redacted error`.
         "last_announce_result" | "last_scrape_result" => matches!(
             text,
             "" | "Success"
                 | "Could not connect to tracker"
                 | "Tracker did not respond"
                 | "redacted"
+                | "redacted error"
         ),
         _ => false,
     }
@@ -310,4 +323,177 @@ fn the_peers_and_trackers_fixtures_are_the_answers_to_the_tab_reads() {
         expect(&["id", "hash_string", "tracker_stats"])
     );
     assert_eq!(peers["hash_string"], trackers["hash_string"]);
+}
+
+/// Each string below a key that the scrubber rewrites or keeps: the key, a real input, and what
+/// the scrubber writes for it. Together they cover every form it can write under those keys,
+/// which `is_scrubbed` must accept: a fixture recorded from a daemon whose data takes any of
+/// them would otherwise fail `every_string_in_the_fixtures_is_scrubbed` as "unscrubbed".
+const SCRUBBED_FORMS: &[(&str, &str, &str)] = &[
+    ("address", "8.8.4.4", "192.0.2.1"),
+    ("address", "::ffff:8.8.4.4", "192.0.2.1"),
+    ("address", "2606:4700:4700::1111", "2001:db8::1"),
+    ("address", "Invalid address", "redacted"),
+    ("address", "", ""),
+    ("client_name", "RealClient/1.0", "Client 1"),
+    ("client_name", "", ""),
+    ("flag_str", "TODdUuK?EHXI", "TODdUuK?EHXI"),
+    ("flag_str", "TKEH@", "redacted"),
+    ("flag_str", "", ""),
+    ("peer_id", "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "redacted"),
+    ("host", "tracker.real.org:6969", "tracker1.example.org:6969"),
+    ("host", "tracker.real.org", "tracker1.example.org"),
+    (
+        "host",
+        "[2606:4700:4700::1111]:80",
+        "tracker1.example.org:80",
+    ),
+    ("host", "", ""),
+    (
+        "announce",
+        "http://tracker.real.org/ann?pk=SECRET",
+        "https://tracker1.example.org/announce",
+    ),
+    ("announce", "not a url", "redacted"),
+    ("announce", "", ""),
+    (
+        "scrape",
+        "http://tracker.real.org/scrape?pk=SECRET",
+        "https://tracker1.example.org/scrape",
+    ),
+    ("scrape", "not a url", "redacted"),
+    ("scrape", "", ""),
+    ("sitename", "realsite", "example"),
+    ("sitename", "", ""),
+    ("last_announce_result", "Success", "Success"),
+    (
+        "last_announce_result",
+        "Could not connect to tracker",
+        "Could not connect to tracker",
+    ),
+    (
+        "last_announce_result",
+        "Tracker did not respond",
+        "Tracker did not respond",
+    ),
+    ("last_announce_result", "", ""),
+    (
+        "last_announce_result",
+        "Tracker gave an error: real.example",
+        "redacted error",
+    ),
+    ("last_scrape_result", "Success", "Success"),
+    ("last_scrape_result", "", ""),
+    (
+        "last_scrape_result",
+        "Tracker gave an error: real.example",
+        "redacted error",
+    ),
+    ("error_string", "", ""),
+    (
+        "error_string",
+        "No space left on real.disk",
+        "redacted error",
+    ),
+    ("labels", "private-label", "label"),
+    ("comment", "a real comment", "redacted"),
+    ("creator", "RealCreator 1.0", "redacted"),
+    ("source", "real-tag", "redacted"),
+    ("download_dir", "/mnt/real/disk", "/data/torrents/video"),
+    ("path", "/mnt/real/disk", "/data/torrents/video"),
+    ("pieces", "AAEC/w==", "AAEC/w=="),
+    ("version", "4.1.3 (abcdef0123)", "4.1.3 (abcdef0123)"),
+];
+
+#[test]
+fn every_form_the_scrubber_writes_passes_the_fixture_check() {
+    let mut wrong = Vec::new();
+    for &(key, input, expected) in SCRUBBED_FORMS {
+        let mut value = json!({ key: input });
+
+        Scrubber::new().scrub(&mut value);
+
+        let written = value[key].as_str().unwrap_or_default();
+        if written != expected {
+            wrong.push(format!(
+                "{key}: {input:?} became {written:?}, not {expected:?}"
+            ));
+        } else if !is_scrubbed(key, written) {
+            wrong.push(format!(
+                "{key}: the scrubber writes {written:?}, the check rejects it"
+            ));
+        }
+    }
+
+    assert!(wrong.is_empty(), "{} forms: {wrong:#?}", wrong.len());
+}
+
+#[test]
+fn the_forms_of_a_torrent_the_scrubber_writes_pass_the_fixture_check() {
+    let hash = "0123456789abcdef0123456789abcdef01234567";
+    let other = "fedcba9876543210fedcba9876543210fedcba98";
+    let mut value = json!({ "result": { "torrents": [
+        {
+            "id": 1,
+            "hash_string": hash,
+            "name": "Real.Show.S01",
+            "magnet_link": format!("magnet:?xt=urn:btih:{hash}&dn=Real.Show.S01"),
+            "files": [{ "name": "Real.Show.S01/a.mkv" }, { "name": "Real.Show.S01/b.mkv" }],
+        },
+        {
+            "id": 2,
+            "hash_string": other,
+            "name": "Real.Movie",
+            "magnet_link": "not a magnet link",
+            "files": [{ "name": "Real.Movie.mkv" }],
+        },
+        { "id": 3, "name": "Real.Nameless", "magnet_link": "" },
+    ] } });
+
+    Scrubber::new().scrub(&mut value);
+
+    let mut found = Vec::new();
+    unscrubbed_strings("", &value, &mut found);
+    assert!(found.is_empty(), "unscrubbed strings: {found:?}");
+    let torrents = &value["result"]["torrents"];
+    assert_eq!(torrents[0]["files"][1]["name"], "Torrent 1/file 2.bin");
+    assert_eq!(torrents[1]["files"][0]["name"], "Torrent 2.bin");
+    assert_eq!(torrents[1]["magnet_link"], "redacted");
+}
+
+#[test]
+fn the_fixture_check_still_rejects_what_the_scrubber_never_writes() {
+    let real = [
+        ("address", "8.8.4.4"),
+        ("address", "192.0.3.1"),
+        ("address", "no documentation address left"),
+        ("client_name", "RealClient/1.0"),
+        ("flag_str", "TKEH@"),
+        ("peer_id", "AAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+        ("host", "tracker.real.org:6969"),
+        ("host", "tracker1.example.org:"),
+        ("host", "tracker1.example.org:80x"),
+        ("announce", "http://tracker.real.org/ann?pk=SECRET"),
+        (
+            "announce",
+            "https://tracker1.example.org/announce?pk=SECRET",
+        ),
+        ("scrape", "https://tracker0.example.org/scrape"),
+        ("sitename", "realsite"),
+        (
+            "last_announce_result",
+            "Tracker gave an error: real.example",
+        ),
+        ("last_scrape_result", "success"),
+        (
+            "magnet_link",
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        ),
+        ("error_string", "No space left"),
+        ("unknown_key", "redacted"),
+    ];
+
+    for (key, text) in real {
+        assert!(!is_scrubbed(key, text), "{key}: {text:?} passes");
+    }
 }
