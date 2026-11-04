@@ -27,7 +27,7 @@ use crate::theme::{STALE_OPACITY, count_color, filter_color, tabular_digits};
 
 /// The width of the sidebar. The default columns of the table fit next to it in the default
 /// window.
-const SIDEBAR_WIDTH: f32 = 200.;
+pub(crate) const SIDEBAR_WIDTH: f32 = 200.;
 
 /// What a click on an entry does, given its filter.
 type SelectHandler = Rc<dyn Fn(Filter, &mut Window, &mut App)>;

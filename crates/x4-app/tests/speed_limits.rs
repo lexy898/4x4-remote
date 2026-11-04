@@ -898,8 +898,8 @@ fn the_speed_keys_do_nothing_behind_a_toolbar_menu(cx: &mut TestAppContext) {
     assert_eq!(window.sent_actions(), [Action::SetAltSpeed(true)]);
 }
 
-/// The popover keeps the keys of the details panel, as a menu does: Alt+Enter, Alt+1, Alt+2 and
-/// Alt+3 change nothing behind it, from a field or from a switch. Each tab key is pressed while
+/// The popover keeps the keys of the details panel, as a menu does: Alt+Enter, Alt+1, Alt+2, Alt+3
+/// and Alt+4 change nothing behind it, from a field or from a switch. Each tab key is pressed while
 /// the other tabs are open, where it would change something.
 #[gpui_kit::test]
 fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
@@ -908,9 +908,10 @@ fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
     assert!(window.details_shown(cx));
 
     for (open_tab, tab_key, other_tab_keys) in [
-        (DetailsTab::General, "alt-1", ["alt-2", "alt-3"]),
-        (DetailsTab::Files, "alt-2", ["alt-1", "alt-3"]),
-        (DetailsTab::Peers, "alt-3", ["alt-1", "alt-2"]),
+        (DetailsTab::General, "alt-1", ["alt-2", "alt-3", "alt-4"]),
+        (DetailsTab::Files, "alt-2", ["alt-1", "alt-3", "alt-4"]),
+        (DetailsTab::Peers, "alt-3", ["alt-1", "alt-2", "alt-4"]),
+        (DetailsTab::Trackers, "alt-4", ["alt-1", "alt-2", "alt-3"]),
     ] {
         window.press(tab_key, cx);
         let before = window.details(cx);

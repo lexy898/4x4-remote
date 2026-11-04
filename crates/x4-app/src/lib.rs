@@ -6,8 +6,8 @@
 //! and lays out a toolbar (the `toolbar` module) with the search box (the `search` module), the
 //! filter sidebar (the `sidebar` module), the torrent table ([`torrent_table`]), the details panel
 //! under it (the `details_panel` module), whose Files tab draws the shared list of a torrent's
-//! files (the `file_list` module) and whose Peers tab draws a torrent's peers with their flags,
-//! and the status bar (the `status_bar` module); the
+//! files (the `file_list` module), whose Peers tab draws a torrent's peers with their flags and
+//! whose Trackers tab lists its trackers, and the status bar (the `status_bar` module); the
 //! `theme` module holds the light and dark theme and the colors of states, the `icons` module
 //! the icons beyond gpui-component's own, and the `flags` module the country flags. [`actions`]
 //! holds what can be done to the selected torrents, the `context_menu` module the menu of a

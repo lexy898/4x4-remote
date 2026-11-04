@@ -565,10 +565,11 @@ date-time = { $year }-{ $month }-{ $day } { $hour }:{ $minute }
 
 ## The details panel under the table
 
-# The tabs of the panel, which Alt+1, Alt+2 and Alt+3 choose too.
+# The tabs of the panel, which Alt+1, Alt+2, Alt+3 and Alt+4 choose too.
 details-tab-general = General
 details-tab-files = Files
 details-tab-peers = Peers
+details-tab-trackers = Trackers
 # What the panel says when it shows no torrent: none is selected, or several are.
 # $count: the torrents selected (a number, 2 or more).
 details-none = Select a torrent
@@ -744,6 +745,60 @@ peers-encrypted = Encrypted connection
 peers-utp = µTP
 peers-utp-tooltip = Connected over µTP, not TCP
 peers-incoming = The peer connected to us
+
+## The Trackers tab of the details panel
+
+# What the tab says instead of the trackers: the torrent has none, so it finds peers through DHT
+# and peer exchange alone; or it is private and has none, so it may use neither. Until the details
+# have come, it says details-pending.
+trackers-none = This torrent has no trackers (DHT and PEX only)
+trackers-none-private = This torrent has no trackers, and a private torrent cannot use DHT or PEX
+# The name of the list of trackers, for screen readers.
+trackers-list = Trackers
+# The column headers. The column of the status dots has no header text, only its name for screen
+# readers.
+trackers-column-status = Status
+trackers-column-tier = Tier
+trackers-column-tracker = Tracker
+trackers-column-last = Last announce
+trackers-column-next = Next announce
+trackers-column-seeders = Seeders
+trackers-column-leechers = Leechers
+trackers-column-downloads = Downloads
+# What a tracker is doing, under its address. A failed or timed out announce shows the server's own
+# text instead, as sent, when it sent one. A backup tracker is one that another tracker of its tier
+# stands in for; "not contacted yet" means no announce has gone to it since the server started.
+tracker-status-working = Working
+tracker-status-announcing = Announcing
+tracker-status-backup = Backup
+tracker-status-not-contacted = Not contacted yet
+tracker-status-failed = Announce failed
+tracker-status-timed-out = Timed out
+# How many peers the last announce returned. $count: a number.
+tracker-peers =
+    { $count ->
+        [one] { $count } peer
+       *[other] { $count } peers
+    }
+# The tracker answered the announce but not the scrape, which asks it for the numbers of seeders
+# and leechers; many trackers never answer one, so the line says it quietly.
+tracker-scrape-problem = No peer counts
+# Between the parts of the line under a tracker's address: the status, the peers of the last
+# announce, how long ago it was, and the note about the scrape.
+tracker-line-separator = ·
+# How far a time is from now. $duration: eta-major or eta-major-minor with the units above, such as
+# "3 m" or "1 h 2 m", in whole minutes above one minute. time-now is also what a time on the wrong
+# side of now says, as the last announce of a clock that runs ahead.
+time-ago = { $duration } ago
+time-in = in { $duration }
+time-now = now
+# The next announce is due, but waits for a free slot to announce in.
+tracker-next-queued = queued
+# A time or a count the server did not give, as for a tracker never announced to.
+tracker-value-none = —
+# The name of a tracker's row, for screen readers. $host: the tracker's address as the server wrote
+# it; $tier: its tier, from 1.
+tracker-row-label = { $host }, tier { $tier }
 
 ## The dialog that adds a torrent
 

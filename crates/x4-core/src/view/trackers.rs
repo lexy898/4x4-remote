@@ -2,8 +2,10 @@
 
 use crate::details::{TorrentDetails, TrackerOutcome, TrackerStat};
 
+mod empty;
 mod rows;
 
+pub use empty::{TrackersEmpty, trackers_empty};
 pub use rows::{TrackerRow, TrackerStatus, tracker_rows, tracker_status};
 
 /// What kind of trouble a tracker is in; the UI words it through its i18n layer.

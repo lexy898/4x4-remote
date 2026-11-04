@@ -1,5 +1,5 @@
-//! The details panel under the torrent table: a tab bar with General, Files and Peers, and under
-//! it the open tab for the torrent the selection names, or a line that says why there is none.
+//! The details panel under the torrent table: a tab bar with General, Files, Peers and Trackers,
+//! and under it the open tab for the torrent the selection names, or a line that says why there is none.
 //!
 //! The panel draws what the main view hands it and decides nothing itself:
 //!
@@ -10,8 +10,7 @@
 //!   the comment of one torrent under the name of another while the selection moves; the rows that
 //!   need them say "—" until they come (the `general` module);
 //! - the open tab, which the main view keeps in the state it remembers. A click on a tab only asks
-//!   for it ([`DetailsPanelEvent::TabChosen`]), as Alt+1, Alt+2 and Alt+3 do. The Trackers tab
-//!   has no view of its own yet: it shows as General, in the bar too.
+//!   for it ([`DetailsPanelEvent::TabChosen`]), as Alt+1, Alt+2, Alt+3 and Alt+4 do.
 //!
 //! The Files tab (the `files` module) shows the torrent's files as a tree, with whether each is
 //! downloaded, its progress and priority, and the switch of downloading in order. Its changes go
@@ -20,20 +19,23 @@
 //! panel's.
 //!
 //! The Peers tab (the `peers` module) shows the peers the service reads while it is open, in
-//! the shared list of the `grid` module, which the Trackers tab is to use too.
+//! the shared list of the `grid` module, which the Trackers tab (the `trackers` module) uses too.
+//! The trackers are part of the details, which the service sends again every few seconds while
+//! the Trackers tab is open.
 //!
 //! The copy buttons of the General tab ask the main view to copy ([`DetailsPanelEvent::Copy`]),
 //! which writes the clipboard at once and gives the keys back to the table.
 //!
 //! A hidden panel holds nothing it showed: no details, no General tab, no tree or rows of the
-//! Files tab, which can be several MiB for a torrent of thousands of files, and no peers. Only the
-//! Files tab's open folders and cursor stay. Shown again, the panel is about the selection then,
-//! and the read the service makes for it fills it.
+//! Files tab, which can be several MiB for a torrent of thousands of files, and no peers or
+//! tracker rows. Only the Files tab's open folders and cursor stay. Shown again, the panel is about
+//! the selection then, and the read the service makes for it fills it.
 
 mod files;
 mod general;
 mod grid;
 mod peers;
+mod trackers;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -54,6 +56,7 @@ use crate::i18n::{details_placeholder_text, t};
 use crate::key_repeats::KeyRepeats;
 use files::FilesTab;
 use peers::PeersTab;
+use trackers::TrackersTab;
 
 /// The element id of the panel.
 const PANEL_ID: &str = "details";
@@ -98,10 +101,12 @@ pub(crate) struct DetailsPanel {
     files: FilesTab,
     /// The peers the Peers tab shows and the order chosen for them.
     peers: PeersTab,
+    /// The rows the Trackers tab shows, made from `details`.
+    trackers: TrackersTab,
     /// Whether the daemon is connected, so that the Files tab's controls can act.
     connected: bool,
-    /// Whether what the panel shows is stale, as while the daemon does not answer: the Peers
-    /// tab's rows are dimmed then.
+    /// Whether what the panel shows is stale, as while the daemon does not answer: the rows of
+    /// the Peers and the Trackers tab are dimmed then.
     stale: bool,
     /// The key held down now, shared with the main view, so that Space, `+` and `-` in the file
     /// list act once per press.
@@ -135,6 +140,7 @@ impl DetailsPanel {
             general: None,
             files,
             peers: PeersTab::new(),
+            trackers: TrackersTab::new(),
             connected: false,
             stale: false,
             key_repeats,
@@ -145,7 +151,8 @@ impl DetailsPanel {
     /// Opens the tab `tab`. The Files tab makes its tree then, from the newest details, and lets
     /// it go when another tab opens; its open folders and cursor stay for its next tree. The
     /// Peers tab waits for the peers the service reads now that it is open, and lets them and
-    /// their order go when another tab opens.
+    /// their order go when another tab opens. The Trackers tab shows the trackers of the newest
+    /// details at once, and lets its rows go when another tab opens.
     pub(crate) fn set_tab(&mut self, tab: DetailsTab, cx: &mut Context<'_, Self>) {
         if tab != self.tab {
             self.tab = tab;
@@ -160,6 +167,7 @@ impl DetailsPanel {
                     self.peers.leave();
                 }
             }
+            self.follow_trackers(cx);
             cx.notify();
         }
     }
@@ -189,13 +197,14 @@ impl DetailsPanel {
         self.torrent = torrent.cloned();
         self.general = self.general_model();
         self.follow_files();
+        self.follow_trackers(cx);
         cx.notify();
     }
 
     /// Lets go of everything the panel shows, as it hides: the target, the details, the General
-    /// tab, the Files tab's tree and rows, and the peers with their order. The Files tab's open
-    /// folders and cursor stay for the next tree of the same torrent. A hidden panel is not drawn,
-    /// so nothing is drawn again.
+    /// tab, the Files tab's tree and rows, the peers with their order, and the tracker rows. The
+    /// Files tab's open folders and cursor stay for the next tree of the same torrent. A hidden
+    /// panel is not drawn, so nothing is drawn again.
     pub(crate) fn hide(&mut self) {
         self.target = DetailsTarget::None;
         self.torrent = None;
@@ -203,11 +212,12 @@ impl DetailsPanel {
         self.general = None;
         self.files.leave();
         self.peers.leave();
+        self.trackers.leave();
     }
 
     /// Takes the details the service sent, if they are of the target's torrent: a read that was
     /// on its way when the target changed or the panel hid is dropped. Draws again only when the
-    /// General tab or the Files tab changed.
+    /// General tab, the Files tab or the Trackers tab changed.
     pub(crate) fn take_details(
         &mut self,
         details: Arc<TorrentDetails>,
@@ -220,7 +230,8 @@ impl DetailsPanel {
         self.details = Some(details);
         let general = self.general_model();
         let files_changed = self.follow_files();
-        if general != self.general || files_changed {
+        let trackers_changed = self.follow_trackers(cx);
+        if general != self.general || files_changed || trackers_changed {
             self.general = general;
             cx.notify();
         }
@@ -236,7 +247,7 @@ impl DetailsPanel {
     }
 
     /// Tells the panel whether what it shows is stale, as while the daemon does not answer; the
-    /// Peers tab dims its rows then.
+    /// Peers and the Trackers tab dim their rows then.
     pub(crate) fn set_stale(&mut self, stale: bool, cx: &mut Context<'_, Self>) {
         if stale != self.stale {
             self.stale = stale;
@@ -273,6 +284,7 @@ impl DetailsPanel {
             .child(Tab::new().label(tab_name(DetailsTab::General)))
             .child(Tab::new().label(tab_name(DetailsTab::Files)))
             .child(Tab::new().label(tab_name(DetailsTab::Peers)))
+            .child(Tab::new().label(tab_name(DetailsTab::Trackers)))
     }
 }
 
@@ -302,16 +314,15 @@ impl Render for DetailsPanel {
                     .test_support(),
             ),
             (None, Some(general)) => match (self.tab, &self.torrent) {
-                // The Trackers tab has no view of its own yet: it shows as General, as the bar
-                // does.
-                (DetailsTab::General | DetailsTab::Trackers, _) => body
+                (DetailsTab::General, _) => body
                     .overflow_y_scroll()
                     .child(general::general_tab(general, cx)),
                 (DetailsTab::Files, Some(torrent)) => {
                     body.child(self.files_tab(torrent, window, cx))
                 }
                 (DetailsTab::Peers, Some(torrent)) => body.child(self.peers_tab(torrent, cx)),
-                (DetailsTab::Files | DetailsTab::Peers, None) => body,
+                (DetailsTab::Trackers, Some(_)) => body.child(self.trackers_tab(cx)),
+                (DetailsTab::Files | DetailsTab::Peers | DetailsTab::Trackers, None) => body,
             },
             (None, None) => body,
         };
@@ -354,30 +365,35 @@ fn choose_tab(index: usize, cx: &mut Context<'_, DetailsPanel>) {
     }
 }
 
-/// The position of `tab` in the tab bar; the Trackers tab, which the bar does not have yet, is at
-/// General's.
+/// The position of `tab` in the tab bar.
 fn tab_index(tab: DetailsTab) -> usize {
     match tab {
-        DetailsTab::General | DetailsTab::Trackers => 0,
+        DetailsTab::General => 0,
         DetailsTab::Files => 1,
         DetailsTab::Peers => 2,
+        DetailsTab::Trackers => 3,
     }
 }
 
 /// The tab at `index` of the tab bar.
 fn tab_at(index: usize) -> Option<DetailsTab> {
-    [DetailsTab::General, DetailsTab::Files, DetailsTab::Peers]
-        .get(index)
-        .copied()
+    [
+        DetailsTab::General,
+        DetailsTab::Files,
+        DetailsTab::Peers,
+        DetailsTab::Trackers,
+    ]
+    .get(index)
+    .copied()
 }
 
-/// The name of `tab`, as its tab says it; the Trackers tab, which the bar does not have yet, is
-/// named as General, which it shows as.
+/// The name of `tab`, as its tab says it.
 fn tab_name(tab: DetailsTab) -> SharedString {
     match tab {
-        DetailsTab::General | DetailsTab::Trackers => t!("details-tab-general"),
+        DetailsTab::General => t!("details-tab-general"),
         DetailsTab::Files => t!("details-tab-files"),
         DetailsTab::Peers => t!("details-tab-peers"),
+        DetailsTab::Trackers => t!("details-tab-trackers"),
     }
     .into()
 }
@@ -388,15 +404,20 @@ mod tests {
 
     #[test]
     fn each_tab_has_its_place_in_the_bar() {
-        let tabs = [DetailsTab::General, DetailsTab::Files, DetailsTab::Peers];
+        let tabs = [
+            DetailsTab::General,
+            DetailsTab::Files,
+            DetailsTab::Peers,
+            DetailsTab::Trackers,
+        ];
         for (index, tab) in tabs.into_iter().enumerate() {
             assert_eq!(tab_index(tab), index, "{tab:?}");
             assert_eq!(tab_at(index), Some(tab));
         }
-        assert_eq!(tab_at(3), None);
-        assert_eq!(tabs.map(tab_name), ["General", "Files", "Peers"]);
-        // Until it has a view, the Trackers tab shows as General.
-        assert_eq!(tab_index(DetailsTab::Trackers), 0);
-        assert_eq!(tab_name(DetailsTab::Trackers), "General");
+        assert_eq!(tab_at(4), None);
+        assert_eq!(
+            tabs.map(tab_name),
+            ["General", "Files", "Peers", "Trackers"]
+        );
     }
 }

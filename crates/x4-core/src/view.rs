@@ -17,8 +17,8 @@
 //! yet. Its Peers tab is decided here as well: [`peer_rows`] puts the peers in the order the user
 //! chose, [`peers_summary`] tells where they came from and who transfers, and [`peers_empty`]
 //! why there are none to show. So is its Trackers tab: [`tracker_rows`] gives a row for each
-//! tracker in the daemon's order, with its [`TrackerStatus`], and [`relative_time`] tells how far
-//! its last and next announce are from now.
+//! tracker in the daemon's order, with its [`TrackerStatus`], [`relative_time`] tells how far its
+//! last and next announce are from now, and [`trackers_empty`] why there are no rows.
 
 mod availability;
 mod columns;
@@ -53,7 +53,7 @@ pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_mo
 pub use subtitle::Subtitle;
 pub use trackers::{
     TrackerCount, TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary,
-    tracker_rows, tracker_status, tracker_summary,
+    TrackersEmpty, tracker_rows, tracker_status, tracker_summary, trackers_empty,
 };
 
 use std::sync::Arc;

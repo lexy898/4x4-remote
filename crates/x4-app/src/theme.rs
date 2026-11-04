@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFeatures, Hsla, Window, WindowAppearance};
-use x4_core::{DisplayState, Filter, Indicator, Subtitle, ThemeChoice};
+use x4_core::{DisplayState, Filter, Indicator, Subtitle, ThemeChoice, TrackerStatus};
 
 /// How visible old data stays: the table and the status bar's numbers are dimmed while the
 /// daemon does not answer, but stay readable.
@@ -85,6 +85,26 @@ pub(crate) fn subtitle_color(subtitle: &Subtitle, theme: &Theme) -> Hsla {
         | Subtitle::Checking { .. }
         | Subtitle::FetchingMetadata { .. } => theme.muted_foreground,
     }
+}
+
+/// The color of a tracker's dot and of the line under its address: green while it works, the
+/// primary color while an announce is under way, the danger color for a failed announce, the
+/// warning color for one that timed out, and muted for a backup and for a tracker not announced to
+/// yet.
+pub(crate) fn tracker_color(status: TrackerStatus, theme: &Theme) -> Hsla {
+    match status {
+        TrackerStatus::Working => theme.success,
+        TrackerStatus::Announcing => theme.primary,
+        TrackerStatus::Failed => theme.danger,
+        TrackerStatus::TimedOut => theme.warning,
+        TrackerStatus::Backup | TrackerStatus::NotContacted => theme.muted_foreground,
+    }
+}
+
+/// The color of the note that a tracker's last scrape failed: the warning color. It marks a tracker
+/// whose announces work, so the dot stays the working color; many trackers never answer a scrape.
+pub(crate) fn scrape_problem_color(theme: &Theme) -> Hsla {
+    theme.warning
 }
 
 /// The color of a download or upload rate in the table: the color of the torrent's state while
@@ -163,7 +183,7 @@ pub(crate) fn follow_appearance(choice: ThemeChoice, window: &mut Window, cx: &m
 mod tests {
     use gpui_kit::TestAppContext;
     use gpui_kit::component::ActiveTheme as _;
-    use x4_core::{ConnectionError, QueueKind, UnsupportedReason};
+    use x4_core::{ConnectionError, QueueKind, TrackerStatus, UnsupportedReason};
 
     use super::*;
 
@@ -270,6 +290,47 @@ mod tests {
         ] {
             assert_eq!(color(quiet), theme.muted_foreground);
         }
+    }
+
+    #[gpui_kit::test]
+    fn trackers_take_the_colors_of_what_they_are_doing(cx: &mut TestAppContext) {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let theme = theme(mode, cx);
+            let color = |status| tracker_color(status, &theme);
+
+            assert_eq!(color(TrackerStatus::Working), theme.success, "{mode:?}");
+            assert_eq!(color(TrackerStatus::Announcing), theme.primary);
+            assert_eq!(color(TrackerStatus::Failed), theme.danger);
+            assert_eq!(color(TrackerStatus::TimedOut), theme.warning);
+            // A tracker that is not in use, or not announced to yet, recedes.
+            for quiet in [TrackerStatus::Backup, TrackerStatus::NotContacted] {
+                assert_eq!(color(quiet), theme.muted_foreground, "{quiet:?}");
+            }
+            // Every color that means something differs from the others.
+            let distinct = [
+                color(TrackerStatus::Working),
+                color(TrackerStatus::Announcing),
+                color(TrackerStatus::Failed),
+                color(TrackerStatus::TimedOut),
+                color(TrackerStatus::Backup),
+            ];
+            for (index, first) in distinct.iter().enumerate() {
+                for second in &distinct[index + 1..] {
+                    assert_ne!(first, second, "{mode:?}");
+                }
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_scrape_problem_is_a_warning_beside_a_dot_that_stays_green(cx: &mut TestAppContext) {
+        let theme = theme(ThemeMode::Dark, cx);
+
+        assert_eq!(scrape_problem_color(&theme), theme.warning);
+        assert_ne!(
+            scrape_problem_color(&theme),
+            tracker_color(TrackerStatus::Working, &theme)
+        );
     }
 
     #[gpui_kit::test]

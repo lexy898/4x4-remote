@@ -476,14 +476,15 @@ fn actions_of(keys: &str, context: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// Alt+1, Alt+2 and Alt+3 open the panel's tabs in the order of its bar, anywhere in the window,
-/// and do nothing while a menu or the speed limits popover is open.
+/// Alt+1, Alt+2, Alt+3 and Alt+4 open the panel's tabs in the order of its bar, anywhere in the
+/// window, and do nothing while a menu or the speed limits popover is open.
 #[test]
 fn the_tab_keys_open_the_tabs_in_the_order_of_the_bar() {
     for (keys, action) in [
         ("alt-1", "x4::ShowGeneralTab"),
         ("alt-2", "x4::ShowFilesTab"),
         ("alt-3", "x4::ShowPeersTab"),
+        ("alt-4", "x4::ShowTrackersTab"),
     ] {
         assert_eq!(actions_of(keys, MAIN_CONTEXT), [action], "{keys}");
         for keeper in [ANY_MENU, SPEED_LIMITS_CONTEXT] {

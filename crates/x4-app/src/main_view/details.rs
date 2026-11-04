@@ -18,8 +18,8 @@
 //! height under the table's header and two rows, the panel is drawn lower, and it grows back as
 //! the window does. A hidden panel keeps its height, and is fitted again when it shows.
 //!
-//! Alt+Enter shows and hides the panel, and Alt+1, Alt+2 and Alt+3 open its tabs, once per press
-//! of the key. The open tab and whether the panel is shown are remembered too.
+//! Alt+Enter shows and hides the panel, and Alt+1, Alt+2, Alt+3 and Alt+4 open its tabs, once per
+//! press of the key. The open tab and whether the panel is shown are remembered too.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,7 +40,7 @@ use super::copying::write_to_clipboard;
 use super::{HEADER_HEIGHT, MainView, ROW_HEIGHT};
 use crate::details_panel::{DetailsPanel, DetailsPanelEvent};
 use crate::key_repeats::{KeyRepeats, once_per_press_of};
-use crate::keymap::{ShowFilesTab, ShowGeneralTab, ShowPeersTab, ToggleDetails};
+use crate::keymap::{ShowFilesTab, ShowGeneralTab, ShowPeersTab, ShowTrackersTab, ToggleDetails};
 
 /// The element id of the split of the table and the panel.
 const DETAILS_SPLIT: &str = "details-split";
@@ -256,8 +256,8 @@ impl MainView {
     }
 }
 
-/// `root`, the main view's root element, with the handlers of Alt+Enter, Alt+1, Alt+2 and Alt+3,
-/// which run once per press of their key, as `repeats`, the view's record of the key held, tells.
+/// `root`, the main view's root element, with the handlers of Alt+Enter, Alt+1, Alt+2, Alt+3 and
+/// Alt+4, which run once per press of their key, as `repeats`, the view's record of the key held, tells.
 pub(super) fn on_details_actions(
     root: Div,
     repeats: &Rc<RefCell<KeyRepeats>>,
@@ -282,5 +282,10 @@ pub(super) fn on_details_actions(
         repeats,
         cx,
         |view, _, cx| view.show_details_tab(DetailsTab::Peers, cx),
+    ))
+    .on_action(once_per_press_of::<_, ShowTrackersTab>(
+        repeats,
+        cx,
+        |view, _, cx| view.show_details_tab(DetailsTab::Trackers, cx),
     ))
 }

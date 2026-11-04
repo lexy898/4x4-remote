@@ -13,12 +13,14 @@ alternative speed limits and sets the global download and upload limits. The win
 columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
 started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
 the toolbar and a context menu; removing asks first, and deleting the files too only after an
-explicit confirmation. A panel under the table shows the selected torrent in two tabs. General gives
+explicit confirmation. A panel under the table shows the selected torrent in four tabs. General gives
 where its data is, its size, hash, dates, share ratio and metainfo, and how its trackers are doing,
 with the worst problem in plain words. Files shows its files as a tree, with each one's progress and
 how much of it already plays from the start; each file or folder can be skipped or given a Low,
-Normal or High priority, and the torrent can be downloaded in order. Whether the panel is shown, its
-height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
+Normal or High priority, and the torrent can be downloaded in order. Peers lists who the torrent is
+connected to, with their countries, and Trackers lists each tracker with its state, its last and
+next announce and the counts it knows, to see why a torrent has few peers or is stuck. Whether the
+panel is shown, its height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
 desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
 that picks the folder on the server (with its free space and the folders used lately), the files to
 download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
@@ -305,8 +307,9 @@ clipboard then keeps what it had.
 The details panel under the table shows the selected torrent. With none selected it says "Select a
 torrent", and with several, how many are selected; it shows a torrent only when exactly one of the
 torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from anywhere
-in the window. It has three tabs, General, Files and Peers, which a click or `Alt+1`, `Alt+2` and
-`Alt+3` open. While a menu or the speed limits popover is open, these four keys do nothing. The
+in the window. It has four tabs, General, Files, Peers and Trackers, which a click or `Alt+1`,
+`Alt+2`, `Alt+3` and `Alt+4` open. While a menu or the speed limits popover is open, these five
+keys do nothing. The
 first time, the panel is open on the General tab, high enough for its usual rows. Drag the line
 between the table and the panel to change its height. The panel keeps that height when it is hidden
 and between runs; when the window is too low for it and the table's header and two rows, it is drawn
@@ -386,6 +389,30 @@ rows are dimmed, as the table is. The list takes no keys; the wheel scrolls it. 
 every 3 seconds, only while the tab is open on one torrent and the window is shown. Left, or with
 the panel hidden, the tab keeps nothing, and its order goes back to the busiest first; the order is
 not remembered between runs.
+
+The Trackers tab shows each tracker of the torrent on a row of two lines, in the order the daemon
+keeps them, tier by tier; it is not sortable, because the order of the tiers means something. The
+dot and the first line give the tracker's address (without the port when that is 80 or 443) and,
+muted beside it, its site name when the address does not say it. The second line says what the
+tracker is doing, in the dot's color: "Working" (green), "Announcing" (the theme's accent color),
+"Not contacted yet" and "Backup" (grey), "Timed out" (yellow), or, when an announce failed, the text
+the tracker or the daemon sent, in red, as sent but with control characters taken out and cut to
+the line (the whole text is in its tooltip; when the daemon sent none, "Announce failed"). After it
+come how many peers the last announce brought and how long ago it was; a failed scrape, which many
+trackers never answer, is a yellow note "No peer counts" after them, and the dot stays green. The
+columns after the tracker are the tier (from 1), the last announce ("3 m ago") and the next one
+("in 27 m", "now", "queued" while it waits for a free slot, "—" when none is scheduled, as for a
+paused torrent), and the seeders, leechers and downloads the tracker reports ("—" when it reports
+none). A time is rounded down to whole minutes above a minute, and the tab draws itself again every
+5 seconds, so that the times move on an idle torrent too. A torrent without trackers says "This
+torrent has no trackers (DHT and PEX only)", or, when it is private, that it cannot use DHT or PEX
+either; until the first read has come the tab says "—". The daemon keeps the announce data of a
+tier, not of a tracker, and shows it on the tier's current tracker: after an error it makes that
+tracker a backup and shows the error on the next one of the tier, so a row tells how its tier is
+doing. While the daemon does not answer, the rows are dimmed, as the table is. The list takes no
+keys; the wheel scrolls it. 4x4 reads the trackers every 5 seconds, only while the tab is open on
+one torrent and the window is shown, and again right after a reannounce of the torrent. Left, or
+with the panel hidden, the tab keeps nothing.
 
 4x4 reads a torrent's details only while the window is shown and active, the panel is open and it
 shows one torrent, so that a small server is asked for no more than the panel needs. It reads them
@@ -603,7 +630,7 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
 | `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
 | `Alt+Enter`                                         | anywhere in the window    | shows or hides the details panel             |
-| `Alt+1`, `Alt+2`, `Alt+3`                           | anywhere in the window    | show the panel's General, Files or Peers tab |
+| `Alt+1`, `Alt+2`, `Alt+3`, `Alt+4`                  | anywhere in the window    | show the panel's tabs in the bar's order     |
 | `Ctrl+O`                                            | anywhere in the window    | opens the file dialog to add .torrent files  |
 | `Ctrl+U`                                            | anywhere in the window    | adds the clipboard's magnet links, or a form |
 | `Ctrl+V`                                            | in the table              | adds the magnet links on the clipboard       |

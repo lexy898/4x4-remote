@@ -1,7 +1,8 @@
 //! Headless tests for the details panel under the torrent table: what it shows for no torrent,
-//! one or several, when it asks the service for a torrent's details, how Alt+Enter, Alt+1, Alt+2
-//! and Alt+3 work, how its height follows the window and the user's drags, what the General tab
-//! says and what its copy buttons copy, and that the Peers tab shows the peers the service sends.
+//! one or several, when it asks the service for a torrent's details, how Alt+Enter, Alt+1, Alt+2,
+//! Alt+3 and Alt+4 work, how its height follows the window and the user's drags, what the General
+//! tab says and what its copy buttons copy, that the Peers tab shows the peers the service sends,
+//! and that the Trackers tab shows the trackers of the details it sends.
 //!
 //! Each test builds the two channels of a service itself and opens the window with no service
 //! behind them, so nothing touches the network: the test reads the commands the window sends and
@@ -37,9 +38,13 @@ const TABS: &str = "details-tabs";
 const GENERAL: usize = 0;
 const FILES: usize = 1;
 const PEERS: usize = 2;
+const TRACKERS: usize = 3;
 /// What the Peers tab says instead of its peers, and its list.
 const PEERS_EMPTY: &str = "peers-empty";
 const PEER_LIST: &str = "peer-list";
+/// What the Trackers tab says instead of its trackers, and its list.
+const TRACKERS_EMPTY: &str = "trackers-empty";
+const TRACKER_LIST: &str = "tracker-list";
 /// What the panel says when it shows no torrent.
 const PLACEHOLDER: &str = "details-placeholder";
 /// The split of the table and the panel, and the handle between them.
@@ -258,6 +263,21 @@ impl Window {
             }
             window
                 .within(PEER_LIST)
+                .find_all_by_role(Role::Row)
+                .iter()
+                .filter_map(|row| row.label().map(str::to_owned))
+                .collect()
+        })
+    }
+
+    /// The names of the rows of the Trackers tab, top to bottom: each tracker's address and tier.
+    fn tracker_rows(&self, cx: &mut TestAppContext) -> Vec<String> {
+        self.act(cx, |window, _| {
+            if window.try_find(TRACKER_LIST).is_none() {
+                return Vec::new();
+            }
+            window
+                .within(TRACKER_LIST)
                 .find_all_by_role(Role::Row)
                 .iter()
                 .filter_map(|row| row.label().map(str::to_owned))
@@ -639,7 +659,73 @@ fn alt_3_opens_the_peers_tab_which_shows_the_peers_of_the_selected_torrent(
 }
 
 #[gpui_kit::test]
-fn the_trackers_tab_shows_as_general_until_it_has_a_view(cx: &mut TestAppContext) {
+fn alt_4_opens_the_trackers_tab_which_shows_the_trackers_of_the_selected_torrent(
+    cx: &mut TestAppContext,
+) {
+    let window = Window::open(cx);
+    let (a, b) = (torrent("a"), torrent("b"));
+    window.send(vec![a.clone(), b.clone()], cx);
+    window.click_row(0, cx);
+    let details_of = |torrent: &Torrent, hosts: &[&str]| TorrentDetails {
+        trackers: hosts.iter().map(|host| neutral_tracker(host)).collect(),
+        ..details(&torrent.hash, &[])
+    };
+
+    window.press("alt-4", cx);
+    assert!(window.tab_selected(TRACKERS, cx));
+    assert!(!window.tab_selected(GENERAL, cx));
+    assert_eq!(window.label(BODY, cx).as_deref(), Some("Trackers"));
+    assert_eq!(window.ui_state(cx).details.tab, DetailsTab::Trackers);
+    assert_eq!(window.shown_tabs(), [DetailsTab::Trackers]);
+    assert!(window.table_focused(cx), "the keys stay in the list");
+    assert!(
+        !window.shown("general-hash", cx),
+        "the Trackers tab shows no General rows"
+    );
+    assert_eq!(window.label(TRACKERS_EMPTY, cx).as_deref(), Some("—"));
+
+    window.send_details(
+        details_of(&a, &["one.example.org:6969", "two.example.org:80"]),
+        cx,
+    );
+    assert_eq!(
+        window.tracker_rows(cx),
+        ["one.example.org:6969, tier 1", "two.example.org, tier 1"]
+    );
+    // Details of a torrent the panel does not show change nothing.
+    window.send_details(details_of(&b, &["other.example.org:80"]), cx);
+    assert_eq!(window.tracker_rows(cx).len(), 2);
+
+    // Another torrent selected: the rows go at once, before the service says anything.
+    window.click_row(1, cx);
+    assert_eq!(window.tracker_rows(cx), [] as [String; 0]);
+    assert_eq!(window.label(TRACKERS_EMPTY, cx).as_deref(), Some("—"));
+    window.send_details(details_of(&b, &["other.example.org:80"]), cx);
+    assert_eq!(window.tracker_rows(cx), ["other.example.org, tier 1"]);
+
+    // A torrent without trackers says so.
+    window.send_details(details_of(&b, &[]), cx);
+    assert_eq!(
+        window.label(TRACKERS_EMPTY, cx).as_deref(),
+        Some("This torrent has no trackers (DHT and PEX only)")
+    );
+
+    // Alt+1 goes back, and a click on the tab opens it again.
+    window.press("alt-1", cx);
+    assert!(window.tab_selected(GENERAL, cx));
+    assert!(window.shown("general-hash", cx));
+    assert_eq!(window.tracker_rows(cx), [] as [String; 0]);
+    window.act(cx, |window, cx| window.within(TABS).click(TRACKERS, cx));
+    assert!(window.tab_selected(TRACKERS, cx));
+    assert_eq!(window.ui_state(cx).details.tab, DetailsTab::Trackers);
+    assert_eq!(
+        window.shown_tabs(),
+        [DetailsTab::General, DetailsTab::Trackers]
+    );
+}
+
+#[gpui_kit::test]
+fn a_remembered_trackers_tab_opens_on_the_trackers(cx: &mut TestAppContext) {
     let ui = UiState {
         details: DetailsState {
             tab: DetailsTab::Trackers,
@@ -648,12 +734,14 @@ fn the_trackers_tab_shows_as_general_until_it_has_a_view(cx: &mut TestAppContext
         ..UiState::default()
     };
     let window = Window::open_with(&ui, cx);
-    window.send(vec![torrent("a")], cx);
+    let a = torrent("a");
+    window.send(vec![a.clone()], cx);
     window.click_row(0, cx);
 
-    assert!(window.tab_selected(GENERAL, cx));
-    assert!(window.shown("general-hash", cx));
-    assert_eq!(window.label(BODY, cx).as_deref(), Some("General"));
+    assert!(window.tab_selected(TRACKERS, cx));
+    assert!(!window.shown("general-hash", cx));
+    assert_eq!(window.label(BODY, cx).as_deref(), Some("Trackers"));
+    assert_eq!(window.label(TRACKERS_EMPTY, cx).as_deref(), Some("—"));
 }
 
 #[gpui_kit::test]
@@ -995,7 +1083,7 @@ fn copy_hash_and_path_buttons_write_the_clipboard(cx: &mut TestAppContext) {
 /// Presses the keys of the panel with a menu open, which keeps them, then closes the menu.
 fn the_panel_keys_do_nothing_in_the_open_menu(window: &Window, cx: &mut TestAppContext) {
     assert!(window.menu_open(cx));
-    for key in ["alt-enter", "alt-2", "alt-3", "alt-1"] {
+    for key in ["alt-enter", "alt-2", "alt-3", "alt-4", "alt-1"] {
         window.press(key, cx);
         assert!(window.menu_open(cx), "{key}: the menu keeps the keys");
     }

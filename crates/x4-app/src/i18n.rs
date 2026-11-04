@@ -15,8 +15,9 @@
 //! moment in the local time zone, and the message `date-time` orders them.
 //!
 //! The `details` module holds the texts of the details panel that carry values, the `files`
-//! module those of its Files tab, the `peers` module those of its Peers tab, and the `adding`
-//! module those of the add dialog and of what became of a torrent to add.
+//! module those of its Files tab, the `peers` module those of its Peers tab, the `trackers`
+//! module those of its Trackers tab, and the `adding` module those of the add dialog and of what
+//! became of a torrent to add.
 
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,10 +28,10 @@ use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
 use x4_core::{
-    ActionError, ColumnId, ConnectionError, Direction, DisplayState, EmptyTable, EtaView, Filter,
-    HumanSize, HumanSpeed, Indicator, KibPerSecond, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB,
-    QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedControls, SpeedLimit,
-    SpeedUnit, Subtitle, TimeUnit, UnsupportedReason, kbps_to_kib,
+    ActionError, ColumnId, CompactDuration, ConnectionError, Direction, DisplayState, EmptyTable,
+    EtaView, Filter, HumanSize, HumanSpeed, Indicator, KibPerSecond, LimitError, MAX_LIMIT_KIB,
+    MIN_LIMIT_KIB, QueueKind, Ratio, RemovalSummary, SizeUnit, SortDirection, SpeedControls,
+    SpeedLimit, SpeedUnit, Subtitle, TimeUnit, UnsupportedReason, kbps_to_kib,
 };
 use x4_rpc::RemoveData;
 
@@ -52,6 +53,11 @@ pub(crate) use files::{
     priority_text,
 };
 pub(crate) use peers::{peer_address_label, peers_empty_text, peers_summary_texts};
+pub(crate) use trackers::{
+    tracker_count_text, tracker_last_text, tracker_next_text, tracker_peers_text,
+    tracker_row_label, tracker_status_text, tracker_status_words, tracker_tier_text,
+    trackers_empty_text,
+};
 
 mod adding;
 mod details;
@@ -61,6 +67,7 @@ mod parity;
 mod peers;
 #[cfg(test)]
 mod tests;
+mod trackers;
 
 /// The message files, embedded into release builds and read from disk in debug builds.
 #[derive(RustEmbed)]
@@ -415,22 +422,26 @@ pub(crate) fn eta_text(eta: &EtaView) -> SharedString {
     match eta {
         EtaView::None => t!("eta-none"),
         EtaView::Unknown => t!("eta-unknown"),
-        EtaView::In(duration) => {
-            let (major, major_unit) = duration.major;
-            let major_unit = time_unit_text(major_unit);
-            match duration.minor {
-                None => t!("eta-major", major = major, major_unit = major_unit),
-                Some((minor, minor_unit)) => t!(
-                    "eta-major-minor",
-                    major = major,
-                    major_unit = major_unit,
-                    minor = minor,
-                    minor_unit = time_unit_text(minor_unit)
-                ),
-            }
-        }
+        EtaView::In(duration) => duration_string(duration),
     }
     .into()
+}
+
+/// A duration the way the ETA column shows it: its largest unit and the one right below it, such
+/// as "1 d 2 h" or "5 m".
+fn duration_string(duration: &CompactDuration) -> String {
+    let (major, major_unit) = duration.major;
+    let major_unit = time_unit_text(major_unit);
+    match duration.minor {
+        None => t!("eta-major", major = major, major_unit = major_unit),
+        Some((minor, minor_unit)) => t!(
+            "eta-major-minor",
+            major = major,
+            major_unit = major_unit,
+            minor = minor,
+            minor_unit = time_unit_text(minor_unit)
+        ),
+    }
 }
 
 /// The ratio column: two decimals, "∞" for infinity and "—" when there is no ratio yet.
