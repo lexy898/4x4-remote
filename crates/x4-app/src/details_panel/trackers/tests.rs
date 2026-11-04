@@ -766,6 +766,64 @@ fn the_times_move_with_the_clock_and_the_tab_redraws_for_them(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn a_hidden_window_does_not_redraw_and_showing_it_again_draws_at_once(cx: &mut TestAppContext) {
+    let film = torrent("film");
+    let panel = trackers_of(&film, cx);
+    take(
+        panel,
+        details_of(&film, vec![working(7, "a.example.org:6969")]),
+        cx,
+    );
+    assert!(held(panel, cx).3);
+    let redraws = Rc::new(Cell::new(0_u32));
+    let entity = panel.entity(cx).expect("the panel is open");
+    cx.update(|cx| {
+        let redraws = Rc::clone(&redraws);
+        cx.observe(&entity, move |_, _| redraws.set(redraws.get() + 1))
+            .detach();
+    });
+
+    // Nobody sees the times move: the rows stay, the clock that redraws them stops.
+    change(panel, cx, |panel, cx| panel.set_window_shown(false, cx));
+    assert_eq!(held(panel, cx), (true, 1, 1, false));
+    cx.executor().advance_clock(Duration::from_secs(60));
+    cx.run_until_parked();
+    assert_eq!(redraws.get(), 0);
+    // Details that come while the window is hidden start no clock either.
+    take(panel, three(&film), cx);
+    assert_eq!(held(panel, cx), (true, 3, 3, false));
+    let before_showing = redraws.get();
+
+    // Shown again, the tab draws at once, with the times of now, and again every 5 seconds.
+    change(panel, cx, |panel, cx| panel.set_window_shown(true, cx));
+    assert_eq!(held(panel, cx), (true, 3, 3, true));
+    cx.run_until_parked();
+    assert_eq!(redraws.get(), before_showing + 1);
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    assert_eq!(redraws.get(), before_showing + 2);
+}
+
+#[gpui_kit::test]
+fn a_hidden_window_on_another_tab_starts_no_clock_when_it_shows(cx: &mut TestAppContext) {
+    let film = torrent("film");
+    let panel = panel_on(DetailsTab::General, cx);
+    show(panel, &film, cx);
+    take(panel, three(&film), cx);
+
+    change(panel, cx, |panel, cx| panel.set_window_shown(false, cx));
+    change(panel, cx, |panel, cx| panel.set_window_shown(true, cx));
+    assert_eq!(held(panel, cx), NOTHING);
+
+    // Opening the tab on a hidden window shows the rows without a clock.
+    change(panel, cx, |panel, cx| panel.set_window_shown(false, cx));
+    change(panel, cx, |panel, cx| {
+        panel.set_tab(DetailsTab::Trackers, cx);
+    });
+    assert_eq!(held(panel, cx), (true, 3, 3, false));
+}
+
+#[gpui_kit::test]
 fn a_tab_without_trackers_does_not_redraw_for_them(cx: &mut TestAppContext) {
     let film = torrent("film");
     let panel = trackers_of(&film, cx);

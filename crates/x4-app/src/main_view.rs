@@ -250,11 +250,11 @@ impl MainView {
                     view.limits_lost_focus(cx);
                 }
             }),
-            cx.observe_window_activation(window, |view, window, _| {
-                view.report_visibility(window);
+            cx.observe_window_activation(window, |view, window, cx| {
+                view.report_visibility(window, cx);
             }),
-            cx.observe_window_visibility(window, |view, _, window, _| {
-                view.report_visibility(window);
+            cx.observe_window_visibility(window, |view, _, window, cx| {
+                view.report_visibility(window, cx);
             }),
             cx.observe_window_appearance(window, |view, window, cx| {
                 follow_appearance(view.ui.theme, window, cx);
@@ -310,9 +310,9 @@ impl MainView {
             _service: service,
             _subscriptions: subscriptions,
         };
-        // The service starts out assuming a visible window on the General tab; tell it how the
-        // window opened.
-        view.report_visibility(window);
+        // The service and the details panel start out assuming a visible window on the General
+        // tab; tell them how the window opened.
+        view.report_visibility(window, cx);
         view.ask_for_tab();
         view.listen_for_adds(AddRequests::new(), window, cx);
         view
@@ -645,14 +645,18 @@ impl MainView {
         cx.notify();
     }
 
-    /// Tells the service whether the user can see the window, when that changed.
-    fn report_visibility(&mut self, window: &Window) {
+    /// Tells the service and the details panel whether the user can see the window, when that
+    /// changed.
+    fn report_visibility(&mut self, window: &Window, cx: &mut Context<'_, Self>) {
         let visibility = visibility(window.is_window_active(), window.is_visible());
         if self.last_visibility == Some(visibility) {
             return;
         }
         self.last_visibility = Some(visibility);
         tracing::debug!(?visibility, "window visibility changed");
+        self.details_panel.update(cx, |panel, cx| {
+            panel.set_window_shown(visibility == Visibility::Visible, cx);
+        });
         if self
             .commands
             .send(Command::SetVisibility(visibility))
@@ -814,6 +818,33 @@ mod tests {
 
         assert_eq!(cx.update(|cx| view.read(cx).config_problem), None);
         assert_eq!(redraws.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn the_details_panel_knows_whether_the_window_is_shown(cx: &mut TestAppContext) {
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (handle, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        let shown = |cx: &mut TestAppContext| {
+            cx.update(|cx| view.read(cx).details_panel.read(cx).window_shown())
+        };
+        // A test window opens without the focus, which the service counts as hidden.
+        cx.run_until_parked();
+        assert!(!shown(cx), "as it opened");
+
+        cx.update_window(handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
+        cx.run_until_parked();
+        assert!(shown(cx), "active and shown");
+
+        cx.simulate_window_visibility_change(handle, gpui_kit::WindowVisibility::Hidden);
+        cx.run_until_parked();
+        assert!(!shown(cx), "hidden");
     }
 
     /// The table dims its rows while the data is stale; an opacity on the list around it would

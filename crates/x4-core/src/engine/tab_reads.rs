@@ -23,7 +23,7 @@ use x4_rpc::{HashString, TorrentGetResponse};
 use super::schedule::Timer;
 use super::{DetailsRead, Engine, Event, PollKind, Request, Visibility};
 use crate::action::Action;
-use crate::details;
+use crate::details::{self, TorrentDetails};
 use crate::peers::build_peers;
 use crate::ui_state::DetailsTab;
 
@@ -178,7 +178,8 @@ impl Engine {
 
     /// Takes the trackers of `hash`, which is still selected, read while the Trackers tab is
     /// shown: they replace those of its details, and the details go out again when that changed
-    /// them.
+    /// them. The trackers are compared first, so that the details, with all their files, are
+    /// copied only when they changed, not at every read.
     pub(super) fn trackers_read(
         &mut self,
         hash: &HashString,
@@ -188,12 +189,16 @@ impl Engine {
             tracing::debug!(torrent = %hash, "ignored trackers with no details to merge into");
             return Vec::new();
         };
-        let mut merged = last.clone();
-        details::merge_trackers(&mut merged, answer);
-        if merged == *last {
+        let Some(trackers) = details::trackers_of(&last.hash, answer) else {
+            return Vec::new();
+        };
+        if trackers == last.trackers {
             return Vec::new();
         }
-        let merged = Arc::new(merged);
+        let merged = Arc::new(TorrentDetails {
+            trackers,
+            ..last.clone()
+        });
         self.details = Some(Arc::clone(&merged));
         vec![Event::Details(merged)]
     }

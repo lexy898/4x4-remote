@@ -5,8 +5,8 @@
 //! ([`TorrentField::DETAILS_PROGRESS`]) brings only what changes while the torrent downloads and
 //! is [merged](merge_progress) into the last full details. A progress read that also asks for the
 //! trackers ([`TorrentField::DETAILS_PROGRESS_TRACKERS`]) replaces them in the merge. A read of
-//! the trackers alone ([`TorrentField::TRACKERS`], for the Trackers tab) replaces just them, in
-//! [`merge_trackers`].
+//! the trackers alone ([`TorrentField::TRACKERS`], for the Trackers tab) replaces just them, with
+//! those [`trackers_of`] finds in its answer.
 //!
 //! [`TorrentField::DETAILS_FULL`]: x4_rpc::TorrentField::DETAILS_FULL
 //! [`TorrentField::DETAILS_PROGRESS`]: x4_rpc::TorrentField::DETAILS_PROGRESS
@@ -292,23 +292,25 @@ pub(crate) fn file_count(record: &TorrentRecord) -> Option<u32> {
     })
 }
 
-/// Replaces the trackers of `details` with those of its torrent in `response`, which asked for
-/// [`TorrentField::TRACKERS`](x4_rpc::TorrentField::TRACKERS) alone: the files and their progress
-/// stay as the last reads left them, and their arrays are not looked for, so nothing is reported
-/// as missing.
+/// The trackers of the torrent `hash` in `response`, which asked for
+/// [`TorrentField::TRACKERS`](x4_rpc::TorrentField::TRACKERS) alone, to replace those of its
+/// details: the files and their progress stay as the last reads left them, and their arrays are
+/// not looked for, so nothing is reported as missing.
 ///
-/// An answer that holds no record of the torrent, or none with `tracker_stats`, leaves the
-/// trackers as they were; one with an empty list empties them, as a torrent whose trackers were
+/// `None`, so that the trackers stay as they were, when the answer holds no record of the torrent
+/// or none with `tracker_stats`; an empty list is none at all, as a torrent whose trackers were
 /// all removed has none.
-pub(crate) fn merge_trackers(details: &mut TorrentDetails, response: &TorrentGetResponse) {
+pub(crate) fn trackers_of(
+    hash: &HashString,
+    response: &TorrentGetResponse,
+) -> Option<Vec<TrackerStat>> {
     let stats = response
         .torrents
         .iter()
-        .find(|record| has_hash(record, &details.hash))
-        .and_then(|record| record.tracker_stats.as_ref());
-    if let Some(stats) = stats {
-        details.trackers = stats.iter().cloned().map(TrackerStat::from).collect();
-    }
+        .find(|record| has_hash(record, hash))?
+        .tracker_stats
+        .as_ref()?;
+    Some(stats.iter().cloned().map(TrackerStat::from).collect())
 }
 
 /// Builds the details of `hash` from its record, which was requested with
@@ -946,48 +948,22 @@ mod tests {
     }
 
     #[test]
-    fn merging_trackers_replaces_them_and_leaves_everything_else() {
-        let mut full = two_files();
-        full.tracker_stats = Some(vec![tracker("old.example:80", 1, 2)]);
-        let last = build(hash(), full).details;
-        let mut details = last.clone();
-
-        merge_trackers(
-            &mut details,
+    fn the_trackers_of_an_answer_are_its_tracker_stats_in_their_order() {
+        // The answer holds nothing but the hash and the trackers, which is what the tab asks for:
+        // no file arrays are needed.
+        let trackers = trackers_of(
+            &hash(),
             &trackers_answer(Some(vec![timed_tracker(), tracker("b.example:443", 7, 8)])),
-        );
+        )
+        .unwrap();
 
-        let hosts: Vec<&str> = details.trackers.iter().map(|t| t.host.as_str()).collect();
+        let hosts: Vec<&str> = trackers.iter().map(|t| t.host.as_str()).collect();
         assert_eq!(hosts, ["tracker.example:6969", "b.example:443"]);
-        assert_eq!(details.trackers[0], TrackerStat::from(timed_tracker()));
-        // The files, their progress and the totals are as the last read left them.
-        assert_eq!(
-            details,
-            TorrentDetails {
-                trackers: details.trackers.clone(),
-                ..last
-            }
-        );
-        assert_eq!(details.files.len(), 2);
+        assert_eq!(trackers[0], TrackerStat::from(timed_tracker()));
     }
 
     #[test]
-    fn merging_trackers_needs_no_file_arrays() {
-        // The answer holds nothing but the hash and the trackers, which is what the tab asks for.
-        let mut details = build(hash(), two_files()).details;
-        let files = details.files.clone();
-
-        merge_trackers(&mut details, &trackers_answer(Some(vec![timed_tracker()])));
-
-        assert_eq!(details.files, files);
-        assert_eq!(details.trackers.len(), 1);
-    }
-
-    #[test]
-    fn merging_an_answer_without_trackers_or_for_another_torrent_changes_nothing() {
-        let mut full = two_files();
-        full.tracker_stats = Some(vec![tracker("old.example:80", 1, 2)]);
-        let last = build(hash(), full).details;
+    fn an_answer_without_trackers_or_for_another_torrent_has_none_to_replace_them() {
         let other = TorrentGetResponse {
             torrents: vec![TorrentRecord {
                 hash_string: Some("f".repeat(40)),
@@ -1002,38 +978,29 @@ mod tests {
         };
 
         for response in [trackers_answer(None), other, nothing] {
-            let mut details = last.clone();
-            merge_trackers(&mut details, &response);
-            assert_eq!(details, last);
+            assert_eq!(trackers_of(&hash(), &response), None);
         }
     }
 
     #[test]
-    fn merging_an_empty_list_of_trackers_empties_them_and_the_hash_may_be_in_capitals() {
-        let mut full = two_files();
-        full.tracker_stats = Some(vec![tracker("old.example:80", 1, 2)]);
-        let mut details = build(hash(), full).details;
+    fn an_empty_list_of_trackers_is_none_at_all_and_the_hash_may_be_in_capitals() {
         let mut response = trackers_answer(Some(Vec::new()));
         response.torrents[0].hash_string = Some(HASH.to_uppercase());
 
-        merge_trackers(&mut details, &response);
-
-        assert_eq!(details.trackers, []);
+        assert_eq!(trackers_of(&hash(), &response), Some(Vec::new()));
     }
 
     #[test]
-    fn merging_the_trackers_fixture_gives_two_trackers_in_the_daemons_order() {
+    fn the_trackers_fixture_gives_two_trackers_in_the_daemons_order() {
         use x4_rpc::testing::fixtures::TORRENT_GET_TRACKERS;
 
         let response: TorrentGetResponse =
             serde_json::from_value(fixture_result(TORRENT_GET_TRACKERS)).unwrap();
         let fixture_hash = HashString::parse("0000000000000000000000000000000000000005").unwrap();
-        let mut details = build(fixture_hash, TorrentRecord::default()).details;
 
-        merge_trackers(&mut details, &response);
+        let trackers = trackers_of(&fixture_hash, &response).unwrap();
 
-        let shape: Vec<(TrackerId, u32, TrackerState)> = details
-            .trackers
+        let shape: Vec<(TrackerId, u32, TrackerState)> = trackers
             .iter()
             .map(|tracker| (tracker.id, tracker.tier, tracker.announce_state))
             .collect();
@@ -1044,10 +1011,7 @@ mod tests {
                 (TrackerId(7), 1, TrackerState::Waiting)
             ]
         );
-        assert_eq!(
-            details.trackers[0].next,
-            NextAnnounce::At(seconds(1_793_787_926))
-        );
+        assert_eq!(trackers[0].next, NextAnnounce::At(seconds(1_793_787_926)));
     }
 
     #[test]

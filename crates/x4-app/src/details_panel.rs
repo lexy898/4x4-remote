@@ -108,6 +108,9 @@ pub(crate) struct DetailsPanel {
     /// Whether what the panel shows is stale, as while the daemon does not answer: the rows of
     /// the Peers and the Trackers tab are dimmed then.
     stale: bool,
+    /// Whether the user can see the window, as the main view tells the service: shown and
+    /// active. The Trackers tab moves its times only then.
+    window_shown: bool,
     /// The key held down now, shared with the main view, so that Space, `+` and `-` in the file
     /// list act once per press.
     key_repeats: Rc<RefCell<KeyRepeats>>,
@@ -143,6 +146,7 @@ impl DetailsPanel {
             trackers: TrackersTab::new(),
             connected: false,
             stale: false,
+            window_shown: true,
             key_repeats,
             _subscriptions: subscriptions,
         }
@@ -253,6 +257,26 @@ impl DetailsPanel {
             self.stale = stale;
             cx.notify();
         }
+    }
+
+    /// Tells the panel whether the user can see the window, as the main view tells the service.
+    /// The Trackers tab stops drawing itself again while nobody can see its times move, and
+    /// draws them at once when the window shows again, as they stood still in between.
+    pub(crate) fn set_window_shown(&mut self, shown: bool, cx: &mut Context<'_, Self>) {
+        if shown == self.window_shown {
+            return;
+        }
+        self.window_shown = shown;
+        self.follow_trackers(cx);
+        if shown && self.trackers.redraws() {
+            cx.notify();
+        }
+    }
+
+    /// Whether the panel takes the window for one the user can see.
+    #[cfg(test)]
+    pub(crate) fn window_shown(&self) -> bool {
+        self.window_shown
     }
 
     /// Fits the Files tab to the details, and to none without them, and has a tree too big to make

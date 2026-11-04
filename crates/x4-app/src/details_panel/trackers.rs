@@ -97,7 +97,8 @@ pub(super) struct TrackersTab {
     scroll: UniformListScrollHandle,
     /// What the times are counted from. The wall clock; the tests set a fixed one.
     clock: fn() -> SystemTime,
-    /// The task that draws the tab again every few seconds, running while there are rows.
+    /// The task that draws the tab again every few seconds, running while there are rows and the
+    /// window is shown.
     refresh: Option<Task<()>>,
 }
 
@@ -149,6 +150,11 @@ impl TrackersTab {
         true
     }
 
+    /// Whether the task that draws the tab again every few seconds runs.
+    pub(super) fn redraws(&self) -> bool {
+        self.refresh.is_some()
+    }
+
     /// Lets go of everything, with the room the rows took, as the tab closes or the panel hides.
     /// Returns whether there was anything.
     pub(super) fn leave(&mut self) -> bool {
@@ -191,13 +197,14 @@ fn row_id(id: TrackerId, before: u64) -> ElementId {
 impl DetailsPanel {
     /// Fits the Trackers tab to the panel's details while the tab is open, and lets it go
     /// otherwise; returns whether it shows something else now. Keeps the task that draws the tab
-    /// again running while there are rows to count the times of, and only then.
+    /// again running while there are rows to count the times of and the window is shown, and
+    /// only then.
     pub(super) fn follow_trackers(&mut self, cx: &mut Context<'_, Self>) -> bool {
         if self.tab != DetailsTab::Trackers {
             return self.trackers.leave();
         }
         let changed = self.trackers.follow(self.details.as_deref());
-        if self.trackers.rows.is_empty() {
+        if self.trackers.rows.is_empty() || !self.window_shown {
             self.trackers.refresh = None;
         } else if self.trackers.refresh.is_none() {
             self.trackers.refresh = Some(cx.spawn(async |panel, cx| {
