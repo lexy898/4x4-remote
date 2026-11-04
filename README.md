@@ -1170,16 +1170,16 @@ tab, its Peers tab (`--press alt-3`) or its Trackers tab (`--press alt-4`) open
 The app itself, which reached no daemon and kept reconnecting to a closed port
 (`just virtual just measure --offline --cpu 60`), against stage 6:
 
-| Metric                     | Target              | App, stage 6        | App, stage 7        |
-| -------------------------- | ------------------- | ------------------- | ------------------- |
-| First frame                | ≤ 500 ms            | 220 ms              | 225 ms              |
-| Resident memory (RSS)      | ≤ 100 MiB           | 144.8 MiB (not met) | 124.7 MiB (not met) |
-| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 62.0 MiB (not met)  | 62.6 MiB (not met)  |
-| Unique memory (USS)        | —                   | 51.4 MiB            | 52.4 MiB            |
-| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.8 MiB            | 16.2 MiB (not met)  |
-| Threads                    | —                   | 35                  | 35                  |
-| CPU over 60 s, one core    | near 0 % when idle  | 0.03 %              | 0.02 %              |
-| Binary size                | —                   | 39.6 MiB            | 40.0 MiB            |
+| Metric                     | Target              | App, stage 6        | App, stage 7                  |
+| -------------------------- | ------------------- | ------------------- | ----------------------------- |
+| First frame                | ≤ 500 ms            | 220 ms              | 225 ms                        |
+| Resident memory (RSS)      | ≤ 100 MiB           | 144.8 MiB (not met) | 124.7 MiB (not met)           |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 62.0 MiB (not met)  | 62.6 MiB (not met)            |
+| Unique memory (USS)        | —                   | 51.4 MiB            | 52.4 MiB                      |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.8 MiB            | 16.2 MiB (not met; see below) |
+| Threads                    | —                   | 35                  | 35                            |
+| CPU over 60 s, one core    | near 0 % when idle  | 0.03 %              | 0.02 %                        |
+| Binary size                | —                   | 39.6 MiB            | 40.0 MiB                      |
 
 - The first frame and the idle CPU are unchanged. The private memory of the table comes from two
   sessions: stage 6's 15.8 MiB from another one (the plan's baseline was 15.9), so the 0.4 MiB
