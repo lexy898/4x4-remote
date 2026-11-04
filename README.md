@@ -100,15 +100,15 @@ safe to delete.
 The package is always built from the commits of the local `master` branch: not from the working
 tree, so uncommitted changes are left out, and not from the branch checked out; the first line
 `just package` prints names the commit it builds. While `master` has no `packaging/arch/PKGBUILD`,
-`just package` stops before it writes anything and says to merge and pull first; outside a git
-repository (a copy of the files without `.git`) it stops the same way, with git's message. If the
-local `master` is behind the `origin/master` you last fetched, `just package` warns and still
-builds the local `master`; it fetches nothing itself. After the
-checkout has moved to another directory, the next build starts over from it and takes the full
-four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
-`/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
-application menu with its icon at once, without logging out. It also installs a second, hidden
-desktop file for debug builds (described below).
+`just package` stops before it writes anything and says to merge and pull first. Outside a git
+repository (a copy of the files without `.git`) it also stops before it writes anything, but it
+shows git's message and does not mention merging. If the local `master` is behind the
+`origin/master` you last fetched, `just package` warns and still builds the local `master`; it
+fetches nothing itself. After the checkout has moved to another directory, the next build starts
+over from it and takes the full four minutes again. The package installs `/usr/bin/4x4`, its
+desktop file in `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows
+in the application menu with its icon at once, without logging out. It also installs a second,
+hidden desktop file for debug builds (described below).
 
 To update, run the same four commands again; pacman replaces the installed version.
 
@@ -1049,10 +1049,11 @@ RUST_LOG=warn,x4_app=info,x4_core::service=debug timeout 120 4x4 2>&1 | grep -c 
 RUST_LOG=warn,x4_synthetic=info cargo run --release --locked -p x4-app --features synthetic \
     --bin x4-synthetic -- --scroll 2>&1 | grep 'scrolled the table'
 # Private memory before and after adding a large .torrent (several MiB): it should come back to
-# within a few MiB of the first figure. With no debug build (just run) going, as its process is
-# named 4x4 too. Adding contacts your daemon and adds that torrent to it for real: untick "Start
-# immediately" in the add dialog, and afterwards remove it with "Remove from list…", which keeps
-# files (there are none)
+# within a few MiB of the first figure. Run it with no debug build (just run) going: that build
+# has the same process name, 4x4, so pgrep -x 4x4 (every process named exactly that) would print
+# two pids and the command would fail. Adding contacts your daemon and adds that torrent to it for
+# real: untick "Start immediately" in the add dialog, and afterwards remove it with "Remove from
+# list…", which keeps files (there are none)
 grep RssAnon /proc/$(pgrep -x 4x4)/status
 ```
 
