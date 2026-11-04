@@ -260,30 +260,32 @@ impl DetailsPanel {
             .into_any_element()
     }
 
-    /// The line above the list: each part of the summary on its own, with a separator between.
+    /// The line above the list: each part of the summary on its own, with a separator between. On
+    /// a narrow panel it wraps between the parts, never inside one, and a separator goes to the
+    /// next line with the part after it, so that no line ends or starts with one alone.
     fn peers_summary_line(&self, cx: &App) -> impl IntoElement {
         let separator = SharedString::from(t!("peers-summary-separator"));
         let parts = peers_summary_texts(&self.peers.summary)
             .into_iter()
             .enumerate()
-            .flat_map(|(index, part)| {
-                let before = (index > 0).then(|| div().child(separator.clone()).into_any_element());
+            .map(|(index, part)| {
+                let before = (index > 0).then(|| div().child(separator.clone()));
                 let part = div()
                     .id(("summary-part", index))
                     .whitespace_nowrap()
                     .aria_label(part.clone())
                     .child(part)
-                    .test_support()
-                    .into_any_element();
-                before.into_iter().chain([part])
+                    .test_support();
+                h_flex().gap_1p5().children(before).child(part)
             });
         h_flex()
             .id(PEERS_SUMMARY_ID)
             .flex_none()
+            .flex_wrap()
             .px_3()
             .py_1()
-            .gap_1p5()
-            .overflow_hidden()
+            .gap_x_1p5()
+            .gap_y_0p5()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
             .when(self.stale, |line| line.opacity(STALE_OPACITY))

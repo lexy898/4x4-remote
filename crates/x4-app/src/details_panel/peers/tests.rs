@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::rc::Rc;
 
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
-use gpui_kit::{AppContext as _, Role, TestAppContext, WindowHandle};
+use gpui_kit::{AppContext as _, Role, TestAppContext, WindowHandle, size};
 use x4_core::test_support::torrent;
 use x4_core::{
     CountryCode, DetailsTab, DetailsTarget, DisplayState, Peer, PeerSources, PeerTraits, Torrent,
@@ -401,6 +401,45 @@ fn the_summary_line_shows_each_part_on_its_own(cx: &mut TestAppContext) {
             .to_vec()
         )
     );
+}
+
+#[gpui_kit::test]
+fn on_a_narrow_panel_the_summary_wraps_between_its_parts(cx: &mut TestAppContext) {
+    let film = torrent("film");
+    let panel = peers_of(&film, cx);
+    change(panel, cx, |panel, cx| panel.take_peers(three(&film), cx));
+    // On a wide panel the summary is one line.
+    let (one_line, wide) = drawn(panel, cx, |window| {
+        (
+            window.find(("summary-part", 0usize)).bounds().size.height,
+            window.find(PEERS_SUMMARY_ID).bounds().size.height,
+        )
+    });
+    cx.simulate_window_resize(panel.into(), size(px(240.), px(400.)));
+
+    drawn(panel, cx, |window| {
+        let summary = window.find(PEERS_SUMMARY_ID).bounds();
+        assert!(
+            summary.size.height >= wide + one_line,
+            "{:?}, one line {wide:?}",
+            summary.size.height
+        );
+        // No part is cut: each lies whole inside the line, on one line of its own.
+        for index in 0..5usize {
+            let part = window
+                .within(PEERS_SUMMARY_ID)
+                .find(("summary-part", index))
+                .bounds();
+            assert!(
+                summary.left() <= part.left()
+                    && part.right() <= summary.right()
+                    && summary.top() <= part.top()
+                    && part.bottom() <= summary.bottom(),
+                "part {index} at {part:?} outside {summary:?}"
+            );
+            assert_eq!(part.size.height, one_line, "part {index}");
+        }
+    });
 }
 
 /// The label of the cell `cell` of the row of `key`, the first of its address and port.

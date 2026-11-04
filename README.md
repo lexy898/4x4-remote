@@ -374,24 +374,25 @@ only the torrent's own folder open. They are not remembered between runs.
 The Peers tab shows who the torrent is connected to, one line each. The line above the list counts
 the peers, then how many of them were found in each way, the most first (from trackers, DHT, PEX,
 LPD, incoming, LTEP, or the resume file of an earlier run; a way that found none is left out), then
-how many send data to us and how many receive data from us right now, as their speeds tell. Each row
-has the peer's country flag and two-letter code (a grey globe when its address has no known country,
-such as a private address, or when the GeoIP files are missing), its address (screen readers hear
-its port too), the client it says it runs ("—" when it says none), how much of the torrent it has,
-as a bar in the torrent's state color and in percent, the speeds from it and to it, in the state's
-color and bold while data moves that way, and the icons of its connection: a lock when it is
-encrypted, a "µTP" badge when it runs over µTP rather than TCP, and an arrow when the peer connected
-to us, each named in its tooltip. The busiest peers come first: by the speed they send to us, then
-the speed we send to them (both counted in whole KiB/s, so that rows do not trade places for a small
-wobble), then the most complete, so that idle rows stay put. A click on the header of the country,
-the address, the client, the progress or a speed sorts by it (the progress and the speeds largest
-first), and a second click reverses the order. Until the first read has come, the tab says "—"; for
-a paused torrent it says "The torrent is paused", and while no peer is connected, as for a magnet
-link still looking for its metadata, "No peers connected". While the daemon does not answer, the
-rows are dimmed, as the table is. The list takes no keys; the wheel scrolls it. 4x4 reads the peers
-every 3 seconds, only while the tab is open on one torrent and the window is shown. Left, or with
-the panel hidden, the tab keeps nothing, and its order goes back to the busiest first; the order is
-not remembered between runs.
+how many send data to us and how many receive data from us right now, as their speeds tell; on a
+narrow panel the line wraps between its parts, never inside one. Each row has the peer's country
+flag and two-letter code (a grey globe when its address has no known country, such as a private
+address, or when the GeoIP files are missing), its address (screen readers hear its port too), the
+client it says it runs ("—" when it says none), how much of the torrent it has, as a bar in the
+torrent's state color and in percent, the speeds from it and to it, in the state's color and bold
+while data moves that way, and the icons of its connection: a lock when it is encrypted, a "µTP"
+badge when it runs over µTP rather than TCP, and an arrow when the peer connected to us, each named
+in its tooltip. The busiest peers come first: by the speed they send to us, then the speed we send
+to them (both counted in whole KiB/s, so that rows do not trade places for a small wobble), then the
+most complete, so that idle rows stay put. A click on the header of the country, the address, the
+client, the progress or a speed sorts by it (the progress and the speeds largest first), and a
+second click reverses the order. Until the first read has come, the tab says "—"; for a paused
+torrent it says "The torrent is paused", and while no peer is connected, as for a magnet link still
+looking for its metadata, "No peers connected". While the daemon does not answer, the rows are
+dimmed, as the table is. The list takes no keys; the wheel scrolls it. 4x4 reads the peers every 3
+seconds, only while the tab is open on one torrent and the window is shown. Left, or with the panel
+hidden, the tab keeps nothing, and its order goes back to the busiest first; the order is not
+remembered between runs.
 
 The Trackers tab shows each tracker of the torrent on a row of two lines, in the order the daemon
 keeps them, tier by tier; it is not sortable, because the order of the tiers means something. The
