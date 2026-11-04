@@ -50,9 +50,10 @@ just setup            # enable git hooks and verify required tools
 - `README.md` reflects every user-visible change.
 - Hooks enforce this. `.claude/settings.json` formats each edited `.rs` file; a guard hook refuses
   Bash commands that bypass the gates (`git commit --no-verify` or `-n`, `git push --no-verify`,
-  changing `core.hooksPath`, writing to `target/.agent-hooks`) and commands that change the
+  changing `core.hooksPath`, writing to `target/.agent-hooks`), commands that change the
   owner's default apps (`just default-handler`, `scripts/default-handler.sh`, `xdg-mime default`;
-  see Hard Rules); and an agent may not finish while `just check-fast` is red. The Stop hook skips
+  see Hard Rules) and `sudo` or `doas` as a command word (see Hard Rules); and an agent may not
+  finish while `just check-fast` is red. The Stop hook skips
   the check when nothing it depends on changed since the last green run, and gives up after 3
   blocked stops on the same state — then tell the owner that the checks are still red.
   `.githooks/pre-commit` runs `just pre-commit`. Never bypass them (`--no-verify`, disabling
@@ -187,9 +188,10 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
   runtime dirs, own HOME); never run KWin, spectacle or test windows against the owner's session
   bus, XDG dirs, home or screens. Debug builds use the `.Devel` app id.
 - Agents never run `sudo`, `pacman -U`, `makepkg -i`/`-s` or `just default-handler`; installing and
-  changing the default apps is the owner's. The guard hook refuses `just default-handler`,
-  `scripts/default-handler.sh` and `xdg-mime default` (reading with `xdg-mime query default` is
-  fine); tests run the script only in a throwaway desktop (see `test-hooks.sh`).
+  changing the default apps is the owner's. The guard hook refuses `sudo` and `doas` (as command
+  words, with any options), `just default-handler`, `scripts/default-handler.sh` and
+  `xdg-mime default` (reading with `xdg-mime query default` is fine); tests run the script only in
+  a throwaway desktop (see `test-hooks.sh`).
 - Everything in the repository is English.
 
 ## Git

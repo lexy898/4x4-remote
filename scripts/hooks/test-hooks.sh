@@ -473,6 +473,28 @@ test_guard_blocks_xdg_mime_default() {
         'sudo xdg-mime default a.desktop text/plain' 'bash -c "xdg-mime default a.desktop text/plain"'
 }
 
+# sudo and doas are the owner's alone (AGENTS.md, Hard Rules). They are refused as command words
+# whatever their options: a flag table of their own would be a second parser to keep right, and
+# a shared one reads `-E` or `-n`, which take no value, as taking one and hides the command behind.
+test_guard_blocks_sudo_and_doas() {
+    local command
+    expect_blocked 'sudo -E git commit --no-verify -m x' 'sudo -n true' 'sudo --user root ls' \
+        'doas -E ls' 'timeout 5 sudo ls' 'sudo ls' 'sudo' '/usr/bin/sudo ls' 'doas ls' \
+        'sudo -H -E git commit -n' 'sudo -i git commit -n' 'env X=1 sudo ls' 'nice sudo ls' \
+        'xargs sudo rm' 'command sudo ls' 'true && sudo ls' 'ls | sudo tee /etc/x' \
+        'if sudo -n true; then echo ok; fi' 'bash -c "sudo ls"' 'echo "$(sudo ls)"' \
+        'sudo pacman -U x.pkg.tar.zst' 'sudo -E just default-handler'
+    expect_allowed 'echo sudo' 'grep sudo README.md' 'man sudo' 'git commit -m "no sudo here"' \
+        'echo doas' 'which sudo' 'ls sudoers' 'sudoedit --help' 'cat /etc/doas.conf'
+    for command in 'sudo -E ls' 'doas ls' 'timeout 5 sudo ls'; do
+        run_guard "$command"
+        expect_status 2
+        expect_contains "Agents never run sudo (AGENTS.md, Hard Rules); the owner runs it" "$stderr" \
+            "stderr for: $command"
+        [[ $stderr != *"Fix the failing check"* ]] || fail "advice about gates for: $command: $stderr"
+    done
+}
+
 test_guard_allows_reading_and_testing_the_default_handler() {
     expect_allowed 'grep default-handler README.md' 'cat scripts/default-handler.sh' \
         'ls scripts/default-handler.sh' 'git add scripts/default-handler.sh' \
@@ -2754,6 +2776,7 @@ cases=(
     guard_blocks_the_default_handler_script
     guard_blocks_the_default_handler_behind_setsid
     guard_blocks_xdg_mime_default
+    guard_blocks_sudo_and_doas
     guard_allows_reading_and_testing_the_default_handler
     guard_tells_the_agent_to_ask_the_owner_about_default_apps
     guard_ignores_other_tools
