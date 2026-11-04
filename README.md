@@ -1118,6 +1118,63 @@ RUST_LOG=warn,x4_synthetic=info cargo run --release --locked -p x4-app --feature
 grep RssAnon /proc/$(pgrep -x 4x4)/status
 ```
 
+### Peers and trackers (stage 7)
+
+Measured on 2026-11-04 on the same laptop, inside the headless KWin of `just virtual`, with release
+builds; each figure is the median of three runs, each the first start of its own session. The
+[synthetic demo](#synthetic-demo) had its 2000 torrents busy and "Synthetic torrent 0016"
+(`--select 15`) selected, which downloads from 150 peers and has twelve trackers, with its General
+tab, its Peers tab (`--press alt-3`) or its Trackers tab (`--press alt-4`) open
+(`X4_MEASURE_SETTLE_SECONDS=15 just virtual just measure --synthetic --cpu 30 -- --select 15
+--press alt-3`); "not met" marks every cell over its target:
+
+| Metric                     | Target              | General             | Peers, 150 peers    | Trackers, 12        |
+| -------------------------- | ------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 235 ms              | 230 ms              | 232 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 145.8 MiB (not met) | 147.7 MiB (not met) | 146.6 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 83.9 MiB (not met)  | 85.8 MiB (not met)  | 84.8 MiB (not met)  |
+| Unique memory (USS)        | —                   | 73.8 MiB            | 75.6 MiB            | 74.6 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 37.6 MiB (not met)  | 39.4 MiB (not met)  | 38.4 MiB (not met)  |
+| Threads                    | —                   | 33                  | 33                  | 33                  |
+| CPU over 30 s, one core    | —                   | 1.43 %              | 2.00 %              | 1.63 %              |
+| Binary size                | —                   | 39.7 MiB            | 39.7 MiB            | 39.7 MiB            |
+
+- The Peers tab of 150 peers adds 1.8 MiB of private memory to the General tab of the same torrent,
+  and 0.6 points of one core: every 3 seconds the made-up daemon writes the 150 peers (about 65 KiB
+  of JSON), the service parses them and looks up their countries, and the tab orders and draws the
+  rows it shows. The synthetic daemon's own part counts here too. The Trackers tab adds 0.8 MiB and
+  0.2 points. The runs of each tab differed by at most 0.2 MiB of private memory.
+- The requests were counted as in stage 4, in the demo's debug log
+  (`RUST_LOG=warn,x4_synthetic=debug,x4_core::service=debug`) over 60 seconds from 15 seconds after
+  the start, one run each. With the Peers tab open, 124 requests (2.07 a second), 20 of them reads
+  of the peers: one every 3 seconds, as asked, each answer about 65 KiB for 150 peers (about 22
+  KiB/s). With the Trackers tab, 116 (1.93 a second), 12 of them reads of the trackers, one every
+  5 seconds, of 8.8 KiB each. With the General tab, 104 (1.73 a second): the recently active
+  torrents and the session statistics every 1.5 seconds, the progress of the download every 3
+  seconds, the free space every 30 seconds, and the whole list and the session settings every
+  minute; the other two tabs add their reads to these.
+
+The app itself, which reached no daemon and kept reconnecting to a closed port
+(`just virtual just measure --offline --cpu 60`), against stage 6:
+
+| Metric                     | Target              | App, stage 6        | App, stage 7        |
+| -------------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 220 ms              | 225 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 144.8 MiB (not met) | 124.7 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 62.0 MiB (not met)  | 62.6 MiB (not met)  |
+| Unique memory (USS)        | —                   | 51.4 MiB            | 52.4 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.8 MiB            | 16.2 MiB (not met)  |
+| Threads                    | —                   | 35                  | 35                  |
+| CPU over 60 s, one core    | near 0 % when idle  | 0.03 %              | 0.02 %              |
+| Binary size                | —                   | 39.6 MiB            | 40.0 MiB            |
+
+- The first frame and the idle CPU are unchanged. The private memory is 0.4 MiB higher than in
+  stage 6 (16.2 MiB in two runs, 16.4 in the third), and the proposed 16 MiB is missed by 0.2 MiB;
+  where it comes from was not traced. The app opens no country database until it shows the first
+  peers, so none of it is the GeoIP files. The binary grew by 0.4 MiB, 0.17 MiB of which are the
+  265 embedded flags. The RSS is 20 MiB lower only because fewer shared driver pages were
+  resident in these sessions (see above).
+
 ## Development
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and
