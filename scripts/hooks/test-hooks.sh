@@ -737,6 +737,8 @@ test_lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let() {
         $'#[allow(unsafe_code)]\nlet taken = unsafe { f() };\n'
         $'#[cfg_attr(test, expect(unsafe_code))]\nlet taken = unsafe { f() };\n'
         $'#[expect(clippy::too_many_lines, reason = "unsafe_code is not meant")]\nlet decoy = 1;\n#[expect(unsafe_code)]\nfn pin() {}\n'
+        # A `//` inside a string is no comment, so what follows it still counts.
+        $'let url = "http://x"; #[expect(unsafe_code)] fn pin() {}\n'
     )
     for form in "${forms[@]}"; do
         printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
@@ -756,6 +758,9 @@ test_lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout() {
         $'// SAFETY: a call.\n#[expect(unsafe_code, reason = "x")]\n// the call\nlet taken = unsafe { f() };\n'
         $'#[expect(\n    unsafe_code,\n    reason = "no safe wrapper [exists]; let it be"\n)]\nlet taken = unsafe { f() };\n'
         $'#[expect(unsafe_code)] let taken = unsafe { f() };\n'
+        # A comment after code on the attribute's line, also after a reason with a URL in it.
+        $'#[expect(unsafe_code, reason = "x")] // trailing note\nlet taken = unsafe { f() };\n'
+        $'#[expect(unsafe_code, reason = "see https://example.org/a")] // note\nlet taken = unsafe { f() };\n'
     )
     for form in "${forms[@]}"; do
         printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
@@ -771,6 +776,7 @@ test_lint_policy_ignores_unsafe_code_in_comments_and_reasons() {
         >>"$dir/crates/x4-core/src/lib.rs"
     printf '#[expect(clippy::too_many_lines, reason = "unsafe_code is not meant")]\nfn j() {}\n' \
         >>"$dir/crates/x4-core/src/lib.rs"
+    printf 'fn k() {} // #[allow(unsafe_code)]\n' >>"$dir/crates/x4-core/src/lib.rs"
     run_policy "$dir"
     expect_status 0
 }

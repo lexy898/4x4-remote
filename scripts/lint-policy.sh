@@ -36,11 +36,14 @@ strip_reasons() {
 groups='all|pedantic|nursery|restriction|style|complexity|perf|suspicious|correctness|cargo'
 unsafe_home=crates/x4-app/src/allocator.rs
 
-# (a) and (b). Attributes may span lines, so each file is flattened to one line first;
-# whole-line comments (including doc comments) are dropped so examples in docs do not count.
+# (a) and (b). Attributes may span lines, so each file is flattened to one line first. A `//`
+# comment is dropped (a whole line, doc comments included, or the end of a line of code), so
+# examples in docs and notes after an attribute do not count. The `//` must start outside a
+# string: one in a string, such as a URL in a `reason`, hides nothing. A `/* */` comment is not
+# dropped; between an attribute and its `let` it counts as code, a false violation on the safe side.
 mapfile -d '' rust_files < <(find crates -type f -name '*.rs' -print0 | LC_ALL=C sort -z)
 for file in "${rust_files[@]}"; do
-    flat=$(sed -E 's:^[[:space:]]*//.*$::' "$file" | tr '\n' ' ')
+    flat=$(sed -E 's:^(([^"/]|/[^/]|"([^"\\]|\\.)*")*)//.*$:\1:' "$file" | tr '\n' ' ')
     while IFS= read -r attribute; do
         [[ -n $attribute ]] || continue
         violation "$file" "crate-wide lint exception $attribute; use #[expect(lint, reason = \"...\")] on the smallest item"
