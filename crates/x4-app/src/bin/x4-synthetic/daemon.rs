@@ -26,9 +26,12 @@
 //!
 //! Every torrent has files (most one, some a folder, a few dozens, one 2000, some with BEP 47
 //! padding files), and the pieces it has follow how much of it is downloaded, from the start when
-//! the download is sequential (`files`). A read that asks for them also gets the metainfo and the
-//! trackers (`metainfo`): the comment, the creator, the source tag, and a tracker that may fail.
-//! Those fields, being heavy, are sent only when `fields` names them.
+//! the download is sequential (`files`). A read that asks for them also gets the metainfo
+//! (`metainfo`: the comment, the creator, the source tag), the trackers (`trackers`: none, one,
+//! or twelve in tiers, some failing, whose announces are counted from the clock as a running
+//! daemon's are) and the peers (`peers`: as many as the torrent is connected to, at documentation
+//! addresses, sharing its rates). Those fields, being heavy, are sent only when `fields` names
+//! them. One torrent that downloads is busy: it has 150 peers and a tracker in every state.
 //!
 //! As a real daemon does, an action without `ids` reaches every torrent, an unknown torrent is
 //! skipped, and a torrent an action changed is among the recently active ones at the next poll.
@@ -39,11 +42,14 @@ mod add;
 mod files;
 mod free_space;
 mod metainfo;
+mod peers;
 mod refusal;
 mod torrent;
+mod trackers;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use x4_rpc::{HttpRequest, HttpResponse, Transport, TransportError};
@@ -51,6 +57,9 @@ use x4_rpc::{HttpRequest, HttpResponse, Transport, TransportError};
 use files::{FileOps, Plan};
 use refusal::Refusal;
 use torrent::{Kind, Torrent};
+use trackers::Trackers;
+
+pub(crate) use peers::country_blocks;
 
 /// The seed of the torrents, so that every run shows the same ones.
 const SEED: u64 = 0x0004_0004_0004_0004;
@@ -63,6 +72,8 @@ const KIB: u64 = 1024;
 /// The torrent with 2000 files is the first one that downloads and holds at least this much, in
 /// KiB (8 GiB), so that each of its files is a few MiB.
 const ALBUM_MIN_KIB: u32 = 8 * 1024 * 1024;
+/// How many peers the busy torrent is connected to, enough to scroll the Peers tab.
+const BUSY_PEERS: u32 = 150;
 /// The JSON-RPC error code of a method the daemon does not have.
 const METHOD_NOT_FOUND: i64 = -32601;
 /// The JSON-RPC error code of parameters the daemon cannot use.
@@ -96,11 +107,19 @@ impl SyntheticDaemon {
             .collect();
         // One torrent with 2000 files, for the details of a big torrent: a download, so that its
         // files and pieces move.
-        if let Some(album) = torrents
-            .iter_mut()
-            .find(|torrent| torrent.kind == Kind::Downloading && torrent.total_kib >= ALBUM_MIN_KIB)
-        {
+        let album = torrents.iter().position(|torrent| {
+            torrent.kind == Kind::Downloading && torrent.total_kib >= ALBUM_MIN_KIB
+        });
+        if let Some(album) = album.and_then(|index| torrents.get_mut(index)) {
             album.plan = Plan::album();
+        }
+        // One busy torrent, for the Peers and the Trackers tab: the first download other than the
+        // album, with many peers and a tracker in every state.
+        if let Some((_, busy)) = (torrents.iter_mut().enumerate())
+            .find(|(index, torrent)| torrent.kind == Kind::Downloading && Some(*index) != album)
+        {
+            busy.peers_connected = BUSY_PEERS;
+            busy.trackers = Trackers::EveryState;
         }
         Self {
             state: Mutex::new(State {
@@ -110,6 +129,7 @@ impl SyntheticDaemon {
                 activity,
                 random,
                 next_id: count.saturating_add(1),
+                started: unix_now(),
             }),
         }
     }
@@ -185,6 +205,25 @@ struct State {
     /// The id of the next torrent added. Ids are never reused, as a daemon never reuses them
     /// while it runs.
     next_id: u32,
+    /// When the daemon started, in Unix seconds.
+    started: i64,
+}
+
+/// When a read is answered, and when the daemon started, in Unix seconds: the trackers' announces
+/// are counted from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Clock {
+    now: i64,
+    started: i64,
+}
+
+/// The time now, in Unix seconds; 0 for a clock set before 1970.
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 impl State {
@@ -193,17 +232,21 @@ impl State {
     /// torrents of a list of ids or hashes, in its order.
     fn torrent_get(&mut self, params: Option<&Value>) -> Result<Value, Refusal> {
         let fields = Fields::of(params)?;
+        let clock = Clock {
+            now: unix_now(),
+            started: self.started,
+        };
         match params.and_then(|params| params.get("ids")) {
             None => {
                 let torrents: Vec<Value> = self
                     .torrents
                     .iter_mut()
-                    .map(|torrent| torrent.record(&fields))
+                    .map(|torrent| torrent.record(&fields, clock))
                     .collect();
                 Ok(json!({ "torrents": torrents }))
             }
             Some(ids) if ids == "recently_active" => {
-                let torrents = self.tick(&fields);
+                let torrents = self.tick(&fields, clock);
                 let removed = std::mem::take(&mut self.removed);
                 Ok(json!({ "torrents": torrents, "removed": removed }))
             }
@@ -211,7 +254,7 @@ impl State {
                 let mut torrents = Vec::new();
                 for index in self.listed(ids)? {
                     if let Some(torrent) = self.torrents.get_mut(index) {
-                        torrents.push(torrent.record(&fields));
+                        torrents.push(torrent.record(&fields, clock));
                     }
                 }
                 Ok(json!({ "torrents": torrents }))
@@ -222,7 +265,7 @@ impl State {
     /// Moves every active torrent on and returns the records of the recently active ones: those
     /// that moved, those being verified and those an action changed. With a static daemon only
     /// the last two move.
-    fn tick(&mut self, fields: &Fields) -> Vec<Value> {
+    fn tick(&mut self, fields: &Fields, clock: Clock) -> Vec<Value> {
         let ticking = self.activity == Activity::Ticking;
         let mut records = Vec::new();
         for torrent in &mut self.torrents {
@@ -233,7 +276,7 @@ impl State {
             }
             let touched = std::mem::take(&mut torrent.touched);
             if moves || verifying || touched {
-                records.push(torrent.record(fields));
+                records.push(torrent.record(fields, clock));
             }
         }
         records

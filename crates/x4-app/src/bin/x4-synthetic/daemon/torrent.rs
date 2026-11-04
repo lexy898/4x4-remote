@@ -1,11 +1,13 @@
 //! A made-up torrent and what it is doing: its kind, rates and progress, and the actions that
-//! change them. Its files and pieces are in `files`, its metainfo and trackers in `metainfo`.
+//! change them. Its files and pieces are in `files`, its metainfo in `metainfo`, its trackers in
+//! `trackers` and its peers in `peers`.
 
 use serde_json::{Value, json};
 
 use super::files::{FileState, Plan};
-use super::metainfo::Trackers;
-use super::{Activity, DOWNLOAD_DIR, Fields, KIB, Lcg, VERIFY_POLLS, files, metainfo};
+use super::peers::leechers;
+use super::trackers::{self, Trackers};
+use super::{Activity, Clock, DOWNLOAD_DIR, Fields, KIB, Lcg, VERIFY_POLLS, files};
 
 /// The added dates are spread over the year after this moment (2026-06-01, Unix time).
 const FIRST_ADDED: i64 = 1_780_272_000;
@@ -105,7 +107,7 @@ impl Kind {
     }
 
     /// Whether the torrent still lacks some of its data.
-    fn incomplete(self) -> bool {
+    pub(super) fn incomplete(self) -> bool {
         matches!(
             self,
             Self::Downloading | Self::DownloadWait | Self::Checking | Self::CheckWait
@@ -124,8 +126,11 @@ pub(super) struct Torrent {
     pub(super) left_kib: u32,
     pub(super) rate_down: u32,
     pub(super) rate_up: u32,
-    peers_connected: u32,
-    peers_getting_from_us: u32,
+    /// How many peers it is connected to; `peers` makes up who they are.
+    pub(super) peers_connected: u32,
+    /// How many of them it sends to now: those its upload rate is shared out among.
+    pub(super) peers_getting_from_us: u32,
+    /// How many of them send to it now: those its download rate is shared out among.
     pub(super) peers_sending_to_us: u32,
     pub(super) ratio_thousandths: u32,
     added_after: u32,
@@ -135,6 +140,8 @@ pub(super) struct Torrent {
     pub(super) plan: Plan,
     /// The trackers it has and which of them fail.
     pub(super) trackers: Trackers,
+    /// Whether it has run since the daemon started, so that its trackers have been announced to.
+    pub(super) ran: bool,
     /// Its files and pieces, made when a read or a `torrent_set` first needs them.
     pub(super) files: Option<FileState>,
     /// Whether an action changed it since the last poll of the recently active torrents.
@@ -212,7 +219,10 @@ impl Torrent {
             // What a torrent holds is decided by streams of its own, so that the torrents and
             // their numbers stay what they were before they had files.
             plan: Plan::pick(&mut Lcg::stream(id, files::PLAN_STREAM)),
-            trackers: Trackers::of(kind, &mut Lcg::stream(id, metainfo::TRACKERS_STREAM)),
+            trackers: Trackers::of(kind, &mut Lcg::stream(id, trackers::TRACKERS_STREAM)),
+            // A stopped torrent may not have run since the daemon started; one that stopped on
+            // an error did, and so did every other.
+            ran: kind != Kind::Paused || id.is_multiple_of(2),
             files: None,
             touched: false,
             verify: None,
@@ -258,8 +268,9 @@ impl Torrent {
             plan,
             trackers: Trackers::of(
                 Kind::Paused,
-                &mut Lcg::stream(id, metainfo::TRACKERS_STREAM),
+                &mut Lcg::stream(id, trackers::TRACKERS_STREAM),
             ),
+            ran: false,
             files: None,
             touched: true,
             verify: None,
@@ -306,6 +317,18 @@ impl Torrent {
             }
             _ => {}
         }
+        // The counts are those of the peers the rates are shared out among (`peers`): the draws
+        // above stay as they were, so that the other torrents' numbers do not move.
+        self.peers_sending_to_us = sharing(
+            &mut self.rate_down,
+            self.peers_sending_to_us,
+            self.peers_connected,
+        );
+        self.peers_getting_from_us = sharing(
+            &mut self.rate_up,
+            self.peers_getting_from_us,
+            leechers(self.kind, self.peers_connected),
+        );
     }
 
     /// Starts a stopped torrent, downloading or seeding by how much it has, and with `now` also a
@@ -319,6 +342,7 @@ impl Torrent {
             _ => return,
         };
         self.kind = kind;
+        self.ran = true;
         // As many peers as a torrent of the kind has when the demo starts.
         self.peers_connected = match kind {
             Kind::Downloading => 12,
@@ -366,6 +390,8 @@ impl Torrent {
         self.recheck_thousandths = 0;
         self.rate_down = 0;
         self.rate_up = 0;
+        self.peers_getting_from_us = 0;
+        self.peers_sending_to_us = 0;
         self.touched = true;
     }
 
@@ -400,9 +426,9 @@ impl Torrent {
         FIRST_ADDED + i64::from(self.added_after)
     }
 
-    /// The torrent as `torrent_get` sends it: the `fields` asked for, among every field of the
-    /// app's list, the magnet link and the details.
-    pub(super) fn record(&mut self, fields: &Fields) -> Value {
+    /// The torrent as `torrent_get` sends it at `clock`: the `fields` asked for, among every
+    /// field of the app's list, the magnet link, the details and the peers.
+    pub(super) fn record(&mut self, fields: &Fields, clock: Clock) -> Value {
         // The files settle what is left, which the list fields report, so they come first.
         if Self::needs_files(fields) {
             self.files();
@@ -414,7 +440,8 @@ impl Torrent {
                 record.insert("magnet_link".to_owned(), self.magnet_link().into());
             }
             self.add_file_fields(fields, record);
-            self.add_metainfo(fields, record);
+            self.add_metainfo(fields, clock, record);
+            self.add_peers(fields, record);
         }
         record
     }
@@ -468,5 +495,19 @@ impl Torrent {
             "total_size": total,
             "upload_ratio": f64::from(self.ratio_thousandths) / 1000.0,
         })
+    }
+}
+
+/// How many peers share `rate` when `drawn` were drawn to and `eligible` can: none without a rate,
+/// otherwise at least one and at most as many as can, and no more than the bytes per second, so
+/// that each gets one. A rate that no peer can take is no rate.
+fn sharing(rate: &mut u32, drawn: u32, eligible: u32) -> u32 {
+    if eligible == 0 {
+        *rate = 0;
+    }
+    if *rate == 0 {
+        0
+    } else {
+        drawn.clamp(1, eligible).min(*rate)
     }
 }

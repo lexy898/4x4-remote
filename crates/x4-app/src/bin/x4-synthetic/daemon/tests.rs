@@ -20,8 +20,10 @@ use super::*;
 mod adding;
 mod details;
 mod file_set;
+mod peers;
 mod pieces;
 mod support;
+mod trackers;
 
 const COUNT: u32 = 2000;
 

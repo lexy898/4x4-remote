@@ -1170,7 +1170,19 @@ left out; it reports a torrent it already has as a duplicate and changes nothing
 answers for the session's folder and the folders of its torrents, and their parent folders, with
 Transmission's error 5, "No such file or directory", for any other. Its torrents have files, most
 one, some a folder of several, a few dozens, and "Synthetic torrent 0005" (`--select 4`) 2000 in
-folders; their pieces follow the download, from the start when it is in order. `--press KEY`,
+folders; their pieces follow the download, from the start when it is in order. The running
+torrents have peers, at addresses reserved for documentation (192.0.2.0/24, 198.51.100.0/24,
+203.0.113.0/24 and 2001:db8::/32), which stay from one read to the next while the torrent's rates
+are shared out among them; a country database the demo makes in memory puts them in countries
+(Japan, South Korea and Finland among them, whose flags are mostly white), in the region EU or in
+none, and the installed GeoIP files are not read. Their trackers, none, one or twelve in tiers
+with a backup in the first, announce every 30 minutes counted from the clock, and a few wait for a
+slot or announce right now; some fail, time out or fail only their scrape, and those of a stopped
+torrent that has not run since the made-up daemon started were never contacted. "Synthetic torrent
+0016" (`--select 15`; with `--static`, "Synthetic torrent 0011", `--select 10`) is busy: it
+downloads from 150 peers and has a tracker of every status, so that `just virtual just
+demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4` the Trackers
+tab with each kind of row. `--press KEY`,
 which can be given several times, presses each key in turn once the list is there and selected,
 one every three seconds, as on the keyboard: for example `just virtual just
 demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
