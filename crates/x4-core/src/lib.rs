@@ -118,6 +118,11 @@
 //! [`peers_summary`] gives the [`PeersSummary`] above them, and [`peers_empty`] the [`PeersEmpty`]
 //! reason when there are none.
 //!
+//! What the Trackers tab shows is decided here as well: [`tracker_rows`] gives a [`TrackerRow`] for
+//! each tracker of the [`TorrentDetails`] in the daemon's order, with the [`TrackerStatus`] that
+//! [`tracker_status`] tells and the [`NextAnnounce`] of its tier, and [`relative_time`] tells how
+//! far a time is from now as a [`RelativeTime`], for the UI to word as "3 min ago" or "in 27 min".
+//!
 //! The `test-support` feature adds the `test_support` module with builders for tests of
 //! dependent crates (a complete [`Torrent`], a recorded fixture's `result`) and turns on
 //! `x4-rpc`'s `test-support`, whose recorded fixtures the builders work with.
@@ -160,7 +165,9 @@ pub use adding::{
     stopped_outcome,
 };
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
-pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
+pub use details::{
+    FileEntry, NextAnnounce, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat,
+};
 pub use engine::{
     Command, DetailsRead, Engine, EngineConfig, Event, FreeSpaceAnswer, Request, Response,
     Visibility,
@@ -203,11 +210,12 @@ pub use ui_state::{
 pub use view::{
     Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,
     GeneralModel, Indicator, PeerColumn, PeerRow, PeerSort, PeerSource, PeersEmpty, PeersSummary,
-    PiecesView, RemovalSummary, Row, Selection, ServiceStatus, SpeedControls, StatusModel,
-    Subtitle, TableModel, TimeUnit, ToggleKind, TrackerCount, TrackerProblem, TrackerProblemKind,
-    TrackerSummary, ViewState, availability, details_target, general_model, peer_rows, peers_empty,
-    peers_summary, removal_summary, status_model, table_model, toggle_kind, tracker_summary,
-    visibility,
+    PiecesView, RelativeTime, RemovalSummary, Row, Selection, ServiceStatus, SpeedControls,
+    StatusModel, Subtitle, TableModel, TimeDirection, TimeUnit, ToggleKind, TrackerCount,
+    TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary, ViewState,
+    availability, details_target, general_model, peer_rows, peers_empty, peers_summary,
+    relative_time, removal_summary, status_model, table_model, toggle_kind, tracker_rows,
+    tracker_status, tracker_summary, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

@@ -248,12 +248,17 @@ fn is_bidi_control(ch: char) -> bool {
     )
 }
 
-/// What a peer calls itself, made fit to print on one line: control and bidirectional-text
-/// characters are dropped, a run of whitespace (a tab and a line break included) becomes one
-/// space, the ends are trimmed and no more than [`MAX_CLIENT_CHARS`] characters are kept.
-///
-/// It stops reading at the limit, because a peer can send as much as it likes.
+/// What a peer calls itself, made fit to print on one line; see [`clean_line`].
 fn clean_client(raw: &str) -> String {
+    clean_line(raw, MAX_CLIENT_CHARS)
+}
+
+/// Text that somebody else chose, made fit to print on one line: control and bidirectional-text
+/// characters are dropped, a run of whitespace (a tab and a line break included) becomes one
+/// space, the ends are trimmed and no more than `max_chars` characters are kept.
+///
+/// It stops reading at the limit, because a peer or a tracker can send as much as it likes.
+pub(crate) fn clean_line(raw: &str, max_chars: usize) -> String {
     let mut clean = String::new();
     let mut chars = 0;
     let mut space_pending = false;
@@ -263,14 +268,14 @@ fn clean_client(raw: &str) -> String {
         } else if !ch.is_control() && !is_bidi_control(ch) {
             if space_pending {
                 // The space is kept only when the character after it fits too.
-                if chars + 1 >= MAX_CLIENT_CHARS {
+                if chars + 1 >= max_chars {
                     break;
                 }
                 clean.push(' ');
                 chars += 1;
                 space_pending = false;
             }
-            if chars >= MAX_CLIENT_CHARS {
+            if chars >= max_chars {
                 break;
             }
             clean.push(ch);

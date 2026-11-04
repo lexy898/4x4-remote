@@ -20,7 +20,7 @@ use gpui_kit::{
 use x4_app::app;
 use x4_app::main_view::MainView;
 use x4_app::torrent_table::TorrentTable;
-use x4_core::test_support::{details, torrent};
+use x4_core::test_support::{details, torrent, tracker as neutral_tracker};
 use x4_core::{
     Attention, Command, ConnectionState, DetailsState, DetailsTab, Event, MAX_DETAILS_HEIGHT,
     MIN_DETAILS_HEIGHT, MIN_WINDOW_HEIGHT, Ratio, Snapshot, Torrent, TorrentDetails, TrackerAnswer,
@@ -301,14 +301,12 @@ fn is_date_time(text: &str) -> bool {
 /// A tracker of the details that answered its last announce with `outcome`, or none.
 fn tracker(host: &str, outcome: Option<TrackerOutcome>, result: &str) -> TrackerStat {
     TrackerStat {
-        host: host.to_owned(),
         last_announce: outcome.map(|outcome| TrackerAnswer {
             outcome,
             result: result.to_owned(),
+            at: None,
         }),
-        last_scrape: None,
-        seeders: None,
-        leechers: None,
+        ..neutral_tracker(host)
     }
 }
 

@@ -16,7 +16,9 @@
 //! trackers into the worst problem and the counts of those that work, fail and were not contacted
 //! yet. Its Peers tab is decided here as well: [`peer_rows`] puts the peers in the order the user
 //! chose, [`peers_summary`] tells where they came from and who transfers, and [`peers_empty`]
-//! why there are none to show.
+//! why there are none to show. So is its Trackers tab: [`tracker_rows`] gives a row for each
+//! tracker in the daemon's order, with its [`TrackerStatus`], and [`relative_time`] tells how far
+//! its last and next announce are from now.
 
 mod availability;
 mod columns;
@@ -26,6 +28,7 @@ mod general;
 // The file tree of the details panel rounds progress like the table does.
 mod peers;
 pub(crate) mod percent;
+mod relative_time;
 mod removal;
 mod row;
 mod selection;
@@ -42,13 +45,15 @@ pub use peers::{
     PeerColumn, PeerRow, PeerSort, PeerSource, PeersEmpty, PeersSummary, peer_rows, peers_empty,
     peers_summary,
 };
+pub use relative_time::{RelativeTime, TimeDirection, relative_time};
 pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
 pub use selection::{Edge, Selection};
 pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_model, visibility};
 pub use subtitle::Subtitle;
 pub use trackers::{
-    TrackerCount, TrackerProblem, TrackerProblemKind, TrackerSummary, tracker_summary,
+    TrackerCount, TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary,
+    tracker_rows, tracker_status, tracker_summary,
 };
 
 use std::sync::Arc;
