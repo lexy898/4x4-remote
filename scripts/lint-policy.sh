@@ -11,8 +11,10 @@
 #       vendor/gpui-pre-wgpu, not the registry crate, and that copy is patched (see its PATCHED.md)
 #   (f) the one `unsafe`: an `unsafe_code` lint attribute only in crates/x4-app/src/allocator.rs, at
 #       most once, as an `#[expect]` on a `let` (not on a whole function or module, where more
-#       unsafe calls would pass), and the workspace level of `unsafe_code` is `deny` (`forbid`
-#       cannot be excepted)
+#       unsafe calls would pass), that file holds exactly one `unsafe` keyword (clippy limits a
+#       block to one operation, but not a statement to one block), and the workspace level of
+#       `unsafe_code` is `deny` (`forbid` cannot be excepted) and of
+#       `multiple_unsafe_ops_per_block` is `warn` or `deny`
 #
 # Prints one line per violation (file or crate, and the rule) and exits 1 if there is any.
 # Usage: scripts/lint-policy.sh [repository root] (default: the repository of this script).
@@ -75,6 +77,12 @@ for file in "${rust_files[@]}"; do
         stripped=$(strip_reasons <<<"$flat")
         if ! grep -qE '#[[:space:]]*\[[[:space:]]*expect[[:space:]]*\([^]]*\bunsafe_code\b[^]]*\][[:space:]]*let[[:space:]]' <<<"$stripped"; then
             violation "$file" "the unsafe_code exception must be an #[expect] on the let of the one unsafe call"
+        else
+            # Comments and reasons are gone, and `unsafe_code` is no match (`_` is a word character).
+            unsafe_keywords=$({ grep -oE '\bunsafe\b' <<<"$stripped" || true; } | wc -l)
+            if ((unsafe_keywords != 1)); then
+                violation "$file" "$unsafe_keywords 'unsafe' keywords; the owner approved one unsafe call"
+            fi
         fi
     fi
 done
@@ -144,6 +152,13 @@ check_vendored_patch
 unsafe_level=$(taplo get -f Cargo.toml workspace.lints.rust.unsafe_code 2>/dev/null || true)
 if [[ $unsafe_level != deny ]]; then
     violation Cargo.toml "workspace.lints.rust.unsafe_code is '${unsafe_level:-unset}', not deny (the one unsafe call needs #[expect], which a forbid rejects, and any other level lets more unsafe in)"
+fi
+
+# Clippy counts the operations of one block; with the keyword count above, one statement cannot
+# hold a second unsafe call either.
+unsafe_ops_level=$(taplo get -f Cargo.toml workspace.lints.clippy.multiple_unsafe_ops_per_block 2>/dev/null || true)
+if [[ $unsafe_ops_level != warn && $unsafe_ops_level != deny ]]; then
+    violation Cargo.toml "workspace.lints.clippy.multiple_unsafe_ops_per_block is '${unsafe_ops_level:-unset}', not warn or deny (an unsafe block may hold only the one call)"
 fi
 
 if ((failures > 0)); then

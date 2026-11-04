@@ -547,7 +547,8 @@ test_check_tools_passes_when_all_present() {
 # output per crate comes from tree-<crate>.txt next to it, and its stderr from
 # tree-<crate>.stderr if that exists. Each call appends its arguments to cargo-args.txt.
 # Clean by default: x4-app's tree is the vendored crate, the vendored renderer is patched, the
-# workspace denies unsafe_code and the allocator holds the one exception to it.
+# workspace denies unsafe_code, limits an unsafe block to one operation, and the allocator holds the
+# one exception to it.
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
@@ -558,7 +559,8 @@ new_policy_root() {
             "$crate" >"$dir/crates/$crate/src/lib.rs"
         printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
     done
-    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n' >"$dir/Cargo.toml"
+    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n\n[workspace.lints.clippy]\nmultiple_unsafe_ops_per_block = "warn"\n' \
+        >"$dir/Cargo.toml"
     mkdir -p "$dir/crates/x4-app/src"
     printf '[package]\nname = "x4-app"\n\n[lints]\nworkspace = true\n' >"$dir/crates/x4-app/Cargo.toml"
     printf '//! The allocator.\n\n// SAFETY: a call.\n#[expect(unsafe_code, reason = "the owner allowed this")]\nlet taken = unsafe { f() };\n' \
@@ -725,6 +727,50 @@ test_lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator() {
     expect_contains "crates/x4-app/src/allocator.rs: 2 unsafe_code exceptions" "$stderr" stderr
 }
 
+# The attribute is on a `let`, but the statement could still hold more than the one call
+# (`multiple_unsafe_ops_per_block` counts operations per block, so two blocks escape it).
+test_lint_policy_rejects_a_second_unsafe_keyword_in_the_allocator() {
+    local dir form
+    dir=$(new_policy_root)
+    local -a forms=(
+        $'#[expect(unsafe_code, reason = "x")]\nlet t = unsafe { f() } + unsafe { g() };\n'
+        $'#[expect(unsafe_code, reason = "x")]\nlet t = {\n    unsafe { f() };\n    unsafe { g() }\n};\n'
+        $'#[expect(unsafe_code, reason = "x")]\nlet taken = unsafe { f() };\nunsafe fn extra() {}\n'
+    )
+    for form in "${forms[@]}"; do
+        printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
+        run_policy "$dir"
+        expect_status 1
+        expect_contains "crates/x4-app/src/allocator.rs: 2 'unsafe' keywords; the owner approved one unsafe call" \
+            "$stderr" "stderr with: $form"
+    done
+}
+
+# Beside the lint-policy count, clippy limits a block to one operation; the workspace must ask for it.
+test_lint_policy_requires_the_one_unsafe_operation_per_block_lint() {
+    local dir level
+    dir=$(new_policy_root)
+    for level in allow forbid; do
+        printf '[workspace.lints.rust]\nunsafe_code = "deny"\n\n[workspace.lints.clippy]\nmultiple_unsafe_ops_per_block = "%s"\n' \
+            "$level" >"$dir/Cargo.toml"
+        run_policy "$dir"
+        expect_status 1
+        expect_contains "Cargo.toml: workspace.lints.clippy.multiple_unsafe_ops_per_block is '$level', not warn or deny" \
+            "$stderr" stderr
+    done
+    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n' >"$dir/Cargo.toml"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "Cargo.toml: workspace.lints.clippy.multiple_unsafe_ops_per_block is 'unset', not warn or deny" \
+        "$stderr" stderr
+    for level in warn deny; do
+        printf '[workspace.lints.rust]\nunsafe_code = "deny"\n\n[workspace.lints.clippy]\nmultiple_unsafe_ops_per_block = "%s"\n' \
+            "$level" >"$dir/Cargo.toml"
+        run_policy "$dir"
+        expect_status 0
+    done
+}
+
 # The owner approved one unsafe call, and the exception sits on the `let` that makes it. On a whole
 # function or module it would cover every unsafe call in them, and a second one would pass.
 test_lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let() {
@@ -761,6 +807,8 @@ test_lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout() {
         # A comment after code on the attribute's line, also after a reason with a URL in it.
         $'#[expect(unsafe_code, reason = "x")] // trailing note\nlet taken = unsafe { f() };\n'
         $'#[expect(unsafe_code, reason = "see https://example.org/a")] // note\nlet taken = unsafe { f() };\n'
+        # The word in comments and in the reason is no second `unsafe`.
+        $'//! The only unsafe here.\n// SAFETY: this unsafe call only sets a parameter.\n#[expect(unsafe_code, reason = "the one unsafe call")]\nlet taken = unsafe { f() }; // the unsafe call\n'
     )
     for form in "${forms[@]}"; do
         printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
@@ -2664,6 +2712,8 @@ cases=(
     lint_policy_rejects_failed_gpui_pre_wgpu_lookup
     lint_policy_rejects_an_unsafe_code_exception_elsewhere
     lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator
+    lint_policy_rejects_a_second_unsafe_keyword_in_the_allocator
+    lint_policy_requires_the_one_unsafe_operation_per_block_lint
     lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let
     lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout
     lint_policy_ignores_unsafe_code_in_comments_and_reasons
