@@ -18,6 +18,10 @@
 //! it answers, so [`Client::torrent_add`] waits [`ADD_TIMEOUT`] rather than the transport's own
 //! timeout; every other call keeps the transport's.
 //!
+//! A `torrent_get` can also read the connected peers ([`PeerRecord`], [`PeersFromRecord`]) and
+//! every tracker's state ([`TrackerStatRecord`]); the records of both are read leniently, so
+//! that one odd value in a peer's or tracker's entry cannot fail the read of the rest.
+//!
 //! The session methods ([`Client::session_get`], [`Client::session_set`],
 //! [`Client::session_stats`], [`Client::free_space`]) read and change the daemon's settings and
 //! report its totals; [`Client::check_server`] tells whether the server's RPC version is one
@@ -30,7 +34,9 @@ mod client;
 mod download_dir;
 mod error;
 mod ids;
+mod lenient;
 mod magnet;
+mod peers;
 mod session;
 mod session_methods;
 #[cfg(feature = "test-support")]
@@ -44,12 +50,13 @@ pub use download_dir::{DownloadDir, DownloadDirError, MAX_DOWNLOAD_DIR_BYTES};
 pub use error::{RpcError, UnsupportedReason};
 pub use ids::{GetIds, HashString, IdError, TorrentId, TorrentRef, TorrentSelection};
 pub use magnet::{MAX_MAGNET_BYTES, MagnetError, MagnetLink};
+pub use peers::{PeerRecord, PeersFromRecord};
 pub use session::{
     FreeSpace, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats, StatsBlock,
 };
 pub use torrent::{
     AddOutcome, AddSource, AddedTorrent, ErrorKind, FilePriority, FileRecord, FileStatRecord,
     Pieces, RemoveData, Status, TorrentAction, TorrentAdd, TorrentField, TorrentGetResponse,
-    TorrentRecord, TorrentSet, TrackerStatRecord,
+    TorrentRecord, TorrentSet, TrackerId, TrackerStatRecord, TrackerState,
 };
 pub use transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};

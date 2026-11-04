@@ -1,12 +1,27 @@
 //! Scrubbing of recorded Transmission responses, so fixtures hold structure and numbers but no
 //! names, paths, hashes, trackers or magnet links of a real daemon.
 //!
-//! The rules are an allowlist: a string survives only under the keys in [`KEEP_KEYS`]; every
-//! other string is replaced, so a field nobody thought about is scrubbed too.
+//! The rules are an allowlist: a string survives only under the keys in [`KEEP_KEYS`] or in the
+//! few shapes the rules below name; every other string is replaced, so a field nobody thought
+//! about is scrubbed too.
+//!
+//! Peers and trackers keep their structure and numbers (ports, rates, times, ids, tiers):
+//! - a peer's `address` becomes a documentation address (RFC 5737 for IPv4, RFC 3849 for IPv6),
+//!   the same one whenever the same real address appears, in any fixture of the recording;
+//! - a `client_name` becomes `Client N`, a `flag_str` is kept when it holds only the daemon's flag
+//!   letters, and a `peer_id` is redacted;
+//! - a tracker's `host`, `announce` and `scrape` become `tracker{N}.example.org` (the real port
+//!   stays), its `sitename` becomes `example`, and an announce or scrape result is kept only when
+//!   it is one of the daemon's own three texts.
 
 use std::collections::{BTreeSet, HashMap};
+use std::net::IpAddr;
 
 use serde_json::{Map, Value};
+
+mod network;
+
+pub use network::stray_addresses;
 
 /// Keys whose string values are kept verbatim: protocol constants and the piece bitfield.
 const KEEP_KEYS: [&str; 4] = ["jsonrpc", "version", "rpc_version_semver", "pieces"];
@@ -16,6 +31,17 @@ const REDACTED: &str = "redacted";
 const REDACTED_ERROR: &str = "redacted error";
 const LABEL: &str = "label";
 const BTIH_PREFIX: &str = "urn:btih:";
+const SITENAME: &str = "example";
+/// The letters of a peer's `flag_str` (T/peer-mgr.cc), the only text kept under that key.
+const FLAG_LETTERS: &str = "TODdUuK?EHXI";
+
+/// The announce and scrape results that are the daemon's own words; any other is a tracker's.
+const DAEMON_RESULTS: [&str; 4] = [
+    "",
+    "Success",
+    "Could not connect to tracker",
+    "Tracker did not respond",
+];
 
 /// An original is searched for inside longer strings only from this length on: shorter ones
 /// would match fake values by chance (a one-letter label is a substring of "label").
@@ -33,6 +59,13 @@ pub struct Scrubber {
     /// Real name to torrent number, for torrents that come without a hash.
     names: HashMap<String, usize>,
     torrent_count: usize,
+    /// Real peer address (an IPv4-mapped one as its IPv4) to its fake. Its length, by family, is
+    /// how many fakes were handed out.
+    addresses: HashMap<IpAddr, String>,
+    /// Real client name to its number.
+    clients: HashMap<String, usize>,
+    /// Real tracker host (lowercase, without port) to its number.
+    trackers: HashMap<String, usize>,
     /// Every sensitive string that was replaced.
     originals: BTreeSet<String>,
 }
@@ -95,16 +128,24 @@ impl Scrubber {
     }
 
     fn scrub_string(&mut self, key: Option<&str>, text: &mut String) {
+        if is_kept(key, text) {
+            return;
+        }
         let replacement = match key {
-            Some(key) if KEEP_KEYS.contains(&key) => return,
-            Some("download_dir" | "path") => FAKE_DIR,
-            // An empty error string means "no error", which a fixture has to keep saying.
-            Some("error_string") if text.is_empty() => return,
-            Some("error_string") => REDACTED_ERROR,
-            Some("labels") => LABEL,
-            _ => REDACTED,
+            Some("download_dir" | "path") => FAKE_DIR.to_owned(),
+            Some("error_string" | "last_announce_result" | "last_scrape_result") => {
+                REDACTED_ERROR.to_owned()
+            }
+            Some("labels") => LABEL.to_owned(),
+            Some("address") => self.fake_address(text),
+            Some("client_name") => format!("Client {}", self.client_number(text)),
+            Some("host") => self.fake_host(text),
+            Some("announce") => self.fake_url(text, "announce"),
+            Some("scrape") => self.fake_url(text, "scrape"),
+            Some("sitename") => SITENAME.to_owned(),
+            _ => REDACTED.to_owned(),
         };
-        self.replace(text, replacement.to_owned());
+        self.replace(text, replacement);
     }
 
     /// Scrubs one torrent object: its identity strings follow its number, the rest is scrubbed
@@ -194,6 +235,20 @@ impl Scrubber {
             self.originals.insert(std::mem::take(text));
         }
         *text = replacement;
+    }
+}
+
+/// Whether `text` under `key` is kept as it is: a protocol constant, or text that holds nothing
+/// to hide. An empty `error_string` says "no error", an empty `client_name` a peer that never
+/// named its client, an empty `sitename` a tracker with none; a `flag_str` of the daemon's
+/// letters and an announce or scrape result in the daemon's own words are no secret either.
+fn is_kept(key: Option<&str>, text: &str) -> bool {
+    match key {
+        Some(key) if KEEP_KEYS.contains(&key) => true,
+        Some("error_string" | "client_name" | "sitename") => text.is_empty(),
+        Some("flag_str") => text.chars().all(|letter| FLAG_LETTERS.contains(letter)),
+        Some("last_announce_result" | "last_scrape_result") => DAEMON_RESULTS.contains(&text),
+        _ => false,
     }
 }
 
@@ -336,7 +391,10 @@ mod tests {
         assert_eq!(torrent["download_dir"], "/data/torrents/video");
         assert_eq!(torrent["error_string"], "redacted error");
         assert_eq!(torrent["labels"], json!(["label", "label"]));
-        assert_eq!(torrent["trackers"][0]["announce"], "redacted");
+        assert_eq!(
+            torrent["trackers"][0]["announce"],
+            "https://tracker1.example.org/announce"
+        );
         assert_eq!(scrubbed["jsonrpc"], "2.0");
         assert_eq!(scrubbed["result"]["version"], "4.1.3 (abcdef0123)");
         assert_eq!(scrubbed["result"]["rpc_version_semver"], "6.0.0");

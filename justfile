@@ -58,12 +58,12 @@ record-fixtures:
 # --no-capture runs the tests one at a time and streams their output, so the hash each test
 # prints for its torrent stays visible even if the run is interrupted (nextest drops the captured
 # output of a cancelled test).
-# Live tests (x4-rpc's and x4-core's) on torrents they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults.
+# Live tests (x4-rpc's and x4-core's) on torrents they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults. x4-core's geoip_live reads the installed GeoIP country files, from X4_GEOIP_DIR if set.
 test-live:
     X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" \
     X4_LIVE_REMOTE_DIR="${X4_LIVE_REMOTE_DIR:-/mnt/hdd/torrents/4x4-test}" \
     X4_LIVE_LOCAL_DIR="${X4_LIVE_LOCAL_DIR:-/mnt/pi-hdd/torrents/4x4-test}" \
-    cargo nextest run -p x4-rpc -p x4-core --test live --run-ignored only --locked --no-capture
+    cargo nextest run -p x4-rpc -p x4-core --test live --test geoip_live --run-ignored only --locked --no-capture
 
 # Enable the git hooks and verify the required tools are installed.
 setup:
@@ -100,6 +100,18 @@ package:
             "then just package" >&2
         exit 1
     fi
+    # The local master may lag behind the origin/master that was last fetched. That is only a
+    # warning (an older master may be wanted), and it compares with what is there: nothing is
+    # fetched, so it is as old as the last fetch, and without that ref it says nothing.
+    if git rev-parse -q --verify refs/remotes/origin/master >/dev/null; then
+        behind=$(git rev-list --count refs/heads/master..refs/remotes/origin/master)
+        if ((behind > 0)); then
+            noun=commits
+            if ((behind == 1)); then noun=commit; fi
+            echo "warning: the local master is $behind $noun behind origin/master (as last fetched);" \
+                "to build the newer ones, run git switch master && git pull, then just package" >&2
+        fi
+    fi
     commit=$(git log -1 --format='%h %s' refs/heads/master)
     echo "building master: $commit"
     repo="{{justfile_directory()}}"
@@ -132,7 +144,7 @@ demo-synthetic *args:
     RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
         cargo run -p x4-app --features synthetic --bin x4-synthetic --locked -- {{args}}
 
-# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `--binary <path>` (measure that file, build nothing), `--offline` (a config of a closed port, so no daemon is reached), `-- <args>`.
+# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `--binary <path>` (measure that file, build nothing), `--offline` (a config of a closed port, so no daemon is reached; not with `--synthetic`), `-- <args>`.
 [positional-arguments]
 measure *args:
     scripts/measure.sh "$@"

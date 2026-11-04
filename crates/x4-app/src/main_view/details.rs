@@ -4,9 +4,11 @@
 //! The panel is about the selected torrents the list shows (x4-core's [`details_target`]): it
 //! shows one torrent only when exactly one is selected. The view asks the service to read that
 //! torrent's details (`Command::Select`) while the panel is open, and to read none
-//! (`Select(None)`) while it is hidden or shows no single torrent. It sends only a change, so a
-//! new snapshot, a click on the same row or a redraw of the table sends nothing; it looks again
-//! whenever the selection, the rows the list shows or the panel's visibility change. The service
+//! (`Select(None)`) while it is hidden or shows no single torrent; it also tells the service which
+//! tab is open (`Command::ShowTab`), as the peers and the trackers are read only while their tab
+//! is. It sends only a change, so a new snapshot, a click on the same row or a redraw of the table
+//! sends nothing; it looks again when the window opens and whenever the selection, the rows the
+//! list shows, the tab or the panel's visibility change. The service
 //! paces the reads itself, so the view polls nothing. A hidden panel lets go of what it showed,
 //! and shown again it waits for the read it asks for.
 //!
@@ -16,8 +18,8 @@
 //! height under the table's header and two rows, the panel is drawn lower, and it grows back as
 //! the window does. A hidden panel keeps its height, and is fitted again when it shows.
 //!
-//! Alt+Enter shows and hides the panel, and Alt+1 and Alt+2 open its tabs, once per press of the
-//! key. The open tab and whether the panel is shown are remembered too.
+//! Alt+Enter shows and hides the panel, and Alt+1, Alt+2, Alt+3 and Alt+4 open its tabs, once per
+//! press of the key. The open tab and whether the panel is shown are remembered too.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -29,8 +31,8 @@ use gpui_kit::{
     Pixels, Styled as _, Window, div, px,
 };
 use x4_core::{
-    Command, DetailsTab, DetailsTarget, MAX_DETAILS_HEIGHT, MIN_DETAILS_HEIGHT, TorrentDetails,
-    details_target,
+    Command, DetailsTab, DetailsTarget, MAX_DETAILS_HEIGHT, MIN_DETAILS_HEIGHT, PeerList,
+    TorrentDetails, details_target,
 };
 use x4_rpc::HashString;
 
@@ -38,7 +40,7 @@ use super::copying::write_to_clipboard;
 use super::{HEADER_HEIGHT, MainView, ROW_HEIGHT};
 use crate::details_panel::{DetailsPanel, DetailsPanelEvent};
 use crate::key_repeats::{KeyRepeats, once_per_press_of};
-use crate::keymap::{ShowFilesTab, ShowGeneralTab, ToggleDetails};
+use crate::keymap::{ShowFilesTab, ShowGeneralTab, ShowPeersTab, ShowTrackersTab, ToggleDetails};
 
 /// The element id of the split of the table and the panel.
 const DETAILS_SPLIT: &str = "details-split";
@@ -58,6 +60,7 @@ impl MainView {
             details_target(table.selection(), table.rows())
         };
         self.ask_for_details(&target);
+        self.ask_for_tab();
         let torrent = match &target {
             DetailsTarget::One(hash) => self.last_snapshot.as_ref().and_then(|snapshot| {
                 snapshot
@@ -94,10 +97,36 @@ impl MainView {
         }
     }
 
+    /// Tells the service which tab of the panel is open, so that it reads the peers and the
+    /// trackers only while their tab is; sends nothing when that is what it told last.
+    pub(super) fn ask_for_tab(&mut self) {
+        let tab = self.ui.details.tab;
+        if tab == self.shown_tab {
+            return;
+        }
+        tracing::debug!(?tab, "details tab told to the service");
+        self.shown_tab = tab;
+        if self.commands.send(Command::ShowTab(tab)).is_err() {
+            tracing::debug!("the service has stopped; the tab shown was not sent");
+        }
+    }
+
     /// Hands the panel the details the service sent; it shows them while they are its torrent's.
     pub(super) fn details_arrived(&self, details: Arc<TorrentDetails>, cx: &mut Context<'_, Self>) {
         self.details_panel
             .update(cx, |panel, cx| panel.take_details(details, cx));
+    }
+
+    /// Hands the panel the peers the service sent; it shows them while they are its torrent's and
+    /// the Peers tab is open.
+    pub(super) fn peers_arrived(&self, peers: Arc<PeerList>, cx: &mut Context<'_, Self>) {
+        self.details_panel
+            .update(cx, |panel, cx| panel.take_peers(peers, cx));
+    }
+
+    /// Tells the panel that the service let go of the peers it sent last.
+    pub(super) fn peers_cleared(&self, cx: &mut Context<'_, Self>) {
+        self.details_panel.update(cx, DetailsPanel::clear_peers);
     }
 
     /// Handles Alt+Enter: hides the panel, keeping its height, or shows it again, fitted to the
@@ -121,6 +150,7 @@ impl MainView {
         tracing::debug!(?tab, "details tab shown");
         self.ui.details.tab = tab;
         self.ui_changed(cx);
+        self.ask_for_tab();
         self.details_panel
             .update(cx, |panel, cx| panel.set_tab(tab, cx));
     }
@@ -226,8 +256,8 @@ impl MainView {
     }
 }
 
-/// `root`, the main view's root element, with the handlers of Alt+Enter, Alt+1 and Alt+2, which
-/// run once per press of their key, as `repeats`, the view's record of the key held, tells.
+/// `root`, the main view's root element, with the handlers of Alt+Enter, Alt+1, Alt+2, Alt+3 and
+/// Alt+4, which run once per press of their key, as `repeats`, the view's record of the key held, tells.
 pub(super) fn on_details_actions(
     root: Div,
     repeats: &Rc<RefCell<KeyRepeats>>,
@@ -247,5 +277,15 @@ pub(super) fn on_details_actions(
         repeats,
         cx,
         |view, _, cx| view.show_details_tab(DetailsTab::Files, cx),
+    ))
+    .on_action(once_per_press_of::<_, ShowPeersTab>(
+        repeats,
+        cx,
+        |view, _, cx| view.show_details_tab(DetailsTab::Peers, cx),
+    ))
+    .on_action(once_per_press_of::<_, ShowTrackersTab>(
+        repeats,
+        cx,
+        |view, _, cx| view.show_details_tab(DetailsTab::Trackers, cx),
     ))
 }

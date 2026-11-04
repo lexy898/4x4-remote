@@ -50,8 +50,8 @@ use x4_rpc::TorrentAdd;
 
 use super::MainView;
 use crate::adding::{
-    self, AddDialog, AddDialogEvent, AddRequest, AddRequests, FilePicker, LoadError, PromptPicker,
-    load,
+    self, AddDialog, AddDialogEvent, AddRequest, AddRequests, FilePicker, Load, LoadError,
+    PromptPicker, load,
 };
 use crate::i18n::{add_notice_text, load_failure_text, queue_full_text, rejected_text};
 use crate::search::clear_search;
@@ -65,22 +65,27 @@ const READ_GRACE: Duration = Duration::from_millis(300);
 /// attention instead: the system may refuse to raise it, or do so a little later.
 const RAISE_GRACE: Duration = Duration::from_millis(250);
 
-/// How the head of the queue is read, off the UI thread.
-pub(super) type ReadItem = fn(AddItem, &App) -> Task<Result<LoadedItem, LoadError>>;
+/// How the head of the queue is read, off the UI thread, with `load`, which does the reading.
+pub(super) type ReadItem = fn(AddItem, Load, &App) -> Task<Result<LoadedItem, LoadError>>;
 
-/// Reads `item`: a `.torrent` file on a thread of its own (`adding::read_on_a_thread`), which a
-/// read that never ends keeps, and a magnet link, which needs no reading, at once.
-fn read_item(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
+/// Reads `item` with `load`: a `.torrent` file on a thread of its own
+/// (`adding::read_on_a_thread`), which a read that never ends keeps, and a magnet link, which
+/// needs no reading, at once.
+fn read_item(item: AddItem, load: Load, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
     match item {
         AddItem::File(_) => adding::read_on_a_thread(item, load, cx),
         AddItem::Magnet(_) => Task::ready(load(item)),
     }
 }
 
-/// Reads `item` on GPUI's background executor, which a read that never ends keeps a thread of.
-/// Under the executor of a test the read runs in its turn with every other task, where a thread of
-/// its own would end at a time of its own: [`MainView::read_adds_on_the_executor`].
-fn read_on_the_executor(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
+/// Reads `item` with `load` on GPUI's background executor, which a read that never ends keeps a
+/// thread of. Under the executor of a test the read runs in its turn with every other task, where a
+/// thread of its own would end at a time of its own: [`MainView::read_adds_on_the_executor`].
+fn read_on_the_executor(
+    item: AddItem,
+    load: Load,
+    cx: &App,
+) -> Task<Result<LoadedItem, LoadError>> {
     cx.background_executor().spawn(async move { load(item) })
 }
 
@@ -92,8 +97,10 @@ pub(super) struct Adds {
     dialog: Option<(Entity<AddDialog>, Subscription)>,
     /// The head being read.
     reading: Option<Reading>,
-    /// How the head is read.
+    /// Where the head is read: on a thread of its own, in the app.
     read: ReadItem,
+    /// What reads the head, where `read` says; a test swaps it to see where that is.
+    load: Load,
     /// The adds sent and not answered yet, by their ids.
     out: HashMap<ActionId, SentAdd>,
     /// The torrent to select once a snapshot lists it.
@@ -119,6 +126,7 @@ impl Default for Adds {
             dialog: None,
             reading: None,
             read: read_item,
+            load,
             out: HashMap::new(),
             pending: PendingSelection::default(),
             last_notice: None,
@@ -444,7 +452,7 @@ impl MainView {
     /// Reads `item`, the head of the queue, off the UI thread, and offers it once it is read.
     /// Without a dialog open, the dialog opens after [`READ_GRACE`] to say that it is being read.
     fn read_head(&mut self, item: AddItem, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let reading = (self.adds.read)(item.clone(), cx);
+        let reading = (self.adds.read)(item.clone(), self.adds.load, cx);
         let read = item.clone();
         let task = cx.spawn_in(window, async move |view, cx| {
             let loaded = reading.await;

@@ -11,6 +11,7 @@ mod details_reads;
 mod folder_space;
 mod magnet_links;
 mod schedule;
+mod tab_reads;
 #[cfg(test)]
 mod tests;
 
@@ -25,13 +26,16 @@ use x4_rpc::{
 
 use crate::action::{Action, ActionError, ActionId, AddError, Added};
 use crate::details::{DetailsIssue, TorrentDetails};
+use crate::peers::PeerList;
 use crate::snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot};
 use crate::store::Store;
+use crate::ui_state::DetailsTab;
 
 use answers::{RefusedPolls, SkippedSet};
 use details_reads::DetailsReads;
 use folder_space::FolderSpace;
 use schedule::Timer;
+use tab_reads::TabReads;
 
 pub use folder_space::FreeSpaceAnswer;
 
@@ -58,6 +62,11 @@ pub struct EngineConfig {
     /// How long a new selection must stay before its details are read, so that moving through
     /// the list with the arrow keys reads only the torrent the selection stops on.
     pub details_settle: Duration,
+    /// How often the selected torrent's peers are read while the Peers tab is shown.
+    pub peers_interval: Duration,
+    /// How often the selected torrent's trackers are read while the Trackers tab is shown;
+    /// otherwise they come with the details.
+    pub trackers_interval: Duration,
     /// The wait before each try to reach a daemon that does not answer, the first try first;
     /// the last wait repeats. An empty list waits 30 s.
     pub backoff: Vec<Duration>,
@@ -70,8 +79,9 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     /// Ticks of 1.5 s while visible and 10 s while hidden, the full list and the session every
     /// minute, the free space every 30 s, the selected torrent's progress every 3 s once it has
-    /// stayed selected for 250 ms, and retries after 1, 2, 4, 8, 16 and then every 30 s, starting
-    /// over once the connection has stayed up for 30 s.
+    /// stayed selected for 250 ms, its peers every 3 s and its trackers every 5 s while their tab
+    /// is shown, and retries after 1, 2, 4, 8, 16 and then every 30 s, starting over once the
+    /// connection has stayed up for 30 s.
     fn default() -> Self {
         Self {
             visible_interval: Duration::from_millis(1500),
@@ -81,6 +91,8 @@ impl Default for EngineConfig {
             free_space_interval: Duration::from_secs(30),
             details_interval: Duration::from_secs(3),
             details_settle: Duration::from_millis(250),
+            peers_interval: Duration::from_secs(3),
+            trackers_interval: Duration::from_secs(5),
             backoff: [1, 2, 4, 8, 16, 30].map(Duration::from_secs).to_vec(),
             stable_after: Duration::from_secs(30),
         }
@@ -105,6 +117,12 @@ pub enum Command {
     /// has stayed for [`EngineConfig::details_settle`], then only for their progress, and only
     /// while the window is visible; the UI sends `None` when nothing shows them.
     Select(Option<HashString>),
+    /// The tab of the details panel that is open. The selected torrent's peers are read only
+    /// while it is [`DetailsTab::Peers`], and its trackers on their own interval only while it is
+    /// [`DetailsTab::Trackers`]; each tab is read at once when it opens, once the selection has
+    /// settled. The engine starts with [`DetailsTab::General`]. Leaving the Peers tab drops the
+    /// peers ([`Event::PeersCleared`]).
+    ShowTab(DetailsTab),
     /// Carry out an action; [`Event::ActionFinished`] with the same id tells how it went, or
     /// [`Event::AddFinished`] for an [`Action::Add`].
     Run(ActionId, Action),
@@ -147,8 +165,8 @@ pub enum Request {
     /// Read the recently active torrents with the list fields, and the ids of those removed
     /// recently; answered with [`Response::Torrents`].
     RecentlyActive,
-    /// Read the details of one torrent, whole or only their progress; answered with
-    /// [`Response::Details`].
+    /// Read the details of one torrent, whole, only their progress, or the peers or the trackers
+    /// of a tab; answered with [`Response::Details`].
     Details {
         /// The torrent.
         hash: HashString,
@@ -166,7 +184,7 @@ pub enum Request {
     FolderFreeSpace(DownloadDir),
 }
 
-/// How much of the selected torrent's details a [`Request::Details`] reads.
+/// What of the selected torrent a [`Request::Details`] reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DetailsRead {
     /// Everything: the metainfo, the files, the trackers and the progress.
@@ -178,6 +196,13 @@ pub enum DetailsRead {
     /// that goes out with a whole list asks for them, about once a minute, and not the one every
     /// few seconds; the answer's trackers replace the last ones.
     ProgressAndTrackers,
+    /// The connected peers and where they were found, for the Peers tab
+    /// ([`TorrentField::PEERS`]). They are not part of the details: they come as
+    /// [`Event::Peers`].
+    Peers,
+    /// The trackers' state alone, for the Trackers tab ([`TorrentField::TRACKERS`]). The
+    /// answer's trackers replace those of the details, whose files stay as they are.
+    Trackers,
 }
 
 impl DetailsRead {
@@ -188,6 +213,8 @@ impl DetailsRead {
             Self::Full => TorrentField::DETAILS_FULL,
             Self::Progress => TorrentField::DETAILS_PROGRESS,
             Self::ProgressAndTrackers => TorrentField::DETAILS_PROGRESS_TRACKERS,
+            Self::Peers => TorrentField::PEERS,
+            Self::Trackers => TorrentField::TRACKERS,
         }
     }
 }
@@ -223,6 +250,14 @@ pub enum Event {
     Snapshot(Arc<Snapshot>),
     /// The selected torrent's details changed.
     Details(Arc<TorrentDetails>),
+    /// The selected torrent's peers, read while the Peers tab is shown; sent only when they differ
+    /// from the last ones sent. The engine leaves each peer's country empty; the service fills
+    /// them in before the event reaches the UI ([`crate::service::spawn`]).
+    Peers(Arc<PeerList>),
+    /// The peers last sent with [`Event::Peers`] are no longer shown: the Peers tab was left, or
+    /// another torrent or none was selected, as when the panel closes. Sent only after an
+    /// [`Event::Peers`], so the UI never keeps the peers of a torrent it does not show.
+    PeersCleared,
     /// An action other than an add finished.
     ActionFinished {
         /// The id it was run with.
@@ -263,7 +298,10 @@ pub enum Event {
 /// active torrents and the statistics. The selected torrent's details are read in full once the
 /// selection settles and after connecting, then only for their progress: every
 /// [`EngineConfig::details_interval`] while it downloads or verifies, otherwise with each whole
-/// list, and nothing while the window is hidden. When the daemon stops
+/// list, and nothing while the window is hidden. The peers of the selected torrent are read every
+/// [`EngineConfig::peers_interval`] while the Peers tab is shown ([`Command::ShowTab`]) and come
+/// as [`Event::Peers`]; its trackers every [`EngineConfig::trackers_interval`] while the Trackers
+/// tab is, merged into the details. When the daemon stops
 /// answering it becomes [`ConnectionState::Reconnecting`], keeps the last state (marked stale)
 /// and checks the server again after each step of [`EngineConfig::backoff`]; the steps go on
 /// until the connection has stayed up for [`EngineConfig::stable_after`], so a daemon that passes
@@ -324,6 +362,12 @@ pub struct Engine {
     refused: RefusedPolls,
     selected: Option<HashString>,
     details: Option<Arc<TorrentDetails>>,
+    /// The tab of the details panel that is shown.
+    tab: DetailsTab,
+    /// When the peers or the trackers of the tab shown are read next.
+    tab_reads: TabReads,
+    /// The peers last sent as [`Event::Peers`], until they are cleared.
+    peers: Option<Arc<PeerList>>,
     /// What was wrong with the selected torrent's last details answer, logged when it changes.
     details_issues: Vec<DetailsIssue>,
     /// Whether the snapshot changed since [`Engine::take_snapshot`] last handed one out.
@@ -362,6 +406,9 @@ impl Engine {
             refused: RefusedPolls::default(),
             selected: None,
             details: None,
+            tab: DetailsTab::default(),
+            tab_reads: TabReads::default(),
+            peers: None,
             details_issues: Vec::new(),
             snapshot_changed: true,
         }
@@ -378,10 +425,8 @@ impl Engine {
                 self.visibility = visibility;
                 Vec::new()
             }
-            Command::Select(hash) => {
-                self.select(now, hash);
-                Vec::new()
-            }
+            Command::Select(hash) => self.select(now, hash),
+            Command::ShowTab(tab) => self.show_tab(tab),
             Command::Run(id, action) => self.accept(Queued::Action(id, action)),
             Command::ReadMagnetLinks(id, hashes) => self.accept(Queued::MagnetLinks(id, hashes)),
             Command::FreeSpace(path) => self.ask_free_space(path),
@@ -392,6 +437,7 @@ impl Engine {
                 // Due only once the download directory is known.
                 self.free_space_timer.force();
                 self.details_refresh(now);
+                self.tabs_refresh();
                 Vec::new()
             }
             Command::Refresh | Command::Reconnect => self.restart(now),
@@ -441,8 +487,8 @@ impl Engine {
     }
 
     /// Whether the answer to `request` still matters: a poll or the free space of a folder is out
-    /// of date once the daemon is no longer connected, and details once their torrent is no
-    /// longer selected.
+    /// of date once the daemon is no longer connected, details once their torrent is no longer
+    /// selected, and the peers or the trackers of a tab also once that tab is no longer shown.
     ///
     /// The worker skips a request that is not current instead of sending it. Server checks,
     /// actions and reads of magnet links are always current: once handed out, they are always
@@ -454,7 +500,9 @@ impl Engine {
         let connected = self.connection == ConnectionState::Connected;
         match request {
             Request::CheckServer | Request::Action(..) | Request::MagnetLinks(..) => true,
-            Request::Details { hash, .. } => connected && self.selected.as_ref() == Some(hash),
+            Request::Details { hash, kind } => {
+                connected && self.selected.as_ref() == Some(hash) && self.tab_shows(*kind)
+            }
             Request::SessionGet
             | Request::SessionStats
             | Request::FreeSpace(_)
@@ -650,6 +698,7 @@ impl Engine {
         self.free_space_timer = Timer::default();
         self.tick_timer = Timer::default();
         self.details_connected(now);
+        self.tabs_connected();
         // The daemon may have restarted with another directory; measure the one it reports.
         self.download_dir = None;
         self.set_connection(ConnectionState::Connected)
@@ -717,6 +766,7 @@ impl Engine {
                 self.session_timer.force();
             }
             self.details_after_action(action, sent_in);
+            self.tabs_after_action(action, sent_in);
             return vec![Event::ActionFinished { id, result: Ok(()) }];
         };
         tracing::error!(action = action.name(), %error, "action failed");
@@ -841,6 +891,8 @@ enum PollKind {
     FullList,
     RecentlyActive,
     Details,
+    Peers,
+    Trackers,
 }
 
 impl Request {
@@ -853,6 +905,14 @@ impl Request {
             Self::FreeSpace(_) => Some(PollKind::FreeSpace),
             Self::FullList => Some(PollKind::FullList),
             Self::RecentlyActive => Some(PollKind::RecentlyActive),
+            Self::Details {
+                kind: DetailsRead::Peers,
+                ..
+            } => Some(PollKind::Peers),
+            Self::Details {
+                kind: DetailsRead::Trackers,
+                ..
+            } => Some(PollKind::Trackers),
             Self::Details { .. } => Some(PollKind::Details),
             Self::CheckServer
             | Self::Action(..)
@@ -902,6 +962,14 @@ impl Request {
                 kind: DetailsRead::ProgressAndTrackers,
                 ..
             } => "details progress and trackers",
+            Self::Details {
+                kind: DetailsRead::Peers,
+                ..
+            } => "peers",
+            Self::Details {
+                kind: DetailsRead::Trackers,
+                ..
+            } => "trackers",
             Self::Action(..) => "action",
             Self::MagnetLinks(..) => "magnet links",
             Self::FolderFreeSpace(_) => "folder free space",

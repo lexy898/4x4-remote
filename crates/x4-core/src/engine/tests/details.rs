@@ -6,6 +6,8 @@ use x4_rpc::{Status, TorrentField};
 
 use super::*;
 
+mod tabs;
+
 /// A full read of `hash`.
 fn full(hash: HashString) -> Request {
     Request::Details {

@@ -13,12 +13,14 @@ alternative speed limits and sets the global download and upload limits. The win
 columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
 started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
 the toolbar and a context menu; removing asks first, and deleting the files too only after an
-explicit confirmation. A panel under the table shows the selected torrent in two tabs. General gives
+explicit confirmation. A panel under the table shows the selected torrent in four tabs. General gives
 where its data is, its size, hash, dates, share ratio and metainfo, and how its trackers are doing,
 with the worst problem in plain words. Files shows its files as a tree, with each one's progress and
 how much of it already plays from the start; each file or folder can be skipped or given a Low,
-Normal or High priority, and the torrent can be downloaded in order. Whether the panel is shown, its
-height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
+Normal or High priority, and the torrent can be downloaded in order. Peers lists who the torrent is
+connected to, with their countries, and Trackers lists each tracker with its state, its last and
+next announce and the counts it knows, to see why a torrent has few peers or is stuck. Whether the
+panel is shown, its height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
 desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
 that picks the folder on the server (with its free space and the folders used lately), the files to
 download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
@@ -100,13 +102,18 @@ safe to delete.
 The package is always built from the commits of the local `master` branch: not from the working
 tree, so uncommitted changes are left out, and not from the branch checked out; the first line
 `just package` prints names the commit it builds. While `master` has no `packaging/arch/PKGBUILD`,
-`just package` stops before it writes anything and says to merge and pull first; outside a git
-repository (a copy of the files without `.git`) it stops the same way, with git's message. After the
-checkout has moved to another directory, the next build starts over from it and takes the full
-four minutes again. The package installs `/usr/bin/4x4`, its desktop file in
-`/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows in the
-application menu with its icon at once, without logging out. It also installs a second, hidden
-desktop file for debug builds (described below).
+`just package` stops before it writes anything and says to merge and pull first. Outside a git
+repository (a copy of the files without `.git`) it also stops before it writes anything, but it
+shows git's message and does not mention merging. If the local `master` is behind the
+`origin/master` you last fetched, `just package` warns and still builds the local `master`; it
+fetches nothing itself. After the checkout has moved to another directory, the next build starts
+over from it and takes the full four minutes again. The package installs `/usr/bin/4x4`, its
+desktop file in `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows
+in the application menu with its icon at once, without logging out. It also installs a second,
+hidden desktop file for debug builds (described below). It depends on `geoip-database`, which holds
+the country files that the peers' flags come from (see [Files and logs](#files-and-logs)), and
+installs, next to the licenses of 4x4, the notice of the flag pictures it embeds
+(`LICENSE-country-flag-icons` in `/usr/share/licenses/4x4-git`; see [License](#license)).
 
 To update, run the same four commands again; pacman replaces the installed version.
 
@@ -300,12 +307,13 @@ clipboard then keeps what it had.
 The details panel under the table shows the selected torrent. With none selected it says "Select a
 torrent", and with several, how many are selected; it shows a torrent only when exactly one of the
 torrents the list shows is selected. `Alt+Enter` hides the panel and shows it again, from anywhere
-in the window. It has two tabs, General and Files, which a click or `Alt+1` and `Alt+2` open. While
-a menu or the speed limits popover is open, these three keys do nothing. The first time, the panel
-is open on the General tab, high enough for its usual rows. Drag the line between the table and the
-panel to change its height. The panel keeps that height when it is hidden and between runs; when the
-window is too low for it and the table's header and two rows, it is drawn lower, and it grows back
-with the window. When the General tab does not fit, it scrolls.
+in the window. It has four tabs, General, Files, Peers and Trackers, which a click or `Alt+1`,
+`Alt+2`, `Alt+3` and `Alt+4` open. While a menu or the speed limits popover is open, these five
+keys do nothing. The
+first time, the panel is open on the General tab, high enough for its usual rows. Drag the line
+between the table and the panel to change its height. The panel keeps that height when it is hidden
+and between runs; when the window is too low for it and the table's header and two rows, it is drawn
+lower, and it grows back with the window. When the General tab does not fit, it scrolls.
 
 The General tab shows, from the daemon's list:
 
@@ -343,10 +351,13 @@ particular order can be half done and still play only its first seconds. Above t
 "Download in order (sequential)" has the daemon download the torrent's pieces from the start, so
 that a file can be played while it downloads. A change shows once the daemon's next answer does, a
 moment later, not before. While the daemon is not connected, the checkboxes, the priorities and the
-switch are disabled. Until the details have come, the tab says "—" under the switch. A magnet link
-has no files until its metadata has come; the tab says so, and the switch can be set already. A
-file list that would take too much memory to show, such as one of more than 50 000 files or of
-files nested hundreds of folders deep, is not drawn: the tab says the list is too large to show.
+switch are disabled. Until the details have come, the tab says "—" under the switch, and so it does
+while the files of a torrent of more than 1000 are sorted into their tree when the tab first shows
+them, which is done off the window's own thread, so that the window keeps answering meanwhile (some
+20 ms for 50 000 files). A magnet link has no files until its metadata has come; the tab says so,
+and the switch can be set already. A file list that would take too much memory to show, such as one
+of more than 50 000 files or of files nested hundreds of folders deep, is not drawn: the tab says
+the list is too large to show.
 
 A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
 Home and End move between the rows, Left closes a folder or goes to the folder around the row, Right
@@ -359,6 +370,54 @@ notification, one for downloading or skipping files, one for their priorities an
 switch. The open folders and the place in the list stay while the Files tab shows the same torrent,
 also after a visit to the General tab; when it shows another torrent, the list starts afresh, with
 only the torrent's own folder open. They are not remembered between runs.
+
+The Peers tab shows who the torrent is connected to, one line each. The line above the list counts
+the peers, then how many of them were found in each way, the most first (from trackers, DHT, PEX,
+LPD, incoming, LTEP, or the resume file of an earlier run; a way that found none is left out), then
+how many send data to us and how many receive data from us right now, as their speeds tell; on a
+narrow panel the line wraps between its parts, never inside one. Each row has the peer's country
+flag and two-letter code (a grey globe when its address has no known country, such as a private
+address, or when the GeoIP files are missing), its address (screen readers hear its port too), the
+client it says it runs ("—" when it says none), how much of the torrent it has, as a bar in the
+torrent's state color and in percent, the speeds from it and to it, in the state's color and bold
+while data moves that way, and the icons of its connection: a lock when it is encrypted, a "µTP"
+badge when it runs over µTP rather than TCP, and an arrow when the peer connected to us, each named
+in its tooltip. The busiest peers come first: by the speed they send to us, then the speed we send
+to them (both counted in whole KiB/s, so that rows do not trade places for a small wobble), then the
+most complete, so that idle rows stay put. A click on the header of the country, the address, the
+client, the progress or a speed sorts by it (the progress and the speeds largest first, a speed by
+its exact value, not in whole KiB/s), and a second click reverses the order. Until the first read
+has come, the tab says "—"; for a paused torrent it says "The torrent is paused", and while no peer
+is connected, as for a magnet link still looking for its metadata, "No peers connected". While the
+daemon does not answer, the rows are dimmed, as the table is. The list takes no keys; the wheel
+scrolls it. 4x4 reads the peers every 3 seconds, only while the tab is open on one torrent and the
+window is shown. Left, or with the panel hidden, the tab keeps nothing, and its order goes back to
+the busiest first; the order is not remembered between runs.
+
+The Trackers tab shows each tracker of the torrent on a row of two lines, in the order the daemon
+keeps them, tier by tier; it is not sortable, because the order of the tiers means something. The
+dot and the first line give the tracker's address (without the port when that is 80 or 443) and,
+muted beside it, its site name when the address does not say it. The second line says what the
+tracker is doing, in the dot's color: "Working" (green), "Announcing" (the theme's info color, cyan
+in the default themes), "Not contacted yet" and "Backup" (grey), "Timed out" (yellow), or, when an
+announce failed, the text the tracker or the daemon sent, in red, as sent but with control
+characters taken out and cut to the line (the whole text is in its tooltip; when the daemon sent
+none, "Announce failed"). After it come how many peers the last announce brought and how long ago it
+was; a failed scrape, which many trackers never answer, is a muted note "No peer counts" after them
+when the tracker reports no seeders or leechers, and the dot stays green. The columns after the
+tracker are the tier (from 1), the last announce ("3 m ago") and the next one ("in 27 m", "now",
+"queued" while it waits for a free slot, "—" when none is scheduled, as for a paused torrent), and
+the seeders, leechers and downloads the tracker reports ("—" when it reports none). A time is
+rounded down to whole minutes above a minute, and while the window is shown and active the tab draws
+itself again every 5 seconds, so that the times move on an idle torrent too. A torrent without
+trackers says "This torrent has no trackers (DHT and PEX only)", or, when it is private, that it
+cannot use DHT or PEX either; until the first read has come the tab says "—". The daemon keeps the
+announce data of a tier, not of a tracker, and shows it on the tier's current tracker: after an
+error it makes that tracker a backup and shows the error on the next one of the tier, so a row tells
+how its tier is doing. While the daemon does not answer, the rows are dimmed, as the table is. The
+list takes no keys; the wheel scrolls it. 4x4 reads the trackers every 5 seconds, only while the tab
+is open on one torrent and the window is shown, and again right after a reannounce of the torrent.
+Left, or with the panel hidden, the tab keeps nothing.
 
 4x4 reads a torrent's details only while the window is shown and active, the panel is open and it
 shows one torrent, so that a small server is asked for no more than the panel needs. It reads them
@@ -576,7 +635,7 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Ctrl+T`                                            | anywhere in the window    | switches the alternative speed limits        |
 | `Ctrl+L`                                            | anywhere in the window    | opens the speed limits                       |
 | `Alt+Enter`                                         | anywhere in the window    | shows or hides the details panel             |
-| `Alt+1`, `Alt+2`                                    | anywhere in the window    | show the panel's General or Files tab        |
+| `Alt+1`, `Alt+2`, `Alt+3`, `Alt+4`                  | anywhere in the window    | show the panel's tabs in the bar's order     |
 | `Ctrl+O`                                            | anywhere in the window    | opens the file dialog to add .torrent files  |
 | `Ctrl+U`                                            | anywhere in the window    | adds the clipboard's magnet links, or a form |
 | `Ctrl+V`                                            | in the table              | adds the magnet links on the clipboard       |
@@ -612,8 +671,8 @@ Between runs 4x4 remembers, in `state.toml`:
 - the details panel: whether it is shown, its height and the tab open in it;
 - the last 10 folders torrents were added to, which the add dialog offers.
 
-The search text, the selected torrent, the scroll position, the open folders of the Files tab and
-the torrents waiting in the add dialog are not remembered.
+The search text, the selected torrent, the scroll position, the open folders of the Files tab, the
+order of the Peers tab and the torrents waiting in the add dialog are not remembered.
 
 4x4 saves a second after the last change, so that dragging a column edge or the window edge writes
 the file once, and at once when the window is closed or 4x4 quits (`Ctrl+Q`). Typing in the search
@@ -656,6 +715,15 @@ the defaults are used; neither ever shows the URL, which may hold a password.
 parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
 file written by a newer version of 4x4, one that cannot be read, or a corrupt one that cannot be
 moved aside is left alone: 4x4 starts from the defaults and saves nothing in that session.
+
+For the countries of peers, 4x4 reads, and never writes, the GeoIP country files of the
+`geoip-database` package: `GeoIP.dat` (IPv4) and `GeoIPv6.dat` (IPv6). Each is taken from the
+first of these folders that has it: `GeoIP` in `$XDG_DATA_HOME` (`~/.local/share`), `GeoIP` in each
+folder of `$XDG_DATA_DIRS` (`/usr/local/share:/usr/share`), `/usr/share/GeoIP` and
+`/var/lib/GeoIP`. 4x4 opens them the first time it reads the peers of a torrent, not at startup,
+and reads a few bytes per address, never a whole file. Without them the peers show no country: the
+log says once which files are missing and where it looked, and names any file it found but cannot
+use, with the reason.
 
 The log lines also go to stderr. `RUST_LOG` sets the level for both (for example
 `RUST_LOG=x4_app=debug`); without it 4x4 logs its own lifecycle events and the problems of its
@@ -706,7 +774,8 @@ arguments after `--` go to the program, as in `just measure --synthetic --cpu 30
 taken out of a package (not with `--synthetic`, which builds the demo); a relative path is taken
 from the repository's directory. `--offline` gives the program a temporary config directory of its
 own, removed afterwards, whose `config.toml` names a closed port on this machine
-(`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting.
+(`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting; it is
+refused with `--synthetic`, as the demo reads no config and reaches no network anyway.
 Without it the app reads your `config.toml`, and inside `just virtual`, whose config directory is
 empty, it polls the default address, which is your daemon's (`192.168.1.5`). For example,
 `just virtual just measure --binary /usr/bin/4x4 --offline --cpu 60` measures the installed 4x4 off
@@ -947,6 +1016,14 @@ making the tree and its rows against taking a read into the tree kept:
 | 50 000 in one folder, open                      | 14.0 ms                | 3.1 ms    |
 | 36 000 names crafted to compare slowly, open    | 667 ms                 | 14 ms     |
 
+Since stage 7 the first tree of more than 1000 files is made on a thread of its own, so the window
+keeps drawing while the demo's 50 000 files take 18 ms (1000 names crafted to compare slowly take at
+most 13.3 ms, on the window's thread); private memory with the Files tab open, medians of three
+(`X4_MEASURE_SETTLE_SECONDS=15 just virtual just measure --synthetic -- --select 4 --press alt-2`
+for the 2000 files, `--select 5` for the 50 000), is unchanged at 40.0 and 146.2 MiB, against 39.8
+and 146.1 when the window's thread made the tree; the 146.2 carries the demo's own answer of 50 000
+files: selecting that torrent adds about 106 MiB, mostly the made-up daemon's JSON, not 4x4's.
+
 ### The allocator (stage 6)
 
 4x4 fixes glibc's mmap threshold at 128 KiB (`mallopt(M_MMAP_THRESHOLD)`, the first thing `main`
@@ -1046,12 +1123,74 @@ RUST_LOG=warn,x4_app=info,x4_core::service=debug timeout 120 4x4 2>&1 | grep -c 
 RUST_LOG=warn,x4_synthetic=info cargo run --release --locked -p x4-app --features synthetic \
     --bin x4-synthetic -- --scroll 2>&1 | grep 'scrolled the table'
 # Private memory before and after adding a large .torrent (several MiB): it should come back to
-# within a few MiB of the first figure. With no debug build (just run) going, as its process is
-# named 4x4 too. Adding contacts your daemon and adds that torrent to it for real: untick "Start
-# immediately" in the add dialog, and afterwards remove it with "Remove from list…", which keeps
-# files (there are none)
+# within a few MiB of the first figure. Run it with no debug build (just run) going: that build
+# has the same process name, 4x4, so pgrep -x 4x4 (every process named exactly that) would print
+# two pids and the command would fail. Adding contacts your daemon and adds that torrent to it for
+# real: untick "Start immediately" in the add dialog, and afterwards remove it with "Remove from
+# list…", which keeps files (there are none)
 grep RssAnon /proc/$(pgrep -x 4x4)/status
 ```
+
+### Peers and trackers (stage 7)
+
+Measured on 2026-11-04 on the same laptop, inside the headless KWin of `just virtual`, with release
+builds; each figure is the median of three runs, each the first start of its own session. The
+[synthetic demo](#synthetic-demo) had its 2000 torrents busy and "Synthetic torrent 0016"
+(`--select 15`) selected, which downloads from 150 peers and has twelve trackers, with its General
+tab, its Peers tab (`--press alt-3`) or its Trackers tab (`--press alt-4`) open
+(`X4_MEASURE_SETTLE_SECONDS=15 just virtual just measure --synthetic --cpu 30 -- --select 15
+--press alt-3`); "not met" marks every cell over its target:
+
+| Metric                     | Target              | General             | Peers, 150 peers    | Trackers, 12        |
+| -------------------------- | ------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 235 ms              | 230 ms              | 232 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 145.8 MiB (not met) | 147.7 MiB (not met) | 146.6 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 83.9 MiB (not met)  | 85.8 MiB (not met)  | 84.8 MiB (not met)  |
+| Unique memory (USS)        | —                   | 73.8 MiB            | 75.6 MiB            | 74.6 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 37.6 MiB (not met)  | 39.4 MiB (not met)  | 38.4 MiB (not met)  |
+| Threads                    | —                   | 33                  | 33                  | 33                  |
+| CPU over 30 s, one core    | —                   | 1.43 %              | 2.00 %              | 1.63 %              |
+| Binary size                | —                   | 39.7 MiB            | 39.7 MiB            | 39.7 MiB            |
+
+- The Peers tab of 150 peers adds 1.8 MiB of private memory to the General tab of the same torrent,
+  and 0.6 points of one core: every 3 seconds the made-up daemon writes the 150 peers (about 65 KiB
+  of JSON), the service parses them and looks up their countries, and the tab orders and draws the
+  rows it shows. The synthetic daemon's own part counts here too. The Trackers tab adds 0.8 MiB and
+  0.2 points. The runs of each tab differed by at most 0.2 MiB of private memory.
+- The requests were counted as in stage 4, in the demo's debug log
+  (`RUST_LOG=warn,x4_synthetic=debug,x4_core::service=debug`) over 60 seconds from 15 seconds after
+  the start, one run each. With the Peers tab open, 124 requests (2.07 a second), 20 of them reads
+  of the peers: one every 3 seconds, as asked, each answer about 65 KiB for 150 peers (about 22
+  KiB/s). With the Trackers tab, 116 (1.93 a second), 12 of them reads of the trackers, one every
+  5 seconds, of 8.8 KiB each. With the General tab, 104 (1.73 a second): the recently active
+  torrents and the session statistics every 1.5 seconds, the progress of the download every 3
+  seconds, the free space every 30 seconds, and the whole list and the session settings every
+  minute; the other two tabs add their reads to these.
+
+The app itself, which reached no daemon and kept reconnecting to a closed port
+(`just virtual just measure --offline --cpu 60`), against stage 6:
+
+| Metric                     | Target              | App, stage 6        | App, stage 7                  |
+| -------------------------- | ------------------- | ------------------- | ----------------------------- |
+| First frame                | ≤ 500 ms            | 220 ms              | 225 ms                        |
+| Resident memory (RSS)      | ≤ 100 MiB           | 144.8 MiB (not met) | 124.7 MiB (not met)           |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 62.0 MiB (not met)  | 62.6 MiB (not met)            |
+| Unique memory (USS)        | —                   | 51.4 MiB            | 52.4 MiB                      |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.8 MiB            | 16.2 MiB (not met; see below) |
+| Threads                    | —                   | 35                  | 35                            |
+| CPU over 60 s, one core    | near 0 % when idle  | 0.03 %              | 0.02 %                        |
+| Binary size                | —                   | 39.6 MiB            | 40.0 MiB                      |
+
+- The first frame and the idle CPU are unchanged. The private memory of the table comes from two
+  sessions: stage 6's 15.8 MiB from another one (the plan's baseline was 15.9), so the 0.4 MiB
+  between them (stage 7 had 16.2 MiB in two runs, 16.4 in the third) is mostly the sessions', not
+  stage 7's. Measured in one session of `just virtual`, the release builds of the two stages taken
+  in turn, three runs each (`X4_MEASURE_SETTLE_SECONDS=10 just measure --offline --cpu 20 --binary
+  <file>`), stage 6 had 15.2 MiB and stage 7 15.3 (medians), both under the proposed 16 MiB: stage 7
+  adds about 0.1 MiB at startup. The app opens no country database until it shows the first peers,
+  so none of it is the GeoIP files. The binary grew by 0.4 MiB, 0.17 MiB of which are the 265
+  embedded flags. The RSS is 20 MiB lower probably because fewer shared driver pages were resident
+  in these sessions, as the PSS and USS figures suggest (see above).
 
 ## Development
 
@@ -1104,8 +1243,21 @@ from a magnet link (which stays without its metadata), honouring `paused`, the f
 left out; it reports a torrent it already has as a duplicate and changes nothing; and its free space
 answers for the session's folder and the folders of its torrents, and their parent folders, with
 Transmission's error 5, "No such file or directory", for any other. Its torrents have files, most
-one, some a folder of several, a few dozens, and "Synthetic torrent 0005" (`--select 4`) 2000 in
-folders; their pieces follow the download, from the start when it is in order. `--press KEY`,
+one, some a folder of several, a few dozens, "Synthetic torrent 0005" (`--select 4`) 2000 in
+folders, and "Synthetic torrent 0006" (`--select 5`, Down from it), a seed, 50 000 in folders, the
+most the Files tab shows; their pieces follow the download, from the start when it is in order. The running
+torrents have peers, at addresses reserved for documentation (192.0.2.0/24, 198.51.100.0/24,
+203.0.113.0/24 and 2001:db8::/32), which stay from one read to the next while the torrent's rates
+are shared out among them; a country database the demo makes in memory puts them in countries
+(Japan, South Korea and Finland among them, whose flags are mostly white), in the region EU or in
+none, and the installed GeoIP files are not read. Their trackers, none, one or twelve in tiers
+with a backup in the first, announce every 30 minutes counted from the clock, and a few wait for a
+slot or announce right now; some fail, time out or fail only their scrape, and those of a stopped
+torrent that has not run since the made-up daemon started were never contacted. "Synthetic torrent
+0016" (`--select 15`; with `--static`, "Synthetic torrent 0011", `--select 10`) is busy: it
+downloads from 150 peers and has a tracker of every status, so that `just virtual just
+demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4` the Trackers
+tab with each kind of row. `--press KEY`,
 which can be given several times, presses each key in turn once the list is there and selected,
 one every three seconds, as on the keyboard: for example `just virtual just
 demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
@@ -1142,9 +1294,11 @@ stopped, though all its data is there; that adding it again, started, into anoth
 folder and with another file left out, is a duplicate that changes nothing; that a folder that does
 not exist yet, `4x4-live-new-<hex>` in the test directory, is kept as it was sent and made only
 when the torrent starts; and that a magnet link of a torrent of the test's own is added and listed,
-paused and without its metadata. Every test checks that every other torrent kept its status,
-sequential mode, file priorities and wanted files, and prints how many torrents the daemon lists
-when it starts and once it has removed its own. The torrent and its data are removed even when a
+paused and without its metadata. One test of x4-core changes nothing at all: it reads the peers and
+the trackers of the daemon's torrent with the most peers as the Peers and the Trackers tab do, and
+checks what they become, printing only counts. Every other test checks that every other torrent
+kept its status, sequential mode, file priorities and wanted files, and prints how many torrents
+the daemon lists when it starts and once it has removed its own. The torrent and its data are removed even when a
 test fails, and only from the folder it was added to: the test directory, or the folder of its own
 that the daemon made directly in it. The folder the daemon reports must be that one once both are
 normalized, so a doubled or a trailing `/` makes no difference, and a folder with any control
@@ -1167,11 +1321,17 @@ this machine writes to it under another (for example over NFS), so both must be 
 there. A test creates it if it is missing (its parent must exist) and then removes it again; a
 directory that already existed is left in place. No torrent may already download into it.
 
+`just test-live` also runs `crates/x4-core/tests/geoip_live.rs`, which needs no daemon: it opens the
+installed GeoIP country files `GeoIP.dat` and `GeoIPv6.dat`, read-only, and checks only what does
+not change from one build of them to the next: the countries of two public DNS resolvers, whose
+addresses are each registered to one country, and that loopback addresses have none.
+
 | Variable             | Meaning                                  | Default                                    |
 | -------------------- | ---------------------------------------- | ------------------------------------------ |
 | `X4_LIVE_URL`        | the daemon's RPC endpoint                | `http://192.168.1.5:9091/transmission/rpc` |
 | `X4_LIVE_REMOTE_DIR` | the test directory as the daemon sees it | `/mnt/hdd/torrents/4x4-test`               |
 | `X4_LIVE_LOCAL_DIR`  | the same directory on this machine       | `/mnt/pi-hdd/torrents/4x4-test`            |
+| `X4_GEOIP_DIR`       | the folder of the GeoIP country files    | `/usr/share/GeoIP`                         |
 
 ```bash
 X4_LIVE_URL=http://my-daemon:9091/transmission/rpc \
@@ -1181,3 +1341,12 @@ X4_LIVE_REMOTE_DIR=/srv/torrents/4x4-test X4_LIVE_LOCAL_DIR=/mnt/daemon/4x4-test
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+The country flags are the `3x2` pictures of
+[country-flag-icons](https://gitlab.com/catamphetamine/country-flag-icons) 1.6.20, embedded as
+published. They are MIT licensed, copyright (c) 2020 catamphetamine; their notice is in
+[`crates/x4-app/assets/flags/LICENSE`](crates/x4-app/assets/flags/LICENSE).
+
+This product includes GeoLite2 Data created by MaxMind, available from
+<https://www.maxmind.com/>. (4x4 reads the country files of the `geoip-database` package to find
+the countries of peers; it does not ship them.)

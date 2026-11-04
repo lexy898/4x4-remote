@@ -4,18 +4,24 @@
 //! the daemon names otherwise would not fail the parse, which takes a missing key as its default,
 //! so the test looks at the answer as sent too.
 //!
+//! It checks what the Trackers tab relies on, too: the ids of a torrent's trackers are unique, its
+//! tiers do not go back, an announce state is 0 to 3, a next announce is set exactly while the
+//! tracker waits for it, a backup tracker has not announced, and no time lies far in the future.
+//!
 //! It changes nothing: `torrent_get` only, of a few torrents at a time, and `files` only of the
-//! torrents it chose. What it reports are counts and the JSON kinds of the keys, never a torrent's
-//! name or hash, nor a tracker's host, address or text; its failures name a key and a kind, never
-//! a value.
+//! torrents it chose, a second apart because the daemon runs on a Raspberry Pi. What it reports
+//! are counts and the JSON kinds of the keys, never a torrent's name or hash, nor a tracker's
+//! host, address or text; its failures name a key and a kind, never a value.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 use x4_rpc::{
     Client, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse, TorrentRecord,
-    TorrentSelection, TrackerStatRecord, UreqTransport,
+    TorrentSelection, TrackerStatRecord, TrackerState, UreqTransport,
 };
 
 /// How many of the daemon's torrents with trackers the test reads the details of, at most.
@@ -28,6 +34,13 @@ const LOOK_LIMIT: usize = 50;
 const MAX_FILES: u32 = 500;
 /// What the list reads of every torrent.
 const LIST_FIELDS: &[TorrentField] = &[TorrentField::Id, TorrentField::HashString];
+/// How long the test waits after each read: the daemon runs on a Raspberry Pi.
+const PAUSE: Duration = Duration::from_secs(1);
+/// How far ahead of this machine's clock a time the daemon reports may lie before the test calls
+/// it wrong: the clocks may differ by a little, and a tracker's interval is hours, not days.
+const CLOCK_SKEW_SECS: i64 = 24 * 60 * 60;
+/// How far ahead the next announce may lie.
+const MOST_NEXT_ANNOUNCE_SECS: i64 = 7 * 24 * 60 * 60;
 /// What a look for trackers reads of a few torrents.
 const LOOK_FIELDS: &[TorrentField] = &[
     TorrentField::Id,
@@ -51,7 +64,7 @@ pub(crate) enum Kind {
 
 impl Kind {
     /// The kind of `value`; [`Kind::Missing`] when there is none.
-    fn of(value: Option<&Value>) -> Self {
+    pub(crate) fn of(value: Option<&Value>) -> Self {
         match value {
             None => Self::Missing,
             Some(Value::Null) => Self::Null,
@@ -64,7 +77,7 @@ impl Kind {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Missing => "missing",
             Self::Null => "null",
@@ -80,8 +93,18 @@ impl Kind {
 
 /// The keys of a `tracker_stats` entry that [`TrackerStatRecord`] reads, with the kind each must
 /// be sent as.
-const TRACKER_KEYS: [(&str, Kind); 11] = [
+const TRACKER_KEYS: [(&str, Kind); 21] = [
+    ("id", Kind::Integer),
+    ("tier", Kind::Integer),
+    ("is_backup", Kind::Bool),
     ("host", Kind::Text),
+    ("sitename", Kind::Text),
+    ("announce_state", Kind::Integer),
+    ("last_announce_time", Kind::Integer),
+    ("last_announce_peer_count", Kind::Integer),
+    ("next_announce_time", Kind::Integer),
+    ("last_scrape_time", Kind::Integer),
+    ("download_count", Kind::Integer),
     ("has_announced", Kind::Bool),
     ("last_announce_succeeded", Kind::Bool),
     ("last_announce_timed_out", Kind::Bool),
@@ -96,8 +119,10 @@ const TRACKER_KEYS: [(&str, Kind); 11] = [
 
 /// The daemon's answer to a `torrent_get`: as sent, and as the client parses it.
 pub(crate) struct Answer {
-    raw: Value,
-    parsed: TorrentGetResponse,
+    /// The result as sent.
+    pub(crate) raw: Value,
+    /// The result as the client parses it.
+    pub(crate) parsed: TorrentGetResponse,
 }
 
 /// What the test saw in an answer: counts and kinds, nothing else.
@@ -287,11 +312,84 @@ fn check_trackers(raw: &Value, record: &TorrentRecord, what: &str, tally: &mut T
             !parsed.host.is_empty(),
             "{what}: a tracker entry without a host"
         );
+        check_entry(parsed, what);
     }
     assert!(
         wrong.is_empty(),
         "{what}: tracker entry keys missing or of another kind, with the kinds sent: {wrong:?}"
     );
+    check_tiers(parsed, what);
+}
+
+/// Checks what the Trackers tab relies on in one entry: the announce state is one the daemon
+/// defines, the next announce is set exactly while the tracker waits for it, a backup has not
+/// announced, and no time lies far ahead of this machine's clock.
+fn check_entry(entry: &TrackerStatRecord, what: &str) {
+    assert!(
+        matches!(
+            entry.announce_state,
+            TrackerState::Inactive
+                | TrackerState::Waiting
+                | TrackerState::Queued
+                | TrackerState::Active
+        ),
+        "{what}: an announce_state outside 0 to 3"
+    );
+    assert_eq!(
+        entry.next_announce_time > 0,
+        entry.announce_state == TrackerState::Waiting,
+        "{what}: next_announce_time is set exactly while announce_state is 1"
+    );
+    assert!(
+        !(entry.is_backup && entry.has_announced),
+        "{what}: a backup tracker that has announced"
+    );
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|since| i64::try_from(since.as_secs()).ok())
+        .unwrap_or(i64::MAX / 2);
+    for (key, time, latest) in [
+        (
+            "last_announce_time",
+            entry.last_announce_time,
+            now + CLOCK_SKEW_SECS,
+        ),
+        (
+            "last_scrape_time",
+            entry.last_scrape_time,
+            now + CLOCK_SKEW_SECS,
+        ),
+        (
+            "next_announce_time",
+            entry.next_announce_time,
+            now + MOST_NEXT_ANNOUNCE_SECS,
+        ),
+    ] {
+        assert!(time <= latest, "{what}: {key} lies far in the future");
+    }
+}
+
+/// Checks the entries of one torrent as a list: their ids are unique and their tiers do not go
+/// back.
+fn check_tiers(entries: &[TrackerStatRecord], what: &str) {
+    let ids: BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
+    assert_eq!(ids.len(), entries.len(), "{what}: tracker ids are unique");
+    assert!(
+        entries.iter().map(|entry| entry.tier).is_sorted(),
+        "{what}: tracker tiers go back"
+    );
+}
+
+/// The wire number of an announce state.
+fn state_code(state: TrackerState) -> i64 {
+    match state {
+        TrackerState::Inactive => 0,
+        TrackerState::Waiting => 1,
+        TrackerState::Queued => 2,
+        TrackerState::Active => 3,
+        TrackerState::Other(code) => i64::from(code),
+    }
 }
 
 /// The keys of the tracker entry `sent` whose value `parsed` does not hold.
@@ -300,7 +398,38 @@ fn keys_parsed_otherwise(sent: &Value, parsed: &TrackerStatRecord) -> Vec<&'stat
     let flag = |key: &str| sent.get(key).and_then(Value::as_bool);
     let count = |key: &str| sent.get(key).and_then(Value::as_i64);
     [
+        ("id", count("id") == Some(i64::from(parsed.id.0))),
+        ("tier", count("tier") == Some(i64::from(parsed.tier))),
+        ("is_backup", flag("is_backup") == Some(parsed.is_backup)),
         ("host", text("host") == Some(parsed.host.as_str())),
+        (
+            "sitename",
+            text("sitename") == Some(parsed.sitename.as_str()),
+        ),
+        (
+            "announce_state",
+            count("announce_state") == Some(state_code(parsed.announce_state)),
+        ),
+        (
+            "last_announce_time",
+            count("last_announce_time") == Some(parsed.last_announce_time),
+        ),
+        (
+            "last_announce_peer_count",
+            count("last_announce_peer_count") == Some(parsed.last_announce_peer_count),
+        ),
+        (
+            "next_announce_time",
+            count("next_announce_time") == Some(parsed.next_announce_time),
+        ),
+        (
+            "last_scrape_time",
+            count("last_scrape_time") == Some(parsed.last_scrape_time),
+        ),
+        (
+            "download_count",
+            count("download_count") == parsed.download_count,
+        ),
         (
             "has_announced",
             flag("has_announced") == Some(parsed.has_announced),
@@ -353,7 +482,7 @@ fn keys_parsed_otherwise(sent: &Value, parsed: &TrackerStatRecord) -> Vec<&'stat
     clippy::panic,
     reason = "a live test stops at the first failure, saying no more than kinds"
 )]
-fn read(
+pub(crate) fn read(
     client: &mut Client<UreqTransport>,
     ids: &GetIds,
     fields: &[TorrentField],
@@ -374,6 +503,7 @@ fn read(
         Err(RpcError::InvalidResponse(_)) => panic!("{what}: the answer is not JSON-RPC"),
         Err(error) => panic!("{what}: the read failed: {error}"),
     };
+    thread::sleep(PAUSE);
     // The error's text may quote a value; the keys and kinds say where it went wrong.
     let Ok(parsed) = serde_json::from_value::<TorrentGetResponse>(raw.clone()) else {
         panic!(
@@ -427,7 +557,7 @@ fn parses_alone<T: serde::de::DeserializeOwned>(key: &str, value: &Value) -> boo
 }
 
 /// The hash of `record`, when it has a valid one.
-fn hash_of(record: &TorrentRecord) -> Option<HashString> {
+pub(crate) fn hash_of(record: &TorrentRecord) -> Option<HashString> {
     record
         .hash_string
         .as_deref()
@@ -439,7 +569,7 @@ fn hash_of(record: &TorrentRecord) -> Option<HashString> {
     clippy::panic,
     reason = "a live test stops at the first failure; callers pass at least one hash"
 )]
-fn selection_of(hashes: &[HashString]) -> GetIds {
+pub(crate) fn selection_of(hashes: &[HashString]) -> GetIds {
     match TorrentSelection::from_hashes(hashes.iter().cloned()) {
         Ok(selection) => GetIds::Selection(selection),
         Err(error) => panic!("no torrents to read: {error}"),

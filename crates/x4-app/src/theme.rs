@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFeatures, Hsla, Window, WindowAppearance};
-use x4_core::{DisplayState, Filter, Indicator, Subtitle, ThemeChoice};
+use x4_core::{DisplayState, Filter, Indicator, Subtitle, ThemeChoice, TrackerStatus};
 
 /// How visible old data stays: the table and the status bar's numbers are dimmed while the
 /// daemon does not answer, but stay readable.
@@ -18,6 +18,12 @@ pub(crate) const STALE_OPACITY: f32 = 0.5;
 /// How visible an idle row of the table is: it recedes behind the rows where something happens,
 /// and stays readable.
 pub(crate) const DIMMED_OPACITY: f32 = 0.55;
+
+/// The opacity of what shows the daemon's data, as the rows of the Peers and the Trackers tab: the
+/// stale opacity while the data is `stale`, and none otherwise.
+pub(crate) fn stale_opacity(stale: bool) -> Option<f32> {
+    stale.then_some(STALE_OPACITY)
+}
 
 /// The opacity of a row of the table: the stale opacity while the data is `stale`, the dimmed
 /// one for an idle (`dimmed`) row, and none otherwise. Never both: a stale idle row would fade to
@@ -84,6 +90,33 @@ pub(crate) fn subtitle_color(subtitle: &Subtitle, theme: &Theme) -> Hsla {
         | Subtitle::Queued(_)
         | Subtitle::Checking { .. }
         | Subtitle::FetchingMetadata { .. } => theme.muted_foreground,
+    }
+}
+
+/// The color of a tracker's dot and of the line under its address: green while it works, the info
+/// color (cyan in the default themes) while an announce is under way, the danger color for a
+/// failed announce, the warning color for one that timed out, and muted for a backup and for a
+/// tracker not announced to yet. The primary color would not do for an announce: it is the color
+/// of plain text.
+pub(crate) fn tracker_color(status: TrackerStatus, theme: &Theme) -> Hsla {
+    match status {
+        TrackerStatus::Working => theme.success,
+        TrackerStatus::Announcing => theme.info,
+        TrackerStatus::Failed => theme.danger,
+        TrackerStatus::TimedOut => theme.warning,
+        TrackerStatus::Backup | TrackerStatus::NotContacted => theme.muted_foreground,
+    }
+}
+
+/// The color of a note about a tracker's trouble, in the General tab and after a tracker's status
+/// line in the Trackers tab: muted for a `mild` kind (see `TrackerProblemKind::is_mild`), such as a
+/// scrape that many trackers never answer while their announces work, and the warning color
+/// otherwise. Both tabs take it from here, so that they say the same trouble in the same color.
+pub(crate) fn problem_note_color(mild: bool, theme: &Theme) -> Hsla {
+    if mild {
+        theme.muted_foreground
+    } else {
+        theme.warning
     }
 }
 
@@ -163,7 +196,9 @@ pub(crate) fn follow_appearance(choice: ThemeChoice, window: &mut Window, cx: &m
 mod tests {
     use gpui_kit::TestAppContext;
     use gpui_kit::component::ActiveTheme as _;
-    use x4_core::{ConnectionError, QueueKind, UnsupportedReason};
+    use x4_core::{
+        ConnectionError, QueueKind, TrackerProblemKind, TrackerStatus, UnsupportedReason,
+    };
 
     use super::*;
 
@@ -177,6 +212,16 @@ mod tests {
             Some(STALE_OPACITY),
             "never the product of the two"
         );
+    }
+
+    #[test]
+    fn stale_data_is_dimmed_and_fresh_data_is_not() {
+        assert_eq!(stale_opacity(true), Some(STALE_OPACITY));
+        assert_eq!(stale_opacity(false), None);
+        // As a row of the table that is not idle.
+        for stale in [false, true] {
+            assert_eq!(stale_opacity(stale), row_opacity(stale, false), "{stale}");
+        }
     }
 
     /// The theme of `mode`, as gpui-component loads it.
@@ -269,6 +314,80 @@ mod tests {
             Subtitle::FetchingMetadata { percent: 6 },
         ] {
             assert_eq!(color(quiet), theme.muted_foreground);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn trackers_take_the_colors_of_what_they_are_doing(cx: &mut TestAppContext) {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let theme = theme(mode, cx);
+            let color = |status| tracker_color(status, &theme);
+
+            assert_eq!(color(TrackerStatus::Working), theme.success, "{mode:?}");
+            // The info color, cyan in the default themes: the primary color is the plain text's.
+            assert_eq!(color(TrackerStatus::Announcing), theme.info, "{mode:?}");
+            assert_ne!(
+                color(TrackerStatus::Announcing),
+                theme.foreground,
+                "{mode:?}"
+            );
+            assert_eq!(color(TrackerStatus::Failed), theme.danger);
+            assert_eq!(color(TrackerStatus::TimedOut), theme.warning);
+            // A tracker that is not in use, or not announced to yet, recedes.
+            for quiet in [TrackerStatus::Backup, TrackerStatus::NotContacted] {
+                assert_eq!(color(quiet), theme.muted_foreground, "{quiet:?}");
+            }
+            // Every color that means something differs from the others.
+            let distinct = [
+                color(TrackerStatus::Working),
+                color(TrackerStatus::Announcing),
+                color(TrackerStatus::Failed),
+                color(TrackerStatus::TimedOut),
+                color(TrackerStatus::Backup),
+            ];
+            for (index, first) in distinct.iter().enumerate() {
+                for second in &distinct[index + 1..] {
+                    assert_ne!(first, second, "{mode:?}");
+                }
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_scrape_problem_is_a_muted_note_beside_a_dot_that_stays_green(cx: &mut TestAppContext) {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let theme = theme(mode, cx);
+            // The Trackers tab's note: a scrape's trouble is always mild.
+            let scrape_note = problem_note_color(true, &theme);
+
+            assert_eq!(scrape_note, theme.muted_foreground, "{mode:?}");
+            // The General tab says a scrape's trouble in the same color.
+            for kind in [
+                TrackerProblemKind::ScrapeFailed,
+                TrackerProblemKind::ScrapeTimedOut,
+            ] {
+                assert_eq!(
+                    problem_note_color(kind.is_mild(), &theme),
+                    scrape_note,
+                    "{kind:?}"
+                );
+            }
+            // An announce's trouble is a warning.
+            for kind in [
+                TrackerProblemKind::AnnounceFailed,
+                TrackerProblemKind::AnnounceTimedOut,
+            ] {
+                assert_eq!(
+                    problem_note_color(kind.is_mild(), &theme),
+                    theme.warning,
+                    "{kind:?}"
+                );
+            }
+            assert_ne!(
+                scrape_note,
+                tracker_color(TrackerStatus::Working, &theme),
+                "{mode:?}"
+            );
         }
     }
 

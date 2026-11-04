@@ -3,7 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use x4_rpc::{Status, TrackerStatRecord};
+use x4_core::{FileEntry, FileTree, MAX_CHOOSABLE_FILES, NodeKey};
+use x4_rpc::{FilePriority, Status, TrackerStatRecord};
 
 use super::support::*;
 use super::*;
@@ -71,11 +72,36 @@ fn synthetic_details_answer_full_and_progress_fields() {
     assert!(progress.date_created.is_none() && progress.is_private.is_none());
     assert!(progress.piece_count.is_none() && progress.piece_size.is_none());
 
-    // The read with the trackers adds them and nothing else.
+    // The read with the trackers adds them and nothing else. Their times follow the wall clock,
+    // which may pass a tier's moment to announce between the two reads, so they are left out.
     let with_trackers = read(&mut client, &hash, TorrentField::DETAILS_PROGRESS_TRACKERS);
-    assert_eq!(with_trackers.tracker_stats, full.tracker_stats);
+    assert!(
+        full.tracker_stats
+            .as_ref()
+            .is_some_and(|stats| !stats.is_empty())
+    );
+    assert_eq!(
+        without_times(with_trackers.tracker_stats),
+        without_times(full.tracker_stats)
+    );
     assert_eq!(with_trackers.bytes_completed, progress.bytes_completed);
     assert!(with_trackers.files.is_none() && with_trackers.comment.is_none());
+}
+
+/// `stats` with the times of the announces and the scrapes at 0: what is left does not follow the
+/// clock.
+fn without_times(stats: Option<Vec<TrackerStatRecord>>) -> Option<Vec<TrackerStatRecord>> {
+    stats.map(|stats| {
+        stats
+            .into_iter()
+            .map(|stat| TrackerStatRecord {
+                last_announce_time: 0,
+                next_announce_time: 0,
+                last_scrape_time: 0,
+                ..stat
+            })
+            .collect()
+    })
 }
 
 #[test]
@@ -106,6 +132,8 @@ fn heavy_fields_are_sent_only_when_asked_for() {
         "bytes_completed",
         "wanted",
         "comment",
+        "peers",
+        "peers_from",
     ] {
         assert!(
             first.get(heavy).is_none(),
@@ -309,6 +337,59 @@ fn most_torrents_have_one_file_and_some_have_a_folder_or_dozens_or_thousands() {
         .find(|&&(_, _, files)| files == 2000)
         .expect("the album");
     assert_eq!(album.1, Status::Downloading, "its files and pieces move");
+}
+
+#[test]
+fn the_torrent_after_the_album_seeds_with_the_most_files_the_files_tab_shows() {
+    for activity in [Activity::Static, Activity::Ticking] {
+        let counts = counts(&mut client(activity));
+        let album = counts
+            .iter()
+            .position(|&(_, _, files)| files == 2000)
+            .expect("the album");
+        let bigger: Vec<usize> = (counts.iter().enumerate())
+            .filter(|&(_, &(_, _, files))| files > 2000)
+            .map(|(row, _)| row)
+            .collect();
+        assert_eq!(
+            bigger,
+            [album + 1],
+            "{activity:?}: one, Down from the album"
+        );
+        let &(_, status, files) = counts.get(album + 1).expect("the archive");
+        assert_eq!(status, Status::Seeding, "{activity:?}: read in full once");
+        assert_eq!(
+            usize::try_from(files),
+            Ok(MAX_CHOOSABLE_FILES),
+            "{activity:?}"
+        );
+    }
+
+    // The Files tab shows its tree: the tree is not too large to make, and its folders go three
+    // deep, as the album's do.
+    let mut client = client(Activity::Static);
+    let hash = pick(&mut client, |_, files| files > 2000);
+    let record = read(
+        &mut client,
+        &hash,
+        &[TorrentField::Name, TorrentField::Files],
+    );
+    let entries: Vec<FileEntry> = (record.files.as_deref().expect("files").iter().enumerate())
+        .map(|(index, file)| FileEntry {
+            index,
+            name: file.name.clone(),
+            length: file.length,
+            bytes_completed: file.bytes_completed,
+            wanted: true,
+            priority: FilePriority::Normal,
+            playable_from_start: 0,
+        })
+        .collect();
+    let tree = FileTree::of_files(hash, &entries);
+    assert!(!tree.is_too_large() && !tree.is_empty());
+    let name = record.name.expect("a name");
+    let last = format!("{name}/Box 25/Folder 20/Scan 50000.tif");
+    assert!(tree.contains(&NodeKey::new(&last)), "{last}");
 }
 
 /// Checks the files of `record` against its size and its pieces, and returns the names of the
@@ -641,7 +722,8 @@ fn the_service_reads_the_details_of_the_selected_torrent() {
         visible_interval: Duration::from_millis(50),
         ..EngineConfig::default()
     };
-    let service = service::spawn(client(Activity::Ticking), config).expect("the service starts");
+    let service = service::spawn(client(Activity::Ticking), config, Box::new(GeoIp::none))
+        .expect("the service starts");
     let (events, received) = crossbeam_channel::unbounded();
     let source = service.events().clone();
     let forward = thread::spawn(move || {

@@ -51,6 +51,16 @@ const FILE_NODE_COST: usize = size_of::<Option<usize>>();
 /// its files, without a choice.
 pub const MAX_CHOOSABLE_FILES: usize = 50_000;
 
+/// The most files a [`FileTree`] of details is made of where it is needed, on the window's thread:
+/// 1 000 ([`FileTree::is_cheap`]).
+///
+/// The time a tree takes grows with its files, and more than in step with them for names crafted
+/// to compare slowly: 50 000 ordinary names take some 20 ms, 36 000 crafted ones most of a second.
+/// A list this short is made within a frame, crafted names included. The tree of a longer one is
+/// made on another thread, and the Files tab shows "—" for the moment it takes, without holding
+/// the window.
+pub const CHEAP_TREE_FILES: usize = 1_000;
+
 /// The files of one torrent as folders and files: those of its details, or those of a `.torrent`
 /// about to be added.
 ///
@@ -161,6 +171,14 @@ impl FileTree {
         let mut tree = Self::of_files(details.hash.clone(), &details.files);
         tree.made_from = Some(Arc::clone(details));
         tree
+    }
+
+    /// Whether the tree of `details` is cheap enough to make where it is needed, on the window's
+    /// thread: they list at most [`CHEAP_TREE_FILES`] files. The tree of more is made on another
+    /// thread.
+    #[must_use]
+    pub fn is_cheap(details: &TorrentDetails) -> bool {
+        details.files.len() <= CHEAP_TREE_FILES
     }
 
     /// The tree of `details`, a later read of the torrent this tree was made from, when they list
@@ -695,6 +713,20 @@ mod tests {
         // A tree of a bare list of files, as the add dialog makes, is not made from details.
         let bare = FileTree::of_files(hash(), &read(&SEASON).files);
         assert!(bare.refreshed(&read(&SEASON)).is_none());
+    }
+
+    #[test]
+    fn a_list_of_up_to_a_thousand_files_is_cheap_to_make() {
+        assert_eq!(CHEAP_TREE_FILES, 1000);
+        let paths: Vec<String> = (0..=CHEAP_TREE_FILES).map(|n| format!("T/{n}")).collect();
+        let files: Vec<Spec<'_>> = paths
+            .iter()
+            .map(|path| (path.as_str(), 1, 0, true, Normal))
+            .collect();
+
+        assert!(FileTree::is_cheap(&details(&hash(), &files[..1000])));
+        assert!(!FileTree::is_cheap(&details(&hash(), &files)), "1001");
+        assert!(FileTree::is_cheap(&details(&hash(), &[])));
     }
 
     #[test]

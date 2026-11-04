@@ -177,6 +177,13 @@ pub mod fixtures {
     /// `torrent_get` with the details fields for one multi-file torrent.
     pub const TORRENT_GET_DETAILS: &str =
         include_str!("../tests/fixtures/torrent_get_details.json");
+    /// `torrent_get` with `TorrentField::PEERS` for one torrent that had peers: the exact answer
+    /// of a daemon, with peers at documentation addresses.
+    pub const TORRENT_GET_PEERS: &str = include_str!("../tests/fixtures/torrent_get_peers.json");
+    /// `torrent_get` with `TorrentField::TRACKERS` for the same torrent: every key of every
+    /// tracker, as the daemon sends them.
+    pub const TORRENT_GET_TRACKERS: &str =
+        include_str!("../tests/fixtures/torrent_get_trackers.json");
 }
 
 /// A poisoned lock only means a handler panicked in another test thread; the data is still usable.

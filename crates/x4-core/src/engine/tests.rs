@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use x4_rpc::testing::fixtures::{
     FREE_SPACE, SESSION_GET, SESSION_STATS, TORRENT_GET_DETAILS, TORRENT_GET_LIST,
-    TORRENT_GET_RECENT,
+    TORRENT_GET_PEERS, TORRENT_GET_RECENT, TORRENT_GET_TRACKERS,
 };
 use x4_rpc::{
     AddOutcome, AddSource, AddedTorrent, FilePriority, IdError, MagnetLink, RemoveData, TorrentAdd,
@@ -108,6 +108,14 @@ fn answer(request: &Request) -> Response {
             kind: DetailsRead::ProgressAndTrackers,
             ..
         } => Response::Details(progress_and_trackers_details()),
+        Request::Details {
+            kind: DetailsRead::Peers,
+            ..
+        } => Response::Details(peers_answer()),
+        Request::Details {
+            kind: DetailsRead::Trackers,
+            ..
+        } => Response::Details(trackers_answer()),
         Request::Action(_, Action::Add(_)) => Response::Added(AddOutcome::Added(AddedTorrent {
             id: TorrentId(99),
             name: "New torrent".to_owned(),
@@ -166,6 +174,26 @@ fn progress_and_trackers_details() -> TorrentGetResponse {
         record.tracker_stats = full.tracker_stats;
     }
     answer
+}
+
+/// `fixture`, a read of one torrent recorded from another one, as a read of the first torrent.
+fn of_first(fixture: &str) -> TorrentGetResponse {
+    let mut answer: TorrentGetResponse = serde_json::from_value(fixture_result(fixture)).unwrap();
+    for record in &mut answer.torrents {
+        record.id = Some(TorrentId(1));
+        record.hash_string = Some(FIRST.to_owned());
+    }
+    answer
+}
+
+/// The peers fixture as a read of the first torrent's peers: 20 of them.
+fn peers_answer() -> TorrentGetResponse {
+    of_first(TORRENT_GET_PEERS)
+}
+
+/// The trackers fixture as a read of the first torrent's trackers: two of them.
+fn trackers_answer() -> TorrentGetResponse {
+    of_first(TORRENT_GET_TRACKERS)
 }
 
 /// Hands out what is due at `now` without answering it.

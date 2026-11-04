@@ -29,13 +29,16 @@
 //!   press is logged, for screenshots of what the actions do.
 //!
 //! The daemon carries out the actions on its own made-up torrents, so they can be tried here.
-//! It reads and writes none of the app's files: there is no `config.toml`, the UI state starts
-//! from the defaults and is never saved, and the log goes to stderr only.
+//! Its peers are at addresses reserved for documentation, which the demo's own country database,
+//! made in memory, puts in countries. It reads and writes none of the app's files: there is no
+//! `config.toml`, the UI state starts from the defaults and is never saved, the installed `GeoIP`
+//! files are not opened, and the log goes to stderr only.
 
 mod daemon;
 mod frames;
 
 use std::env;
+use std::io::Cursor;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -51,7 +54,7 @@ use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
 use x4_core::service;
-use x4_core::{EngineConfig, UiState};
+use x4_core::{CountryDb, Edition, EngineConfig, GeoIp, UiState, build_country_file};
 use x4_rpc::Client;
 
 use crate::daemon::{Activity, SyntheticDaemon};
@@ -91,7 +94,7 @@ fn main() -> anyhow::Result<()> {
     );
     let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
     let startup = Startup {
-        service: service::spawn(client, EngineConfig::default()),
+        service: service::spawn(client, EngineConfig::default(), Box::new(countries)),
         ui: UiState::default(),
         state_writable: false,
         state_path: None,
@@ -277,6 +280,28 @@ fn extend_down(window: AnyWindowHandle, times: usize, cx: &mut AsyncApp) {
         Ok(()) => tracing::info!(rows = times, "selection extended"),
         Err(error) => tracing::error!(%error, "the selection could not be extended"),
     }
+}
+
+/// The demo's own country databases, made in memory: they put the documentation ranges the
+/// made-up peers are in into countries, the region EU and none ([`daemon::country_blocks`]), so
+/// that the Peers tab shows flags without the installed files, which know no such address.
+fn countries() -> GeoIp {
+    let blocks = daemon::country_blocks();
+    let open = |edition| {
+        let file = Cursor::new(build_country_file(edition, &blocks));
+        match CountryDb::open(Box::new(file), edition) {
+            Ok(db) => Some(db.named(format!("the synthetic {edition} countries"))),
+            Err(error) => {
+                tracing::error!(
+                    %edition,
+                    %error,
+                    "the synthetic countries cannot be read; peers show none"
+                );
+                None
+            }
+        }
+    };
+    GeoIp::new(open(Edition::V4), open(Edition::V6))
 }
 
 /// The command line.

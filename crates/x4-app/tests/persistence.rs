@@ -21,8 +21,8 @@ use tempfile::TempDir;
 use x4_app::app::{self, Startup};
 use x4_app::main_view::MainView;
 use x4_core::{
-    ColumnId, ColumnState, Filter, SortDirection, SortKey, SortState, ThemeChoice, UiState,
-    ViewState, WindowState,
+    ColumnId, ColumnState, DetailsTab, Filter, SortDirection, SortKey, SortState, ThemeChoice,
+    UiState, ViewState, WindowState,
 };
 
 /// The position of the size column in the default layout.
@@ -170,6 +170,15 @@ impl Window {
         Some(UiState::parse(&text).expect("a valid state file").state)
     }
 
+    /// Whether each tab of the details panel's bar is selected, in the bar's order.
+    fn selected_tabs(&self, cx: &mut TestAppContext) -> Vec<Option<bool>> {
+        self.act(cx, |window, _| {
+            (0..4usize)
+                .map(|tab| window.within("details-tabs").find(tab).selected())
+                .collect()
+        })
+    }
+
     /// The label of the status bar's notice that the state cannot be saved, if it is shown.
     fn not_saved_notice(&self, cx: &mut TestAppContext) -> Option<String> {
         self.act(cx, |window, _| {
@@ -301,6 +310,37 @@ fn state_restores_columns_sort_filter(cx: &mut TestAppContext) {
     advance(5_000, cx);
     assert_eq!(window.saves(cx), 0);
     assert_eq!(fs::read_to_string(&path).expect("readable"), SAVED);
+}
+
+#[gpui_kit::test]
+fn a_state_file_edited_to_the_peers_tab_opens_on_it(cx: &mut TestAppContext) {
+    let dir = temp_dir();
+    let path = dir.path().join("state.toml");
+    fs::write(&path, "version = 1\n\n[details]\ntab = \"peers\"\n").expect("written");
+
+    let window = Window::open(&path, cx);
+
+    assert_eq!(window.ui_state(cx).details.tab, DetailsTab::Peers);
+    // The tab bar has General, Files, Peers and Trackers, in that order.
+    assert_eq!(
+        window.selected_tabs(cx),
+        [Some(false), Some(false), Some(true), Some(false)]
+    );
+}
+
+#[gpui_kit::test]
+fn a_state_file_edited_to_the_trackers_tab_opens_on_it(cx: &mut TestAppContext) {
+    let dir = temp_dir();
+    let path = dir.path().join("state.toml");
+    fs::write(&path, "version = 1\n\n[details]\ntab = \"trackers\"\n").expect("written");
+
+    let window = Window::open(&path, cx);
+
+    assert_eq!(window.ui_state(cx).details.tab, DetailsTab::Trackers);
+    assert_eq!(
+        window.selected_tabs(cx),
+        [Some(false), Some(false), Some(false), Some(true)]
+    );
 }
 
 #[gpui_kit::test]

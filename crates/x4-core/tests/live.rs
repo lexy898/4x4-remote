@@ -11,6 +11,10 @@
 //! reads. So the daemon's real answers go through `TorrentRecord` and into the engine's details,
 //! built from a full read and merged from the progress reads.
 //!
+//! The tabs of the details panel are checked with reads only, on a torrent of the daemon's own
+//! that has peers: the engine's reads of the Peers and the Trackers tab, and what their answers
+//! become. That test changes nothing and reports counts only, never an address, a name or a hash.
+//!
 //! The add path is checked against the daemon's own numbering of the files: a torrent of this
 //! run, whose files are not in the order their names sort in, with an empty file and a padding
 //! file among them, is read by the strict parser, a file past the padding is unchecked in the add
@@ -29,6 +33,7 @@ mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use support::{
@@ -36,8 +41,9 @@ use support::{
     assert_others_unchanged, others_fingerprint, torrent_by_hash,
 };
 use x4_core::{
-    AddCheck, AddForm, Command, ConnectionState, DetailsRead, Engine, EngineConfig, Event,
-    LoadedItem, NodeKey, Request, Response, Snapshot, TorrentDetails, Visibility, parse_torrent,
+    AddCheck, AddForm, Command, ConnectionState, DetailsRead, DetailsTab, Engine, EngineConfig,
+    Event, LoadedItem, NodeKey, PeerList, Request, Response, Snapshot, TorrentDetails, Visibility,
+    parse_torrent,
 };
 use x4_rpc::{
     Client, FilePriority, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse,
@@ -70,40 +76,51 @@ struct Driven<'a> {
     engine: Engine,
     now: Instant,
     client: &'a mut Client<UreqTransport>,
-    /// The test torrent, the only one the engine may read the details of.
-    own: HashString,
-    /// The name of its folder, which starts the name of each of its files.
-    folder: String,
+    /// The torrent the test selected, the only one the engine may read the details of: the test
+    /// torrent, or one of the daemon's own for a test that only reads.
+    selected: Option<HashString>,
+    /// The name of the test torrent's folder, which starts the name of each of its files; `None`
+    /// for a torrent of the daemon's own, whose files the test does not know.
+    folder: Option<String>,
     /// The details reads the engine handed out, in order.
     reads: Vec<DetailsRead>,
     /// How many times it checked the server: once, unless it lost the connection.
     checks: usize,
+    /// How many calls went to the daemon, each one request (the session handshake aside).
+    calls: usize,
+    /// How long to wait before each call after the first, in real time: a test that only reads
+    /// the daemon's own torrents spares the Raspberry Pi it runs on.
+    pace: Duration,
+    /// How many entries the last answer of each tab held: peers, and trackers.
+    tab_entries: (Option<usize>, Option<usize>),
 }
 
 impl Driven<'_> {
     /// Answers every request due now, and those the answers make due, until none is; returns the
     /// details the engine handed out meanwhile.
+    fn settle(&mut self) -> Vec<Arc<TorrentDetails>> {
+        details_of(&self.settle_events())
+    }
+
+    /// Answers every request due now, and those the answers make due, until none is; returns the
+    /// events the answers brought.
     #[expect(
         clippy::panic,
         reason = "a live test stops at the first failure; the guard cleans up"
     )]
-    fn settle(&mut self) -> Vec<Arc<TorrentDetails>> {
-        let mut details = Vec::new();
+    fn settle_events(&mut self) -> Vec<Event> {
+        let mut events = Vec::new();
         for _ in 0..TURNS {
             let requests = self.engine.due_requests(self.now);
             if requests.is_empty() {
-                return details;
+                return events;
             }
             for request in requests {
                 if !self.engine.is_current(&request) {
                     continue;
                 }
                 let answer = self.answer(&request);
-                for event in self.engine.handle_response(self.now, &request, Ok(answer)) {
-                    if let Event::Details(read) = event {
-                        details.push(read);
-                    }
-                }
+                events.extend(self.engine.handle_response(self.now, &request, Ok(answer)));
             }
         }
         panic!("the engine still had requests after {TURNS} turns");
@@ -117,7 +134,11 @@ impl Driven<'_> {
         reason = "a live test stops at the first failure; the guard cleans up"
     )]
     fn answer(&mut self, request: &Request) -> Response {
+        if self.calls > 0 && !self.pace.is_zero() {
+            thread::sleep(self.pace);
+        }
         let client = &mut *self.client;
+        self.calls += 1;
         let answer = match request {
             Request::CheckServer => {
                 self.checks += 1;
@@ -133,10 +154,21 @@ impl Driven<'_> {
                 .torrent_get(&GetIds::RecentlyActive, TorrentField::LIST)
                 .map(Response::Torrents),
             Request::Details { hash, kind } => {
-                assert_eq!(hash, &self.own, "the engine reads only the test torrent");
+                // The hashes are the owner's torrents': the message says only that they differ.
+                assert!(
+                    Some(hash) == self.selected.as_ref(),
+                    "the engine reads only the torrent the test selected"
+                );
                 self.reads.push(*kind);
                 read_details(client, hash, *kind).map(|answer| {
-                    check_record(&answer, *kind, &self.folder);
+                    let entries = check_record(&answer, *kind, self.folder.as_deref());
+                    match kind {
+                        DetailsRead::Peers => self.tab_entries.0 = entries,
+                        DetailsRead::Trackers => self.tab_entries.1 = entries,
+                        DetailsRead::Full
+                        | DetailsRead::Progress
+                        | DetailsRead::ProgressAndTrackers => {}
+                    }
                     Response::Details(answer)
                 })
             }
@@ -144,7 +176,11 @@ impl Driven<'_> {
                 panic!("this test runs no action and asks about no folder: {request:?}")
             }
         };
-        answer.unwrap_or_else(|error| panic!("{request:?} failed: {error}"))
+        // A read of the details names its torrent's hash, which the message leaves out.
+        answer.unwrap_or_else(|error| match request {
+            Request::Details { kind, .. } => panic!("the {kind:?} read failed: {error}"),
+            _ => panic!("{request:?} failed: {error}"),
+        })
     }
 
     /// Moves the clock on by `by`.
@@ -155,7 +191,16 @@ impl Driven<'_> {
     /// Hands the engine `command`, which brings no event at once.
     fn command(&mut self, command: Command) {
         let events = self.engine.handle_command(self.now, command);
-        assert_eq!(events, [], "the command brought events at once");
+        assert!(
+            events.is_empty(),
+            "the command brought events at once: {:?}",
+            kinds(&events)
+        );
+    }
+
+    /// Hands the engine `command`; returns the events it brings at once.
+    fn command_events(&mut self, command: Command) -> Vec<Event> {
+        self.engine.handle_command(self.now, command)
     }
 
     /// Whether the engine is connected, as its latest snapshot says; the test takes none before,
@@ -178,18 +223,97 @@ fn read_details(
     client.torrent_get(&GetIds::Selection(selection), kind.fields())
 }
 
+/// The details events of `events`.
+fn details_of(events: &[Event]) -> Vec<Arc<TorrentDetails>> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Details(details) => Some(Arc::clone(details)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The peers events of `events`.
+fn peers_of(events: &[Event]) -> Vec<Arc<PeerList>> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Peers(list) => Some(Arc::clone(list)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The kind of each of `events`, for a message: the events hold the owner's torrents, which no
+/// message may show.
+fn kinds(events: &[Event]) -> Vec<&'static str> {
+    events
+        .iter()
+        .map(|event| match event {
+            Event::Snapshot(_) => "Snapshot",
+            Event::Details(_) => "Details",
+            Event::Peers(_) => "Peers",
+            Event::PeersCleared => "PeersCleared",
+            Event::ActionFinished { .. } => "ActionFinished",
+            Event::MagnetLinks { .. } => "MagnetLinks",
+            Event::AddFinished { .. } => "AddFinished",
+            Event::FreeSpace { .. } => "FreeSpace",
+        })
+        .collect()
+}
+
 /// Checks that the daemon's `answer` to a `kind` read holds what that read asks for, file by file
-/// for the test torrent of [`MULTI_FILES`] in `folder`, and nothing it does not.
+/// for the test torrent of [`MULTI_FILES`] in `folder`, and nothing it does not; with no `folder`,
+/// a torrent of the daemon's own, the files are not checked. Returns how many entries a read of a
+/// tab brought: peers or trackers.
 #[expect(
     clippy::panic,
     reason = "a live test stops at the first failure; the guard cleans up"
 )]
-fn check_record(answer: &TorrentGetResponse, kind: DetailsRead, folder: &str) {
+fn check_record(
+    answer: &TorrentGetResponse,
+    kind: DetailsRead,
+    folder: Option<&str>,
+) -> Option<usize> {
     let [record]: &[TorrentRecord; 1] = answer
         .torrents
         .as_slice()
         .try_into()
-        .unwrap_or_else(|_| panic!("{kind:?}: not one torrent: {answer:?}"));
+        .unwrap_or_else(|_| panic!("{kind:?}: not one torrent"));
+    let trackers = record.tracker_stats.as_ref().map(Vec::len);
+    match kind {
+        DetailsRead::Peers => {
+            let peers = record.peers.as_ref().map(Vec::len);
+            let from = record
+                .peers_from
+                .unwrap_or_else(|| panic!("{kind:?}: no peers_from"));
+            let sources = [
+                from.from_cache,
+                from.from_dht,
+                from.from_incoming,
+                from.from_lpd,
+                from.from_ltep,
+                from.from_pex,
+                from.from_tracker,
+            ];
+            // One answer of a single-threaded daemon: each peer is counted by one source.
+            assert_eq!(
+                peers.and_then(|peers| u32::try_from(peers).ok()),
+                Some(sources.iter().sum()),
+                "{kind:?}: the peers and their sources"
+            );
+            assert!(record.files.is_none() && trackers.is_none(), "{kind:?}");
+            return peers;
+        }
+        DetailsRead::Trackers => {
+            assert!(trackers.is_some(), "{kind:?}: no tracker_stats");
+            assert!(record.files.is_none() && record.peers.is_none(), "{kind:?}");
+            return trackers;
+        }
+        DetailsRead::Full | DetailsRead::Progress | DetailsRead::ProgressAndTrackers => {}
+    }
+    let folder = folder?;
     let count = MULTI_FILES.len();
     let per_file = |values: Option<usize>, what: &str| {
         assert_eq!(values, Some(count), "{kind:?}: one {what} per file");
@@ -204,7 +328,6 @@ fn check_record(answer: &TorrentGetResponse, kind: DetailsRead, folder: &str) {
             .is_some_and(|pieces| !pieces.is_empty()),
         "{kind:?}: no pieces"
     );
-    let trackers = record.tracker_stats.as_ref().map(Vec::len);
     match kind {
         DetailsRead::Full => {
             let files: Vec<(String, u64)> = record
@@ -241,7 +364,9 @@ fn check_record(answer: &TorrentGetResponse, kind: DetailsRead, folder: &str) {
             assert!(record.files.is_none(), "{kind:?}: no file names");
             assert_eq!(trackers, Some(0), "{kind:?}: the trackers, none");
         }
+        DetailsRead::Peers | DetailsRead::Trackers => {}
     }
+    None
 }
 
 /// Sends `set` for the test torrent `selection` names, which must succeed.
@@ -264,7 +389,7 @@ fn latest(details: &[Arc<TorrentDetails>], own: &HashString, after: &str) -> Tor
     let Some(last) = details.last() else {
         panic!("the engine gave no details after {after}");
     };
-    assert_eq!(&last.hash, own, "{after}");
+    assert!(&last.hash == own, "{after}: the details of another torrent");
     TorrentDetails::clone(last)
 }
 
@@ -336,10 +461,13 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
         engine: Engine::new(EngineConfig::default(), start),
         now: start,
         client: &mut client,
-        own: own.clone(),
-        folder: folder.clone(),
+        selected: Some(own.clone()),
+        folder: Some(folder.clone()),
         reads: Vec::new(),
         checks: 0,
+        calls: 0,
+        pace: Duration::ZERO,
+        tab_entries: (None, None),
     };
     driven.command(Command::Select(Some(own.clone())));
 
@@ -410,6 +538,108 @@ fn details_full_and_progress_fields_parse_on_an_own_torrent() {
     torrent.remove_with_data(&mut client);
     assert_eq!(torrent_by_hash(&mut client, &own), Ok(None));
     assert_others_unchanged(&mut client, None, &before);
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn the_peers_and_trackers_tabs_read_a_torrent_with_peers() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let start = Instant::now();
+    let mut driven = Driven {
+        engine: Engine::new(EngineConfig::default(), start),
+        now: start,
+        client: &mut client,
+        selected: None,
+        folder: None,
+        reads: Vec::new(),
+        checks: 0,
+        calls: 0,
+        pace: Duration::from_secs(1),
+        tab_entries: (None, None),
+    };
+
+    // Connected, the engine reads the whole list, which says how many peers each torrent has.
+    driven.settle();
+    let snapshot = driven
+        .engine
+        .take_snapshot()
+        .expect("the first snapshot of the engine");
+    assert_eq!(snapshot.connection, ConnectionState::Connected);
+    let busiest = snapshot
+        .torrents
+        .iter()
+        .max_by_key(|torrent| torrent.peers_connected)
+        .filter(|torrent| torrent.peers_connected > 0);
+    let Some(busiest) = busiest else {
+        eprintln!(
+            "tabs: skipped: none of the {} torrents has peers now ({} calls)",
+            snapshot.torrents.len(),
+            driven.calls
+        );
+        return;
+    };
+    let (hash, listed_peers) = (busiest.hash.clone(), busiest.peers_connected);
+
+    // The Peers tab of the torrent: the full read once the selection settles, then the peers.
+    driven.selected = Some(hash.clone());
+    driven.command(Command::ShowTab(DetailsTab::Peers));
+    driven.command(Command::Select(Some(hash.clone())));
+    driven.wait(Duration::from_millis(250));
+    let events = driven.settle_events();
+    let full = latest(&details_of(&events), &hash, "the full read");
+    let [peers] = <[Arc<PeerList>; 1]>::try_from(peers_of(&events))
+        .unwrap_or_else(|events| panic!("not one list of peers: {} lists", events.len()));
+    // No value of the owner's torrent goes into a message: only counts.
+    assert!(peers.hash == hash, "the peers of another torrent");
+    assert_eq!(
+        Some(peers.peers.len()),
+        driven.tab_entries.0,
+        "a row for each peer of the answer"
+    );
+    assert!(peers.peers.iter().all(|peer| peer.country.is_none()));
+    let addressed = peers.peers.iter().filter(|peer| peer.ip.is_some()).count();
+
+    // The Trackers tab: the peers go, and the trackers are read and merged into the details.
+    let left = driven.command_events(Command::ShowTab(DetailsTab::Trackers));
+    assert!(
+        matches!(left.as_slice(), [Event::PeersCleared]),
+        "leaving the Peers tab sends only PeersCleared, not {:?}",
+        kinds(&left)
+    );
+    let events = driven.settle_events();
+    assert_eq!(peers_of(&events).len(), 0, "no peers on the Trackers tab");
+    let merged = details_of(&events)
+        .last()
+        .map_or_else(|| full.clone(), |last| TorrentDetails::clone(last));
+    assert!(merged.hash == hash, "the details of another torrent");
+    assert_eq!(
+        Some(merged.trackers.len()),
+        driven.tab_entries.1,
+        "the trackers of the answer replace the details' trackers"
+    );
+    assert!(merged.files == full.files, "the trackers keep the files");
+    assert!(
+        TorrentDetails {
+            trackers: full.trackers.clone(),
+            ..merged.clone()
+        } == full,
+        "nothing but the trackers changed"
+    );
+
+    assert_eq!(
+        driven.reads,
+        [DetailsRead::Full, DetailsRead::Peers, DetailsRead::Trackers]
+    );
+    assert_eq!(driven.checks, 1, "the engine never lost the connection");
+    eprintln!(
+        "tabs: {} torrents listed; the busiest has {listed_peers} peers in the list and {} in \
+         its peers read ({addressed} with an IP address), {} trackers; {} calls to the daemon",
+        snapshot.torrents.len(),
+        peers.peers.len(),
+        merged.trackers.len(),
+        driven.calls
+    );
 }
 
 /// A snapshot without the daemon's settings, in which the add form names its folder whatever it

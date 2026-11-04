@@ -2,6 +2,12 @@
 
 use crate::details::{TorrentDetails, TrackerOutcome, TrackerStat};
 
+mod empty;
+mod rows;
+
+pub use empty::{TrackersEmpty, trackers_empty};
+pub use rows::{TrackerRow, TrackerStatus, tracker_rows, tracker_status};
+
 /// What kind of trouble a tracker is in; the UI words it through its i18n layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackerProblemKind {
@@ -194,12 +200,13 @@ mod tests {
 
     use super::*;
     use crate::details::TrackerAnswer;
-    use crate::test_support::details;
+    use crate::test_support::{details, tracker as neutral_tracker};
 
     fn answer(outcome: TrackerOutcome, result: &str) -> TrackerAnswer {
         TrackerAnswer {
             outcome,
             result: result.to_owned(),
+            at: None,
         }
     }
 
@@ -209,11 +216,9 @@ mod tests {
         last_scrape: Option<TrackerAnswer>,
     ) -> TrackerStat {
         TrackerStat {
-            host: host.to_owned(),
             last_announce,
             last_scrape,
-            seeders: None,
-            leechers: None,
+            ..neutral_tracker(host)
         }
     }
 

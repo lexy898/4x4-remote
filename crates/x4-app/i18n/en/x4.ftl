@@ -565,9 +565,11 @@ date-time = { $year }-{ $month }-{ $day } { $hour }:{ $minute }
 
 ## The details panel under the table
 
-# The tabs of the panel, which Alt+1 and Alt+2 choose too.
+# The tabs of the panel, which Alt+1, Alt+2, Alt+3 and Alt+4 choose too.
 details-tab-general = General
 details-tab-files = Files
+details-tab-peers = Peers
+details-tab-trackers = Trackers
 # What the panel says when it shows no torrent: none is selected, or several are.
 # $count: the torrents selected (a number, 2 or more).
 details-none = Select a torrent
@@ -680,6 +682,123 @@ files-percent = { $percent }%
 # $size: the formatted size, such as "12.4 GiB"; $percent: the share of the file in whole percent
 # (a number).
 files-playable = Playable from start: { $size } ({ $percent }%)
+
+## The Peers tab of the details panel
+
+# The line above the peers. Each part is shown on its own, with peers-summary-separator between
+# them: how many peers are connected; how many of them were found in each way, the most first; and
+# how many send data to us and receive data from us now. A part whose count is 0 is left out.
+# $count: a number.
+peers-summary-connected =
+    { $count ->
+        [one] { $count } peer
+       *[other] { $count } peers
+    }
+peers-source-tracker =
+    { $count ->
+        [one] { $count } from a tracker
+       *[other] { $count } from trackers
+    }
+peers-source-dht = { $count } from DHT
+peers-source-pex = { $count } from PEX
+# Local Peer Discovery: peers on the same local network.
+peers-source-lpd = { $count } from LPD
+# Peers that connected to us on their own.
+peers-source-incoming = { $count } incoming
+# Peers named in another peer's extension handshake.
+peers-source-ltep = { $count } from LTEP
+# Peers the server remembered from an earlier run.
+peers-source-resume = { $count } from the resume file
+peers-summary-sending = { $count } sending to us
+peers-summary-receiving = { $count } receiving from us
+peers-summary-separator = ·
+# What the tab says instead of the peers: the torrent is stopped, so it connects to no one; or it
+# runs and no peer is connected, as for a magnet link still looking for its metadata. Until the
+# first read has come, it says details-pending.
+peers-paused = The torrent is paused
+peers-none = No peers connected
+# The name of the list of peers, for screen readers.
+peers-list = Peers
+# The column headers. The speed columns are narrow, so their headers are only arrows; the -long names
+# are for screen readers. The column of a connection's icons has no header text, only its name for
+# screen readers.
+peers-column-country = Country
+peers-column-address = Address
+peers-column-client = Client
+peers-column-progress = Progress
+peers-column-down = ↓
+peers-column-down-long = Download speed
+peers-column-up = ↑
+peers-column-up-long = Upload speed
+peers-column-connection = Connection
+# The country of a peer whose address has none that is known, for screen readers: a private
+# address, or no GeoIP files.
+peers-country-unknown = Unknown country
+# The address of a peer, for screen readers. $address: the address as the server wrote it; $port:
+# the peer's port.
+peers-address-label = { $address }, port { $port }
+# A peer that did not say which client it runs.
+peers-client-none = —
+# The icons of a connection: their names for screen readers and their tooltips. The µTP badge has
+# peers-utp as its text.
+peers-encrypted = Encrypted connection
+peers-utp = µTP
+peers-utp-tooltip = Connected over µTP, not TCP
+peers-incoming = The peer connected to us
+
+## The Trackers tab of the details panel
+
+# What the tab says instead of the trackers: the torrent has none, so it finds peers through DHT
+# and peer exchange alone; or it is private and has none, so it may use neither. Until the details
+# have come, it says details-pending.
+trackers-none = This torrent has no trackers (DHT and PEX only)
+trackers-none-private = This torrent has no trackers, and a private torrent cannot use DHT or PEX
+# The name of the list of trackers, for screen readers.
+trackers-list = Trackers
+# The column headers. The column of the status dots has no header text, only its name for screen
+# readers.
+trackers-column-status = Status
+trackers-column-tier = Tier
+trackers-column-tracker = Tracker
+trackers-column-last = Last announce
+trackers-column-next = Next announce
+trackers-column-seeders = Seeders
+trackers-column-leechers = Leechers
+trackers-column-downloads = Downloads
+# What a tracker is doing, under its address. A failed or timed out announce shows the server's own
+# text instead, as sent, when it sent one. A backup tracker is one that another tracker of its tier
+# stands in for; "not contacted yet" means no announce has gone to it since the server started.
+tracker-status-working = Working
+tracker-status-announcing = Announcing
+tracker-status-backup = Backup
+tracker-status-not-contacted = Not contacted yet
+tracker-status-failed = Announce failed
+tracker-status-timed-out = Timed out
+# How many peers the last announce returned. $count: a number.
+tracker-peers =
+    { $count ->
+        [one] { $count } peer
+       *[other] { $count } peers
+    }
+# The tracker answered the announce but not the scrape, which asks it for the numbers of seeders
+# and leechers; many trackers never answer one, so the line says it quietly.
+tracker-scrape-problem = No peer counts
+# Between the parts of the line under a tracker's address: the status, the peers of the last
+# announce, how long ago it was, and the note about the scrape.
+tracker-line-separator = ·
+# How far a time is from now. $duration: eta-major or eta-major-minor with the units above, such as
+# "3 m" or "1 h 2 m", in whole minutes above one minute. time-now is also what a time on the wrong
+# side of now says, as the last announce of a clock that runs ahead.
+time-ago = { $duration } ago
+time-in = in { $duration }
+time-now = now
+# The next announce is due, but waits for a free slot to announce in.
+tracker-next-queued = queued
+# A time or a count the server did not give, as for a tracker never announced to.
+tracker-value-none = —
+# The name of a tracker's row, for screen readers. $host: the tracker's address as the server wrote
+# it; $tier: its tier, from 1.
+tracker-row-label = { $host }, tier { $tier }
 
 ## The dialog that adds a torrent
 

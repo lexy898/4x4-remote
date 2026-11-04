@@ -88,7 +88,9 @@
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
 //! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
 //! their progress and, once a minute, their trackers ([`DetailsRead`]), and nothing while the
-//! window is hidden. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
+//! window is hidden. While the Peers or the Trackers tab is shown ([`Command::ShowTab`]) it also
+//! reads that torrent's peers every 3 s, which come as [`Event::Peers`] and go with
+//! [`Event::PeersCleared`], or its trackers every 5 s, merged into the details. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
 //! on [`Command::ReadMagnetLinks`], under the same rules as an action. An [`Action::Add`] is
 //! answered with [`Event::AddFinished`]: the torrent [`Added`] (or found already there), or the
 //! [`AddError`] why not. An add that gets no answer within its long timeout is
@@ -100,7 +102,32 @@
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
 //! [`Command`]s, which never blocks, awaits the [`Event`]s on its own executor, and drops the
-//! handle to stop the thread without waiting for it, so it never waits on the network.
+//! handle to stop the thread without waiting for it, so it never waits on the network. The
+//! thread also fills in the countries of the peers, from the databases that the
+//! [`service::OpenCountries`] the app hands it opens on the first peers.
+//!
+//! The countries of peers come from the legacy country files that the `geoip-database`
+//! package installs. [`CountryDb::open`] checks a file of an [`Edition`], or says with a
+//! [`GeoIpError`] why it cannot be used, and a [`GeoIp`] holds the IPv4 and the IPv6 database and
+//! gives the [`CountryCode`] of an address as a [`CountryLookup`], reading a few bytes of a file
+//! per lookup and never a whole file. [`build_country_file`] writes such a file for tests and the
+//! synthetic demo, and [`known_countries`] lists every country a lookup can give.
+//!
+//! The peers of a torrent are modeled here as well. [`build_peers`] turns a `torrent_get` answer
+//! into a [`PeerList`] of [`Peer`]s and the [`PeerSources`] they were found through; it renames the
+//! daemon's choke and interest flags as [`PeerTraits`] and cleans the client name a peer chose.
+//! [`locate`] fills in the countries through a [`CountryLookup`], and [`peer_flag`] names the
+//! letters of a flag string. What the Peers tab shows is decided here too: [`peer_rows`] orders
+//! the [`PeerRow`]s as a [`PeerSort`] asks (by a [`PeerColumn`], or the busiest first; a click on
+//! a header changes it with [`PeerSort::toggle`]),
+//! [`peers_summary`] gives the [`PeersSummary`] above them, and [`peers_empty`] the [`PeersEmpty`]
+//! reason when there are none.
+//!
+//! What the Trackers tab shows is decided here as well: [`tracker_rows`] gives a [`TrackerRow`] for
+//! each tracker of the [`TorrentDetails`] in the daemon's order, with the [`TrackerStatus`] that
+//! [`tracker_status`] tells and the [`NextAnnounce`] of its tier, and [`relative_time`] tells how
+//! far a time is from now as a [`RelativeTime`], for the UI to word as "3 min ago" or "in 27 min",
+//! and [`trackers_empty`] tells why there are no rows ([`TrackersEmpty`]).
 //!
 //! The `test-support` feature adds the `test_support` module with builders for tests of
 //! dependent crates (a complete [`Torrent`], a recorded fixture's `result`) and turns on
@@ -114,10 +141,12 @@ mod engine;
 mod files;
 mod filter;
 mod format;
+mod geoip;
 pub mod launch;
 mod limits;
 mod metainfo;
 mod model;
+mod peers;
 mod playable;
 pub mod service;
 mod snapshot;
@@ -142,19 +171,25 @@ pub use adding::{
     stopped_outcome,
 };
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
-pub use details::{FileEntry, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat};
+pub use details::{
+    FileEntry, NextAnnounce, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat,
+};
 pub use engine::{
     Command, DetailsRead, Engine, EngineConfig, Event, FreeSpaceAnswer, Request, Response,
     Visibility,
 };
 pub use files::{
-    FileRow, FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, NonEmptyIndices, PriorityView,
-    RowKind, TREE_BUDGET, WantedState, next_priority,
+    CHEAP_TREE_FILES, FileRow, FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey,
+    NonEmptyIndices, PriorityView, RowKind, TREE_BUDGET, WantedState, next_priority,
 };
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{
     DurationParts, HumanSize, HumanSpeed, SizeUnit, SpeedUnit, duration_parts, human_size,
     human_speed,
+};
+pub use geoip::{
+    CountryCode, CountryDb, CountryLookup, Edition, GeoIp, GeoIpError, Source, build_country_file,
+    known_countries,
 };
 pub use limits::{
     KbPerSecond, KibPerSecond, LimitEdit, LimitError, MAX_LIMIT_KIB, MIN_LIMIT_KIB, kbps_to_kib,
@@ -162,6 +197,10 @@ pub use limits::{
 };
 pub use metainfo::{MAX_TORRENT_FILE_BYTES, MetaFile, MetainfoError, ParsedTorrent, parse_torrent};
 pub use model::{Eta, ModelError, Ratio, Torrent};
+pub use peers::{
+    MAX_CLIENT_CHARS, Peer, PeerFlag, PeerList, PeerSources, PeerTraits, build_peers, locate,
+    peer_flag,
+};
 pub use playable::{Playable, file_offsets, playable_prefix};
 pub use snapshot::{ConnectionError, ConnectionState, SessionSummary, Snapshot, SpeedLimit};
 pub use sort::{SortDirection, SortKey, sort};
@@ -176,11 +215,13 @@ pub use ui_state::{
 };
 pub use view::{
     Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,
-    GeneralModel, Indicator, PiecesView, RemovalSummary, Row, Selection, ServiceStatus,
-    SpeedControls, StatusModel, Subtitle, TableModel, TimeUnit, ToggleKind, TrackerCount,
-    TrackerProblem, TrackerProblemKind, TrackerSummary, ViewState, availability, details_target,
-    general_model, removal_summary, status_model, table_model, toggle_kind, tracker_summary,
-    visibility,
+    GeneralModel, Indicator, PeerColumn, PeerRow, PeerSort, PeerSource, PeersEmpty, PeersSummary,
+    PiecesView, RelativeTime, RemovalSummary, Row, Selection, ServiceStatus, SpeedControls,
+    StatusModel, Subtitle, TableModel, TimeDirection, TimeUnit, ToggleKind, TrackerCount,
+    TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary, TrackersEmpty,
+    ViewState, availability, details_target, general_model, peer_rows, peers_empty, peers_summary,
+    relative_time, removal_summary, status_model, table_model, toggle_kind, tracker_rows,
+    tracker_status, tracker_summary, trackers_empty, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

@@ -87,6 +87,9 @@ expect_used = "warn"
 indexing_slicing = "warn"
 let_underscore_must_use = "warn"
 mod_module_files = "warn"
+# One operation per unsafe block, so a block cannot hide a second unsafe call. It counts per block;
+# `just lint-policy` also requires a single `unsafe` keyword in the allocator.
+multiple_unsafe_ops_per_block = "warn"
 panic = "warn"
 print_stderr = "warn"
 print_stdout = "warn"

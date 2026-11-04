@@ -14,6 +14,12 @@ const MAX_PIECES: u64 = 16_384;
 /// The share of a torrent's size, in percent, that all files but the last one are cut from. The
 /// last file gets the rest, so there is room for padding.
 const SHARE_BEFORE_LAST: u64 = 88;
+/// How many files the archive has: as many as the Files tab shows, `x4_core::MAX_CHOOSABLE_FILES`.
+const ARCHIVE_FILES: u32 = 50_000;
+/// How many scans each folder of the archive holds.
+const ARCHIVE_SCANS_PER_FOLDER: u32 = 100;
+/// How many folders each box of the archive holds.
+const ARCHIVE_FOLDERS_PER_BOX: u32 = 20;
 
 /// A number of bytes or pieces as an index.
 pub(super) fn to_index(value: u64) -> usize {
@@ -36,6 +42,8 @@ enum Shape {
     Series,
     /// An album of 2000 tracks, in discs and parts: folders three deep.
     Album,
+    /// An archive of [`ARCHIVE_FILES`] scans, in boxes and folders: folders three deep.
+    Archive,
     /// The files of a torrent a client added, as its metainfo lists them: a path and a size in
     /// bytes each, in the metainfo's order.
     Listed(Vec<(String, u64)>),
@@ -82,6 +90,14 @@ impl Plan {
     pub(in super::super) fn album() -> Self {
         Self {
             shape: Shape::Album,
+            padding: None,
+        }
+    }
+
+    /// The plan of the one torrent with [`ARCHIVE_FILES`] files.
+    pub(in super::super) fn archive() -> Self {
+        Self {
+            shape: Shape::Archive,
             padding: None,
         }
     }
@@ -159,6 +175,20 @@ impl Plan {
                     let name = format!(
                         "{top}/Disc {disc:02}/Part {part}/Track {:03}.flac",
                         track + 1
+                    );
+                    (name, weigh(1))
+                })
+                .collect(),
+            Shape::Archive => (0..ARCHIVE_FILES)
+                .map(|scan| {
+                    let folder = scan / ARCHIVE_SCANS_PER_FOLDER;
+                    let (number, within) = (
+                        folder / ARCHIVE_FOLDERS_PER_BOX + 1,
+                        folder % ARCHIVE_FOLDERS_PER_BOX + 1,
+                    );
+                    let name = format!(
+                        "{top}/Box {number:02}/Folder {within:02}/Scan {:05}.tif",
+                        scan + 1
                     );
                     (name, weigh(1))
                 })

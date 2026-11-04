@@ -951,9 +951,22 @@ fn details_state_round_trips() {
     for (tab, name) in [
         (DetailsTab::General, "general"),
         (DetailsTab::Files, "files"),
+        (DetailsTab::Peers, "peers"),
+        (DetailsTab::Trackers, "trackers"),
     ] {
         let text = format!("[details]\ntab = \"{name}\"\n");
         assert_eq!(load(&text).details.tab, tab, "{name}");
+        let written = UiState {
+            details: DetailsState {
+                tab,
+                ..DetailsState::default()
+            },
+            ..UiState::default()
+        }
+        .to_toml()
+        .expect("the state can be written");
+        assert!(written.contains(&format!("tab = \"{name}\"")), "{written}");
+        assert_eq!(load(&written).details.tab, tab, "{written}");
     }
 }
 
@@ -1033,7 +1046,7 @@ fn details_height_is_clamped() {
 
 #[test]
 fn an_unknown_details_tab_falls_back_to_the_default() {
-    let text = "[details]\nopen = false\nheight = 300.0\ntab = \"peers\"\n";
+    let text = "[details]\nopen = false\nheight = 300.0\ntab = \"pieces\"\n";
 
     let state = UiState::parse(text)
         .expect("an unknown tab does not fail the file")

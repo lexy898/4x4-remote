@@ -4,16 +4,20 @@
 //! is [built](build) into [`TorrentDetails`]; a progress read
 //! ([`TorrentField::DETAILS_PROGRESS`]) brings only what changes while the torrent downloads and
 //! is [merged](merge_progress) into the last full details. A progress read that also asks for the
-//! trackers ([`TorrentField::DETAILS_PROGRESS_TRACKERS`]) replaces them in the merge.
+//! trackers ([`TorrentField::DETAILS_PROGRESS_TRACKERS`]) replaces them in the merge. A read of
+//! the trackers alone ([`TorrentField::TRACKERS`], for the Trackers tab) replaces just them, with
+//! those [`trackers_of`] finds in its answer.
 //!
 //! [`TorrentField::DETAILS_FULL`]: x4_rpc::TorrentField::DETAILS_FULL
 //! [`TorrentField::DETAILS_PROGRESS`]: x4_rpc::TorrentField::DETAILS_PROGRESS
 //! [`TorrentField::DETAILS_PROGRESS_TRACKERS`]: x4_rpc::TorrentField::DETAILS_PROGRESS_TRACKERS
+//! [`TorrentField::TRACKERS`]: x4_rpc::TorrentField::TRACKERS
 
 use std::time::SystemTime;
 
 use x4_rpc::{
-    FilePriority, HashString, Pieces, TorrentGetResponse, TorrentRecord, TrackerStatRecord,
+    FilePriority, HashString, Pieces, TorrentGetResponse, TorrentRecord, TrackerId,
+    TrackerStatRecord, TrackerState,
 };
 
 use crate::model::date_from_wire;
@@ -58,11 +62,19 @@ pub struct TrackerAnswer {
     /// The daemon's text: `Success`, or why it failed, often in the tracker's own words. It is
     /// shown as sent, not localized.
     pub result: String,
+    /// When the answer came; `None` when the daemon gives no time (it sends 0).
+    pub at: Option<SystemTime>,
 }
 
 impl TrackerAnswer {
     /// The answer of the flags and text the daemon reports, if there was one at all.
-    fn of(happened: bool, succeeded: bool, timed_out: bool, result: String) -> Option<Self> {
+    fn of(
+        happened: bool,
+        succeeded: bool,
+        timed_out: bool,
+        result: String,
+        time: i64,
+    ) -> Option<Self> {
         let outcome = if succeeded {
             TrackerOutcome::Succeeded
         } else if timed_out {
@@ -70,24 +82,74 @@ impl TrackerAnswer {
         } else {
             TrackerOutcome::Failed
         };
-        happened.then_some(Self { outcome, result })
+        happened.then(|| Self {
+            outcome,
+            result,
+            at: date_from_wire(time),
+        })
+    }
+}
+
+/// When the next announce of a tracker's tier is due.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextAnnounce {
+    /// The tier waits for this time, which may already be past while a read is stale.
+    At(SystemTime),
+    /// The tier is ready and waits for a free announce slot.
+    Queued,
+    /// Nothing is scheduled: the torrent is stopped or has an error, the tracker is a backup, an
+    /// announce is under way, or the daemon sent a state this version does not know.
+    Idle,
+}
+
+impl NextAnnounce {
+    /// What the daemon's `announce_state` and `next_announce_time` say. The time counts only
+    /// while the tier waits for it; elsewhere the daemon sends 0.
+    fn of(state: TrackerState, time: i64) -> Self {
+        match state {
+            TrackerState::Waiting => date_from_wire(time).map_or(Self::Idle, Self::At),
+            TrackerState::Queued => Self::Queued,
+            TrackerState::Inactive | TrackerState::Active | TrackerState::Other(_) => Self::Idle,
+        }
     }
 }
 
 /// What one tracker of the torrent last answered.
+///
+/// The announce data of a tier belongs to the tier, not to one of its trackers: the daemon shows
+/// it on the tier's current tracker, and after an error it makes that tracker a backup, with no
+/// data, and shows the error on the next tracker of the tier. A tracker alone in its tier keeps
+/// its own error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackerStat {
+    /// The daemon's id of the tracker, unique within the daemon: what a row is told apart by.
+    pub id: TrackerId,
+    /// The tier, counted from 0: the trackers of a tier back each other up.
+    pub tier: u32,
+    /// Whether another tracker of the tier is the one in use. A backup has no state of its own.
+    pub is_backup: bool,
     /// The tracker's host and port, such as `tracker.example.org:443`.
     pub host: String,
+    /// The first label of the host before its public suffix, such as `example`; may be empty.
+    pub sitename: String,
+    /// What the announce of the tier is doing.
+    pub announce_state: TrackerState,
+    /// When the next announce is due.
+    pub next: NextAnnounce,
     /// The last announce; `None` until the torrent was announced to this tracker, which backup
     /// trackers never are.
     pub last_announce: Option<TrackerAnswer>,
+    /// How many peers the last announce returned; `None` until there was one, or when the daemon
+    /// sends no count. It is 0 after a failure.
+    pub last_announce_peers: Option<u32>,
     /// The last scrape; `None` until the tracker was scraped.
     pub last_scrape: Option<TrackerAnswer>,
     /// How many seeders the tracker knows of; `None` when it did not say.
     pub seeders: Option<u32>,
     /// How many leechers the tracker knows of; `None` when it did not say.
     pub leechers: Option<u32>,
+    /// How many times the tracker saw the torrent completed; `None` when it did not say.
+    pub downloads: Option<u32>,
 }
 
 impl From<TrackerStatRecord> for TrackerStat {
@@ -95,21 +157,34 @@ impl From<TrackerStatRecord> for TrackerStat {
         // The daemon sends -1 for a count the tracker did not report.
         let count = |count: Option<i64>| count.and_then(|count| u32::try_from(count).ok());
         Self {
+            id: record.id,
+            tier: record.tier,
+            is_backup: record.is_backup,
             host: record.host,
+            sitename: record.sitename,
+            announce_state: record.announce_state,
+            next: NextAnnounce::of(record.announce_state, record.next_announce_time),
             last_announce: TrackerAnswer::of(
                 record.has_announced,
                 record.last_announce_succeeded,
                 record.last_announce_timed_out,
                 record.last_announce_result,
+                record.last_announce_time,
             ),
+            // Before the first announce the daemon's count is a 0 that says nothing.
+            last_announce_peers: u32::try_from(record.last_announce_peer_count)
+                .ok()
+                .filter(|_| record.has_announced),
             last_scrape: TrackerAnswer::of(
                 record.has_scraped,
                 record.last_scrape_succeeded,
                 record.last_scrape_timed_out,
                 record.last_scrape_result,
+                record.last_scrape_time,
             ),
             seeders: count(record.seeder_count),
             leechers: count(record.leecher_count),
+            downloads: count(record.download_count),
         }
     }
 }
@@ -186,18 +261,24 @@ pub(crate) struct Built {
     pub(crate) issues: Vec<DetailsIssue>,
 }
 
+/// Whether `record` is the torrent `hash`, whatever the case of the hash it carries.
+pub(crate) fn has_hash(record: &TorrentRecord, hash: &HashString) -> bool {
+    record
+        .hash_string
+        .as_deref()
+        .and_then(|raw| HashString::parse(raw).ok())
+        .is_some_and(|found| &found == hash)
+}
+
 /// The record of the torrent `hash` in a details answer, if it is there.
 pub(crate) fn find_record(
     hash: &HashString,
     response: TorrentGetResponse,
 ) -> Option<TorrentRecord> {
-    response.torrents.into_iter().find(|record| {
-        record
-            .hash_string
-            .as_deref()
-            .and_then(|raw| HashString::parse(raw).ok())
-            .is_some_and(|found| &found == hash)
-    })
+    response
+        .torrents
+        .into_iter()
+        .find(|record| has_hash(record, hash))
 }
 
 /// How many files `record` says the torrent has: its `file_count`, or the length of its `files`
@@ -209,6 +290,27 @@ pub(crate) fn file_count(record: &TorrentRecord) -> Option<u32> {
             .as_ref()
             .and_then(|files| u32::try_from(files.len()).ok())
     })
+}
+
+/// The trackers of the torrent `hash` in `response`, which asked for
+/// [`TorrentField::TRACKERS`](x4_rpc::TorrentField::TRACKERS) alone, to replace those of its
+/// details: the files and their progress stay as the last reads left them, and their arrays are
+/// not looked for, so nothing is reported as missing.
+///
+/// `None`, so that the trackers stay as they were, when the answer holds no record of the torrent
+/// or none with `tracker_stats`; an empty list is none at all, as a torrent whose trackers were
+/// all removed has none.
+pub(crate) fn trackers_of(
+    hash: &HashString,
+    response: &TorrentGetResponse,
+) -> Option<Vec<TrackerStat>> {
+    let stats = response
+        .torrents
+        .iter()
+        .find(|record| has_hash(record, hash))?
+        .tracker_stats
+        .as_ref()?;
+    Some(stats.iter().cloned().map(TrackerStat::from).collect())
 }
 
 /// Builds the details of `hash` from its record, which was requested with
@@ -371,7 +473,7 @@ fn pieces_of(has_files: bool, pieces: Option<&str>, issues: &mut Vec<DetailsIssu
 #[cfg(test)]
 mod tests {
     use x4_rpc::testing::fixtures::TORRENT_GET_DETAILS;
-    use x4_rpc::{FileRecord, TorrentId, TrackerStatRecord};
+    use x4_rpc::{FileRecord, TorrentId, TrackerId, TrackerStatRecord, TrackerState};
 
     use super::*;
 
@@ -447,6 +549,7 @@ mod tests {
             last_scrape_result: "Success".to_owned(),
             seeder_count: Some(seeder_count),
             leecher_count: Some(leecher_count),
+            ..TrackerStatRecord::default()
         }
     }
 
@@ -638,17 +741,20 @@ mod tests {
         assert_eq!(
             trackers.first(),
             Some(&TrackerStat {
-                host: "a.example:443".to_owned(),
                 last_announce: Some(TrackerAnswer {
                     outcome: TrackerOutcome::TimedOut,
                     result: "Tracker did not respond".to_owned(),
+                    at: None,
                 }),
                 last_scrape: Some(TrackerAnswer {
                     outcome: TrackerOutcome::Succeeded,
                     result: "Success".to_owned(),
+                    at: None,
                 }),
+                last_announce_peers: Some(0),
                 seeders: Some(12),
                 leechers: Some(3),
+                ..crate::test_support::tracker("a.example:443")
             })
         );
         // Never announced to nor scraped, as a backup tracker.
@@ -678,8 +784,234 @@ mod tests {
             Some(TrackerAnswer {
                 outcome: TrackerOutcome::Failed,
                 result: "Unregistered torrent".to_owned(),
+                at: None,
             })
         );
+    }
+
+    /// A tracker of the second tier that was announced to and scraped, as the daemon reports it
+    /// while it waits for the next announce.
+    fn timed_tracker() -> TrackerStatRecord {
+        TrackerStatRecord {
+            id: TrackerId(7),
+            tier: 1,
+            host: "tracker.example:6969".to_owned(),
+            sitename: "example".to_owned(),
+            announce_state: TrackerState::Waiting,
+            has_announced: true,
+            last_announce_time: 1_700_000_000,
+            last_announce_succeeded: true,
+            last_announce_result: "Success".to_owned(),
+            last_announce_peer_count: 30,
+            next_announce_time: 1_700_001_800,
+            has_scraped: true,
+            last_scrape_time: 1_700_000_100,
+            last_scrape_succeeded: false,
+            last_scrape_result: "Could not connect to tracker".to_owned(),
+            seeder_count: Some(5),
+            leecher_count: Some(-1),
+            download_count: Some(345),
+            ..TrackerStatRecord::default()
+        }
+    }
+
+    fn seconds(seconds: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds)
+    }
+
+    #[test]
+    fn a_tracker_keeps_its_place_its_state_and_its_times() {
+        let stat = TrackerStat::from(timed_tracker());
+
+        assert_eq!(
+            stat,
+            TrackerStat {
+                id: TrackerId(7),
+                tier: 1,
+                is_backup: false,
+                host: "tracker.example:6969".to_owned(),
+                sitename: "example".to_owned(),
+                announce_state: TrackerState::Waiting,
+                next: NextAnnounce::At(seconds(1_700_001_800)),
+                last_announce: Some(TrackerAnswer {
+                    outcome: TrackerOutcome::Succeeded,
+                    result: "Success".to_owned(),
+                    at: Some(seconds(1_700_000_000)),
+                }),
+                last_announce_peers: Some(30),
+                last_scrape: Some(TrackerAnswer {
+                    outcome: TrackerOutcome::Failed,
+                    result: "Could not connect to tracker".to_owned(),
+                    at: Some(seconds(1_700_000_100)),
+                }),
+                seeders: Some(5),
+                leechers: None,
+                downloads: Some(345),
+            }
+        );
+    }
+
+    #[test]
+    fn the_next_announce_is_a_time_only_while_the_tracker_waits_for_one() {
+        let next = |announce_state: TrackerState, next_announce_time: i64| {
+            TrackerStat::from(TrackerStatRecord {
+                announce_state,
+                next_announce_time,
+                ..timed_tracker()
+            })
+            .next
+        };
+        let at = NextAnnounce::At(seconds(1_700_001_800));
+
+        assert_eq!(
+            next(TrackerState::Inactive, 1_700_001_800),
+            NextAnnounce::Idle
+        );
+        assert_eq!(next(TrackerState::Waiting, 1_700_001_800), at);
+        assert_eq!(next(TrackerState::Queued, 0), NextAnnounce::Queued);
+        assert_eq!(
+            next(TrackerState::Queued, 1_700_001_800),
+            NextAnnounce::Queued
+        );
+        // Announcing now, there is no next time yet.
+        assert_eq!(
+            next(TrackerState::Active, 1_700_001_800),
+            NextAnnounce::Idle
+        );
+        // A state this version does not know says nothing about when.
+        assert_eq!(
+            next(TrackerState::Other(9), 1_700_001_800),
+            NextAnnounce::Idle
+        );
+        // Waiting without a time: nothing to count down to.
+        assert_eq!(next(TrackerState::Waiting, 0), NextAnnounce::Idle);
+        assert_eq!(next(TrackerState::Waiting, -5), NextAnnounce::Idle);
+    }
+
+    #[test]
+    fn a_time_of_zero_is_no_time_and_the_answer_stays() {
+        let stat = TrackerStat::from(TrackerStatRecord {
+            last_announce_time: 0,
+            last_scrape_time: 0,
+            ..timed_tracker()
+        });
+
+        assert_eq!(stat.last_announce.map(|answer| answer.at), Some(None));
+        assert_eq!(stat.last_scrape.map(|answer| answer.at), Some(None));
+    }
+
+    #[test]
+    fn the_peers_of_the_last_announce_are_known_only_after_one() {
+        let peers = |has_announced: bool, count: i64| {
+            TrackerStat::from(TrackerStatRecord {
+                has_announced,
+                last_announce_peer_count: count,
+                ..timed_tracker()
+            })
+            .last_announce_peers
+        };
+
+        assert_eq!(peers(true, 30), Some(30));
+        assert_eq!(peers(true, 0), Some(0));
+        assert_eq!(peers(true, -1), None);
+        assert_eq!(peers(false, 0), None);
+        assert_eq!(peers(false, 30), None);
+    }
+
+    #[test]
+    fn a_backup_tracker_has_neither_answers_nor_a_next_announce() {
+        let stat = TrackerStat::from(TrackerStatRecord {
+            id: TrackerId(3),
+            is_backup: true,
+            host: "backup.example:80".to_owned(),
+            ..TrackerStatRecord::default()
+        });
+
+        assert!(stat.is_backup);
+        assert_eq!(stat.id, TrackerId(3));
+        assert_eq!(stat.next, NextAnnounce::Idle);
+        assert_eq!((stat.last_announce, stat.last_scrape), (None, None));
+        assert_eq!(stat.last_announce_peers, None);
+    }
+
+    /// A `torrent_get` answer for the tab read of the trackers of `HASH`: the hash and the trackers.
+    fn trackers_answer(trackers: Option<Vec<TrackerStatRecord>>) -> TorrentGetResponse {
+        TorrentGetResponse {
+            torrents: vec![TorrentRecord {
+                id: Some(TorrentId(1)),
+                hash_string: Some(HASH.to_owned()),
+                tracker_stats: trackers,
+                ..TorrentRecord::default()
+            }],
+            removed: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_trackers_of_an_answer_are_its_tracker_stats_in_their_order() {
+        // The answer holds nothing but the hash and the trackers, which is what the tab asks for:
+        // no file arrays are needed.
+        let trackers = trackers_of(
+            &hash(),
+            &trackers_answer(Some(vec![timed_tracker(), tracker("b.example:443", 7, 8)])),
+        )
+        .unwrap();
+
+        let hosts: Vec<&str> = trackers.iter().map(|t| t.host.as_str()).collect();
+        assert_eq!(hosts, ["tracker.example:6969", "b.example:443"]);
+        assert_eq!(trackers[0], TrackerStat::from(timed_tracker()));
+    }
+
+    #[test]
+    fn an_answer_without_trackers_or_for_another_torrent_has_none_to_replace_them() {
+        let other = TorrentGetResponse {
+            torrents: vec![TorrentRecord {
+                hash_string: Some("f".repeat(40)),
+                tracker_stats: Some(vec![timed_tracker()]),
+                ..TorrentRecord::default()
+            }],
+            removed: Vec::new(),
+        };
+        let nothing = TorrentGetResponse {
+            torrents: Vec::new(),
+            removed: Vec::new(),
+        };
+
+        for response in [trackers_answer(None), other, nothing] {
+            assert_eq!(trackers_of(&hash(), &response), None);
+        }
+    }
+
+    #[test]
+    fn an_empty_list_of_trackers_is_none_at_all_and_the_hash_may_be_in_capitals() {
+        let mut response = trackers_answer(Some(Vec::new()));
+        response.torrents[0].hash_string = Some(HASH.to_uppercase());
+
+        assert_eq!(trackers_of(&hash(), &response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn the_trackers_fixture_gives_two_trackers_in_the_daemons_order() {
+        use x4_rpc::testing::fixtures::TORRENT_GET_TRACKERS;
+
+        let response: TorrentGetResponse =
+            serde_json::from_value(fixture_result(TORRENT_GET_TRACKERS)).unwrap();
+        let fixture_hash = HashString::parse("0000000000000000000000000000000000000005").unwrap();
+
+        let trackers = trackers_of(&fixture_hash, &response).unwrap();
+
+        let shape: Vec<(TrackerId, u32, TrackerState)> = trackers
+            .iter()
+            .map(|tracker| (tracker.id, tracker.tier, tracker.announce_state))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (TrackerId(6), 0, TrackerState::Waiting),
+                (TrackerId(7), 1, TrackerState::Waiting)
+            ]
+        );
+        assert_eq!(trackers[0].next, NextAnnounce::At(seconds(1_793_787_926)));
     }
 
     #[test]

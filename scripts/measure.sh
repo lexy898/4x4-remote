@@ -12,7 +12,8 @@
 #                       --synthetic, which builds the demo
 #     --offline         give the program a config dir of its own, whose 4x4/config.toml names a
 #                       closed port on this machine (http://127.0.0.1:1/transmission/rpc), so that
-#                       the app reaches no daemon, whatever the caller's config says
+#                       the app reaches no daemon, whatever the caller's config says. Not with
+#                       --synthetic: the demo reads no config and reaches no network anyway
 #     -- <arg>...       arguments for the app or the demo
 #
 # Builds the release binary (unless --binary names one), starts it with only the 4x4 lifecycle
@@ -100,6 +101,9 @@ done
 
 if [[ $synthetic == yes && -n $binary ]]; then
     usage "--binary and --synthetic exclude each other: --synthetic builds the demo, --binary measures the given file"
+fi
+if [[ $synthetic == yes && $offline == yes ]]; then
+    usage "--offline has no meaning with --synthetic: the demo reads no config and reaches no network"
 fi
 
 # The app ignores a relative XDG_STATE_HOME or XDG_CONFIG_HOME and would save into the owner's

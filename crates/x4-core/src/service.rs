@@ -7,6 +7,12 @@
 //! the requests the engine says are due, one at a time, hands each answer back to the engine,
 //! publishes the snapshot when it changed, and then sleeps until the engine's next wakeup or the
 //! next command, whichever comes first.
+//!
+//! The thread also fills in the country of each peer of an [`Event::Peers`] before it sends the
+//! event, from the country databases that the [`OpenCountries`] given to [`spawn`] opens: only
+//! when the first list of peers needs them, so that a run that never shows peers opens no file.
+
+mod countries;
 
 use std::any::Any;
 use std::io;
@@ -24,13 +30,19 @@ use x4_rpc::{
 
 use crate::action::{Action, Direction};
 use crate::engine::{Command, Engine, EngineConfig, Event, Request, Response};
+use crate::geoip::GeoIp;
 use crate::limits::KbPerSecond;
+use countries::Countries;
 
 /// The name of the service thread, as debuggers and system monitors show it.
 const THREAD_NAME: &str = "x4-service";
 
 /// What a read of magnet links asks for: just enough to match each link to its torrent.
 const MAGNET_FIELDS: &[TorrentField] = &[TorrentField::HashString, TorrentField::MagnetLink];
+
+/// Opens the country databases. The service thread calls it once, on the first list of peers,
+/// so it may read files: it never runs on the UI thread.
+pub type OpenCountries = Box<dyn FnOnce() -> GeoIp + Send>;
 
 /// The UI's end of the service thread: commands go in, events come out.
 ///
@@ -115,7 +127,9 @@ impl Drop for ServiceHandle {
     }
 }
 
-/// Starts the service thread, which drives an [`Engine`] with `config` through `client`.
+/// Starts the service thread, which drives an [`Engine`] with `config` through `client`, and fills
+/// in the countries of the peers from the databases `open_countries` opens on the first list of
+/// peers.
 ///
 /// The engine starts connecting at once, and the first [`Event::Snapshot`] says so before the
 /// daemon has answered.
@@ -126,12 +140,19 @@ impl Drop for ServiceHandle {
 pub fn spawn<T: Transport + 'static>(
     client: Client<T>,
     config: EngineConfig,
+    open_countries: OpenCountries,
 ) -> io::Result<ServiceHandle> {
     let (commands, command_rx) = crossbeam_channel::unbounded();
     let (event_tx, events) = async_channel::unbounded();
     let thread = thread::Builder::new()
         .name(THREAD_NAME.to_owned())
-        .spawn(move || guarded(|| Worker::new(client, config, command_rx, event_tx).run()))?;
+        .spawn(move || {
+            guarded(|| {
+                Worker::new(client, config, command_rx, event_tx)
+                    .with_countries(Countries::new(open_countries))
+                    .run();
+            });
+        })?;
     Ok(ServiceHandle {
         commands,
         events,
@@ -319,11 +340,12 @@ fn panic_message(payload: &(dyn Any + Send)) -> &str {
         .unwrap_or("a panic without a message")
 }
 
-/// What the service thread owns: the engine, the client it drives and the thread's ends of the
-/// two channels.
+/// What the service thread owns: the engine, the client it drives, the country databases and the
+/// thread's ends of the two channels.
 struct Worker<T: Transport> {
     client: Client<T>,
     engine: Engine,
+    countries: Countries,
     commands: Receiver<Command>,
     events: async_channel::Sender<Event>,
 }
@@ -338,9 +360,15 @@ impl<T: Transport> Worker<T> {
         Self {
             client,
             engine: Engine::new(config, Instant::now()),
+            countries: Countries::new(Box::new(GeoIp::none)),
             commands,
             events,
         }
+    }
+
+    /// The worker, with `countries` for the peers.
+    fn with_countries(self, countries: Countries) -> Self {
+        Self { countries, ..self }
     }
 
     fn run(mut self) {
@@ -443,13 +471,15 @@ impl<T: Transport> Worker<T> {
         ControlFlow::Break(())
     }
 
-    fn publish_all(&self, events: Vec<Event>) -> ControlFlow<()> {
+    fn publish_all(&mut self, events: Vec<Event>) -> ControlFlow<()> {
         events.into_iter().try_for_each(|event| self.publish(event))
     }
 
-    /// Sends `event` to the UI; the channel is unbounded, so this never blocks. Stops the loop
-    /// when the UI has closed the channel.
-    fn publish(&self, event: Event) -> ControlFlow<()> {
+    /// Sends `event` to the UI, with the countries of its peers filled in if it brings some; the
+    /// channel is unbounded, so this never blocks. Stops the loop when the UI has closed the
+    /// channel.
+    fn publish(&mut self, event: Event) -> ControlFlow<()> {
+        let event = self.countries.locate(event);
         if self.events.send_blocking(event).is_err() {
             tracing::debug!("the UI closed its events");
             return ControlFlow::Break(());
@@ -594,6 +624,28 @@ mod tests {
                     "fields": fields(TorrentField::DETAILS_PROGRESS_TRACKERS),
                 }),
             ),
+            (
+                Request::Details {
+                    hash: selected.clone(),
+                    kind: DetailsRead::Peers,
+                },
+                "torrent_get",
+                json!({
+                    "ids": [selected.as_str()],
+                    "fields": ["id", "hash_string", "peers", "peers_from"],
+                }),
+            ),
+            (
+                Request::Details {
+                    hash: selected.clone(),
+                    kind: DetailsRead::Trackers,
+                },
+                "torrent_get",
+                json!({
+                    "ids": [selected.as_str()],
+                    "fields": ["id", "hash_string", "tracker_stats"],
+                }),
+            ),
         ];
 
         for (request, method, params) in cases {
@@ -632,6 +684,8 @@ mod tests {
             DetailsRead::Full,
             DetailsRead::Progress,
             DetailsRead::ProgressAndTrackers,
+            DetailsRead::Peers,
+            DetailsRead::Trackers,
         ] {
             assert!(matches!(
                 answer(Request::Details {

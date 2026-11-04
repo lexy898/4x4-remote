@@ -78,7 +78,7 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    Availability, ColumnId, Command, Event, Filter, ServiceStatus, Snapshot, SortState,
+    Availability, ColumnId, Command, DetailsTab, Event, Filter, ServiceStatus, Snapshot, SortState,
     StatusModel, TableModel, UiState, ViewState, Visibility, shown_columns, status_model,
     table_model, visibility,
 };
@@ -171,6 +171,9 @@ pub struct MainView {
     /// The torrent whose details the service was last asked to read; `None` for none, which is
     /// also what the service starts with.
     selected_details: Option<HashString>,
+    /// The tab of the panel the service was last told is open; the default tab, General, is
+    /// also what the service starts with.
+    shown_tab: DetailsTab,
     /// The height of the split when the panel was last fitted to it; `None` before the first fit.
     fitted_split: Option<Pixels>,
     /// The torrents to add: the queue, the add dialog and the adds sent.
@@ -247,11 +250,11 @@ impl MainView {
                     view.limits_lost_focus(cx);
                 }
             }),
-            cx.observe_window_activation(window, |view, window, _| {
-                view.report_visibility(window);
+            cx.observe_window_activation(window, |view, window, cx| {
+                view.report_visibility(window, cx);
             }),
-            cx.observe_window_visibility(window, |view, _, window, _| {
-                view.report_visibility(window);
+            cx.observe_window_visibility(window, |view, _, window, cx| {
+                view.report_visibility(window, cx);
             }),
             cx.observe_window_appearance(window, |view, window, cx| {
                 follow_appearance(view.ui.theme, window, cx);
@@ -300,14 +303,17 @@ impl MainView {
             details_panel,
             details_split,
             selected_details: None,
+            shown_tab: DetailsTab::default(),
             fitted_split: None,
             adds: adding::Adds::default(),
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,
         };
-        // The service starts out assuming a visible window; tell it how the window opened.
-        view.report_visibility(window);
+        // The service and the details panel start out assuming a visible window on the General
+        // tab; tell them how the window opened.
+        view.report_visibility(window, cx);
+        view.ask_for_tab();
         view.listen_for_adds(AddRequests::new(), window, cx);
         view
     }
@@ -317,6 +323,16 @@ impl MainView {
     #[must_use]
     pub fn table(&self) -> &Entity<TableState<TorrentTable>> {
         &self.table
+    }
+
+    /// Makes the Files tab's trees of big torrents on GPUI's background executor from now on,
+    /// instead of on a thread of their own each. For tests: the executor of a test makes each tree
+    /// in its turn with every other task, so a test sees the tree as soon as it runs the tasks; a
+    /// thread of its own ends at a time of its own, and wakes the window from outside the test's
+    /// executor.
+    pub fn make_trees_on_the_executor(&mut self, cx: &mut Context<'_, Self>) {
+        self.details_panel
+            .update(cx, |panel, _| panel.make_trees_on_the_executor());
     }
 
     /// What the status bar shows: the speeds, the free space, the connection and whether the
@@ -580,8 +596,8 @@ impl MainView {
 
     /// Tells the table whether its rows are stale data, which it draws at the stale opacity, and
     /// whether the daemon is connected, which its context menu needs for most of its items; the
-    /// details panel whether its Files tab can act; and the speed limits popover whether it can
-    /// apply.
+    /// details panel whether its Files tab can act and whether its peers are stale; and the speed
+    /// limits popover whether it can apply.
     fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
         let connected = self.status.connected();
@@ -592,8 +608,10 @@ impl MainView {
                 cx.notify();
             }
         });
-        self.details_panel
-            .update(cx, |panel, cx| panel.set_connected(connected, cx));
+        self.details_panel.update(cx, |panel, cx| {
+            panel.set_connected(connected, cx);
+            panel.set_stale(stale, cx);
+        });
         self.show_speed_status(cx);
     }
 
@@ -627,14 +645,18 @@ impl MainView {
         cx.notify();
     }
 
-    /// Tells the service whether the user can see the window, when that changed.
-    fn report_visibility(&mut self, window: &Window) {
+    /// Tells the service and the details panel whether the user can see the window, when that
+    /// changed.
+    fn report_visibility(&mut self, window: &Window, cx: &mut Context<'_, Self>) {
         let visibility = visibility(window.is_window_active(), window.is_visible());
         if self.last_visibility == Some(visibility) {
             return;
         }
         self.last_visibility = Some(visibility);
         tracing::debug!(?visibility, "window visibility changed");
+        self.details_panel.update(cx, |panel, cx| {
+            panel.set_window_shown(visibility == Visibility::Visible, cx);
+        });
         if self
             .commands
             .send(Command::SetVisibility(visibility))
@@ -796,6 +818,145 @@ mod tests {
 
         assert_eq!(cx.update(|cx| view.read(cx).config_problem), None);
         assert_eq!(redraws.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn the_details_panel_knows_whether_the_window_is_shown(cx: &mut TestAppContext) {
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (handle, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        let shown = |cx: &mut TestAppContext| {
+            cx.update(|cx| view.read(cx).details_panel.read(cx).window_shown())
+        };
+        // A test window opens without the focus, which the service counts as hidden.
+        cx.run_until_parked();
+        assert!(!shown(cx), "as it opened");
+
+        cx.update_window(handle, |_, window, _| window.activate_window())
+            .expect("the window is open");
+        cx.run_until_parked();
+        assert!(shown(cx), "active and shown");
+
+        cx.simulate_window_visibility_change(handle, gpui_kit::WindowVisibility::Hidden);
+        cx.run_until_parked();
+        assert!(!shown(cx), "hidden");
+    }
+
+    #[gpui_kit::test]
+    fn stale_data_dims_the_rows_of_the_peers_and_the_trackers_tab(cx: &mut TestAppContext) {
+        use x4_core::test_support::{details, torrent, tracker};
+        use x4_core::{
+            ConnectionError, ConnectionState, Peer, PeerList, PeerSources, PeerTraits,
+            TorrentDetails,
+        };
+
+        use crate::theme::STALE_OPACITY;
+        use crate::torrent_table::select_added;
+
+        let (_events, events_rx) = async_channel::unbounded();
+        let (commands, _commands_rx) = crossbeam_channel::unbounded();
+        let (_, view): (_, Entity<MainView>) = cx
+            .update(|cx| {
+                app::init(cx);
+                app::open_main_window(events_rx, commands, None, &UiState::default(), cx)
+            })
+            .expect("the window opens");
+        let panel = cx.update(|cx| view.read(cx).details_panel.clone());
+        let film = torrent("film");
+        let snapshot = |connection: ConnectionState, stale: bool| {
+            Arc::new(Snapshot {
+                torrents: vec![film.clone()],
+                listed: true,
+                session: None,
+                free_space_bytes: None,
+                rate_down: 0,
+                rate_up: 0,
+                connection,
+                stale,
+            })
+        };
+        let peer = |address: &str| Peer {
+            ip: address.parse().ok(),
+            address: address.to_owned(),
+            port: 6881,
+            client: String::new(),
+            progress: 0.0,
+            rate_down: 0,
+            rate_up: 0,
+            traits: PeerTraits::default(),
+            flags: String::new(),
+            country: None,
+        };
+        // The panel shows the one torrent selected, on the Peers tab.
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.show(snapshot(ConnectionState::Connected, false), cx);
+                view.table
+                    .update(cx, |table, cx| select_added(table, film.hash.clone(), cx));
+            });
+        });
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| panel.set_tab(DetailsTab::Peers, cx));
+            view.update(cx, |view, cx| {
+                view.peers_arrived(
+                    Arc::new(PeerList {
+                        hash: film.hash.clone(),
+                        peers: vec![peer("192.0.2.1"), peer("192.0.2.2")],
+                        sources: PeerSources::default(),
+                    }),
+                    cx,
+                );
+            });
+        });
+        let peers = |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).peers_dimming(cx));
+        assert_eq!(peers(cx), (None, vec![None, None]), "fresh");
+
+        // The daemon stopped answering: what the panel shows is old.
+        let reconnecting = ConnectionState::Reconnecting {
+            attempt: 1,
+            last_error: ConnectionError::Unreachable,
+        };
+        cx.update(|cx| view.update(cx, |view, cx| view.show(snapshot(reconnecting, true), cx)));
+
+        assert!(cx.update(|cx| panel.read(cx).is_stale()));
+        assert_eq!(
+            peers(cx),
+            (Some(STALE_OPACITY), vec![Some(STALE_OPACITY); 2]),
+            "the summary and the rows of the Peers tab"
+        );
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| panel.set_tab(DetailsTab::Trackers, cx));
+            view.update(cx, |view, cx| {
+                view.details_arrived(
+                    Arc::new(TorrentDetails {
+                        trackers: vec![tracker("a.example.org:80"), tracker("b.example.org:80")],
+                        ..details(&film.hash, &[])
+                    }),
+                    cx,
+                );
+            });
+        });
+        let trackers =
+            |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).trackers_dimming(cx));
+        assert_eq!(
+            trackers(cx),
+            [Some(STALE_OPACITY); 2],
+            "the rows of the Trackers tab"
+        );
+
+        // It answers again.
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.show(snapshot(ConnectionState::Connected, false), cx);
+            });
+        });
+        assert!(!cx.update(|cx| panel.read(cx).is_stale()));
+        assert_eq!(trackers(cx), [None; 2]);
     }
 
     /// The table dims its rows while the data is stale; an opacity on the list around it would

@@ -15,7 +15,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::download_dir::DownloadDir;
 use crate::error::RpcError;
 use crate::ids::{HashString, TorrentId};
+use crate::lenient::{lenient, lenient_list};
 use crate::magnet::MagnetLink;
+use crate::peers::{PeerRecord, PeersFromRecord};
 
 /// A key of the `fields` array of `torrent_get`; serializes as its wire name (`hash_string`, …).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -109,6 +111,10 @@ pub enum TorrentField {
     UploadedEver,
     /// `tracker_stats`
     TrackerStats,
+    /// `peers`
+    Peers,
+    /// `peers_from`
+    PeersFrom,
 }
 
 impl TorrentField {
@@ -200,6 +206,15 @@ impl TorrentField {
         Self::UploadedEver,
         Self::TrackerStats,
     ];
+
+    /// The fields of the Peers tab: the connected peers and where they came from.
+    ///
+    /// `peers_connected` is left out: the number of peers in the same answer is that number.
+    pub const PEERS: &'static [TorrentField] =
+        &[Self::Id, Self::HashString, Self::Peers, Self::PeersFrom];
+
+    /// The fields of the Trackers tab: every tracker's state.
+    pub const TRACKERS: &'static [TorrentField] = &[Self::Id, Self::HashString, Self::TrackerStats];
 }
 
 /// A torrent's activity, the wire `status` (0 to 6).
@@ -359,11 +374,55 @@ pub struct FileStatRecord {
     pub priority: FilePriority,
 }
 
+/// The daemon's id of a tracker: unique within the daemon, so a row of the Trackers tab can be
+/// told from another across reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+#[serde(transparent)]
+pub struct TrackerId(pub u32);
+
+/// What a tracker's announce is doing, the wire `announce_state` (0 to 3).
+///
+/// It is the state of the tracker's *tier*, shown on the tier's current tracker; a backup
+/// tracker is always [`TrackerState::Inactive`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(from = "u8")]
+pub enum TrackerState {
+    /// 0: nothing will be announced, because the torrent is stopped, has an error, or the
+    /// tracker is a backup.
+    #[default]
+    Inactive,
+    /// 1: waiting for the time of the next announce.
+    Waiting,
+    /// 2: waiting for a free announce slot.
+    Queued,
+    /// 3: announcing now.
+    Active,
+    /// A value this version does not know, kept as sent.
+    Other(u8),
+}
+
+impl From<u8> for TrackerState {
+    fn from(code: u8) -> Self {
+        match code {
+            0 => Self::Inactive,
+            1 => Self::Waiting,
+            2 => Self::Queued,
+            3 => Self::Active,
+            other => Self::Other(other),
+        }
+    }
+}
+
 /// One entry of `tracker_stats`: what one tracker last answered. Only the keys 4x4 uses are
 /// kept; the daemon sends 28.
 ///
-/// A key the daemon leaves out holds its default (empty text, `false`, `None`), so that an odd
-/// tracker entry cannot fail the whole `torrent_get`.
+/// Not kept: `announce` and `scrape`, whose URLs may carry a private tracker's passkey;
+/// `scrape_state`, which stays "queued" for a tracker that has no scrape URL; the `*_start_time`
+/// keys, one of which is `0` while the answer's time is set; and `downloader_count`.
+///
+/// A key the daemon leaves out, or sends as another type, holds its default (empty text, `false`,
+/// `0`, `None`), so that an odd tracker entry cannot fail the whole `torrent_get`. Times are Unix
+/// seconds, `0` for never or not applicable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 #[expect(
@@ -371,30 +430,74 @@ pub struct FileStatRecord {
     reason = "a record of the daemon's flags for one tracker, as the wire has them"
 )]
 pub struct TrackerStatRecord {
+    /// `id`
+    #[serde(deserialize_with = "lenient")]
+    pub id: TrackerId,
+    /// `tier`: 0-based; the trackers of a tier back each other up.
+    #[serde(deserialize_with = "lenient")]
+    pub tier: u32,
+    /// `is_backup`: another tracker of the tier is the one in use. A backup carries no state:
+    /// its times and states are `0`.
+    #[serde(deserialize_with = "lenient")]
+    pub is_backup: bool,
     /// `host`: the tracker's host and port, such as `tracker.example.org:443`.
+    #[serde(deserialize_with = "lenient")]
     pub host: String,
+    /// `sitename`: the first label of the host before its public suffix, such as `example`.
+    #[serde(deserialize_with = "lenient")]
+    pub sitename: String,
+    /// `announce_state`
+    #[serde(deserialize_with = "lenient")]
+    pub announce_state: TrackerState,
     /// `has_announced`: whether the torrent was announced to this tracker since it started; the
     /// other announce keys hold nothing until then.
+    #[serde(deserialize_with = "lenient")]
     pub has_announced: bool,
+    /// `last_announce_time`: when the last answer came; `0` if none did.
+    #[serde(deserialize_with = "lenient")]
+    pub last_announce_time: i64,
     /// `last_announce_succeeded`
+    #[serde(deserialize_with = "lenient")]
     pub last_announce_succeeded: bool,
     /// `last_announce_timed_out`
+    #[serde(deserialize_with = "lenient")]
     pub last_announce_timed_out: bool,
     /// `last_announce_result`: the daemon's text, such as `Success` or the tracker's own error.
+    #[serde(deserialize_with = "lenient")]
     pub last_announce_result: String,
+    /// `last_announce_peer_count`: how many peers the last answer held.
+    #[serde(deserialize_with = "lenient")]
+    pub last_announce_peer_count: i64,
+    /// `next_announce_time`: meaningful only while `announce_state` is
+    /// [`TrackerState::Waiting`]; `0` otherwise.
+    #[serde(deserialize_with = "lenient")]
+    pub next_announce_time: i64,
     /// `has_scraped`: whether this tracker was scraped since the torrent started; the other
     /// scrape keys hold nothing until then.
+    #[serde(deserialize_with = "lenient")]
     pub has_scraped: bool,
+    /// `last_scrape_time`: when the last scrape answer came; `0` if none did.
+    #[serde(deserialize_with = "lenient")]
+    pub last_scrape_time: i64,
     /// `last_scrape_succeeded`
+    #[serde(deserialize_with = "lenient")]
     pub last_scrape_succeeded: bool,
     /// `last_scrape_timed_out`
+    #[serde(deserialize_with = "lenient")]
     pub last_scrape_timed_out: bool,
     /// `last_scrape_result`
+    #[serde(deserialize_with = "lenient")]
     pub last_scrape_result: String,
     /// `seeder_count`; `-1` when the tracker did not say.
+    #[serde(deserialize_with = "lenient")]
     pub seeder_count: Option<i64>,
     /// `leecher_count`; `-1` when the tracker did not say.
+    #[serde(deserialize_with = "lenient")]
     pub leecher_count: Option<i64>,
+    /// `download_count`: how many times the tracker saw the torrent completed; `-1` when the
+    /// tracker did not say.
+    #[serde(deserialize_with = "lenient")]
+    pub download_count: Option<i64>,
 }
 
 /// One torrent of a `torrent_get` response; a field is `Some` only if it was requested (and
@@ -496,7 +599,19 @@ pub struct TorrentRecord {
     /// `uploaded_ever`, bytes.
     pub uploaded_ever: Option<u64>,
     /// `tracker_stats`: one entry per tracker.
+    ///
+    /// Read leniently: a value that is not a list is `None`, and an item that is not an object
+    /// is an empty record.
+    #[serde(deserialize_with = "lenient_list")]
     pub tracker_stats: Option<Vec<TrackerStatRecord>>,
+    /// `peers`: the connected peers, in no stable order.
+    ///
+    /// Read leniently, like `tracker_stats`.
+    #[serde(deserialize_with = "lenient_list")]
+    pub peers: Option<Vec<PeerRecord>>,
+    /// `peers_from`: where the connected peers were first found.
+    #[serde(deserialize_with = "lenient")]
+    pub peers_from: Option<PeersFromRecord>,
 }
 
 /// The result of `torrent_get`.
@@ -729,6 +844,14 @@ mod tests {
                 "tracker_stats",
             ])
         );
+        assert_eq!(
+            serde_json::to_value(TorrentField::PEERS).unwrap(),
+            json!(["id", "hash_string", "peers", "peers_from"])
+        );
+        assert_eq!(
+            serde_json::to_value(TorrentField::TRACKERS).unwrap(),
+            json!(["id", "hash_string", "tracker_stats"])
+        );
     }
 
     #[test]
@@ -820,6 +943,7 @@ mod tests {
                 last_scrape_result: String::new(),
                 seeder_count: Some(12),
                 leecher_count: Some(-1),
+                ..TrackerStatRecord::default()
             }])
         );
     }
@@ -836,6 +960,182 @@ mod tests {
             }
         );
         assert_eq!(stat.seeder_count, None);
+    }
+
+    /// A `tracker_stats` entry as a 4.1 daemon sends it: all 28 keys, a passkey in the URLs.
+    fn live_shaped_tracker() -> serde_json::Value {
+        json!({
+            "announce": "http://tracker.example/ann?pk=SECRETPASSKEY",
+            "announce_state": 1,
+            "download_count": -1,
+            "downloader_count": -1,
+            "has_announced": true,
+            "has_scraped": true,
+            "host": "tracker.example:80",
+            "id": 7,
+            "is_backup": false,
+            "last_announce_peer_count": 30,
+            "last_announce_result": "Success",
+            "last_announce_start_time": 0,
+            "last_announce_succeeded": true,
+            "last_announce_time": 1_700_000_000,
+            "last_announce_timed_out": false,
+            "last_scrape_result": "Could not connect to tracker",
+            "last_scrape_start_time": 0,
+            "last_scrape_succeeded": false,
+            "last_scrape_time": 1_700_000_100,
+            "last_scrape_timed_out": false,
+            "leecher_count": -1,
+            "next_announce_time": 1_700_001_800,
+            "next_scrape_time": 0,
+            "scrape": "http://tracker.example/scrape?pk=SECRETPASSKEY",
+            "scrape_state": 2,
+            "seeder_count": -1,
+            "sitename": "example",
+            "tier": 1,
+        })
+    }
+
+    fn tracker(value: serde_json::Value) -> TrackerStatRecord {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_live_shaped_tracker_entry_parses_every_key_read() {
+        assert_eq!(
+            tracker(live_shaped_tracker()),
+            TrackerStatRecord {
+                id: TrackerId(7),
+                tier: 1,
+                is_backup: false,
+                host: "tracker.example:80".to_owned(),
+                sitename: "example".to_owned(),
+                announce_state: TrackerState::Waiting,
+                has_announced: true,
+                last_announce_time: 1_700_000_000,
+                last_announce_succeeded: true,
+                last_announce_timed_out: false,
+                last_announce_result: "Success".to_owned(),
+                last_announce_peer_count: 30,
+                next_announce_time: 1_700_001_800,
+                has_scraped: true,
+                last_scrape_time: 1_700_000_100,
+                last_scrape_succeeded: false,
+                last_scrape_timed_out: false,
+                last_scrape_result: "Could not connect to tracker".to_owned(),
+                seeder_count: Some(-1),
+                leecher_count: Some(-1),
+                download_count: Some(-1),
+            }
+        );
+    }
+
+    #[test]
+    fn a_tracker_entry_never_holds_the_urls_with_their_passkeys() {
+        let record = tracker(live_shaped_tracker());
+
+        for text in [format!("{record:?}"), format!("{record:#?}")] {
+            assert!(!text.contains("SECRETPASSKEY"), "{text}");
+            assert!(!text.contains("/ann"), "{text}");
+            assert!(!text.contains("/scrape"), "{text}");
+        }
+    }
+
+    #[test]
+    fn every_announce_state_maps() {
+        let states: Vec<TrackerState> = [0, 1, 2, 3, 9]
+            .into_iter()
+            .map(|code| tracker(json!({ "announce_state": code })).announce_state)
+            .collect();
+
+        assert_eq!(
+            states,
+            [
+                TrackerState::Inactive,
+                TrackerState::Waiting,
+                TrackerState::Queued,
+                TrackerState::Active,
+                TrackerState::Other(9),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_backup_row_carries_no_state() {
+        let record = tracker(json!({
+            "id": 8,
+            "tier": 0,
+            "is_backup": true,
+            "host": "backup.example:80",
+            "announce_state": 0,
+            "has_announced": false,
+            "last_announce_time": 0,
+            "next_announce_time": 0,
+            "last_announce_peer_count": 0,
+            "last_scrape_time": 0,
+            "seeder_count": -1,
+            "leecher_count": -1,
+            "download_count": -1,
+        }));
+
+        assert!(record.is_backup);
+        assert_eq!(record.announce_state, TrackerState::Inactive);
+        assert_eq!(
+            (record.last_announce_time, record.next_announce_time),
+            (0, 0)
+        );
+        assert_eq!(record.id, TrackerId(8));
+    }
+
+    #[test]
+    fn counts_of_minus_one_and_times_in_the_future_are_kept_as_sent() {
+        let record = tracker(json!({
+            "seeder_count": -1,
+            "leecher_count": 0,
+            "download_count": 12,
+            "last_announce_time": 4_102_444_800_i64,
+            "next_announce_time": 4_102_448_400_i64,
+        }));
+
+        assert_eq!(record.seeder_count, Some(-1));
+        assert_eq!(record.leecher_count, Some(0));
+        assert_eq!(record.download_count, Some(12));
+        assert_eq!(record.last_announce_time, 4_102_444_800);
+        assert_eq!(record.next_announce_time, 4_102_448_400);
+    }
+
+    #[test]
+    fn a_tracker_without_a_download_count_has_none() {
+        assert_eq!(tracker(json!({ "host": "t:80" })).download_count, None);
+        assert_eq!(
+            tracker(json!({ "download_count": null })).download_count,
+            None
+        );
+    }
+
+    #[test]
+    fn tracker_keys_of_another_type_hold_their_defaults_and_the_others_survive() {
+        let mut entry = live_shaped_tracker();
+        entry["tier"] = json!("first");
+        entry["id"] = json!(-4);
+        entry["announce_state"] = json!(400);
+        entry["download_count"] = json!("many");
+        entry["last_announce_peer_count"] = json!(null);
+        entry["host"] = json!(80);
+        entry["has_announced"] = json!(1);
+
+        let record = tracker(entry);
+
+        assert_eq!(record.tier, 0);
+        assert_eq!(record.id, TrackerId(0));
+        assert_eq!(record.announce_state, TrackerState::Inactive);
+        assert_eq!(record.download_count, None);
+        assert_eq!(record.last_announce_peer_count, 0);
+        assert_eq!(record.host, "");
+        assert!(!record.has_announced);
+        assert_eq!(record.sitename, "example");
+        assert_eq!(record.last_announce_result, "Success");
+        assert_eq!(record.next_announce_time, 1_700_001_800);
     }
 
     #[test]

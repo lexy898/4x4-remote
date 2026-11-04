@@ -12,9 +12,13 @@ pkgdesc='Native desktop client for a remote Transmission daemon'
 arch=('x86_64')
 url='https://github.com/lexy898/4x4'
 license=('MIT OR Apache-2.0')
+# geoip-database holds the country files in /usr/share/GeoIP that the Peers tab reads for its flags.
+# It is a dependency, not an optional one: 4x4 works without it, but pacman -Rs of the package that
+# first brought it in (deluge) would remove an optional one, and the flags would go silently.
 depends=(
   glibc
   libgcc
+  geoip-database
   hicolor-icon-theme
   libxcb
   libxkbcommon
@@ -74,4 +78,7 @@ package() {
     packaging/linux/io.github.lexy898.FourByFour.Devel.desktop -t "$pkgdir/usr/share/applications/"
   install -Dm644 packaging/linux/io.github.lexy898.FourByFour.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps/"
   install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  # The notice of the flags embedded in the binary (country-flag-icons, MIT).
+  install -Dm644 crates/x4-app/assets/flags/LICENSE \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE-country-flag-icons"
 }

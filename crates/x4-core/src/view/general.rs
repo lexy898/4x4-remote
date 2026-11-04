@@ -163,7 +163,7 @@ mod tests {
     use crate::details::{TrackerAnswer, TrackerOutcome, TrackerStat};
     use crate::format::human_size;
     use crate::state::Attention;
-    use crate::test_support::{details, torrent};
+    use crate::test_support::{details, torrent, tracker};
     use crate::view::trackers::{TrackerProblem, TrackerProblemKind};
 
     fn at(seconds: u64) -> SystemTime {
@@ -192,14 +192,12 @@ mod tests {
             downloaded_ever: 5_000,
             uploaded_ever: 7_500,
             trackers: vec![TrackerStat {
-                host: "tracker.example.org:443".to_owned(),
                 last_announce: Some(TrackerAnswer {
                     outcome: TrackerOutcome::Failed,
                     result: "Unregistered torrent".to_owned(),
+                    at: None,
                 }),
-                last_scrape: None,
-                seeders: None,
-                leechers: None,
+                ..tracker("tracker.example.org:443")
             }],
             ..details(
                 &torrent.hash,

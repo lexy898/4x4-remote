@@ -473,6 +473,28 @@ test_guard_blocks_xdg_mime_default() {
         'sudo xdg-mime default a.desktop text/plain' 'bash -c "xdg-mime default a.desktop text/plain"'
 }
 
+# sudo and doas are the owner's alone (AGENTS.md, Hard Rules). They are refused as command words
+# whatever their options: a flag table of their own would be a second parser to keep right, and
+# a shared one reads `-E` or `-n`, which take no value, as taking one and hides the command behind.
+test_guard_blocks_sudo_and_doas() {
+    local command
+    expect_blocked 'sudo -E git commit --no-verify -m x' 'sudo -n true' 'sudo --user root ls' \
+        'doas -E ls' 'timeout 5 sudo ls' 'sudo ls' 'sudo' '/usr/bin/sudo ls' 'doas ls' \
+        'sudo -H -E git commit -n' 'sudo -i git commit -n' 'env X=1 sudo ls' 'nice sudo ls' \
+        'xargs sudo rm' 'command sudo ls' 'true && sudo ls' 'ls | sudo tee /etc/x' \
+        'if sudo -n true; then echo ok; fi' 'bash -c "sudo ls"' 'echo "$(sudo ls)"' \
+        'sudo pacman -U x.pkg.tar.zst' 'sudo -E just default-handler'
+    expect_allowed 'echo sudo' 'grep sudo README.md' 'man sudo' 'git commit -m "no sudo here"' \
+        'echo doas' 'which sudo' 'ls sudoers' 'sudoedit --help' 'cat /etc/doas.conf'
+    for command in 'sudo -E ls' 'doas ls' 'timeout 5 sudo ls'; do
+        run_guard "$command"
+        expect_status 2
+        expect_contains "Agents never run sudo (AGENTS.md, Hard Rules); the owner runs it" "$stderr" \
+            "stderr for: $command"
+        [[ $stderr != *"Fix the failing check"* ]] || fail "advice about gates for: $command: $stderr"
+    done
+}
+
 test_guard_allows_reading_and_testing_the_default_handler() {
     expect_allowed 'grep default-handler README.md' 'cat scripts/default-handler.sh' \
         'ls scripts/default-handler.sh' 'git add scripts/default-handler.sh' \
@@ -547,7 +569,8 @@ test_check_tools_passes_when_all_present() {
 # output per crate comes from tree-<crate>.txt next to it, and its stderr from
 # tree-<crate>.stderr if that exists. Each call appends its arguments to cargo-args.txt.
 # Clean by default: x4-app's tree is the vendored crate, the vendored renderer is patched, the
-# workspace denies unsafe_code and the allocator holds the one exception to it.
+# workspace denies unsafe_code, limits an unsafe block to one operation, and the allocator holds the
+# one exception to it.
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
@@ -558,7 +581,8 @@ new_policy_root() {
             "$crate" >"$dir/crates/$crate/src/lib.rs"
         printf '%s v0.1.0 (%s)\n' "$crate" "$dir/crates/$crate" >"$dir/tree-$crate.txt"
     done
-    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n' >"$dir/Cargo.toml"
+    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n\n[workspace.lints.clippy]\nmultiple_unsafe_ops_per_block = "warn"\n' \
+        >"$dir/Cargo.toml"
     mkdir -p "$dir/crates/x4-app/src"
     printf '[package]\nname = "x4-app"\n\n[lints]\nworkspace = true\n' >"$dir/crates/x4-app/Cargo.toml"
     printf '//! The allocator.\n\n// SAFETY: a call.\n#[expect(unsafe_code, reason = "the owner allowed this")]\nlet taken = unsafe { f() };\n' \
@@ -725,6 +749,50 @@ test_lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator() {
     expect_contains "crates/x4-app/src/allocator.rs: 2 unsafe_code exceptions" "$stderr" stderr
 }
 
+# The attribute is on a `let`, but the statement could still hold more than the one call
+# (`multiple_unsafe_ops_per_block` counts operations per block, so two blocks escape it).
+test_lint_policy_rejects_a_second_unsafe_keyword_in_the_allocator() {
+    local dir form
+    dir=$(new_policy_root)
+    local -a forms=(
+        $'#[expect(unsafe_code, reason = "x")]\nlet t = unsafe { f() } + unsafe { g() };\n'
+        $'#[expect(unsafe_code, reason = "x")]\nlet t = {\n    unsafe { f() };\n    unsafe { g() }\n};\n'
+        $'#[expect(unsafe_code, reason = "x")]\nlet taken = unsafe { f() };\nunsafe fn extra() {}\n'
+    )
+    for form in "${forms[@]}"; do
+        printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
+        run_policy "$dir"
+        expect_status 1
+        expect_contains "crates/x4-app/src/allocator.rs: 2 'unsafe' keywords; the owner approved one unsafe call" \
+            "$stderr" "stderr with: $form"
+    done
+}
+
+# Beside the lint-policy count, clippy limits a block to one operation; the workspace must ask for it.
+test_lint_policy_requires_the_one_unsafe_operation_per_block_lint() {
+    local dir level
+    dir=$(new_policy_root)
+    for level in allow forbid; do
+        printf '[workspace.lints.rust]\nunsafe_code = "deny"\n\n[workspace.lints.clippy]\nmultiple_unsafe_ops_per_block = "%s"\n' \
+            "$level" >"$dir/Cargo.toml"
+        run_policy "$dir"
+        expect_status 1
+        expect_contains "Cargo.toml: workspace.lints.clippy.multiple_unsafe_ops_per_block is '$level', not warn or deny" \
+            "$stderr" stderr
+    done
+    printf '[workspace.lints.rust]\nunsafe_code = "deny"\n' >"$dir/Cargo.toml"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "Cargo.toml: workspace.lints.clippy.multiple_unsafe_ops_per_block is 'unset', not warn or deny" \
+        "$stderr" stderr
+    for level in warn deny; do
+        printf '[workspace.lints.rust]\nunsafe_code = "deny"\n\n[workspace.lints.clippy]\nmultiple_unsafe_ops_per_block = "%s"\n' \
+            "$level" >"$dir/Cargo.toml"
+        run_policy "$dir"
+        expect_status 0
+    done
+}
+
 # The owner approved one unsafe call, and the exception sits on the `let` that makes it. On a whole
 # function or module it would cover every unsafe call in them, and a second one would pass.
 test_lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let() {
@@ -737,6 +805,8 @@ test_lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let() {
         $'#[allow(unsafe_code)]\nlet taken = unsafe { f() };\n'
         $'#[cfg_attr(test, expect(unsafe_code))]\nlet taken = unsafe { f() };\n'
         $'#[expect(clippy::too_many_lines, reason = "unsafe_code is not meant")]\nlet decoy = 1;\n#[expect(unsafe_code)]\nfn pin() {}\n'
+        # A `//` inside a string is no comment, so what follows it still counts.
+        $'let url = "http://x"; #[expect(unsafe_code)] fn pin() {}\n'
     )
     for form in "${forms[@]}"; do
         printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
@@ -756,6 +826,11 @@ test_lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout() {
         $'// SAFETY: a call.\n#[expect(unsafe_code, reason = "x")]\n// the call\nlet taken = unsafe { f() };\n'
         $'#[expect(\n    unsafe_code,\n    reason = "no safe wrapper [exists]; let it be"\n)]\nlet taken = unsafe { f() };\n'
         $'#[expect(unsafe_code)] let taken = unsafe { f() };\n'
+        # A comment after code on the attribute's line, also after a reason with a URL in it.
+        $'#[expect(unsafe_code, reason = "x")] // trailing note\nlet taken = unsafe { f() };\n'
+        $'#[expect(unsafe_code, reason = "see https://example.org/a")] // note\nlet taken = unsafe { f() };\n'
+        # The word in comments and in the reason is no second `unsafe`.
+        $'//! The only unsafe here.\n// SAFETY: this unsafe call only sets a parameter.\n#[expect(unsafe_code, reason = "the one unsafe call")]\nlet taken = unsafe { f() }; // the unsafe call\n'
     )
     for form in "${forms[@]}"; do
         printf '%s' "$form" >"$dir/crates/x4-app/src/allocator.rs"
@@ -771,6 +846,7 @@ test_lint_policy_ignores_unsafe_code_in_comments_and_reasons() {
         >>"$dir/crates/x4-core/src/lib.rs"
     printf '#[expect(clippy::too_many_lines, reason = "unsafe_code is not meant")]\nfn j() {}\n' \
         >>"$dir/crates/x4-core/src/lib.rs"
+    printf 'fn k() {} // #[allow(unsafe_code)]\n' >>"$dir/crates/x4-core/src/lib.rs"
     run_policy "$dir"
     expect_status 0
 }
@@ -1144,6 +1220,21 @@ test_measure_refuses_a_binary_with_the_synthetic_demo() {
     expect_status 2
     [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "something was built"
     [[ ! -e $dir/args-installed.txt && ! -e $dir/args-x4-synthetic.txt ]] || fail "something ran"
+}
+
+# The demo reads no config and has no daemon to reach, so --offline would promise a guarantee the
+# demo has no use for; the caller is told, as with --binary, and nothing is built or run.
+test_measure_refuses_offline_with_the_synthetic_demo() {
+    local dir order
+    dir=$(new_measure_env)
+    for order in '--synthetic --offline' '--offline --synthetic'; do
+        run_measure_script "$dir" $order
+        expect_status 2
+        expect_contains "--offline" "$stderr" "stderr with $order"
+        expect_contains "--synthetic" "$stderr" "stderr with $order"
+        [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "with $order, something was built"
+        [[ ! -e $dir/args-x4-synthetic.txt ]] || fail "with $order, something ran"
+    done
 }
 
 # Inside `just virtual` the config dir is empty, so the app would poll the default daemon, the
@@ -1530,8 +1621,8 @@ test_package_build_file_describes_4x4_git_built_from_the_local_master() {
     expect_srcinfo pkgname 4x4-git
     expect_srcinfo arch x86_64
     expect_srcinfo license 'MIT OR Apache-2.0'
-    expect_srcinfo depends glibc libgcc hicolor-icon-theme libxcb libxkbcommon libxkbcommon-x11 \
-        vulkan-icd-loader wayland
+    expect_srcinfo depends glibc libgcc geoip-database hicolor-icon-theme libxcb libxkbcommon \
+        libxkbcommon-x11 vulkan-icd-loader wayland
     expect_srcinfo makedepends cargo git fontconfig freetype2
     expect_srcinfo optdepends \
         'vulkan-driver: draw through Vulkan; without one 4x4 falls back to OpenGL and uses more memory' \
@@ -1634,7 +1725,8 @@ RUSTUP_TOOLCHAIN: stable"
 
 # package() in a stand-in of makepkg's $srcdir and $pkgdir, with a stand-in binary and the
 # repository's own desktop files (4x4's, and the hidden one that gives the windows of the debug
-# build the icon), icon and licenses: exactly those six files, with pacman's modes.
+# build the icon), icon and licenses (the two of 4x4 and the notice of the flags it embeds):
+# exactly those seven files, with pacman's modes.
 test_package_installs_the_binary_desktop_files_icon_and_licenses() {
     local dir checkout listing expected
     dir=$(mktemp -d "$tmp_root/package-files.XXXXXX")
@@ -1646,6 +1738,9 @@ test_package_installs_the_binary_desktop_files_icon_and_licenses() {
         "$checkout/packaging/linux/" 2>/dev/null || fail "no desktop file for the debug build"
     cp "$icon" "$checkout/packaging/linux/" 2>/dev/null || fail "no icon at $icon"
     cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$checkout/"
+    mkdir -p "$checkout/crates/x4-app/assets/flags"
+    cp "$root/crates/x4-app/assets/flags/LICENSE" "$checkout/crates/x4-app/assets/flags/" 2>/dev/null ||
+        fail "no notice of the flags at $root/crates/x4-app/assets/flags/LICENSE"
     run_with_input '' env -C "$dir/src" X4_REPO="$dir" srcdir="$dir/src" pkgdir="$dir/pkg" \
         bash -e -c 'source "$1" && package' _ "$pkgbuild"
     expect_status 0
@@ -1655,6 +1750,7 @@ test_package_installs_the_binary_desktop_files_icon_and_licenses() {
 644 ./usr/share/icons/hicolor/scalable/apps/io.github.lexy898.FourByFour.svg
 644 ./usr/share/licenses/4x4-git/LICENSE-APACHE
 644 ./usr/share/licenses/4x4-git/LICENSE-MIT
+644 ./usr/share/licenses/4x4-git/LICENSE-country-flag-icons
 755 ./usr/bin/4x4"
     [[ $listing == "$expected" ]] || fail "unexpected files in the package: $listing"
 }
@@ -1784,6 +1880,63 @@ test_package_recipe_stops_outside_a_git_repository() {
     [[ ! -e $package_dir/makepkg.log ]] || fail "makepkg ran"
     [[ -z $(ls -A "$package_dir/home") ]] ||
         fail "the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
+}
+
+# The local master can lag behind the origin/master the checkout last fetched (a pull request merged
+# on GitHub, not pulled yet). The recipe then warns and builds the local master all the same: an
+# older master may be wanted. It only compares; it never fetches, so the warning is as old as the
+# last fetch, and with no origin/master, or one the local master has caught up with or passed,
+# it says nothing. The remote-tracking ref is made by hand, as a fetch would, with no remote.
+test_package_recipe_warns_when_master_is_behind_the_last_fetched_origin() {
+    local first second third what local_master origin_master behind noun
+    new_package_env
+    commit_build_file master "feat: first"
+    first=$(git -C "$package_repo" rev-parse master)
+    commit_build_file master "feat: second"
+    second=$(git -C "$package_repo" rev-parse master)
+    commit_build_file master "feat: third"
+    third=$(git -C "$package_repo" rev-parse master)
+
+    # <local master> <origin/master> <commits behind, 0 for silence>
+    local -a cases=(
+        "$first $third 2"
+        "$second $third 1"
+        "$third $third 0"
+        "$third $first 0"
+        "$third none 0"
+    )
+    for what in "${cases[@]}"; do
+        read -r local_master origin_master behind <<<"$what"
+        git -C "$package_repo" update-ref refs/heads/master "$local_master"
+        if [[ $origin_master == none ]]; then
+            git -C "$package_repo" update-ref -d refs/remotes/origin/master
+        else
+            git -C "$package_repo" update-ref refs/remotes/origin/master "$origin_master"
+        fi
+        rm -f "$package_dir/makepkg.log"
+        run_package
+        expect_status 0
+        [[ $stdout == *"building master:"* && -e $package_dir/makepkg.log ]] ||
+            fail "with '$what', the recipe did not build the local master: $stdout"
+        if ((behind == 0)); then
+            [[ $stderr != *behind* ]] || fail "with '$what', the recipe warned: $stderr"
+        else
+            noun=commits
+            ((behind == 1)) && noun=commit
+            expect_contains "warning: the local master is $behind $noun behind origin/master (as last fetched)" \
+                "$stderr" "stderr with '$what'"
+            expect_contains "git switch master && git pull" "$stderr" "stderr with '$what'"
+        fi
+    done
+
+    # An origin that cannot be reached: the run is the same, so nothing is fetched.
+    git -C "$package_repo" remote add origin "file://$package_dir/no-such-repository"
+    git -C "$package_repo" update-ref refs/heads/master "$first"
+    git -C "$package_repo" update-ref refs/remotes/origin/master "$third"
+    run_package
+    expect_status 0
+    [[ $stderr == "warning: the local master is 2 commits behind origin/master (as last fetched);"* &&
+        $stderr != *$'\n'* ]] || fail "expected the one warning, and no fetch error, got: $stderr"
 }
 
 # makepkg refuses a source mirror made from another checkout (this one moved, or an agent's clone),
@@ -2643,6 +2796,7 @@ cases=(
     guard_blocks_the_default_handler_script
     guard_blocks_the_default_handler_behind_setsid
     guard_blocks_xdg_mime_default
+    guard_blocks_sudo_and_doas
     guard_allows_reading_and_testing_the_default_handler
     guard_tells_the_agent_to_ask_the_owner_about_default_apps
     guard_ignores_other_tools
@@ -2658,6 +2812,8 @@ cases=(
     lint_policy_rejects_failed_gpui_pre_wgpu_lookup
     lint_policy_rejects_an_unsafe_code_exception_elsewhere
     lint_policy_rejects_a_second_unsafe_code_exception_in_the_allocator
+    lint_policy_rejects_a_second_unsafe_keyword_in_the_allocator
+    lint_policy_requires_the_one_unsafe_operation_per_block_lint
     lint_policy_rejects_an_unsafe_code_exception_that_is_not_on_a_let
     lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout
     lint_policy_ignores_unsafe_code_in_comments_and_reasons
@@ -2682,6 +2838,7 @@ cases=(
     measure_takes_a_relative_binary_from_the_callers_directory
     measure_refuses_a_binary_it_cannot_run
     measure_refuses_a_binary_with_the_synthetic_demo
+    measure_refuses_offline_with_the_synthetic_demo
     measure_offline_gives_the_program_a_config_of_a_closed_port
     measure_offline_config_dir_is_absolute_under_a_relative_tmpdir
     measure_without_offline_keeps_the_callers_config_dir
@@ -2706,6 +2863,7 @@ cases=(
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
     package_recipe_stops_outside_a_git_repository
+    package_recipe_warns_when_master_is_behind_the_last_fetched_origin
     package_recipe_starts_over_from_a_source_mirror_of_another_checkout
     icon_is_a_plain_square_svg
     icon_check_catches_what_does_not_belong_in_an_icon

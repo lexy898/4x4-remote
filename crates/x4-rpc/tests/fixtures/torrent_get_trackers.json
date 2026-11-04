@@ -1,0 +1,74 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "torrents": [
+      {
+        "hash_string": "0000000000000000000000000000000000000005",
+        "id": 5,
+        "tracker_stats": [
+          {
+            "announce": "https://tracker2.example.org/announce",
+            "announce_state": 1,
+            "download_count": -1,
+            "downloader_count": -1,
+            "has_announced": true,
+            "has_scraped": false,
+            "host": "tracker2.example.org:80",
+            "id": 6,
+            "is_backup": false,
+            "last_announce_peer_count": 30,
+            "last_announce_result": "Success",
+            "last_announce_start_time": 1793784666,
+            "last_announce_succeeded": true,
+            "last_announce_time": 1793784667,
+            "last_announce_timed_out": false,
+            "last_scrape_result": "",
+            "last_scrape_start_time": 0,
+            "last_scrape_succeeded": false,
+            "last_scrape_time": 0,
+            "last_scrape_timed_out": false,
+            "leecher_count": -1,
+            "next_announce_time": 1793787926,
+            "next_scrape_time": 0,
+            "scrape": "",
+            "scrape_state": 2,
+            "seeder_count": -1,
+            "sitename": "example",
+            "tier": 0
+          },
+          {
+            "announce": "https://tracker3.example.org/announce",
+            "announce_state": 1,
+            "download_count": -1,
+            "downloader_count": -1,
+            "has_announced": true,
+            "has_scraped": true,
+            "host": "tracker3.example.org:80",
+            "id": 7,
+            "is_backup": false,
+            "last_announce_peer_count": 0,
+            "last_announce_result": "Could not connect to tracker",
+            "last_announce_start_time": 0,
+            "last_announce_succeeded": false,
+            "last_announce_time": 1793783945,
+            "last_announce_timed_out": false,
+            "last_scrape_result": "Could not connect to tracker",
+            "last_scrape_start_time": 0,
+            "last_scrape_succeeded": false,
+            "last_scrape_time": 1793782300,
+            "last_scrape_timed_out": false,
+            "leecher_count": -1,
+            "next_announce_time": 1793791162,
+            "next_scrape_time": 1793789520,
+            "scrape": "https://tracker3.example.org/scrape",
+            "scrape_state": 1,
+            "seeder_count": -1,
+            "sitename": "example",
+            "tier": 1
+          }
+        ]
+      }
+    ]
+  }
+}

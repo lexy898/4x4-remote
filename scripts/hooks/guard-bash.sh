@@ -14,6 +14,8 @@
 #     owner to run it. `bash -n scripts/default-handler.sh` (a syntax check) is allowed; so is
 #     reading about it. `just --show default-handler` is refused too, a false block that costs
 #     nothing: the agent reads the justfile.
+#   - `sudo` and `doas` as a command word, with any options (AGENTS.md, Hard Rules: agents never
+#     run sudo). They get the owner advice too. Mentions (`grep sudo`, `man sudo`) stay allowed.
 # Everything else exits 0 silently. Mentions inside quoted arguments, heredoc bodies and
 # read-only commands (`grep no-verify`, `cat target/.agent-hooks/last-green`) are allowed:
 # the command is split into words and simple commands roughly the way the shell does it,
@@ -29,6 +31,7 @@ export LC_ALL=C
 
 advice='Fix the failing check instead; if it cannot be fixed, stop and tell the owner (AGENTS.md, Definition of Done).'
 owner_advice='Installing and changing the default apps is the owner'\''s (AGENTS.md, Hard Rules): stop and ask the owner to run `just default-handler` themselves.'
+sudo_advice='Agents never run sudo (AGENTS.md, Hard Rules); the owner runs it: stop and ask the owner to run the command themselves.'
 max_depth=6
 
 block() { # <reason> [<advice>]
@@ -39,6 +42,10 @@ block() { # <reason> [<advice>]
 
 block_default_apps() { # <reason>
     block "$1" "$owner_advice"
+}
+
+block_sudo() { # <reason>
+    block "$1" "$sudo_advice"
 }
 
 # --- Lexer --------------------------------------------------------------------------------
@@ -478,7 +485,12 @@ strip_wrappers() { # <word...>
             '!' | '{' | '}' | if | then | elif | else | do | while | until | fi | done | time | command | builtin | exec | nohup)
                 ARGV=("${ARGV[@]:1}")
                 ;;
-            env | nice | timeout | stdbuf | xargs | sudo | doas | setsid)
+            sudo | doas)
+                # Refused whole, not parsed: their options that take a value and those that do not
+                # differ from the other wrappers', and a wrong guess lets the command behind pass.
+                block_sudo "$base runs a command with another user's rights"
+                ;;
+            env | nice | timeout | stdbuf | xargs | setsid)
                 ARGV=("${ARGV[@]:1}")
                 while ((${#ARGV[@]} > 0)); do
                     case ${ARGV[0]} in
