@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 use x4_core::UiState;
@@ -7,10 +9,10 @@ use crate::app;
 
 /// Reads a magnet link as the app does, and never finishes reading a file, as on a network file
 /// system that hangs.
-fn stuck_on_files(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
+fn stuck_on_files(item: AddItem, load: Load, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
     match item {
         AddItem::File(_) => cx.background_executor().spawn(std::future::pending()),
-        magnet @ AddItem::Magnet(_) => read_on_the_executor(magnet, cx),
+        magnet @ AddItem::Magnet(_) => read_on_the_executor(magnet, load, cx),
     }
 }
 
@@ -199,16 +201,25 @@ fn run_until(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) 
     }
 }
 
-/// Reads a file as the app does, on a thread of its own, and fails a read that is not on such a
-/// thread.
-fn read_and_check_the_thread(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
-    fn load_on_the_reader(item: AddItem) -> Result<LoadedItem, LoadError> {
-        if std::thread::current().name() != Some("torrent-reader") {
-            return Err(LoadError::NotAFile);
-        }
-        load(item)
-    }
-    adding::read_on_a_thread(item, load_on_the_reader, cx)
+/// What [`load_and_note_the_thread`] was asked to load, and the name of the thread it ran on, in
+/// the order of the loads. A `fn` cannot carry state, so the note is made here; only
+/// `a_torrent_file_is_read_on_a_thread_of_its_own` uses it.
+static NOTED: Mutex<Vec<(&'static str, Option<String>)>> = Mutex::new(Vec::new());
+
+/// Loads as the app does, and notes in [`NOTED`] what it loaded and on which thread.
+fn load_and_note_the_thread(item: AddItem) -> Result<LoadedItem, LoadError> {
+    let kind = match item {
+        AddItem::File(_) => "file",
+        AddItem::Magnet(_) => "magnet",
+    };
+    let thread = std::thread::current().name().map(str::to_owned);
+    NOTED.lock().expect("the note is kept").push((kind, thread));
+    load(item)
+}
+
+/// What [`load_and_note_the_thread`] has noted so far.
+fn noted() -> Vec<(&'static str, Option<String>)> {
+    NOTED.lock().expect("the note is kept").clone()
 }
 
 #[gpui_kit::test]
@@ -216,33 +227,61 @@ fn a_torrent_file_is_read_on_a_thread_of_its_own(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let path = dir.path().join("film.torrent");
     std::fs::write(&path, one_file_torrent("Film")).expect("the file is written");
+    NOTED.lock().expect("the note is kept").clear();
     let (handle, view) = open(cx);
+    // `adds.read` stays what the app uses, so that its choice of where to read is what is tested;
+    // only the load, which that read runs, notes the thread it is on.
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
-            view.adds.read = read_and_check_the_thread;
-            view.take_add_request(AddRequest::Items(vec![AddItem::File(path)]), window, cx);
+            view.adds.load = load_and_note_the_thread;
+            view.take_add_request(
+                AddRequest::Items(vec![AddItem::File(path), AddItem::Magnet(None)]),
+                window,
+                cx,
+            );
         });
     })
     .expect("the window is open");
 
     assert!(run_until(cx, |cx| label(handle, "add-name", cx).is_some()));
     assert_eq!(label(handle, "add-name", cx).as_deref(), Some("Film"));
+    assert_eq!(
+        noted(),
+        [("file", Some("torrent-reader".to_owned()))],
+        "the file, and only the head, was read on the reader thread"
+    );
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("add-cancel", cx);
+    })
+    .expect("the window is open");
+    assert!(run_until(cx, |cx| label(handle, "add-link", cx).is_some()));
+    let noted = noted();
+    assert_eq!(noted.len(), 2, "the magnet link was loaded: {noted:?}");
+    assert_eq!(noted[1].0, "magnet");
+    assert_ne!(
+        noted[1].1.as_deref(),
+        Some("torrent-reader"),
+        "a magnet link needs no reading, and gets no thread"
+    );
 }
 
 /// Reads a file as the app does, on a thread of its own, but never finishes reading one in a
 /// folder named `hangs`, as on a network file system that hangs.
-fn read_hanging_in_one_folder(item: AddItem, cx: &App) -> Task<Result<LoadedItem, LoadError>> {
-    fn load_or_hang(item: AddItem) -> Result<LoadedItem, LoadError> {
-        if let AddItem::File(path) = &item
-            && path.parent().is_some_and(|dir| dir.ends_with("hangs"))
-        {
-            loop {
-                std::thread::park();
-            }
+fn read_hanging_in_one_folder(
+    item: AddItem,
+    load: Load,
+    cx: &App,
+) -> Task<Result<LoadedItem, LoadError>> {
+    fn hang(_: AddItem) -> Result<LoadedItem, LoadError> {
+        loop {
+            std::thread::park();
         }
-        load(item)
     }
-    adding::read_on_a_thread(item, load_or_hang, cx)
+    let hangs = matches!(&item, AddItem::File(path)
+        if path.parent().is_some_and(|dir| dir.ends_with("hangs")));
+    adding::read_on_a_thread(item, if hangs { hang } else { load }, cx)
 }
 
 #[gpui_kit::test]

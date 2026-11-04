@@ -25,6 +25,6 @@ pub(crate) use drop_target::{drop_highlight_layer, hover_while_dragging};
 pub(crate) use picker::PortalPicker;
 pub(crate) use picker::PromptPicker;
 pub use picker::{FilePicker, PickError, Picked};
-pub(crate) use reader::read_on_a_thread;
+pub(crate) use reader::{Load, read_on_a_thread};
 pub use requests::{AddRequest, AddRequests, launch_requests};
 pub(crate) use requests::{LoadError, load};
