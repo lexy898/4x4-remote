@@ -203,7 +203,7 @@ impl Trackers {
         let host = format!("tracker{number}.{domain}:{port}");
         let wide = u32::try_from(index).unwrap_or(0);
         // The moment of its own at which the tier announces, every interval.
-        let phase = i64::from((id * 613 + wide * 277) % 1800);
+        let phase = (i64::from(id) * 613 + i64::from(wide) * 277) % ANNOUNCE_INTERVAL;
         let (announced, last, state, next) = if backup {
             (false, 0, 0, 0)
         } else if torrent.kind.status() != 0 {

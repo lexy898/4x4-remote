@@ -4,13 +4,14 @@
 //!
 //! Work done on a thread of GPUI's background pool left its memory with that thread: glibc keeps an
 //! arena of freed memory for each thread that allocates, and a pool thread never ends, so each one
-//! that did such work kept its own. Five `.torrent` files of 2000 entries read on the pool held
-//! 5.5 MiB more than one, and the file trees of the synthetic demo's 2000-file and 50 000-file
-//! torrents, selected in turn five times, a median of 128 MiB of private memory against 87 on
-//! threads of their own (README, Performance). A thread that ends gives its arena back for the
-//! next one to take, so the pieces of work share about one, as long as no thread of the pool takes
-//! it first: the answer is awaited on the UI thread. And work that never ends, as a read on a
-//! network folder that hangs, holds only its own thread, where it held one of the pool's for good.
+//! that did such work kept its own. In stage 5, five `.torrent` files of 2000 entries read on the
+//! pool held 5.5 MiB more than one (README, Performance). For the file trees the measurements did
+//! not tell the two apart: the Files tab of the synthetic demo's 50 000 files, opened five times,
+//! left 125.8 MiB of private memory on threads of their own and 126.2 on the pool, against 137.1 on
+//! the window's thread. A thread that ends gives its arena back for the next one to take, so the
+//! pieces of work share about one, as long as no thread of the pool takes it first: the answer is
+//! awaited on the UI thread. And work that never ends, as a read on a network folder that hangs,
+//! holds only its own thread, where it held one of the pool's for good.
 
 use std::io;
 use std::thread;
@@ -20,8 +21,10 @@ use gpui_kit::{App, Task};
 /// Runs `work` on a thread of its own, named `name`, with a stack of `stack` bytes, which ends
 /// with it; the task, on the UI thread, gives what `work` gave. A thread that cannot be started,
 /// or that ends without an answer, gives what `lost` makes of the kind of the error, which is
-/// logged. Dropping the task lets go of the answer: the thread still ends with its work, and its
-/// answer is dropped there.
+/// logged. A thread that cannot be started is a warning: each caller has its answer to it, as the
+/// Files tab, which makes the tree on the window's thread then, and the reading of a `.torrent`
+/// file, which tells the user. Dropping the task lets go of the answer: the thread still ends with
+/// its work, and its answer is dropped there.
 pub(crate) fn on_a_thread<R: Send + 'static>(
     name: &'static str,
     stack: usize,
@@ -39,7 +42,7 @@ pub(crate) fn on_a_thread<R: Send + 'static>(
             }
         });
     if let Err(error) = started {
-        tracing::error!(thread = name, %error, "no thread could be started for the work");
+        tracing::warn!(thread = name, %error, "no thread could be started for the work");
         return Task::ready(lost(error.kind()));
     }
     // The answer is awaited on the UI thread. On a thread of GPUI's pool, the wait would allocate,

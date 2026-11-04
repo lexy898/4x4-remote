@@ -9,16 +9,8 @@ const NOISE: f64 = 1e-9;
 /// It rounds down and reaches 100 only from `progress >= 1.0`, so a torrent never shows 100%
 /// before it is done. A value outside the range is clamped to 0 or 100, and NaN is 0.
 #[must_use]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the value is clamped to 0..=99 first, and a NaN casts to 0"
-)]
 pub(crate) fn percent(progress: f64) -> u8 {
-    if progress >= 1.0 {
-        return 100;
-    }
-    (progress * 100.0 + NOISE).floor().clamp(0.0, 99.0) as u8
+    percent_with(progress, NOISE)
 }
 
 /// Float noise of an `f32` below this still counts toward the next whole percent: an `f32` keeps
@@ -29,18 +21,22 @@ const F32_NOISE: f64 = 1e-4;
 /// The whole percent a `progress` of 0.0 to 1.0 kept as an `f32` is shown as, as [`percent`]
 /// does with room for the coarser noise of an `f32`. The daemon keeps a peer's progress so.
 #[must_use]
+pub(crate) fn percent_f32(progress: f32) -> u8 {
+    percent_with(f64::from(progress), F32_NOISE)
+}
+
+/// The whole percent of `progress`, as [`percent`] describes, where float noise below `noise`
+/// still counts toward the next whole percent.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "the value is clamped to 0..=99 first, and a NaN casts to 0"
 )]
-pub(crate) fn percent_f32(progress: f32) -> u8 {
+fn percent_with(progress: f64, noise: f64) -> u8 {
     if progress >= 1.0 {
         return 100;
     }
-    (f64::from(progress) * 100.0 + F32_NOISE)
-        .floor()
-        .clamp(0.0, 99.0) as u8
+    (progress * 100.0 + noise).floor().clamp(0.0, 99.0) as u8
 }
 
 /// `progress` limited to 0.0 to 1.0, so a bar never overflows its track; NaN is 0.0.

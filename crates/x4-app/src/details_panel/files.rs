@@ -334,7 +334,11 @@ impl DetailsPanel {
         else {
             return;
         };
-        tracing::warn!("the file tree is made on the window's thread instead");
+        tracing::warn!(
+            torrent = %hash,
+            files = details.files.len(),
+            "the file tree is made on the window's thread instead"
+        );
         let tree = FileTree::new(details);
         self.tree_built(tree, cx);
     }
@@ -353,7 +357,10 @@ impl DetailsPanel {
             && is_of(&self.target, tree.hash())
             && self.files.is_building(tree.hash());
         if !wanted {
-            tracing::debug!("a file tree came for what the Files tab no longer shows; dropped");
+            tracing::debug!(
+                torrent = %tree.hash(),
+                "a file tree came for what the Files tab no longer shows; dropped"
+            );
             return;
         }
         match self.files.take_built(tree, self.details.as_ref()) {
