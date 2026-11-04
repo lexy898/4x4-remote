@@ -87,14 +87,15 @@ pub(crate) fn subtitle_color(subtitle: &Subtitle, theme: &Theme) -> Hsla {
     }
 }
 
-/// The color of a tracker's dot and of the line under its address: green while it works, the
-/// primary color while an announce is under way, the danger color for a failed announce, the
-/// warning color for one that timed out, and muted for a backup and for a tracker not announced to
-/// yet.
+/// The color of a tracker's dot and of the line under its address: green while it works, the info
+/// color (cyan in the default themes) while an announce is under way, the danger color for a
+/// failed announce, the warning color for one that timed out, and muted for a backup and for a
+/// tracker not announced to yet. The primary color would not do for an announce: it is the color
+/// of plain text.
 pub(crate) fn tracker_color(status: TrackerStatus, theme: &Theme) -> Hsla {
     match status {
         TrackerStatus::Working => theme.success,
-        TrackerStatus::Announcing => theme.primary,
+        TrackerStatus::Announcing => theme.info,
         TrackerStatus::Failed => theme.danger,
         TrackerStatus::TimedOut => theme.warning,
         TrackerStatus::Backup | TrackerStatus::NotContacted => theme.muted_foreground,
@@ -307,7 +308,13 @@ mod tests {
             let color = |status| tracker_color(status, &theme);
 
             assert_eq!(color(TrackerStatus::Working), theme.success, "{mode:?}");
-            assert_eq!(color(TrackerStatus::Announcing), theme.primary);
+            // The info color, cyan in the default themes: the primary color is the plain text's.
+            assert_eq!(color(TrackerStatus::Announcing), theme.info, "{mode:?}");
+            assert_ne!(
+                color(TrackerStatus::Announcing),
+                theme.foreground,
+                "{mode:?}"
+            );
             assert_eq!(color(TrackerStatus::Failed), theme.danger);
             assert_eq!(color(TrackerStatus::TimedOut), theme.warning);
             // A tracker that is not in use, or not announced to yet, recedes.
