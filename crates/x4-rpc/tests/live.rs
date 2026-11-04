@@ -14,9 +14,11 @@
 //! deletes it itself; a guard of the file deletes it on every path too. An interrupted run skips
 //! the guards, so each new torrent is named on stderr as soon as it is added.
 //!
-//! One test only reads: it looks for a few of the daemon's own torrents that have trackers and
-//! reads their details as the details panel does (the `tracker_entries` module), so that real
-//! tracker entries are parsed. It changes nothing and reports counts and kinds of values only.
+//! Two tests only read: one looks for a few of the daemon's own torrents that have trackers and
+//! reads their details as the details panel and the Trackers tab do (the `tracker_entries`
+//! module), the other for a few that have peers and reads them as the Peers tab does (the
+//! `peer_entries` module), so that real tracker and peer entries are parsed. They change nothing,
+//! read a second apart, and report counts and kinds of values only.
 //!
 //! The offline tests of the support code (bencode, piece hashes, accepting the added torrent,
 //! the local data) run in `just test` too. They are in files of their own that only this crate
@@ -27,6 +29,8 @@ mod metainfo;
 #[cfg(test)]
 #[path = "live/metainfo_tests.rs"]
 mod metainfo_tests;
+#[path = "live/peer_entries.rs"]
+mod peer_entries;
 #[path = "live/support.rs"]
 mod support;
 #[cfg(test)]
@@ -39,6 +43,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use metainfo::random_seed;
+use peer_entries::WITH_PEERS;
 use support::{
     FILE_SIZE, LiveEnv, MULTI_FILES, OwnTorrent, TestFolder, TestTorrent, assert_others_unchanged,
     file_is_gone, file_size, folder_exists, others_fingerprint, torrent_by_hash, wait_until,
@@ -447,7 +452,7 @@ fn sequential_on_and_off_on_an_own_torrent() {
 
 #[test]
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
-fn real_tracker_stats_parse_on_the_daemons_torrents() {
+fn real_tracker_entries_parse_on_the_daemons_torrents() {
     let env = LiveEnv::from_env();
     let mut client = env.client();
     let hashes = listed_hashes(&mut client);
@@ -463,18 +468,43 @@ fn real_tracker_stats_parse_on_the_daemons_torrents() {
         "none of the {looked_at} torrents looked at has trackers"
     );
 
-    // The read of the progress that goes out with the whole list, then the full read on select.
+    // The read of the progress that goes out with the whole list, then the full read on select,
+    // then the read of the Trackers tab.
     for (what, fields) in [
         (
             "progress and trackers",
             TorrentField::DETAILS_PROGRESS_TRACKERS,
         ),
         ("full", TorrentField::DETAILS_FULL),
+        ("trackers tab", TorrentField::TRACKERS),
     ] {
         let tally = read_and_check(&mut client, &tracked, fields, what);
         eprintln!("{what}: {tally}");
         assert!(tally.entries > 0, "{what}: no tracker entry was parsed");
     }
+}
+
+#[test]
+#[ignore = "live: needs a Transmission daemon, run with just test-live"]
+fn real_peer_entries_parse_on_the_daemons_torrents() {
+    let env = LiveEnv::from_env();
+    let mut client = env.client();
+    let hashes = listed_hashes(&mut client);
+    let (with_peers, looked_at) = peer_entries::with_peers(&mut client, &hashes);
+    eprintln!(
+        "peer entries: {} torrents listed, {looked_at} looked at, {} of at most {WITH_PEERS} \
+         with peers chosen",
+        hashes.len(),
+        with_peers.len()
+    );
+    // Peers come and go, unlike trackers: none at the moment is no failure.
+    if with_peers.is_empty() {
+        eprintln!("peer entries: skipped: no peers on the {looked_at} torrents looked at");
+        return;
+    }
+
+    let tally = peer_entries::read_and_check(&mut client, &with_peers, "peers tab");
+    eprintln!("peers tab: {tally}");
 }
 
 #[test]

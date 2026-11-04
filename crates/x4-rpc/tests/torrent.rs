@@ -5,7 +5,10 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use x4_rpc::testing::fixtures::{TORRENT_GET_DETAILS, TORRENT_GET_LIST, TORRENT_GET_RECENT};
+use x4_rpc::testing::fixtures::{
+    TORRENT_GET_DETAILS, TORRENT_GET_LIST, TORRENT_GET_PEERS, TORRENT_GET_RECENT,
+    TORRENT_GET_TRACKERS,
+};
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
 use x4_rpc::{
     AddOutcome, AddSource, AddedTorrent, Client, DownloadDir, ErrorKind, GetIds, HashString,
@@ -127,6 +130,62 @@ fn parses_details_fixture() {
     assert!(pieces.has(0));
     assert!(pieces.has(piece_count - 1));
     assert!(!pieces.has(piece_count));
+}
+
+#[test]
+fn parses_the_peers_fixture() {
+    let (mut client, _) = client_answering(fixture_result(TORRENT_GET_PEERS));
+
+    let response = client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::PEERS)
+        .unwrap();
+
+    let torrent = &response.torrents[0];
+    let peers = torrent.peers.as_ref().unwrap();
+    assert_ne!(peers.len(), 0);
+    for peer in peers {
+        assert!(peer.address.starts_with("192.0.2."), "{peer:?}");
+        assert_ne!(peer.port, 0, "{peer:?}");
+        assert!(peer.client_name.starts_with("Client "), "{peer:?}");
+        assert!(!peer.flag_str.is_empty(), "{peer:?}");
+        assert!((0.0..=1.0).contains(&peer.progress), "{peer:?}");
+    }
+    let from = torrent.peers_from.unwrap();
+    let total = from.from_cache
+        + from.from_dht
+        + from.from_incoming
+        + from.from_lpd
+        + from.from_ltep
+        + from.from_pex
+        + from.from_tracker;
+    assert_eq!(usize::try_from(total).ok(), Some(peers.len()));
+    assert!(torrent.tracker_stats.is_none());
+}
+
+#[test]
+fn parses_the_trackers_fixture() {
+    let (mut client, _) = client_answering(fixture_result(TORRENT_GET_TRACKERS));
+
+    let response = client
+        .torrent_get(&GetIds::Selection(selection()), TorrentField::TRACKERS)
+        .unwrap();
+
+    let torrent = &response.torrents[0];
+    let trackers = torrent.tracker_stats.as_ref().unwrap();
+    assert_ne!(trackers.len(), 0);
+    for tracker in trackers {
+        assert!(tracker.host.ends_with(".example.org:80"), "{tracker:?}");
+        assert_eq!(tracker.sitename, "example");
+        assert!(tracker.id.0 > 0, "{tracker:?}");
+        assert!(!tracker.is_backup, "{tracker:?}");
+        assert!(tracker.has_announced, "{tracker:?}");
+    }
+    assert!(
+        trackers
+            .iter()
+            .any(|tracker| tracker.last_announce_succeeded)
+    );
+    assert!(torrent.peers.is_none());
 }
 
 #[test]
