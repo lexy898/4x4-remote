@@ -54,6 +54,8 @@ mod tests {
             IconName::Play,
             IconName::Pause,
             IconName::Search,
+            // The globe of a peer without a flag is among gpui-component's own.
+            IconName::Globe,
         ] {
             assert!(loads(&icon.path()), "{icon:?}");
         }

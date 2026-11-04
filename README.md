@@ -108,7 +108,10 @@ fetches nothing itself. After the checkout has moved to another directory, the n
 over from it and takes the full four minutes again. The package installs `/usr/bin/4x4`, its
 desktop file in `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows
 in the application menu with its icon at once, without logging out. It also installs a second,
-hidden desktop file for debug builds (described below).
+hidden desktop file for debug builds (described below). It depends on `geoip-database`, which holds
+the country files that the peers' flags come from (see [Files and logs](#files-and-logs)), and
+installs, next to the licenses of 4x4, the notice of the flag pictures it embeds
+(`LICENSE-country-flag-icons` in `/usr/share/licenses/4x4-git`; see [License](#license)).
 
 To update, run the same four commands again; pacman replaces the installed version.
 
@@ -1202,3 +1205,12 @@ X4_LIVE_REMOTE_DIR=/srv/torrents/4x4-test X4_LIVE_LOCAL_DIR=/mnt/daemon/4x4-test
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+The country flags are the `3x2` pictures of
+[country-flag-icons](https://gitlab.com/catamphetamine/country-flag-icons) 1.6.20, embedded as
+published. They are MIT licensed, copyright (c) 2020 catamphetamine; their notice is in
+[`crates/x4-app/assets/flags/LICENSE`](crates/x4-app/assets/flags/LICENSE).
+
+This product includes GeoLite2 Data created by MaxMind, available from
+<https://www.maxmind.com/>. (4x4 reads the country files of the `geoip-database` package to find
+the countries of peers; it does not ship them.)

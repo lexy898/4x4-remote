@@ -1,6 +1,14 @@
 [files]
-# vendor/ holds third-party code, which is not spell-checked (vendor/gpui-pre-wgpu/PATCHED.md).
-extend-exclude = [".specs/", "**/tests/fixtures/", "target/", "vendor/"]
+# vendor/ holds third-party code, which is not spell-checked (vendor/gpui-pre-wgpu/PATCHED.md). So
+# are the flags of crates/x4-app/assets/flags/, as published: the file names are ISO 3166-1 codes,
+# and some of them (BA, FO, PN) read as typos.
+extend-exclude = [
+  ".specs/",
+  "**/tests/fixtures/",
+  "target/",
+  "vendor/",
+  "crates/x4-app/assets/flags/",
+]
 
 [default]
 # The rows of the GeoIP country table (crates/x4-core/src/geoip/country_codes.rs) are ISO 3166-1

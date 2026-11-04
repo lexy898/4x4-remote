@@ -1621,8 +1621,8 @@ test_package_build_file_describes_4x4_git_built_from_the_local_master() {
     expect_srcinfo pkgname 4x4-git
     expect_srcinfo arch x86_64
     expect_srcinfo license 'MIT OR Apache-2.0'
-    expect_srcinfo depends glibc libgcc hicolor-icon-theme libxcb libxkbcommon libxkbcommon-x11 \
-        vulkan-icd-loader wayland
+    expect_srcinfo depends glibc libgcc geoip-database hicolor-icon-theme libxcb libxkbcommon \
+        libxkbcommon-x11 vulkan-icd-loader wayland
     expect_srcinfo makedepends cargo git fontconfig freetype2
     expect_srcinfo optdepends \
         'vulkan-driver: draw through Vulkan; without one 4x4 falls back to OpenGL and uses more memory' \
@@ -1725,7 +1725,8 @@ RUSTUP_TOOLCHAIN: stable"
 
 # package() in a stand-in of makepkg's $srcdir and $pkgdir, with a stand-in binary and the
 # repository's own desktop files (4x4's, and the hidden one that gives the windows of the debug
-# build the icon), icon and licenses: exactly those six files, with pacman's modes.
+# build the icon), icon and licenses (the two of 4x4 and the notice of the flags it embeds):
+# exactly those seven files, with pacman's modes.
 test_package_installs_the_binary_desktop_files_icon_and_licenses() {
     local dir checkout listing expected
     dir=$(mktemp -d "$tmp_root/package-files.XXXXXX")
@@ -1737,6 +1738,9 @@ test_package_installs_the_binary_desktop_files_icon_and_licenses() {
         "$checkout/packaging/linux/" 2>/dev/null || fail "no desktop file for the debug build"
     cp "$icon" "$checkout/packaging/linux/" 2>/dev/null || fail "no icon at $icon"
     cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$checkout/"
+    mkdir -p "$checkout/crates/x4-app/assets/flags"
+    cp "$root/crates/x4-app/assets/flags/LICENSE" "$checkout/crates/x4-app/assets/flags/" 2>/dev/null ||
+        fail "no notice of the flags at $root/crates/x4-app/assets/flags/LICENSE"
     run_with_input '' env -C "$dir/src" X4_REPO="$dir" srcdir="$dir/src" pkgdir="$dir/pkg" \
         bash -e -c 'source "$1" && package' _ "$pkgbuild"
     expect_status 0
@@ -1746,6 +1750,7 @@ test_package_installs_the_binary_desktop_files_icon_and_licenses() {
 644 ./usr/share/icons/hicolor/scalable/apps/io.github.lexy898.FourByFour.svg
 644 ./usr/share/licenses/4x4-git/LICENSE-APACHE
 644 ./usr/share/licenses/4x4-git/LICENSE-MIT
+644 ./usr/share/licenses/4x4-git/LICENSE-country-flag-icons
 755 ./usr/bin/4x4"
     [[ $listing == "$expected" ]] || fail "unexpected files in the package: $listing"
 }
