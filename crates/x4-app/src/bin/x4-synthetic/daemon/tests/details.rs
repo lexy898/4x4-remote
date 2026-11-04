@@ -3,7 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use x4_rpc::{Status, TrackerStatRecord};
+use x4_core::{FileEntry, FileTree, MAX_CHOOSABLE_FILES, NodeKey};
+use x4_rpc::{FilePriority, Status, TrackerStatRecord};
 
 use super::support::*;
 use super::*;
@@ -309,6 +310,59 @@ fn most_torrents_have_one_file_and_some_have_a_folder_or_dozens_or_thousands() {
         .find(|&&(_, _, files)| files == 2000)
         .expect("the album");
     assert_eq!(album.1, Status::Downloading, "its files and pieces move");
+}
+
+#[test]
+fn the_torrent_after_the_album_seeds_with_the_most_files_the_files_tab_shows() {
+    for activity in [Activity::Static, Activity::Ticking] {
+        let counts = counts(&mut client(activity));
+        let album = counts
+            .iter()
+            .position(|&(_, _, files)| files == 2000)
+            .expect("the album");
+        let bigger: Vec<usize> = (counts.iter().enumerate())
+            .filter(|&(_, &(_, _, files))| files > 2000)
+            .map(|(row, _)| row)
+            .collect();
+        assert_eq!(
+            bigger,
+            [album + 1],
+            "{activity:?}: one, Down from the album"
+        );
+        let &(_, status, files) = counts.get(album + 1).expect("the archive");
+        assert_eq!(status, Status::Seeding, "{activity:?}: read in full once");
+        assert_eq!(
+            usize::try_from(files),
+            Ok(MAX_CHOOSABLE_FILES),
+            "{activity:?}"
+        );
+    }
+
+    // The Files tab shows its tree: the tree is not too large to make, and its folders go three
+    // deep, as the album's do.
+    let mut client = client(Activity::Static);
+    let hash = pick(&mut client, |_, files| files > 2000);
+    let record = read(
+        &mut client,
+        &hash,
+        &[TorrentField::Name, TorrentField::Files],
+    );
+    let entries: Vec<FileEntry> = (record.files.as_deref().expect("files").iter().enumerate())
+        .map(|(index, file)| FileEntry {
+            index,
+            name: file.name.clone(),
+            length: file.length,
+            bytes_completed: file.bytes_completed,
+            wanted: true,
+            priority: FilePriority::Normal,
+            playable_from_start: 0,
+        })
+        .collect();
+    let tree = FileTree::of_files(hash, &entries);
+    assert!(!tree.is_too_large() && !tree.is_empty());
+    let name = record.name.expect("a name");
+    let last = format!("{name}/Box 25/Folder 20/Scan 50000.tif");
+    assert!(tree.contains(&NodeKey::new(&last)), "{last}");
 }
 
 /// Checks the files of `record` against its size and its pieces, and returns the names of the

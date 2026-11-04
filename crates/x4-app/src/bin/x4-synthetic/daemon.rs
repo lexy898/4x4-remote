@@ -24,14 +24,15 @@
 //! - `free_space` knows the session's folder and the folders of the torrents, and answers error 5
 //!   ("No such file or directory") for any other (`free_space`).
 //!
-//! Every torrent has files (most one, some a folder, a few dozens, one 2000, some with BEP 47
-//! padding files), and the pieces it has follow how much of it is downloaded, from the start when
-//! the download is sequential (`files`). A read that asks for them also gets the metainfo
-//! (`metainfo`: the comment, the creator, the source tag), the trackers (`trackers`: none, one,
-//! or twelve in tiers, some failing, whose announces are counted from the clock as a running
-//! daemon's are) and the peers (`peers`: as many as the torrent is connected to, at documentation
-//! addresses, sharing its rates). Those fields, being heavy, are sent only when `fields` names
-//! them. One torrent that downloads is busy: it has 150 peers and a tracker in every state.
+//! Every torrent has files (most one, some a folder, a few dozens, one 2000, one 50 000, some with
+//! BEP 47 padding files), and the pieces it has follow how much of it is downloaded, from the
+//! start when the download is sequential (`files`). A read that asks for them also gets the
+//! metainfo (`metainfo`: the comment, the creator, the source tag), the trackers (`trackers`:
+//! none, one, or twelve in tiers, some failing, whose announces are counted from the clock as a
+//! running daemon's are) and the peers (`peers`: as many as the torrent is connected to, at
+//! documentation addresses, sharing its rates). Those fields, being heavy, are sent only when
+//! `fields` names them. One torrent that downloads is busy: it has 150 peers and a tracker in
+//! every state.
 //!
 //! As a real daemon does, an action without `ids` reaches every torrent, an unknown torrent is
 //! skipped, and a torrent an action changed is among the recently active ones at the next poll.
@@ -112,6 +113,12 @@ impl SyntheticDaemon {
         });
         if let Some(album) = album.and_then(|index| torrents.get_mut(index)) {
             album.plan = Plan::album();
+        }
+        // One torrent with 50 000 files, the most the Files tab shows: the one after the album,
+        // so that Down from the album shows it. It seeds, in either activity, so its files are
+        // read in full once, when it is selected, and not every few seconds.
+        if let Some(archive) = album.and_then(|index| torrents.get_mut(index + 1)) {
+            archive.plan = Plan::archive();
         }
         // One busy torrent, for the Peers and the Trackers tab: the first download other than the
         // album, with many peers and a tracker in every state.

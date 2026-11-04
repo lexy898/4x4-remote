@@ -1226,8 +1226,9 @@ from a magnet link (which stays without its metadata), honouring `paused`, the f
 left out; it reports a torrent it already has as a duplicate and changes nothing; and its free space
 answers for the session's folder and the folders of its torrents, and their parent folders, with
 Transmission's error 5, "No such file or directory", for any other. Its torrents have files, most
-one, some a folder of several, a few dozens, and "Synthetic torrent 0005" (`--select 4`) 2000 in
-folders; their pieces follow the download, from the start when it is in order. The running
+one, some a folder of several, a few dozens, "Synthetic torrent 0005" (`--select 4`) 2000 in
+folders, and "Synthetic torrent 0006" (`--select 5`, Down from it), a seed, 50 000 in folders, the
+most the Files tab shows; their pieces follow the download, from the start when it is in order. The running
 torrents have peers, at addresses reserved for documentation (192.0.2.0/24, 198.51.100.0/24,
 203.0.113.0/24 and 2001:db8::/32), which stay from one read to the next while the torrent's rates
 are shared out among them; a country database the demo makes in memory puts them in countries
