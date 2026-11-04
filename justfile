@@ -100,6 +100,18 @@ package:
             "then just package" >&2
         exit 1
     fi
+    # The local master may lag behind the origin/master that was last fetched. That is only a
+    # warning (an older master may be wanted), and it compares with what is there: nothing is
+    # fetched, so it is as old as the last fetch, and without that ref it says nothing.
+    if git rev-parse -q --verify refs/remotes/origin/master >/dev/null; then
+        behind=$(git rev-list --count refs/heads/master..refs/remotes/origin/master)
+        if ((behind > 0)); then
+            noun=commits
+            if ((behind == 1)); then noun=commit; fi
+            echo "warning: the local master is $behind $noun behind origin/master (as last fetched);" \
+                "to build the newer ones, run git switch master && git pull, then just package" >&2
+        fi
+    fi
     commit=$(git log -1 --format='%h %s' refs/heads/master)
     echo "building master: $commit"
     repo="{{justfile_directory()}}"

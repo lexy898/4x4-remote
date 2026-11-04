@@ -1840,6 +1840,63 @@ test_package_recipe_stops_outside_a_git_repository() {
         fail "the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
 }
 
+# The local master can lag behind the origin/master the checkout last fetched (a pull request merged
+# on GitHub, not pulled yet). The recipe then warns and builds the local master all the same: an
+# older master may be wanted. It only compares; it never fetches, so the warning is as old as the
+# last fetch, and with no origin/master, or one the local master has caught up with or passed,
+# it says nothing. The remote-tracking ref is made by hand, as a fetch would, with no remote.
+test_package_recipe_warns_when_master_is_behind_the_last_fetched_origin() {
+    local first second third what local_master origin_master behind noun
+    new_package_env
+    commit_build_file master "feat: first"
+    first=$(git -C "$package_repo" rev-parse master)
+    commit_build_file master "feat: second"
+    second=$(git -C "$package_repo" rev-parse master)
+    commit_build_file master "feat: third"
+    third=$(git -C "$package_repo" rev-parse master)
+
+    # <local master> <origin/master> <commits behind, 0 for silence>
+    local -a cases=(
+        "$first $third 2"
+        "$second $third 1"
+        "$third $third 0"
+        "$third $first 0"
+        "$third none 0"
+    )
+    for what in "${cases[@]}"; do
+        read -r local_master origin_master behind <<<"$what"
+        git -C "$package_repo" update-ref refs/heads/master "$local_master"
+        if [[ $origin_master == none ]]; then
+            git -C "$package_repo" update-ref -d refs/remotes/origin/master
+        else
+            git -C "$package_repo" update-ref refs/remotes/origin/master "$origin_master"
+        fi
+        rm -f "$package_dir/makepkg.log"
+        run_package
+        expect_status 0
+        [[ $stdout == *"building master:"* && -e $package_dir/makepkg.log ]] ||
+            fail "with '$what', the recipe did not build the local master: $stdout"
+        if ((behind == 0)); then
+            [[ $stderr != *behind* ]] || fail "with '$what', the recipe warned: $stderr"
+        else
+            noun=commits
+            ((behind == 1)) && noun=commit
+            expect_contains "warning: the local master is $behind $noun behind origin/master (as last fetched)" \
+                "$stderr" "stderr with '$what'"
+            expect_contains "git switch master && git pull" "$stderr" "stderr with '$what'"
+        fi
+    done
+
+    # An origin that cannot be reached: the run is the same, so nothing is fetched.
+    git -C "$package_repo" remote add origin "file://$package_dir/no-such-repository"
+    git -C "$package_repo" update-ref refs/heads/master "$first"
+    git -C "$package_repo" update-ref refs/remotes/origin/master "$third"
+    run_package
+    expect_status 0
+    [[ $stderr == "warning: the local master is 2 commits behind origin/master (as last fetched);"* &&
+        $stderr != *$'\n'* ]] || fail "expected the one warning, and no fetch error, got: $stderr"
+}
+
 # makepkg refuses a source mirror made from another checkout (this one moved, or an agent's clone),
 # and the working copy made from it cannot follow this checkout's commits: both go before makepkg
 # runs, and the packages and the rest of the build dir stay. A mirror of this checkout stays too.
@@ -2762,6 +2819,7 @@ cases=(
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
     package_recipe_stops_outside_a_git_repository
+    package_recipe_warns_when_master_is_behind_the_last_fetched_origin
     package_recipe_starts_over_from_a_source_mirror_of_another_checkout
     icon_is_a_plain_square_svg
     icon_check_catches_what_does_not_belong_in_an_icon
