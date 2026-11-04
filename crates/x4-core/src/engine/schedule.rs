@@ -130,6 +130,10 @@ impl Engine {
         if let Some(read) = self.due_details(now, full_list) {
             due.push(read);
         }
+        // After the details: a full read that goes out now lets the tab's read go with it.
+        if let Some(read) = self.due_tab_read(now) {
+            due.push(read);
+        }
     }
 
     /// Measures the next turn of `poll` from its answer, which came at `now`.
@@ -139,8 +143,8 @@ impl Engine {
             Request::FullList => &mut self.full_list_timer,
             Request::FreeSpace(_) => &mut self.free_space_timer,
             Request::RecentlyActive | Request::SessionStats => &mut self.tick_timer,
-            Request::Details { .. } => {
-                self.details_answered_at(now);
+            Request::Details { kind, .. } => {
+                self.details_answered_at(*kind, now);
                 return;
             }
             Request::CheckServer
@@ -158,6 +162,7 @@ impl Engine {
                 .due_at(now, self.config.free_space_interval)
         });
         let details = self.next_details(now);
+        let tab = self.next_tab_read(now);
         [
             self.session_timer.due_at(now, self.config.session_interval),
             self.full_list_timer
@@ -165,6 +170,7 @@ impl Engine {
             self.tick_timer.due_at(now, self.tick_interval()),
             free_space,
             details,
+            tab,
         ]
         .into_iter()
         .flatten()

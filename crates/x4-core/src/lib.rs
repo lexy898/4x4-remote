@@ -88,7 +88,9 @@
 //! only while the daemon is connected, refuses those that name no torrent or no file, and reads
 //! the [`TorrentDetails`] of the selected torrent: in full once the selection settles, then only
 //! their progress and, once a minute, their trackers ([`DetailsRead`]), and nothing while the
-//! window is hidden. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
+//! window is hidden. While the Peers or the Trackers tab is shown ([`Command::ShowTab`]) it also
+//! reads that torrent's peers every 3 s, which come as [`Event::Peers`] and go with
+//! [`Event::PeersCleared`], or its trackers every 5 s, merged into the details. A speed limit is set one [`Direction`] at a time. Magnet links are read once,
 //! on [`Command::ReadMagnetLinks`], under the same rules as an action. An [`Action::Add`] is
 //! answered with [`Event::AddFinished`]: the torrent [`Added`] (or found already there), or the
 //! [`AddError`] why not. An add that gets no answer within its long timeout is
@@ -100,7 +102,9 @@
 //! [`service::spawn`] runs the engine on a worker thread, which does all the network I/O through
 //! an [`x4_rpc::Client`]. The UI talks to it through the [`service::ServiceHandle`]: it sends
 //! [`Command`]s, which never blocks, awaits the [`Event`]s on its own executor, and drops the
-//! handle to stop the thread without waiting for it, so it never waits on the network.
+//! handle to stop the thread without waiting for it, so it never waits on the network. The
+//! thread also fills in the countries of the peers, from the databases that the
+//! [`service::OpenCountries`] the app hands it opens on the first peers.
 //!
 //! The countries of peers come from the legacy country files that the `geoip-database`
 //! package installs. [`CountryDb::open`] checks a file of an [`Edition`], or says with a

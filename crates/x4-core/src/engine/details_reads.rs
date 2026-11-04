@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use x4_rpc::{HashString, TorrentGetResponse};
+use x4_rpc::{HashString, TorrentGetResponse, TorrentRecord};
 
 use super::schedule::Timer;
 use super::{DetailsRead, Engine, Event, PollKind, Request, Visibility};
@@ -39,10 +39,11 @@ pub(super) struct DetailsReads {
 }
 
 impl Engine {
-    /// Shows the details of `hash` from `now` on, or none.
-    pub(super) fn select(&mut self, now: Instant, hash: Option<HashString>) {
+    /// Shows the details of `hash` from `now` on, or none; returns the events that causes: the
+    /// peers of the torrent selected before are cleared.
+    pub(super) fn select(&mut self, now: Instant, hash: Option<HashString>) -> Vec<Event> {
         if hash == self.selected {
-            return;
+            return Vec::new();
         }
         // The old torrent's details must not show as the new one's.
         self.details = None;
@@ -56,6 +57,7 @@ impl Engine {
             ..DetailsReads::default()
         };
         self.selected = hash;
+        self.tabs_selected()
     }
 
     /// The daemon was connected to at `now`: anything may have changed while it was away, so the
@@ -163,10 +165,21 @@ impl Engine {
         }
     }
 
-    /// The answer to a details read came at `now`: the next progress read is measured from it,
+    /// The answer to a `kind` read came at `now`: the next read of its kind is measured from it,
     /// so a slow daemon rests a full interval.
-    pub(super) fn details_answered_at(&mut self, now: Instant) {
-        self.details_reads.timer.answered(now);
+    pub(super) fn details_answered_at(&mut self, kind: DetailsRead, now: Instant) {
+        match kind {
+            DetailsRead::Full | DetailsRead::Progress | DetailsRead::ProgressAndTrackers => {
+                self.details_reads.timer.answered(now);
+            }
+            DetailsRead::Peers | DetailsRead::Trackers => self.tab_read_answered_at(kind, now),
+        }
+    }
+
+    /// Whether a full read of the selected torrent is still to go out: the selection has not
+    /// settled yet, or the details are to be read whole again. The tabs wait for it.
+    pub(super) fn details_unsettled(&self) -> bool {
+        self.details_reads.full_at.is_some()
     }
 
     /// Whether the torrent `hash` downloads or verifies, so its files change by the second.
@@ -192,37 +205,74 @@ impl Engine {
             // Removed since it was selected; the list shows that.
             return Vec::new();
         }
-        let Some(record) = details::find_record(hash, answer) else {
-            self.note_details_issues(hash, vec![DetailsIssue::NoMatchingRecord]);
+        match kind {
+            DetailsRead::Full => self.full_read(hash, answer),
+            DetailsRead::Progress | DetailsRead::ProgressAndTrackers => {
+                self.progress_read(now, hash, answer)
+            }
+            DetailsRead::Peers => self.peers_read(hash, &answer),
+            DetailsRead::Trackers => self.trackers_read(hash, &answer),
+        }
+    }
+
+    /// Takes a full read of the details of `hash`.
+    fn full_read(&mut self, hash: &HashString, answer: TorrentGetResponse) -> Vec<Event> {
+        let Some(record) = self.record_of(hash, answer) else {
             return Vec::new();
         };
-        let Built { details, issues } = match kind {
-            DetailsRead::Full => {
-                self.details_reads.file_count = details::file_count(&record);
-                details::build(hash.clone(), record)
-            }
-            DetailsRead::Progress | DetailsRead::ProgressAndTrackers => {
-                let Some(last) = self.details.as_deref() else {
-                    tracing::debug!(
-                        "ignored a details progress with no full details to merge into"
-                    );
-                    return Vec::new();
-                };
-                if let (Some(counted), Some(known)) =
-                    (details::file_count(&record), self.details_reads.file_count)
-                    && counted != known
-                {
-                    tracing::info!(
-                        torrent = %hash,
-                        files = counted,
-                        "the selected torrent's files changed; reading its details again"
-                    );
-                    self.details_reads.full_at = Some(now);
-                    return Vec::new();
-                }
-                details::merge_progress(last, record)
-            }
+        self.details_reads.file_count = details::file_count(&record);
+        let built = details::build(hash.clone(), record);
+        self.show_built(hash, built)
+    }
+
+    /// Takes a read of the progress of `hash`, which came at `now`, and merges it into the last
+    /// full read; a progress that counts other files than that read has the details read in
+    /// full again.
+    fn progress_read(
+        &mut self,
+        now: Instant,
+        hash: &HashString,
+        answer: TorrentGetResponse,
+    ) -> Vec<Event> {
+        let Some(record) = self.record_of(hash, answer) else {
+            return Vec::new();
         };
+        let Some(last) = self.details.as_deref() else {
+            tracing::debug!("ignored a details progress with no full details to merge into");
+            return Vec::new();
+        };
+        if let (Some(counted), Some(known)) =
+            (details::file_count(&record), self.details_reads.file_count)
+            && counted != known
+        {
+            tracing::info!(
+                torrent = %hash,
+                files = counted,
+                "the selected torrent's files changed; reading its details again"
+            );
+            self.details_reads.full_at = Some(now);
+            return Vec::new();
+        }
+        let built = details::merge_progress(last, record);
+        self.show_built(hash, built)
+    }
+
+    /// The record of `hash` in `answer`; `None`, noted as an issue, when it holds only others.
+    fn record_of(
+        &mut self,
+        hash: &HashString,
+        answer: TorrentGetResponse,
+    ) -> Option<TorrentRecord> {
+        let record = details::find_record(hash, answer);
+        if record.is_none() {
+            self.note_details_issues(hash, vec![DetailsIssue::NoMatchingRecord]);
+        }
+        record
+    }
+
+    /// Keeps the details of `hash` that a read `built`, and sends them when they changed.
+    fn show_built(&mut self, hash: &HashString, built: Built) -> Vec<Event> {
+        let Built { details, issues } = built;
         self.note_details_issues(hash, issues);
         if self.details.as_deref() == Some(&details) {
             return Vec::new();

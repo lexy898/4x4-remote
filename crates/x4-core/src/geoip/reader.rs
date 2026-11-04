@@ -34,6 +34,8 @@ pub struct CountryDb {
     /// The nodes of the tree; a record that names another node is a corrupt file.
     nodes: u64,
     info: String,
+    /// What the caller calls the file, such as its path, for the warning about a corrupt file.
+    name: Option<String>,
     broken: bool,
 }
 
@@ -100,6 +102,7 @@ impl CountryDb {
             edition,
             nodes: trailer.nodes,
             info: trailer.info,
+            name: None,
             broken: false,
         };
         for probe in [0, u128::MAX] {
@@ -109,6 +112,23 @@ impl CountryDb {
             })?;
         }
         Ok(db)
+    }
+
+    /// The database, which logs `name`, such as the path it was opened from, in the warning it
+    /// writes when a lookup finds the file corrupt. x4-core opens no files, so only the caller
+    /// knows where the bytes come from.
+    #[must_use]
+    pub fn named(self, name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..self
+        }
+    }
+
+    /// What the caller named the file ([`CountryDb::named`]), if it did.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     /// The text that names the build of the file, such as `"GeoLite2 Country 20260203"`.
@@ -124,8 +144,9 @@ impl CountryDb {
     /// read. "Not found", the regions AP and EU and the entries A1, A2 and O1 are `None` too.
     ///
     /// When a node cannot be read, a record names a node past the tree, or the walk does not end
-    /// after the last bit, the file is corrupt: the lookup gives `None`, logs a warning once, and
-    /// from then on the database is [broken](Self::is_broken) and gives `None` without reading.
+    /// after the last bit, the file is corrupt: the lookup gives `None`, logs a warning once, with
+    /// the [name](Self::named) of the file if it has one, and from then on the database is
+    /// [broken](Self::is_broken) and gives `None` without reading.
     pub fn lookup(&mut self, ip: IpAddr) -> Option<CountryCode> {
         if self.broken {
             return None;
@@ -141,6 +162,7 @@ impl CountryDb {
             Err(error) => {
                 self.broken = true;
                 tracing::warn!(
+                    file = self.name.as_deref(),
                     edition = %self.edition,
                     info = %self.info,
                     %error,
@@ -200,7 +222,11 @@ impl CountryDb {
 
 impl fmt::Debug for CountryDb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CountryDb")
+        let mut debug = f.debug_struct("CountryDb");
+        if let Some(name) = &self.name {
+            debug.field("name", name);
+        }
+        debug
             .field("edition", &self.edition)
             .field("nodes", &self.nodes)
             .field("info", &self.info)

@@ -917,3 +917,20 @@ fn random_bytes_with_a_valid_trailer_never_panic() {
     assert!(lookups > 25_000, "{lookups} lookups");
     assert!(node_reads > 20_000, "{node_reads} node reads");
 }
+
+#[test]
+fn a_named_database_carries_its_name_for_the_logs() {
+    let db = v4_db();
+    assert!(!format!("{db:?}").contains("name"), "{db:?}");
+
+    let mut db = db.named("/usr/share/GeoIP/GeoIP.dat");
+
+    assert_eq!(db.name(), Some("/usr/share/GeoIP/GeoIP.dat"));
+    assert!(
+        format!("{db:?}").contains("/usr/share/GeoIP/GeoIP.dat"),
+        "{db:?}"
+    );
+    // The name changes nothing else.
+    assert_eq!(db.lookup(ip("192.0.2.1")), Some(code("GB")));
+    assert_eq!(v4_db().name(), None);
+}

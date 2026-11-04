@@ -300,13 +300,6 @@ pub(crate) fn file_count(record: &TorrentRecord) -> Option<u32> {
 /// An answer that holds no record of the torrent, or none with `tracker_stats`, leaves the
 /// trackers as they were; one with an empty list empties them, as a torrent whose trackers were
 /// all removed has none.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the engine calls it once it reads the trackers for the Trackers tab, in the next task; the expectation then fails and goes"
-    )
-)]
 pub(crate) fn merge_trackers(details: &mut TorrentDetails, response: &TorrentGetResponse) {
     let stats = response
         .torrents

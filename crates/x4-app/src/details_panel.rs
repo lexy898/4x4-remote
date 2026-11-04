@@ -137,7 +137,9 @@ impl DetailsPanel {
                 DetailsTab::Files => {
                     self.follow_files();
                 }
-                DetailsTab::General => self.files.leave(),
+                DetailsTab::General | DetailsTab::Peers | DetailsTab::Trackers => {
+                    self.files.leave();
+                }
             }
             cx.notify();
         }
@@ -268,7 +270,9 @@ impl Render for DetailsPanel {
                     .test_support(),
             ),
             (None, Some(general)) => match (self.tab, &self.torrent) {
-                (DetailsTab::General, _) => body
+                // The Peers and the Trackers tab have no view of their own yet: they show as
+                // General, as the bar does.
+                (DetailsTab::General | DetailsTab::Peers | DetailsTab::Trackers, _) => body
                     .overflow_y_scroll()
                     .child(general::general_tab(general, cx)),
                 (DetailsTab::Files, Some(torrent)) => {
@@ -301,10 +305,10 @@ fn choose_tab(index: usize, cx: &mut Context<'_, DetailsPanel>) {
     }
 }
 
-/// The position of `tab` in the tab bar.
+/// The position of `tab` in the tab bar; the tabs the bar does not have yet are at General's.
 fn tab_index(tab: DetailsTab) -> usize {
     match tab {
-        DetailsTab::General => 0,
+        DetailsTab::General | DetailsTab::Peers | DetailsTab::Trackers => 0,
         DetailsTab::Files => 1,
     }
 }
@@ -314,10 +318,13 @@ fn tab_at(index: usize) -> Option<DetailsTab> {
     [DetailsTab::General, DetailsTab::Files].get(index).copied()
 }
 
-/// The name of `tab`, as its tab says it.
+/// The name of `tab`, as its tab says it; the tabs the bar does not have yet are named as
+/// General, which they show as.
 fn tab_name(tab: DetailsTab) -> SharedString {
     match tab {
-        DetailsTab::General => t!("details-tab-general"),
+        DetailsTab::General | DetailsTab::Peers | DetailsTab::Trackers => {
+            t!("details-tab-general")
+        }
         DetailsTab::Files => t!("details-tab-files"),
     }
     .into()
@@ -335,5 +342,10 @@ mod tests {
         assert_eq!(tab_at(2), None);
         assert_eq!(tab_name(DetailsTab::General), "General");
         assert_eq!(tab_name(DetailsTab::Files), "Files");
+        // Until they have views, the Peers and the Trackers tab show as General.
+        for tab in [DetailsTab::Peers, DetailsTab::Trackers] {
+            assert_eq!(tab_index(tab), 0);
+            assert_eq!(tab_name(tab), "General");
+        }
     }
 }

@@ -4,9 +4,11 @@
 //! The panel is about the selected torrents the list shows (x4-core's [`details_target`]): it
 //! shows one torrent only when exactly one is selected. The view asks the service to read that
 //! torrent's details (`Command::Select`) while the panel is open, and to read none
-//! (`Select(None)`) while it is hidden or shows no single torrent. It sends only a change, so a
-//! new snapshot, a click on the same row or a redraw of the table sends nothing; it looks again
-//! whenever the selection, the rows the list shows or the panel's visibility change. The service
+//! (`Select(None)`) while it is hidden or shows no single torrent; it also tells the service which
+//! tab is open (`Command::ShowTab`), as the peers and the trackers are read only while their tab
+//! is. It sends only a change, so a new snapshot, a click on the same row or a redraw of the table
+//! sends nothing; it looks again when the window opens and whenever the selection, the rows the
+//! list shows, the tab or the panel's visibility change. The service
 //! paces the reads itself, so the view polls nothing. A hidden panel lets go of what it showed,
 //! and shown again it waits for the read it asks for.
 //!
@@ -58,6 +60,7 @@ impl MainView {
             details_target(table.selection(), table.rows())
         };
         self.ask_for_details(&target);
+        self.ask_for_tab();
         let torrent = match &target {
             DetailsTarget::One(hash) => self.last_snapshot.as_ref().and_then(|snapshot| {
                 snapshot
@@ -94,6 +97,20 @@ impl MainView {
         }
     }
 
+    /// Tells the service which tab of the panel is open, so that it reads the peers and the
+    /// trackers only while their tab is; sends nothing when that is what it told last.
+    pub(super) fn ask_for_tab(&mut self) {
+        let tab = self.ui.details.tab;
+        if tab == self.shown_tab {
+            return;
+        }
+        tracing::debug!(?tab, "details tab told to the service");
+        self.shown_tab = tab;
+        if self.commands.send(Command::ShowTab(tab)).is_err() {
+            tracing::debug!("the service has stopped; the tab shown was not sent");
+        }
+    }
+
     /// Hands the panel the details the service sent; it shows them while they are its torrent's.
     pub(super) fn details_arrived(&self, details: Arc<TorrentDetails>, cx: &mut Context<'_, Self>) {
         self.details_panel
@@ -121,6 +138,7 @@ impl MainView {
         tracing::debug!(?tab, "details tab shown");
         self.ui.details.tab = tab;
         self.ui_changed(cx);
+        self.ask_for_tab();
         self.details_panel
             .update(cx, |panel, cx| panel.set_tab(tab, cx));
     }

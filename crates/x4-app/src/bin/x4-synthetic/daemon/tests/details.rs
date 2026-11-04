@@ -641,7 +641,8 @@ fn the_service_reads_the_details_of_the_selected_torrent() {
         visible_interval: Duration::from_millis(50),
         ..EngineConfig::default()
     };
-    let service = service::spawn(client(Activity::Ticking), config).expect("the service starts");
+    let service = service::spawn(client(Activity::Ticking), config, Box::new(GeoIp::none))
+        .expect("the service starts");
     let (events, received) = crossbeam_channel::unbounded();
     let source = service.events().clone();
     let forward = thread::spawn(move || {

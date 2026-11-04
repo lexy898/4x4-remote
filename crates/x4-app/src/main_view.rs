@@ -78,7 +78,7 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    Availability, ColumnId, Command, Event, Filter, ServiceStatus, Snapshot, SortState,
+    Availability, ColumnId, Command, DetailsTab, Event, Filter, ServiceStatus, Snapshot, SortState,
     StatusModel, TableModel, UiState, ViewState, Visibility, shown_columns, status_model,
     table_model, visibility,
 };
@@ -171,6 +171,9 @@ pub struct MainView {
     /// The torrent whose details the service was last asked to read; `None` for none, which is
     /// also what the service starts with.
     selected_details: Option<HashString>,
+    /// The tab of the panel the service was last told is open; the default tab, General, is
+    /// also what the service starts with.
+    shown_tab: DetailsTab,
     /// The height of the split when the panel was last fitted to it; `None` before the first fit.
     fitted_split: Option<Pixels>,
     /// The torrents to add: the queue, the add dialog and the adds sent.
@@ -300,14 +303,17 @@ impl MainView {
             details_panel,
             details_split,
             selected_details: None,
+            shown_tab: DetailsTab::default(),
             fitted_split: None,
             adds: adding::Adds::default(),
             _events: pump,
             _service: service,
             _subscriptions: subscriptions,
         };
-        // The service starts out assuming a visible window; tell it how the window opened.
+        // The service starts out assuming a visible window on the General tab; tell it how the
+        // window opened.
         view.report_visibility(window);
+        view.ask_for_tab();
         view.listen_for_adds(AddRequests::new(), window, cx);
         view
     }

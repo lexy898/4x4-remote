@@ -34,6 +34,7 @@ mod context_menu;
 mod details_panel;
 mod file_list;
 mod files;
+mod geoip;
 mod i18n;
 mod icons;
 pub mod instance;

@@ -9,14 +9,15 @@ use std::time::{Duration, Instant};
 use async_channel::TryRecvError;
 use crossbeam_channel::RecvTimeoutError;
 use serde_json::{Value, json};
-use x4_core::service::{self, ServiceHandle, ServiceStopped};
+use x4_core::service::{self, OpenCountries, ServiceHandle, ServiceStopped};
 use x4_core::{
     Action, ActionError, ActionId, AddError, Added, Command, ConnectionError, ConnectionState,
-    EngineConfig, Event, FreeSpaceAnswer, Snapshot,
+    CountryCode, CountryDb, DetailsTab, Edition, EngineConfig, Event, FreeSpaceAnswer, GeoIp,
+    PeerList, Snapshot, build_country_file,
 };
 use x4_rpc::testing::fixtures::{
     FREE_SPACE, SESSION_GET, SESSION_STATS, TORRENT_GET_DETAILS, TORRENT_GET_LIST,
-    TORRENT_GET_RECENT,
+    TORRENT_GET_PEERS, TORRENT_GET_RECENT,
 };
 use x4_rpc::testing::{FakeTransport, ok};
 use x4_rpc::{
@@ -37,6 +38,8 @@ fn fast() -> EngineConfig {
         free_space_interval: Duration::from_millis(50),
         details_interval: Duration::from_millis(50),
         details_settle: Duration::from_millis(10),
+        peers_interval: Duration::from_millis(20),
+        trackers_interval: Duration::from_millis(20),
         backoff: vec![Duration::from_millis(10), Duration::from_millis(20)],
         stable_after: Duration::from_millis(50),
     }
@@ -52,6 +55,11 @@ fn ticking_every(tick: Duration) -> EngineConfig {
         free_space_interval: Duration::from_secs(60),
         ..fast()
     }
+}
+
+/// No country databases: what a test that reads no peers opens.
+fn no_countries() -> OpenCountries {
+    Box::new(GeoIp::none)
 }
 
 /// The hash of the first torrent of the recorded list.
@@ -212,7 +220,7 @@ fn added_and_duplicate_answers_reach_the_app_with_the_hash() {
             ok(json!({ "torrent_added": { "id": 99, "name": "New torrent", "hash_string": NEW } }))
         })
     });
-    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake), fast(), no_countries()).unwrap();
     snapshot_where(&handle, connected).unwrap();
     let link = |hash: &str| MagnetLink::parse(&format!("magnet:?xt=urn:btih:{hash}")).unwrap();
 
@@ -259,7 +267,7 @@ fn start_added_torrents_comes_with_the_session() {
             session["start_added_torrents"] = json!(start);
             Ok(ok(session))
         });
-        let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
+        let handle = service::spawn(Client::new(fake.clone()), fast(), no_countries()).unwrap();
 
         let snapshot = snapshot_where(&handle, |snapshot| snapshot.session.is_some()).unwrap();
         handle.shutdown();
@@ -307,7 +315,12 @@ fn free_space_of_a_new_folder_comes_from_its_parent_over_the_wire() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake.clone()), ticking_every(WAIT)).unwrap();
+    let handle = service::spawn(
+        Client::new(fake.clone()),
+        ticking_every(WAIT),
+        no_countries(),
+    )
+    .unwrap();
     // Once the status bar's own free space has come, it is next read a minute later.
     snapshot_where(&handle, |snapshot| {
         connected(snapshot) && snapshot.free_space_bytes.is_some()
@@ -347,7 +360,7 @@ fn free_space_of_a_new_folder_comes_from_its_parent_over_the_wire() {
 
 #[test]
 fn service_publishes_first_snapshot() {
-    let handle = service::spawn(Client::new(recorded_daemon()), fast()).unwrap();
+    let handle = service::spawn(Client::new(recorded_daemon()), fast(), no_countries()).unwrap();
 
     let snapshot = snapshot_where(&handle, connected).unwrap();
 
@@ -367,7 +380,7 @@ fn the_ui_hears_that_the_service_is_connecting_before_the_daemon_answers() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake), fast(), no_countries()).unwrap();
 
     let first = snapshot_where(&handle, |_| true).unwrap();
     open_tx.send(()).unwrap();
@@ -389,7 +402,7 @@ fn a_reconnect_shows_connecting_before_the_server_check_answers() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake), fast(), no_countries()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     handle.send(Command::Reconnect).unwrap();
@@ -405,7 +418,7 @@ fn a_reconnect_shows_connecting_before_the_server_check_answers() {
 #[test]
 fn service_runs_actions() {
     let fake = recorded_daemon();
-    let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake.clone()), fast(), no_countries()).unwrap();
     snapshot_where(&handle, connected).unwrap();
     let hash = HashString::parse(FIXTURE_HASH).unwrap();
 
@@ -432,7 +445,7 @@ fn a_failed_action_is_not_retried() {
             Ok(daemon(method, params))
         }
     });
-    let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake.clone()), fast(), no_countries()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     handle
@@ -461,7 +474,7 @@ fn a_failed_action_is_not_retried() {
 fn service_reports_unreachable() {
     let unreachable =
         FakeTransport::routed(|_, _| Err(TransportError::Connect("connection refused".to_owned())));
-    let handle = service::spawn(Client::new(unreachable), fast()).unwrap();
+    let handle = service::spawn(Client::new(unreachable), fast(), no_countries()).unwrap();
 
     let snapshot = snapshot_where(&handle, reconnecting_at_least(1)).unwrap();
 
@@ -487,7 +500,7 @@ fn polls_that_are_no_longer_current_are_not_sent() {
             Ok(daemon(method, params))
         }
     });
-    let handle = service::spawn(Client::new(fake.clone()), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake.clone()), fast(), no_countries()).unwrap();
 
     snapshot_where(&handle, reconnecting_at_least(2)).unwrap();
     handle.shutdown();
@@ -514,7 +527,7 @@ fn a_slow_daemon_rests_a_full_interval_after_each_answer() {
         log.lock().unwrap().push((received, Instant::now()));
         Ok(answer)
     });
-    let handle = service::spawn(Client::new(fake), ticking_every(tick)).unwrap();
+    let handle = service::spawn(Client::new(fake), ticking_every(tick), no_countries()).unwrap();
 
     assert!(eventually(|| stats_calls.lock().unwrap().len() >= 4));
     handle.shutdown();
@@ -545,7 +558,12 @@ fn commands_queued_during_a_batch_are_all_taken_before_the_next() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake.clone()), ticking_every(WAIT)).unwrap();
+    let handle = service::spawn(
+        Client::new(fake.clone()),
+        ticking_every(WAIT),
+        no_countries(),
+    )
+    .unwrap();
     entered.recv_timeout(WAIT).unwrap();
     let hash = HashString::parse(FIXTURE_HASH).unwrap();
 
@@ -581,7 +599,7 @@ fn the_worker_thread_is_named_x4_service() {
             .push(thread::current().name().map(str::to_owned));
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake), fast(), no_countries()).unwrap();
 
     snapshot_where(&handle, connected).unwrap();
     handle.shutdown();
@@ -598,7 +616,7 @@ fn the_worker_thread_is_named_x4_service() {
 
 #[test]
 fn service_shuts_down_cleanly() {
-    let handle = service::spawn(Client::new(recorded_daemon()), fast()).unwrap();
+    let handle = service::spawn(Client::new(recorded_daemon()), fast(), no_countries()).unwrap();
     let events = handle.events().clone();
     let commands = handle.commands();
     snapshot_where(&handle, connected).unwrap();
@@ -626,7 +644,7 @@ fn dropping_handle_stops_thread() {
         let _alive = &probe;
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(transport), fast()).unwrap();
+    let handle = service::spawn(Client::new(transport), fast(), no_countries()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     drop(handle);
@@ -651,7 +669,7 @@ fn dropping_the_handle_does_not_wait_for_the_request_in_flight() {
         }
         Ok(daemon(method, params))
     });
-    let handle = service::spawn(Client::new(fake), fast()).unwrap();
+    let handle = service::spawn(Client::new(fake), fast(), no_countries()).unwrap();
     entered.recv_timeout(WAIT).unwrap();
 
     // A drop that waited for the thread would return only after the handler timed out.
@@ -666,7 +684,7 @@ fn dropping_the_handle_does_not_wait_for_the_request_in_flight() {
 
 #[test]
 fn the_worker_stops_when_the_ui_closes_its_events() {
-    let handle = service::spawn(Client::new(recorded_daemon()), fast()).unwrap();
+    let handle = service::spawn(Client::new(recorded_daemon()), fast(), no_countries()).unwrap();
     snapshot_where(&handle, connected).unwrap();
 
     handle.events().close();
@@ -674,4 +692,146 @@ fn the_worker_stops_when_the_ui_closes_its_events() {
     assert!(eventually(
         || handle.send(Command::Refresh) == Err(ServiceStopped)
     ));
+}
+
+/// The torrent of the peers fixture.
+const PEERS_HASH: &str = "0000000000000000000000000000000000000005";
+
+/// The recorded daemon, which answers a read of peers with the peers fixture; each answer has
+/// another download rate for the first peer, so that every read brings a new list.
+fn peers_daemon() -> FakeTransport {
+    let reads = AtomicUsize::new(0);
+    FakeTransport::routed(move |method, params| {
+        if method != "torrent_get" || !asks_for(params, "peers") {
+            return Ok(daemon(method, params));
+        }
+        let mut answer = result_of(TORRENT_GET_PEERS);
+        let read = reads.fetch_add(1, Ordering::Relaxed);
+        if let Some(rate) = answer.pointer_mut("/torrents/0/peers/0/rate_to_client") {
+            *rate = json!(1000 + read);
+        }
+        Ok(ok(answer))
+    })
+}
+
+/// Whether the `params` of a `torrent_get` name the field `field`.
+fn asks_for(params: &Value, field: &str) -> bool {
+    params
+        .get("fields")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|named| named == field))
+}
+
+/// A country database that puts the documentation range of every peer of the fixture in GB.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: a database that does not build fails the test"
+)]
+fn fixture_countries() -> GeoIp {
+    let gb = CountryCode::new("GB").unwrap();
+    let file = build_country_file(Edition::V4, &[("192.0.2.0".parse().unwrap(), 24, gb)]);
+    let v4 = CountryDb::open(Box::new(std::io::Cursor::new(file)), Edition::V4).unwrap();
+    GeoIp::new(Some(v4), None)
+}
+
+/// An opener of [`fixture_countries`] that notes the name of the thread each call runs on.
+fn noted_opener(calls: &Arc<Mutex<Vec<Option<String>>>>) -> OpenCountries {
+    let calls = Arc::clone(calls);
+    Box::new(move || {
+        if let Ok(mut calls) = calls.lock() {
+            calls.push(thread::current().name().map(str::to_owned));
+        }
+        fixture_countries()
+    })
+}
+
+fn peer_list(handle: &ServiceHandle) -> Option<Arc<PeerList>> {
+    next_picked(handle, |event| match event {
+        Event::Peers(list) => Some(list),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_countries_are_opened_once_on_the_service_thread_and_filled_in_before_the_peers_leave() {
+    let calls: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let handle = service::spawn(Client::new(peers_daemon()), fast(), noted_opener(&calls)).unwrap();
+    snapshot_where(&handle, connected).unwrap();
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "nothing is opened before the peers"
+    );
+
+    handle.send(Command::ShowTab(DetailsTab::Peers)).unwrap();
+    handle
+        .send(Command::Select(Some(
+            HashString::parse(PEERS_HASH).unwrap(),
+        )))
+        .unwrap();
+    let mut rates = Vec::new();
+    for _ in 0..3 {
+        let list = peer_list(&handle).expect("the peers come");
+        assert_eq!(list.peers.len(), 20);
+        assert!(
+            list.peers.iter().all(|peer| peer
+                .country
+                .map(|code| code.as_str().to_owned())
+                .as_deref()
+                == Some("GB")),
+            "every peer has its country when the event arrives"
+        );
+        rates.push(list.peers[0].rate_down);
+    }
+    handle.shutdown();
+
+    rates.dedup();
+    assert_eq!(rates.len(), 3, "three reads: {rates:?}");
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [Some("x4-service".to_owned())],
+        "opened once, on the service thread"
+    );
+}
+
+/// How many reads of one torrent `fake` was sent, and how many of them asked for peers.
+fn reads_of_one_torrent(fake: &FakeTransport) -> (usize, usize) {
+    let named: Vec<Value> = fake
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.method == "torrent_get"
+                && request.params.get("ids").is_some_and(Value::is_array)
+        })
+        .map(|request| request.params)
+        .collect();
+    let peers = named
+        .iter()
+        .filter(|params| asks_for(params, "peers"))
+        .count();
+    (named.len(), peers)
+}
+
+#[test]
+fn no_database_is_opened_while_no_peers_are_read() {
+    let calls: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let fake = peers_daemon();
+    let handle = service::spawn(Client::new(fake.clone()), fast(), noted_opener(&calls)).unwrap();
+    snapshot_where(&handle, connected).unwrap();
+
+    // The General tab, then the Files and the Trackers tab: the details are read, the peers never.
+    handle
+        .send(Command::Select(Some(
+            HashString::parse(PEERS_HASH).unwrap(),
+        )))
+        .unwrap();
+    assert!(eventually(|| reads_of_one_torrent(&fake).0 >= 2));
+    handle.send(Command::ShowTab(DetailsTab::Files)).unwrap();
+    handle.send(Command::ShowTab(DetailsTab::Trackers)).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    handle.shutdown();
+
+    let (reads, peers) = reads_of_one_torrent(&fake);
+    assert!(reads >= 2, "{reads} reads");
+    assert_eq!(peers, 0);
+    assert_eq!(*calls.lock().unwrap(), Vec::<Option<String>>::new());
 }

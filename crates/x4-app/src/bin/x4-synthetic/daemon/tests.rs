@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use x4_core::{
     Action, ActionId, Attention, Command, ConnectionState, DisplayState, EngineConfig, Event,
-    QueueKind, Snapshot, Torrent as ShownTorrent, service,
+    GeoIp, QueueKind, Snapshot, Torrent as ShownTorrent, service,
 };
 use x4_rpc::{
     Client, GetIds, HashString, RemoveData, RpcError, SessionSet, TorrentAction, TorrentField,
@@ -703,8 +703,12 @@ const SERVICE_WAIT: Duration = Duration::from_secs(10);
 /// of the daemon is hand-picked; this catches a request the engine sends that is not on it.
 #[test]
 fn the_service_connects_and_lists_every_torrent() {
-    let service = service::spawn(client(Activity::Ticking), EngineConfig::default())
-        .expect("the service thread starts");
+    let service = service::spawn(
+        client(Activity::Ticking),
+        EngineConfig::default(),
+        Box::new(GeoIp::none),
+    )
+    .expect("the service thread starts");
     // The events channel is async; a thread hands its events over to one with a timeout, and
     // ends when the service closes the channel.
     let (events, received) = crossbeam_channel::unbounded();
@@ -746,7 +750,9 @@ fn the_service_connects_and_lists_every_torrent() {
             Ok(Event::AddFinished { result, .. }) => {
                 assert!(result.is_ok(), "an add failed: {result:?}");
             }
-            Ok(Event::Details(_) | Event::FreeSpace { .. }) => {}
+            Ok(
+                Event::Details(_) | Event::Peers(_) | Event::PeersCleared | Event::FreeSpace { .. },
+            ) => {}
             Err(error) => panic!("no connected snapshot with the whole list: {error}"),
         }
     };
@@ -778,7 +784,11 @@ fn wait_for<T>(
             Event::ActionFinished { result, .. } => assert!(result.is_ok(), "{result:?}"),
             Event::MagnetLinks { result, .. } => assert!(result.is_ok(), "{result:?}"),
             Event::AddFinished { result, .. } => assert!(result.is_ok(), "{result:?}"),
-            Event::Snapshot(_) | Event::Details(_) | Event::FreeSpace { .. } => {}
+            Event::Snapshot(_)
+            | Event::Details(_)
+            | Event::Peers(_)
+            | Event::PeersCleared
+            | Event::FreeSpace { .. } => {}
         }
     }
 }
@@ -796,8 +806,12 @@ fn state_in(snapshot: &Snapshot, hash: &HashString) -> Option<DisplayState> {
 /// the torrent paused, then seeding again.
 #[test]
 fn an_action_through_the_service_shows_in_the_next_snapshots() {
-    let service = service::spawn(client(Activity::Static), EngineConfig::default())
-        .expect("the service thread starts");
+    let service = service::spawn(
+        client(Activity::Static),
+        EngineConfig::default(),
+        Box::new(GeoIp::none),
+    )
+    .expect("the service thread starts");
     let (events, received) = crossbeam_channel::unbounded();
     let source = service.events().clone();
     let forward = thread::spawn(move || {

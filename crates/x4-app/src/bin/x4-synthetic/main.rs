@@ -51,7 +51,7 @@ use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
 use x4_core::service;
-use x4_core::{EngineConfig, UiState};
+use x4_core::{EngineConfig, GeoIp, UiState};
 use x4_rpc::Client;
 
 use crate::daemon::{Activity, SyntheticDaemon};
@@ -91,7 +91,8 @@ fn main() -> anyhow::Result<()> {
     );
     let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
     let startup = Startup {
-        service: service::spawn(client, EngineConfig::default()),
+        // The demo shows no countries yet.
+        service: service::spawn(client, EngineConfig::default(), Box::new(GeoIp::none)),
         ui: UiState::default(),
         state_writable: false,
         state_path: None,

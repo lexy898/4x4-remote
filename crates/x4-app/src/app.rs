@@ -31,6 +31,7 @@ use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 use crate::PRODUCT_NAME;
 use crate::adding::{AddRequest, AddRequests};
 use crate::files::{FilesError, read_config, read_ui_state};
+use crate::geoip;
 use crate::icons::AppAssets;
 use crate::instance::{Listener, Serving};
 use crate::keymap::{Quit, key_bindings};
@@ -188,7 +189,11 @@ pub fn run(
     );
     let client = Client::new(UreqTransport::new(&config.connection.url, DEFAULT_TIMEOUT));
     // Spawning only starts the thread; the state file is read while it connects.
-    let service = service::spawn(client, EngineConfig::default());
+    let service = service::spawn(
+        client,
+        EngineConfig::default(),
+        Box::new(geoip::open_installed),
+    );
     let startup = Startup {
         config_problem,
         ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))

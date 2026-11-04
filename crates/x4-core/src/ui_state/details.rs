@@ -75,4 +75,8 @@ pub enum DetailsTab {
     General,
     /// The torrent's files.
     Files,
+    /// The peers the torrent is connected to.
+    Peers,
+    /// Every tracker of the torrent, with its state.
+    Trackers,
 }

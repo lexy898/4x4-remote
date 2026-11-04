@@ -659,6 +659,15 @@ parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts fro
 file written by a newer version of 4x4, one that cannot be read, or a corrupt one that cannot be
 moved aside is left alone: 4x4 starts from the defaults and saves nothing in that session.
 
+For the countries of peers, 4x4 reads, and never writes, the GeoIP country files of the
+`geoip-database` package: `GeoIP.dat` (IPv4) and `GeoIPv6.dat` (IPv6). Each is taken from the
+first of these folders that has it: `GeoIP` in `$XDG_DATA_HOME` (`~/.local/share`), `GeoIP` in each
+folder of `$XDG_DATA_DIRS` (`/usr/local/share:/usr/share`), `/usr/share/GeoIP` and
+`/var/lib/GeoIP`. 4x4 opens them the first time it reads the peers of a torrent, not at startup,
+and reads a few bytes per address, never a whole file. Without them the peers show no country: the
+log says once which files are missing and where it looked, and names any file it found but cannot
+use, with the reason.
+
 The log lines also go to stderr. `RUST_LOG` sets the level for both (for example
 `RUST_LOG=x4_app=debug`); without it 4x4 logs its own lifecycle events and the problems of its
 libraries. If the log directory cannot be used, 4x4 logs to stderr only and still starts.
@@ -1146,9 +1155,11 @@ stopped, though all its data is there; that adding it again, started, into anoth
 folder and with another file left out, is a duplicate that changes nothing; that a folder that does
 not exist yet, `4x4-live-new-<hex>` in the test directory, is kept as it was sent and made only
 when the torrent starts; and that a magnet link of a torrent of the test's own is added and listed,
-paused and without its metadata. Every test checks that every other torrent kept its status,
-sequential mode, file priorities and wanted files, and prints how many torrents the daemon lists
-when it starts and once it has removed its own. The torrent and its data are removed even when a
+paused and without its metadata. One test of x4-core changes nothing at all: it reads the peers and
+the trackers of the daemon's torrent with the most peers as the Peers and the Trackers tab do, and
+checks what they become, printing only counts. Every other test checks that every other torrent
+kept its status, sequential mode, file priorities and wanted files, and prints how many torrents
+the daemon lists when it starts and once it has removed its own. The torrent and its data are removed even when a
 test fails, and only from the folder it was added to: the test directory, or the folder of its own
 that the daemon made directly in it. The folder the daemon reports must be that one once both are
 normalized, so a doubled or a trailing `/` makes no difference, and a folder with any control

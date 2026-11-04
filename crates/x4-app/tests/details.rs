@@ -263,6 +263,18 @@ impl Window {
         self.act(cx, |window, cx| table.focus_handle(cx).is_focused(window))
     }
 
+    /// The tabs the window has told the service are open since the last look, in order; the
+    /// other commands are dropped.
+    fn shown_tabs(&self) -> Vec<DetailsTab> {
+        self.commands
+            .try_iter()
+            .filter_map(|command| match command {
+                Command::ShowTab(tab) => Some(tab),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The torrents the window has asked the service to read the details of since the last look,
     /// in order; `None` asks for none.
     fn selects(&self) -> Vec<Option<HashString>> {
@@ -524,6 +536,41 @@ fn alt_1_and_alt_2_switch_tabs_and_the_tab_is_remembered(cx: &mut TestAppContext
     let remembered = window.ui_state(cx);
     let next = Window::open_with(&remembered, cx);
     assert!(next.tab_selected(FILES, cx));
+}
+
+#[gpui_kit::test]
+fn the_window_tells_the_service_the_open_tab_once_per_change(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(vec![torrent("a")], cx);
+    window.click_row(0, cx);
+    // The service starts on the General tab, as the window does: nothing to tell.
+    assert_eq!(window.shown_tabs(), []);
+
+    window.press("alt-2", cx);
+    assert_eq!(window.shown_tabs(), [DetailsTab::Files]);
+    window.press("alt-2", cx);
+    window.act(cx, |window, cx| window.within(TABS).click(FILES, cx));
+    assert_eq!(window.shown_tabs(), [], "the same tab again is no news");
+
+    // Hiding and showing the panel leaves the tab as it was; the selection tells the rest.
+    window.press("alt-enter", cx);
+    window.press("alt-enter", cx);
+    window.send(vec![torrent("a"), torrent("b")], cx);
+    assert_eq!(window.shown_tabs(), []);
+
+    window.press("alt-1", cx);
+    assert_eq!(window.shown_tabs(), [DetailsTab::General]);
+
+    // A window that opens on another tab tells the service at once, before any snapshot.
+    let ui = UiState {
+        details: DetailsState {
+            tab: DetailsTab::Files,
+            ..DetailsState::default()
+        },
+        ..UiState::default()
+    };
+    let next = Window::open_with(&ui, cx);
+    assert_eq!(next.shown_tabs(), [DetailsTab::Files]);
 }
 
 #[gpui_kit::test]

@@ -374,12 +374,17 @@ impl Window {
         self.act(cx, |window, _| window.find_all(NOTIFICATION).len())
     }
 
-    /// The commands the window has sent so far, other than the window's visibility and the
-    /// torrent whose details to read, which the `details` tests cover.
+    /// The commands the window has sent so far, other than the window's visibility, the torrent
+    /// whose details to read and the tab shown, which the `details` tests cover.
     fn sent(&self) -> Vec<Command> {
         self.commands
             .try_iter()
-            .filter(|command| !matches!(command, Command::SetVisibility(_) | Command::Select(_)))
+            .filter(|command| {
+                !matches!(
+                    command,
+                    Command::SetVisibility(_) | Command::Select(_) | Command::ShowTab(_)
+                )
+            })
             .collect()
     }
 
