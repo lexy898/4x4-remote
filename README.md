@@ -351,10 +351,13 @@ particular order can be half done and still play only its first seconds. Above t
 "Download in order (sequential)" has the daemon download the torrent's pieces from the start, so
 that a file can be played while it downloads. A change shows once the daemon's next answer does, a
 moment later, not before. While the daemon is not connected, the checkboxes, the priorities and the
-switch are disabled. Until the details have come, the tab says "—" under the switch. A magnet link
-has no files until its metadata has come; the tab says so, and the switch can be set already. A
-file list that would take too much memory to show, such as one of more than 50 000 files or of
-files nested hundreds of folders deep, is not drawn: the tab says the list is too large to show.
+switch are disabled. Until the details have come, the tab says "—" under the switch, and so it does
+while the files of a torrent of more than 1000 are sorted into their tree when the tab first shows
+them, which is done off the window's own thread, so that the window keeps answering meanwhile (some
+20 ms for 50 000 files). A magnet link has no files until its metadata has come; the tab says so,
+and the switch can be set already. A file list that would take too much memory to show, such as one
+of more than 50 000 files or of files nested hundreds of folders deep, is not drawn: the tab says
+the list is too large to show.
 
 A click anywhere in the file list gives it the keys, and so does Tab: Up, Down, Page Up, Page Down,
 Home and End move between the rows, Left closes a folder or goes to the folder around the row, Right
@@ -1010,6 +1013,18 @@ making the tree and its rows against taking a read into the tree kept:
 | 50 000, four folders deep, long names           | 19.6 ms                | 1.0 ms    |
 | 50 000 in one folder, open                      | 14.0 ms                | 3.1 ms    |
 | 36 000 names crafted to compare slowly, open    | 667 ms                 | 14 ms     |
+
+Since stage 7 the first tree of more than 1000 files is made on a thread of its own, so the window
+keeps drawing: 18 ms for the demo's 50 000 files ("Synthetic torrent 0006"), after which the window
+needs under 0.01 ms for the rows; 1000 names crafted to compare slowly take at most 13 ms, on the
+window's thread. Private memory, medians of three (`X4_MEASURE_SETTLE_SECONDS=15 just virtual just
+measure --synthetic -- --select 5 --press alt-2`), is unchanged with the Files tab open: 40.0 MiB
+on the 2000 files and 146.2 on the 50 000, against 39.8 and 146.1 when the window's thread made the
+tree. Opening the Files tab of the 50 000 files five times, each time back to the General tab,
+which lets the tree go, left 125.8 MiB, against 137.1 on the window's thread and 126.2 on GPUI's
+background pool, which was tried first; selecting the 2000-file and the 50 000-file torrent in turn
+five times varied from 41 to 148 MiB in every build, with the demo's own reads of the 50 000 files
+(medians of nine: 64.8 on the window's thread, 127.5 on the pool, 86.9 on threads of their own).
 
 ### The allocator (stage 6)
 

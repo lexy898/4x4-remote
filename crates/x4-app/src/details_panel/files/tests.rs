@@ -1,15 +1,16 @@
-//! The tests of the Files tab: what it holds as the tab, the panel and the target change, and
-//! when the list draws again.
+//! The tests of the Files tab: what it holds as the tab, the panel and the target change, when
+//! the list draws again, and how the tree of a big torrent is made off the window's thread.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{
-    AppContext as _, ElementId, ScrollDelta, Subscription, TestAppContext, WindowHandle, point, px,
-};
+use gpui_kit::{ElementId, ScrollDelta, Subscription, TestAppContext, WindowHandle, point, px};
 use x4_core::test_support::{details, torrent};
-use x4_core::{DetailsTab, DetailsTarget, Edge};
+use x4_core::{CHEAP_TREE_FILES, DetailsTab, DetailsTarget, Edge};
 use x4_rpc::HashString;
 
 use super::*;
@@ -53,7 +54,7 @@ fn made_from_read(
 fn a_key_that_changes_nothing_draws_nothing_again(cx: &mut TestAppContext) {
     let mut tab = cx.update(FilesTab::new);
     let film = torrent("a");
-    tab.follow(Some(&read(&film.hash)));
+    assert_eq!(tab.follow(Some(&read(&film.hash))), Follow::Changed);
     let step = |by: isize| {
         move |view: &mut FileTreeView, tree: &FileTree| {
             view.move_cursor(tree, by);
@@ -101,10 +102,15 @@ fn held(
         .expect("the panel is open")
 }
 
-/// A panel on the tab `tab`, about no torrent yet.
+/// A panel on the tab `tab`, about no torrent yet, which makes the trees of big torrents on the
+/// executor, where the test runs them when it runs the tasks.
 fn panel_on(tab: DetailsTab, cx: &mut TestAppContext) -> WindowHandle<DetailsPanel> {
     cx.update(app::init);
-    cx.add_window(|window, cx| DetailsPanel::new(tab, Rc::new(RefCell::default()), window, cx))
+    cx.add_window(|window, cx| {
+        let mut panel = DetailsPanel::new(tab, Rc::new(RefCell::default()), window, cx);
+        panel.make_trees_on_the_executor();
+        panel
+    })
 }
 
 /// A read of the details of the torrent `hash`: a show with a season of two episodes.
@@ -353,10 +359,16 @@ fn album(hash: &HashString) -> Arc<TorrentDetails> {
 #[gpui_kit::test]
 fn no_details_leave_no_room_kept_for_the_rows(cx: &mut TestAppContext) {
     let mut tab = cx.update(FilesTab::new);
-    tab.follow(Some(&album(&torrent("album").hash)));
+    let album = album(&torrent("album").hash);
+    // Too many files to make the tree at once: the panel has it made, and hands it over.
+    assert_eq!(tab.follow(Some(&album)), Follow::Build(Arc::clone(&album)));
+    assert_eq!(
+        tab.take_built(FileTree::new(&album), Some(&album)),
+        Follow::Changed
+    );
     assert_eq!(tab.rows.len(), 2001);
 
-    assert!(tab.follow(None));
+    assert_eq!(tab.follow(None), Follow::Changed);
 
     assert_eq!(tab.rows.capacity(), 0, "the room of 2001 rows is let go");
     assert!(tab.tree.is_none());
@@ -403,6 +415,7 @@ fn a_key_draws_the_list_again_to_bring_the_cursor_back_into_sight(cx: &mut TestA
         panel.show(DetailsTarget::One(tracks.hash.clone()), Some(&tracks), cx);
         panel.take_details(album(&tracks.hash), cx);
     });
+    cx.run_until_parked();
     draw(panel, cx);
     // End: the cursor goes to the last row, and the list scrolls to it.
     change(panel, cx, |panel, cx| {
@@ -485,4 +498,269 @@ fn the_tree_is_made_only_while_the_files_tab_is_shown(cx: &mut TestAppContext) {
         panel.set_tab(DetailsTab::Files, cx);
     });
     assert!(made_from_read(panel, &fourth, cx));
+}
+
+/// The name of the last file of [`big`].
+const LAST: &str = "Box/Last.tif";
+
+/// A read of the details of the torrent `hash` with one file more than a tree is made of on the
+/// window's thread ([`CHEAP_TREE_FILES`]): scans in parts of 100, and last the file `last`.
+fn big(hash: &HashString, last: &str) -> Arc<TorrentDetails> {
+    let mut names: Vec<String> = (1..=CHEAP_TREE_FILES)
+        .map(|scan| format!("Box/Part {:02}/Scan {scan:04}.tif", scan / 100))
+        .collect();
+    names.push(last.to_owned());
+    let files: Vec<(&str, u64, u64, bool, FilePriority)> = names
+        .iter()
+        .map(|name| (name.as_str(), 1024, 0, true, FilePriority::Normal))
+        .collect();
+    Arc::new(details(hash, &files))
+}
+
+/// Shows `scans` on the Files tab of `panel`, with the details `read`.
+fn show_with(
+    panel: WindowHandle<DetailsPanel>,
+    scans: &Torrent,
+    read: &Arc<TorrentDetails>,
+    cx: &mut TestAppContext,
+) {
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::One(scans.hash.clone()), Some(scans), cx);
+        panel.take_details(Arc::clone(read), cx);
+    });
+}
+
+#[gpui_kit::test]
+fn a_big_torrents_tree_is_not_built_before_the_tasks_run(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let scans = torrent("a");
+    let read = big(&scans.hash, LAST);
+
+    show_with(panel, &scans, &read, cx);
+    assert!(tree_of(panel, cx).is_none(), "not on the window's thread");
+
+    cx.run_until_parked();
+    assert!(made_from_read(panel, &read, cx));
+}
+
+/// Whether the Files tab of `panel` draws the "—" of no tree, the switch and the file list.
+fn drawn_parts(panel: WindowHandle<DetailsPanel>, cx: &mut TestAppContext) -> [bool; 3] {
+    draw(panel, cx);
+    cx.update_window(panel.into(), |_, window, _| {
+        ["files-pending", "file-sequential", FILE_LIST_ID].map(|id| window.try_find(id).is_some())
+    })
+    .expect("the panel is open")
+}
+
+#[gpui_kit::test]
+fn the_tab_shows_the_dash_and_the_switch_while_the_tree_is_built(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let scans = torrent("a");
+
+    show_with(panel, &scans, &big(&scans.hash, LAST), cx);
+    assert_eq!(drawn_parts(panel, cx), [true, true, false]);
+
+    cx.run_until_parked();
+    assert_eq!(drawn_parts(panel, cx), [false, true, true]);
+}
+
+#[gpui_kit::test]
+fn a_tree_for_a_torrent_no_longer_shown_is_dropped(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let (a, b) = (torrent("a"), torrent("b"));
+    show_with(panel, &a, &big(&a.hash, LAST), cx);
+    assert!(tree_of(panel, cx).is_none(), "A's tree is being made");
+    change(panel, cx, |panel, cx| {
+        panel.show(DetailsTarget::One(b.hash.clone()), Some(&b), cx);
+    });
+
+    cx.run_until_parked();
+    assert_eq!(held(panel, cx), (false, Vec::new(), None), "nothing of A");
+
+    // B's own details, of a few files, give B's tree at once.
+    change(panel, cx, |panel, cx| panel.take_details(read(&b.hash), cx));
+    let tree = tree_of(panel, cx).expect("B's tree");
+    assert_eq!(tree.hash(), &b.hash);
+    cx.run_until_parked();
+    assert!(tree_of(panel, cx).is_some_and(|after| Arc::ptr_eq(&after, &tree)));
+}
+
+#[gpui_kit::test]
+fn a_tree_that_comes_for_another_torrent_is_dropped(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let (a, b) = (torrent("a"), torrent("b"));
+    let read = big(&a.hash, LAST);
+    show_with(panel, &a, &read, cx);
+
+    // As a tree on its way when the torrent changed would come.
+    let other = FileTree::new(&big(&b.hash, LAST));
+    change(panel, cx, |panel, cx| panel.tree_built(other, cx));
+    assert!(tree_of(panel, cx).is_none(), "not B's");
+
+    cx.run_until_parked();
+    assert!(made_from_read(panel, &read, cx), "A's own still comes");
+}
+
+/// Makes no tree, as when no thread can be started.
+fn make_nowhere(_: Arc<TorrentDetails>, _: MakeTree, _: &App) -> Task<Option<FileTree>> {
+    Task::ready(None)
+}
+
+#[gpui_kit::test]
+fn a_tree_no_other_thread_could_make_is_made_on_the_windows_thread(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    change(panel, cx, |panel, _| panel.files.make_on = make_nowhere);
+    let scans = torrent("a");
+    let read = big(&scans.hash, LAST);
+
+    show_with(panel, &scans, &read, cx);
+    cx.run_until_parked();
+
+    assert!(made_from_read(panel, &read, cx), "late, rather than never");
+}
+
+#[gpui_kit::test]
+fn closing_the_tab_while_the_tree_is_built_drops_it(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let scans = torrent("a");
+    let read = big(&scans.hash, LAST);
+    show_with(panel, &scans, &read, cx);
+    change(panel, cx, |panel, cx| {
+        panel.set_tab(DetailsTab::General, cx);
+    });
+
+    cx.run_until_parked();
+    assert!(tree_of(panel, cx).is_none(), "no tree for a closed tab");
+
+    // Opened again, the tab has its tree made again.
+    change(panel, cx, |panel, cx| panel.set_tab(DetailsTab::Files, cx));
+    assert!(tree_of(panel, cx).is_none());
+    cx.run_until_parked();
+    assert!(made_from_read(panel, &read, cx));
+}
+
+/// How many trees [`make_and_count`] made; only
+/// `a_newer_read_of_the_same_files_during_the_build_takes_the_finished_tree` uses it.
+static MADE: AtomicUsize = AtomicUsize::new(0);
+
+/// Makes the tree of `details`, as the app does, and counts it in [`MADE`].
+fn make_and_count(details: &Arc<TorrentDetails>) -> FileTree {
+    MADE.fetch_add(1, Ordering::SeqCst);
+    FileTree::new(details)
+}
+
+#[gpui_kit::test]
+fn a_newer_read_of_the_same_files_during_the_build_takes_the_finished_tree(
+    cx: &mut TestAppContext,
+) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    change(panel, cx, |panel, _| panel.files.make = make_and_count);
+    MADE.store(0, Ordering::SeqCst);
+    let scans = torrent("a");
+    let (first, second) = (big(&scans.hash, LAST), big(&scans.hash, LAST));
+
+    show_with(panel, &scans, &first, cx);
+    change(panel, cx, |panel, cx| {
+        panel.take_details(Arc::clone(&second), cx);
+    });
+    assert!(tree_of(panel, cx).is_none());
+
+    cx.run_until_parked();
+    assert!(made_from_read(panel, &second, cx), "fitted to the newest");
+    assert_eq!(MADE.load(Ordering::SeqCst), 1, "one tree made");
+}
+
+#[gpui_kit::test]
+fn a_read_that_changes_the_files_during_the_build_starts_another_build(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let scans = torrent("a");
+    let renamed = big(&scans.hash, "Box/Last (fixed).tif");
+
+    show_with(panel, &scans, &big(&scans.hash, LAST), cx);
+    change(panel, cx, |panel, cx| {
+        panel.take_details(Arc::clone(&renamed), cx);
+    });
+    assert!(tree_of(panel, cx).is_none(), "the first tree is being made");
+
+    cx.run_until_parked();
+    let tree = tree_of(panel, cx).expect("a tree");
+    assert!(tree.is_made_from(&renamed));
+    assert!(tree.contains(&NodeKey::new("Box/Last (fixed).tif")));
+    assert!(!tree.contains(&NodeKey::new(LAST)));
+}
+
+#[gpui_kit::test]
+fn the_open_folders_and_the_cursor_survive_a_built_tree(cx: &mut TestAppContext) {
+    let panel = panel_on(DetailsTab::Files, cx);
+    let scans = torrent("a");
+    show_with(panel, &scans, &big(&scans.hash, LAST), cx);
+    cx.run_until_parked();
+    let (folder, scan) = (
+        NodeKey::new("Box/Part 03"),
+        NodeKey::new("Box/Part 03/Scan 0350.tif"),
+    );
+    change(panel, cx, |panel, cx| {
+        panel.change_file_view(
+            None,
+            |view, tree| {
+                view.toggle_expanded(tree, &folder);
+                view.set_cursor(tree, &scan);
+            },
+            cx,
+        );
+    });
+    let before = held(panel, cx);
+    assert_eq!(before.2.as_deref(), Some(scan.as_str()));
+
+    // Away from the tab and back, with a new read meanwhile: no tree while it is made again.
+    change(panel, cx, |panel, cx| {
+        panel.set_tab(DetailsTab::General, cx);
+        panel.take_details(big(&scans.hash, LAST), cx);
+        panel.set_tab(DetailsTab::Files, cx);
+    });
+    assert_eq!(held(panel, cx), (false, Vec::new(), None));
+
+    cx.run_until_parked();
+    assert_eq!(held(panel, cx), before);
+}
+
+/// The names of the threads [`make_and_note_the_thread`] made trees on. A `fn` cannot carry state,
+/// so the note is made here; only `a_big_torrents_tree_is_made_on_a_thread_of_its_own` uses it.
+static NOTED: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+
+/// Makes the tree of `details`, as the app does, and notes in [`NOTED`] the thread it is made on.
+fn make_and_note_the_thread(details: &Arc<TorrentDetails>) -> FileTree {
+    let thread = std::thread::current().name().map(str::to_owned);
+    NOTED.lock().expect("the note is kept").push(thread);
+    FileTree::new(details)
+}
+
+#[gpui_kit::test]
+fn a_big_torrents_tree_is_made_on_a_thread_of_its_own(cx: &mut TestAppContext) {
+    cx.update(app::init);
+    // Where the app makes it, not on the executor; only what makes it notes the thread.
+    let panel = cx.add_window(|window, cx| {
+        let mut panel =
+            DetailsPanel::new(DetailsTab::Files, Rc::new(RefCell::default()), window, cx);
+        panel.files.make = make_and_note_the_thread;
+        panel
+    });
+    NOTED.lock().expect("the note is kept").clear();
+    let scans = torrent("a");
+    let read = big(&scans.hash, LAST);
+
+    show_with(panel, &scans, &read, cx);
+
+    // The thread wakes the window from outside the test's executor, at a time of its own.
+    cx.executor().allow_parking();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !made_from_read(panel, &read, cx) {
+        assert!(Instant::now() < deadline, "the tree never came");
+        std::thread::sleep(Duration::from_millis(5));
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        *NOTED.lock().expect("the note is kept"),
+        [Some("file-tree".to_owned())]
+    );
 }

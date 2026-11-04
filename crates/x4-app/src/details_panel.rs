@@ -27,9 +27,9 @@
 //! which writes the clipboard at once and gives the keys back to the table.
 //!
 //! A hidden panel holds nothing it showed: no details, no General tab, no tree or rows of the
-//! Files tab, which can be several MiB for a torrent of thousands of files, and no peers or
-//! tracker rows. Only the Files tab's open folders and cursor stay. Shown again, the panel is about
-//! the selection then, and the read the service makes for it fills it.
+//! Files tab, which can be several MiB for a torrent of thousands of files, nor a tree being made,
+//! and no peers or tracker rows. Only the Files tab's open folders and cursor stay. Shown again,
+//! the panel is about the selection then, and the read the service makes for it fills it.
 
 mod files;
 mod general;
@@ -54,7 +54,7 @@ use x4_rpc::HashString;
 use crate::actions::FileRequest;
 use crate::i18n::{details_placeholder_text, t};
 use crate::key_repeats::KeyRepeats;
-use files::FilesTab;
+use files::{FilesTab, Follow};
 use peers::PeersTab;
 use trackers::TrackersTab;
 
@@ -148,18 +148,18 @@ impl DetailsPanel {
         }
     }
 
-    /// Opens the tab `tab`. The Files tab makes its tree then, from the newest details, and lets
-    /// it go when another tab opens; its open folders and cursor stay for its next tree. The
-    /// Peers tab waits for the peers the service reads now that it is open, and lets them and
-    /// their order go when another tab opens. The Trackers tab shows the trackers of the newest
-    /// details at once, and lets its rows go when another tab opens.
+    /// Opens the tab `tab`. The Files tab makes its tree then, from the newest details (a big one
+    /// off the window's thread), and lets it go when another tab opens; its open folders and
+    /// cursor stay for its next tree. The Peers tab waits for the peers the service reads now that
+    /// it is open, and lets them and their order go when another tab opens. The Trackers tab shows
+    /// the trackers of the newest details at once, and lets its rows go when another tab opens.
     pub(crate) fn set_tab(&mut self, tab: DetailsTab, cx: &mut Context<'_, Self>) {
         if tab != self.tab {
             self.tab = tab;
             match tab {
                 DetailsTab::Files => {
                     self.peers.leave();
-                    self.follow_files();
+                    self.follow_files(cx);
                 }
                 DetailsTab::Peers => self.files.leave(),
                 DetailsTab::General | DetailsTab::Trackers => {
@@ -196,15 +196,15 @@ impl DetailsPanel {
         self.target = target;
         self.torrent = torrent.cloned();
         self.general = self.general_model();
-        self.follow_files();
+        self.follow_files(cx);
         self.follow_trackers(cx);
         cx.notify();
     }
 
     /// Lets go of everything the panel shows, as it hides: the target, the details, the General
-    /// tab, the Files tab's tree and rows, the peers with their order, and the tracker rows. The
-    /// Files tab's open folders and cursor stay for the next tree of the same torrent. A hidden
-    /// panel is not drawn, so nothing is drawn again.
+    /// tab, the Files tab's tree and rows and a tree being made, the peers with their order, and
+    /// the tracker rows. The Files tab's open folders and cursor stay for the next tree of the
+    /// same torrent. A hidden panel is not drawn, so nothing is drawn again.
     pub(crate) fn hide(&mut self) {
         self.target = DetailsTarget::None;
         self.torrent = None;
@@ -229,7 +229,7 @@ impl DetailsPanel {
         }
         self.details = Some(details);
         let general = self.general_model();
-        let files_changed = self.follow_files();
+        let files_changed = self.follow_files(cx);
         let trackers_changed = self.follow_trackers(cx);
         if general != self.general || files_changed || trackers_changed {
             self.general = general;
@@ -255,15 +255,24 @@ impl DetailsPanel {
         }
     }
 
-    /// Fits the Files tab to the details, and to none without them; returns whether it shows
-    /// something else now. Only while the tab is shown: the progress is read again every few
-    /// seconds, and a tree of thousands of files is not made for nothing. Opening the tab fits it
-    /// then.
-    fn follow_files(&mut self) -> bool {
+    /// Fits the Files tab to the details, and to none without them, and has a tree too big to make
+    /// at once made off the window's thread; returns whether the tab shows something else now.
+    /// Only while the tab is shown: the progress is read again every few seconds, and a tree of
+    /// thousands of files is not made for nothing. Opening the tab fits it then.
+    fn follow_files(&mut self, cx: &mut Context<'_, Self>) -> bool {
         if self.tab != DetailsTab::Files {
             return false;
         }
-        self.files.follow(self.details.as_ref())
+        let had_tree = self.files.has_tree();
+        match self.files.follow(self.details.as_ref()) {
+            Follow::Unchanged => false,
+            Follow::Changed => true,
+            // The tree drawn, if any, is gone until the new one comes.
+            Follow::Build(details) => {
+                self.build_tree(details, cx);
+                had_tree
+            }
+        }
     }
 
     /// What the General tab shows for the torrent and its details.

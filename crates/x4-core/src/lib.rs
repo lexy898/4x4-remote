@@ -179,8 +179,8 @@ pub use engine::{
     Visibility,
 };
 pub use files::{
-    FileRow, FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey, NonEmptyIndices, PriorityView,
-    RowKind, TREE_BUDGET, WantedState, next_priority,
+    CHEAP_TREE_FILES, FileRow, FileTree, FileTreeView, MAX_CHOOSABLE_FILES, NodeKey,
+    NonEmptyIndices, PriorityView, RowKind, TREE_BUDGET, WantedState, next_priority,
 };
 pub use filter::{Filter, FilterCounts, counts, matches_search};
 pub use format::{

@@ -68,7 +68,8 @@ struct Window {
 }
 
 impl Window {
-    /// Opens the window, active and with animations off, on the Files tab.
+    /// Opens the window, active and with animations off, on the Files tab, making the trees of
+    /// big torrents on the test's executor.
     #[expect(
         clippy::expect_used,
         reason = "a test helper: a window that does not open fails the test"
@@ -87,6 +88,7 @@ impl Window {
             .expect("the main window opens");
         cx.update_window(handle, |_, window, _| window.activate_window())
             .expect("the window is open");
+        cx.update(|cx| view.update(cx, MainView::make_trees_on_the_executor));
         cx.run_until_parked();
         Self {
             handle,

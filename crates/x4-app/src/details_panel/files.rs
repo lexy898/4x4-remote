@@ -9,12 +9,16 @@
 //! [`FileTreeView::retain`]; the rows are what the view lists. A read that lists the same files,
 //! as the reads of a torrent's progress do every few seconds, keeps the tree's folders and files
 //! ([`FileTree::refreshed`]): only the first read after the tab opens sorts the names, which for
-//! 50 000 files takes tens of milliseconds of the window's thread. A magnet link without
+//! 50 000 files takes tens of milliseconds. So the first tree of more than
+//! [`CHEAP_TREE_FILES`](x4_core::CHEAP_TREE_FILES) files is made on a thread of its own
+//! ([`on_a_thread`], which says why not on GPUI's pool), not on the window's thread, which stays
+//! free to draw; the tab shows no tree until it comes, and the newest details then
+//! (`DetailsPanel::tree_built`). A magnet link without
 //! metadata has no files yet, and the tab says so instead of the list; so it does for a file list
 //! too large to show ([`FileTree::is_too_large`]): more than 50 000 files, or files nested
 //! hundreds of folders deep.
 //! Before the details come it shows the switch and "—", as the General tab does for what only the
-//! details know.
+//! details know, and so it does while a tree is made.
 //!
 //! Every change of files is built by the tree that was drawn: a click takes the tree of its frame,
 //! a key the tree on screen, and the tree's own `toggle_wanted_action`, `priority_action` and
@@ -34,26 +38,70 @@ use std::sync::Arc;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, FocusHandle, IntoElement, ParentElement as _, Styled as _,
-    UniformListScrollHandle, Window,
+    AnyElement, App, AppContext as _, Context, FocusHandle, IntoElement, ParentElement as _,
+    Styled as _, Task, UniformListScrollHandle, Window,
 };
-use x4_core::{FileRow, FileTree, FileTreeView, NodeKey, Torrent, TorrentDetails};
-use x4_rpc::FilePriority;
+use x4_core::{DetailsTab, FileRow, FileTree, FileTreeView, NodeKey, Torrent, TorrentDetails};
+use x4_rpc::{FilePriority, HashString};
 
-use super::{DetailsPanel, DetailsPanelEvent, note};
+use super::{DetailsPanel, DetailsPanelEvent, is_of, note};
 use crate::actions::FileRequest;
 use crate::file_list::{self, Columns, Drawn, FileListHost, file_row};
 use crate::i18n::t;
+use crate::own_thread::on_a_thread;
 use crate::theme::state_color;
 
 /// The element id of the file list.
 const FILE_LIST_ID: &str = "file-list";
 
+/// The name of the thread a tree is made on.
+const TREE_THREAD: &str = "file-tree";
+
+/// The stack of that thread. Making a tree recurses nowhere: the paths are walked and the folders
+/// sorted in loops; a stack is mapped, not filled, so only what is used takes memory.
+const TREE_STACK: usize = 256 * 1024;
+
+/// What makes the tree of some details.
+type MakeTree = fn(&Arc<TorrentDetails>) -> FileTree;
+
+/// Where a tree is made off the window's thread, with what makes it; the task gives the tree, or
+/// `None` when nothing could make it there.
+type MakeOn = fn(Arc<TorrentDetails>, MakeTree, &App) -> Task<Option<FileTree>>;
+
+/// Makes the tree of `details` with `make` on a thread of its own, named `file-tree`.
+fn make_on_a_thread(
+    details: Arc<TorrentDetails>,
+    make: MakeTree,
+    cx: &App,
+) -> Task<Option<FileTree>> {
+    on_a_thread(
+        TREE_THREAD,
+        TREE_STACK,
+        move || Some(make(&details)),
+        |_| None,
+        cx,
+    )
+}
+
+/// Makes the tree of `details` with `make` on GPUI's background executor. Under the executor of a
+/// test the tree is made in its turn with every other task, where a thread of its own would end at
+/// a time of its own: [`DetailsPanel::make_trees_on_the_executor`].
+fn make_on_the_executor(
+    details: Arc<TorrentDetails>,
+    make: MakeTree,
+    cx: &App,
+) -> Task<Option<FileTree>> {
+    cx.background_spawn(async move { Some(make(&details)) })
+}
+
 /// What the Files tab shows and what the user has done to it.
 pub(super) struct FilesTab {
     /// The tree drawn: of the details of the panel's torrent, which it keeps; `None` until they
-    /// come, while the panel is about no single torrent or hidden, and while another tab is open.
+    /// come, while the panel is about no single torrent or hidden, while another tab is open, and
+    /// while the tree is made.
     tree: Option<Arc<FileTree>>,
+    /// The tree being made off the window's thread, while there is no tree to draw.
+    building: Option<Building>,
     /// The folders open and the cursor.
     view: FileTreeView,
     /// The rows of `tree` that `view` shows, in order.
@@ -62,6 +110,32 @@ pub(super) struct FilesTab {
     focus: FocusHandle,
     /// The scroll position of the list.
     scroll: UniformListScrollHandle,
+    /// Where a tree is made off the window's thread: on a thread of its own, in the app.
+    make_on: MakeOn,
+    /// What makes a tree there: [`FileTree::new`]; a test counts the trees made, or notes the
+    /// thread.
+    make: MakeTree,
+}
+
+/// A tree being made off the window's thread.
+struct Building {
+    /// The torrent whose files it is made of.
+    hash: HashString,
+    /// The making; dropping it lets the tree go, which then never reaches the panel.
+    _task: Task<()>,
+}
+
+/// What the Files tab did with the details it was given.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+pub(super) enum Follow {
+    /// It shows what it showed.
+    Unchanged,
+    /// It shows something else now.
+    Changed,
+    /// The tree of these details is to be made off the window's thread: they list too many files
+    /// to make it at once. Meanwhile the tab has no tree.
+    Build(Arc<TorrentDetails>),
 }
 
 impl FilesTab {
@@ -69,10 +143,13 @@ impl FilesTab {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             tree: None,
+            building: None,
             view: FileTreeView::default(),
             rows: Vec::new(),
             focus: cx.focus_handle().tab_stop(true),
             scroll: UniformListScrollHandle::new(),
+            make_on: make_on_a_thread,
+            make: FileTree::new,
         }
     }
 
@@ -84,38 +161,96 @@ impl FilesTab {
     /// Takes `details`, those of the panel's torrent, or `None` while it has none: makes their
     /// tree, unless it was made from them already, and fits the open folders and the cursor to it.
     /// The tree of details that list the files of the tree drawn keeps its folders and files.
-    /// Returns whether the tab shows something else now.
-    pub(super) fn follow(&mut self, details: Option<&Arc<TorrentDetails>>) -> bool {
+    ///
+    /// The tree of other files is made at once only when that is cheap
+    /// ([`FileTree::is_cheap`]); otherwise the tab lets go of the tree it draws, whose rows and
+    /// actions belong to another list of files, and asks for the tree to be made off the window's
+    /// thread ([`Follow::Build`]).
+    pub(super) fn follow(&mut self, details: Option<&Arc<TorrentDetails>>) -> Follow {
         let Some(details) = details else {
             let changed = self.tree.is_some();
             self.leave();
-            return changed;
+            return if changed {
+                Follow::Changed
+            } else {
+                Follow::Unchanged
+            };
         };
         if self
             .tree
             .as_ref()
             .is_some_and(|tree| tree.is_made_from(details))
         {
-            return false;
+            return Follow::Unchanged;
         }
-        let tree = self
-            .tree
+        let tree = match self.tree.as_ref().and_then(|tree| tree.refreshed(details)) {
+            Some(tree) => tree,
+            None if FileTree::is_cheap(details) => FileTree::new(details),
+            None => {
+                self.tree = None;
+                drop(std::mem::take(&mut self.rows));
+                return Follow::Build(Arc::clone(details));
+            }
+        };
+        self.show_tree(tree);
+        Follow::Changed
+    }
+
+    /// Takes `built`, the tree made off the window's thread, with `details`, the newest the panel
+    /// has of its torrent, which may have come while it was made: the tree shows them, keeping its
+    /// folders and files when they list the same files. When they list other files, their tree
+    /// is made as [`follow`](Self::follow) makes it.
+    pub(super) fn take_built(
+        &mut self,
+        built: FileTree,
+        details: Option<&Arc<TorrentDetails>>,
+    ) -> Follow {
+        self.building = None;
+        let tree = details.and_then(|details| {
+            if built.is_made_from(details) {
+                Some(built)
+            } else {
+                built.refreshed(details)
+            }
+        });
+        match tree {
+            Some(tree) => {
+                self.show_tree(tree);
+                Follow::Changed
+            }
+            None => self.follow(details),
+        }
+    }
+
+    /// Whether the tab has a tree to draw.
+    pub(super) fn has_tree(&self) -> bool {
+        self.tree.is_some()
+    }
+
+    /// Whether a tree of the torrent `hash` is being made.
+    pub(super) fn is_building(&self, hash: &HashString) -> bool {
+        self.building
             .as_ref()
-            .and_then(|tree| tree.refreshed(details))
-            .unwrap_or_else(|| FileTree::new(details));
+            .is_some_and(|building| building.hash == *hash)
+    }
+
+    /// Draws `tree`: fits the open folders and the cursor to it and lists its rows. A tree still
+    /// being made is of no use any more.
+    fn show_tree(&mut self, tree: FileTree) {
         let tree = Arc::new(tree);
         self.view.retain(&tree);
         self.rows = self.view.rows(&tree);
         self.tree = Some(tree);
-        true
+        self.building = None;
     }
 
     /// Lets go of the tree, the details it was made from and its rows, with the room they took,
-    /// as the tab closes, the panel hides or its torrent has no details: a tree of thousands of
-    /// files is not kept for a tab nobody sees. The open folders and the cursor stay, and the next
-    /// tree of the same torrent keeps them.
+    /// and of a tree being made, as the tab closes, the panel hides or its torrent has no details:
+    /// a tree of thousands of files is not kept for a tab nobody sees. The open folders and the
+    /// cursor stay, and the next tree of the same torrent keeps them.
     pub(super) fn leave(&mut self) {
         self.tree = None;
+        self.building = None;
         drop(std::mem::take(&mut self.rows));
     }
 
@@ -157,6 +292,77 @@ impl FilesTab {
 }
 
 impl DetailsPanel {
+    /// Has the tree of `details` made on a thread of its own, unless a tree of their torrent is
+    /// being made already: that one is fitted to the newest details when it comes. The tree goes
+    /// to [`tree_built`](Self::tree_built).
+    pub(super) fn build_tree(&mut self, details: Arc<TorrentDetails>, cx: &mut Context<'_, Self>) {
+        if self.files.is_building(&details.hash) {
+            return;
+        }
+        tracing::debug!(
+            files = details.files.len(),
+            "making a file tree off the window's thread"
+        );
+        let hash = details.hash.clone();
+        let making = (self.files.make_on)(details, self.files.make, cx);
+        let task = cx.spawn({
+            let hash = hash.clone();
+            async move |panel, cx| {
+                let tree = making.await;
+                let taken = panel.update(cx, |panel, cx| match tree {
+                    Some(tree) => panel.tree_built(tree, cx),
+                    None => panel.make_tree_here(&hash, cx),
+                });
+                if let Err(error) = taken {
+                    tracing::debug!(%error, "a file tree was made after the panel closed");
+                }
+            }
+        });
+        self.files.building = Some(Building { hash, _task: task });
+    }
+
+    /// Makes the tree of the torrent `hash` on the window's thread, from the newest details, when
+    /// no other thread could: late, rather than never.
+    fn make_tree_here(&mut self, hash: &HashString, cx: &mut Context<'_, Self>) {
+        if !self.files.is_building(hash) {
+            return;
+        }
+        let Some(details) = self
+            .details
+            .as_ref()
+            .filter(|details| details.hash == *hash)
+        else {
+            return;
+        };
+        tracing::warn!("the file tree is made on the window's thread instead");
+        let tree = FileTree::new(details);
+        self.tree_built(tree, cx);
+    }
+
+    /// Makes the Files tab's trees on GPUI's background executor from now on; for tests
+    /// ([`make_on_the_executor`]).
+    pub(crate) fn make_trees_on_the_executor(&mut self) {
+        self.files.make_on = make_on_the_executor;
+    }
+
+    /// Takes `tree`, made off the window's thread, if the Files tab still waits for it: the tab is
+    /// open, on the torrent the tree is of. Dropping the making when the tab closes or the torrent
+    /// changes keeps any other tree from coming; this checks a tree that was on its way then.
+    fn tree_built(&mut self, tree: FileTree, cx: &mut Context<'_, Self>) {
+        let wanted = self.tab == DetailsTab::Files
+            && is_of(&self.target, tree.hash())
+            && self.files.is_building(tree.hash());
+        if !wanted {
+            tracing::debug!("a file tree came for what the Files tab no longer shows; dropped");
+            return;
+        }
+        match self.files.take_built(tree, self.details.as_ref()) {
+            Follow::Unchanged => {}
+            Follow::Changed => cx.notify(),
+            Follow::Build(details) => self.build_tree(details, cx),
+        }
+    }
+
     /// The Files tab, for the panel's torrent `torrent`.
     pub(super) fn files_tab(
         &self,

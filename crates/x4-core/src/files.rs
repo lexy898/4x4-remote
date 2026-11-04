@@ -30,7 +30,7 @@ mod names;
 mod tree;
 mod view;
 
-pub use tree::{FileTree, MAX_CHOOSABLE_FILES, TREE_BUDGET};
+pub use tree::{CHEAP_TREE_FILES, FileTree, MAX_CHOOSABLE_FILES, TREE_BUDGET};
 pub use view::{FileRow, FileTreeView, RowKind};
 
 /// The identity of a node of a [`FileTree`]: its path inside the torrent, `/`-separated.

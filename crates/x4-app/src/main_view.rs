@@ -325,6 +325,16 @@ impl MainView {
         &self.table
     }
 
+    /// Makes the Files tab's trees of big torrents on GPUI's background executor from now on,
+    /// instead of on a thread of their own each. For tests: the executor of a test makes each tree
+    /// in its turn with every other task, so a test sees the tree as soon as it runs the tasks; a
+    /// thread of its own ends at a time of its own, and wakes the window from outside the test's
+    /// executor.
+    pub fn make_trees_on_the_executor(&mut self, cx: &mut Context<'_, Self>) {
+        self.details_panel
+            .update(cx, |panel, _| panel.make_trees_on_the_executor());
+    }
+
     /// What the status bar shows: the speeds, the free space, the connection and whether the
     /// data is stale.
     #[must_use]

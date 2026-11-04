@@ -44,6 +44,7 @@ mod key_repeats;
 pub mod keymap;
 pub mod logging;
 pub mod main_view;
+mod own_thread;
 pub mod paths;
 mod private_dir;
 mod removal;
