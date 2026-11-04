@@ -19,7 +19,8 @@ just check-fast       # fmt + clippy + tests (run by the agent Stop hook)
 just fmt              # format Rust and TOML
 just test             # tests via nextest
 just test-hooks       # tests for the hook and helper scripts in scripts/
-just test-live        # live tests against the owner's daemon; never part of check
+just test-live        # live tests against the owner's daemon, and geoip_live, which reads the
+                      # installed GeoIP files and needs no daemon; never part of check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
 just lint-policy      # lint exceptions, workspace lints, the one unsafe call, dependency
                       # direction, the vendored gpui-pre-wgpu patch (scripts/lint-policy.sh)
@@ -102,7 +103,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
   call in `crates/x4-app/src/allocator.rs`: a `#[expect(unsafe_code, reason = "...")]` on that
   `let` statement and a `// SAFETY:` comment above it. Any other `unsafe` needs the owner's explicit
   approval first; `just lint-policy` rejects an `unsafe_code` exception anywhere else, and one in
-  the allocator that does not sit on a `let` (on a whole function it would cover more calls).
+  the allocator that does not sit on a `let` (on a whole function it would cover more calls). It
+  also checks that `allocator.rs` holds exactly one `unsafe` keyword, and that the workspace keeps
+  `multiple_unsafe_ops_per_block` at `warn` or `deny`, so that the one block holds one operation.
 
 ### Logging
 - `tracing` only; `println!`/`eprintln!` are rejected by lint. English messages with structured

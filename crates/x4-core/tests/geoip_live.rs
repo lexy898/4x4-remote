@@ -3,8 +3,8 @@
 //!
 //! It reads `GeoIP.dat` and `GeoIPv6.dat` (read-only) from `X4_GEOIP_DIR`, or from
 //! `/usr/share/GeoIP`, where the `geoip-database` package puts them. The data changes with each
-//! build, so it checks only what is not expected to change: the countries of two public resolvers
-//! that are not anycast, and that loopback addresses have none.
+//! build, so it checks only what is not expected to change: the countries of two public resolvers,
+//! whose addresses are each registered to one country, and that loopback addresses have none.
 
 use std::fs::File;
 use std::net::IpAddr;

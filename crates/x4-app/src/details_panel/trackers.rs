@@ -22,8 +22,9 @@
 //!
 //! The times are counted from the clock at each draw. The service sends the details again only
 //! when a tracker changed, so while the tab shows trackers it draws itself again every few
-//! seconds, and a "27 m" counts down on an idle torrent too. While the data is stale the rows are
-//! dimmed, as the table is.
+//! seconds, and a "27 m" counts down on an idle torrent too; while the window is hidden or not
+//! active it rests, and draws once when the window shows again. While the data is stale the rows
+//! are dimmed, as the table is.
 //!
 //! The list is the shared [`grid`](super::grid): no tab stop, no keys and no menu.
 

@@ -385,14 +385,14 @@ badge when it runs over µTP rather than TCP, and an arrow when the peer connect
 in its tooltip. The busiest peers come first: by the speed they send to us, then the speed we send
 to them (both counted in whole KiB/s, so that rows do not trade places for a small wobble), then the
 most complete, so that idle rows stay put. A click on the header of the country, the address, the
-client, the progress or a speed sorts by it (the progress and the speeds largest first), and a
-second click reverses the order. Until the first read has come, the tab says "—"; for a paused
-torrent it says "The torrent is paused", and while no peer is connected, as for a magnet link still
-looking for its metadata, "No peers connected". While the daemon does not answer, the rows are
-dimmed, as the table is. The list takes no keys; the wheel scrolls it. 4x4 reads the peers every 3
-seconds, only while the tab is open on one torrent and the window is shown. Left, or with the panel
-hidden, the tab keeps nothing, and its order goes back to the busiest first; the order is not
-remembered between runs.
+client, the progress or a speed sorts by it (the progress and the speeds largest first, a speed by
+its exact value, not in whole KiB/s), and a second click reverses the order. Until the first read
+has come, the tab says "—"; for a paused torrent it says "The torrent is paused", and while no peer
+is connected, as for a magnet link still looking for its metadata, "No peers connected". While the
+daemon does not answer, the rows are dimmed, as the table is. The list takes no keys; the wheel
+scrolls it. 4x4 reads the peers every 3 seconds, only while the tab is open on one torrent and the
+window is shown. Left, or with the panel hidden, the tab keeps nothing, and its order goes back to
+the busiest first; the order is not remembered between runs.
 
 The Trackers tab shows each tracker of the torrent on a row of two lines, in the order the daemon
 keeps them, tier by tier; it is not sortable, because the order of the tiers means something. The
@@ -1017,16 +1017,12 @@ making the tree and its rows against taking a read into the tree kept:
 | 36 000 names crafted to compare slowly, open    | 667 ms                 | 14 ms     |
 
 Since stage 7 the first tree of more than 1000 files is made on a thread of its own, so the window
-keeps drawing: 18 ms for the demo's 50 000 files ("Synthetic torrent 0006"), after which the window
-needs under 0.01 ms for the rows; 1000 names crafted to compare slowly take at most 13 ms, on the
-window's thread. Private memory, medians of three (`X4_MEASURE_SETTLE_SECONDS=15 just virtual just
-measure --synthetic -- --select 5 --press alt-2`), is unchanged with the Files tab open: 40.0 MiB
-on the 2000 files and 146.2 on the 50 000, against 39.8 and 146.1 when the window's thread made the
-tree. Opening the Files tab of the 50 000 files five times, each time back to the General tab,
-which lets the tree go, left 125.8 MiB, against 137.1 on the window's thread and 126.2 on GPUI's
-background pool, which was tried first; selecting the 2000-file and the 50 000-file torrent in turn
-five times varied from 41 to 148 MiB in every build, with the demo's own reads of the 50 000 files
-(medians of nine: 64.8 on the window's thread, 127.5 on the pool, 86.9 on threads of their own).
+keeps drawing while the demo's 50 000 files take 18 ms (1000 names crafted to compare slowly take at
+most 13.3 ms, on the window's thread); private memory with the Files tab open, medians of three
+(`X4_MEASURE_SETTLE_SECONDS=15 just virtual just measure --synthetic -- --select 4 --press alt-2`
+for the 2000 files, `--select 5` for the 50 000), is unchanged at 40.0 and 146.2 MiB, against 39.8
+and 146.1 when the window's thread made the tree; the 146.2 carries the demo's own answer of 50 000
+files: selecting that torrent adds about 106 MiB, mostly the made-up daemon's JSON, not 4x4's.
 
 ### The allocator (stage 6)
 
@@ -1185,12 +1181,16 @@ The app itself, which reached no daemon and kept reconnecting to a closed port
 | CPU over 60 s, one core    | near 0 % when idle  | 0.03 %              | 0.02 %              |
 | Binary size                | —                   | 39.6 MiB            | 40.0 MiB            |
 
-- The first frame and the idle CPU are unchanged. The private memory is 0.4 MiB higher than in
-  stage 6 (16.2 MiB in two runs, 16.4 in the third), and the proposed 16 MiB is missed by 0.2 MiB;
-  where it comes from was not traced. The app opens no country database until it shows the first
-  peers, so none of it is the GeoIP files. The binary grew by 0.4 MiB, 0.17 MiB of which are the
-  265 embedded flags. The RSS is 20 MiB lower only because fewer shared driver pages were
-  resident in these sessions (see above).
+- The first frame and the idle CPU are unchanged. The private memory of the table comes from two
+  sessions: stage 6's 15.8 MiB from another one (the plan's baseline was 15.9), so the 0.4 MiB
+  between them (stage 7 had 16.2 MiB in two runs, 16.4 in the third) is mostly the sessions', not
+  stage 7's. Measured in one session of `just virtual`, the release builds of the two stages taken
+  in turn, three runs each (`X4_MEASURE_SETTLE_SECONDS=10 just measure --offline --cpu 20 --binary
+  <file>`), stage 6 had 15.2 MiB and stage 7 15.3 (medians), both under the proposed 16 MiB: stage 7
+  adds about 0.1 MiB at startup. The app opens no country database until it shows the first peers,
+  so none of it is the GeoIP files. The binary grew by 0.4 MiB, 0.17 MiB of which are the 265
+  embedded flags. The RSS is 20 MiB lower probably because fewer shared driver pages were resident
+  in these sessions, as the PSS and USS figures suggest (see above).
 
 ## Development
 
@@ -1321,10 +1321,10 @@ this machine writes to it under another (for example over NFS), so both must be 
 there. A test creates it if it is missing (its parent must exist) and then removes it again; a
 directory that already existed is left in place. No torrent may already download into it.
 
-`just test-live` also runs `crates/x4-core/tests/geoip_live.rs`, which needs no daemon: it opens
-the installed GeoIP country files `GeoIP.dat` and `GeoIPv6.dat`, read-only, and checks only what
-does not change from one build of them to the next: the countries of two public DNS resolvers that
-are not anycast, and that loopback addresses have none.
+`just test-live` also runs `crates/x4-core/tests/geoip_live.rs`, which needs no daemon: it opens the
+installed GeoIP country files `GeoIP.dat` and `GeoIPv6.dat`, read-only, and checks only what does
+not change from one build of them to the next: the countries of two public DNS resolvers, whose
+addresses are each registered to one country, and that loopback addresses have none.
 
 | Variable             | Meaning                                  | Default                                    |
 | -------------------- | ---------------------------------------- | ------------------------------------------ |
