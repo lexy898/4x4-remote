@@ -399,23 +399,23 @@ dot and the first line give the tracker's address (without the port when that is
 muted beside it, its site name when the address does not say it. The second line says what the
 tracker is doing, in the dot's color: "Working" (green), "Announcing" (the theme's accent color),
 "Not contacted yet" and "Backup" (grey), "Timed out" (yellow), or, when an announce failed, the text
-the tracker or the daemon sent, in red, as sent but with control characters taken out and cut to
-the line (the whole text is in its tooltip; when the daemon sent none, "Announce failed"). After it
-come how many peers the last announce brought and how long ago it was; a failed scrape, which many
-trackers never answer, is a yellow note "No peer counts" after them, and the dot stays green. The
-columns after the tracker are the tier (from 1), the last announce ("3 m ago") and the next one
-("in 27 m", "now", "queued" while it waits for a free slot, "—" when none is scheduled, as for a
-paused torrent), and the seeders, leechers and downloads the tracker reports ("—" when it reports
-none). A time is rounded down to whole minutes above a minute, and the tab draws itself again every
-5 seconds, so that the times move on an idle torrent too. A torrent without trackers says "This
-torrent has no trackers (DHT and PEX only)", or, when it is private, that it cannot use DHT or PEX
-either; until the first read has come the tab says "—". The daemon keeps the announce data of a
-tier, not of a tracker, and shows it on the tier's current tracker: after an error it makes that
-tracker a backup and shows the error on the next one of the tier, so a row tells how its tier is
-doing. While the daemon does not answer, the rows are dimmed, as the table is. The list takes no
-keys; the wheel scrolls it. 4x4 reads the trackers every 5 seconds, only while the tab is open on
-one torrent and the window is shown, and again right after a reannounce of the torrent. Left, or
-with the panel hidden, the tab keeps nothing.
+the tracker or the daemon sent, in red, as sent but with control characters taken out and cut to the
+line (the whole text is in its tooltip; when the daemon sent none, "Announce failed"). After it come
+how many peers the last announce brought and how long ago it was; a failed scrape, which many
+trackers never answer, is a muted note "No peer counts" after them when the tracker reports no
+seeders or leechers, and the dot stays green. The columns after the tracker are the tier (from 1),
+the last announce ("3 m ago") and the next one ("in 27 m", "now", "queued" while it waits for a free
+slot, "—" when none is scheduled, as for a paused torrent), and the seeders, leechers and downloads
+the tracker reports ("—" when it reports none). A time is rounded down to whole minutes above a
+minute, and the tab draws itself again every 5 seconds, so that the times move on an idle torrent
+too. A torrent without trackers says "This torrent has no trackers (DHT and PEX only)", or, when it
+is private, that it cannot use DHT or PEX either; until the first read has come the tab says "—".
+The daemon keeps the announce data of a tier, not of a tracker, and shows it on the tier's current
+tracker: after an error it makes that tracker a backup and shows the error on the next one of the
+tier, so a row tells how its tier is doing. While the daemon does not answer, the rows are dimmed,
+as the table is. The list takes no keys; the wheel scrolls it. 4x4 reads the trackers every 5
+seconds, only while the tab is open on one torrent and the window is shown, and again right after a
+reannounce of the torrent. Left, or with the panel hidden, the tab keeps nothing.
 
 4x4 reads a torrent's details only while the window is shown and active, the panel is open and it
 shows one torrent, so that a small server is asked for no more than the panel needs. It reads them

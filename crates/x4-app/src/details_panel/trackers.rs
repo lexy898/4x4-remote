@@ -15,9 +15,10 @@
 //! column. The first is the address, with the site name muted beside it when the address does not
 //! say it. The second is the status in words, or the daemon's own text when an announce failed
 //! (cleaned and clipped to the line by x4-core, the whole text in a tooltip), then how many peers
-//! the last announce brought and how long ago it was; a failed scrape is a note after them, in the
-//! warning color, while the dot stays the working color. The Peers column is not a column of its
-//! own: with the others the table needs more width than the panel has at its least.
+//! the last announce brought and how long ago it was; a failed scrape is a muted note after them,
+//! only when the tracker reported neither seeders nor leechers, while the dot stays the working
+//! color. The Peers column is not a column of its own: with the others the table needs more width
+//! than the panel has at its least.
 //!
 //! The times are counted from the clock at each draw. The service sends the details again only
 //! when a tracker changed, so while the tab shows trackers it draws itself again every few
@@ -53,7 +54,7 @@ use crate::i18n::{
     tracker_row_label, tracker_status_text, tracker_status_words, tracker_tier_text,
     trackers_empty_text,
 };
-use crate::theme::{STALE_OPACITY, scrape_problem_color, tabular_digits, tracker_color};
+use crate::theme::{STALE_OPACITY, problem_note_color, tabular_digits, tracker_color};
 
 /// The element id of what the tab says instead of the trackers.
 pub(super) const TRACKERS_EMPTY_ID: &str = "trackers-empty";
@@ -490,11 +491,12 @@ fn status_line(row: &TrackerRow, now: SystemTime, theme: &Theme) -> impl IntoEle
             .map(|peers| ("tracker-peers", tracker_peers_text(peers), color)),
         row.last
             .map(|_| ("tracker-ago", tracker_last_text(row.last, now), color)),
+        // A scrape's trouble is mild, and the General tab says it in the same color.
         row.scrape_problem.then(|| {
             (
                 "tracker-scrape",
                 SharedString::from(t!("tracker-scrape-problem")),
-                scrape_problem_color(theme),
+                problem_note_color(true, theme),
             )
         }),
     ]

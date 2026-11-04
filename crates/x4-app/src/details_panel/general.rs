@@ -20,6 +20,7 @@ use crate::i18n::{
     created_text, date_time_text, error_texts, pieces_text, ratio_text, size_text,
     size_with_wanted_text, t, tracker_problem_text, trackers_text,
 };
+use crate::theme::problem_note_color;
 
 /// The width of the labels, room for "Downloaded" and "Completed" in the panel's text size.
 const LABEL_WIDTH: f32 = 92.;
@@ -155,12 +156,11 @@ fn torrent_rows(model: &GeneralModel, theme: &Theme) -> Vec<Row> {
     let mut rows = vec![
         Row {
             note: model.trackers.problem.as_ref().map(|problem| {
-                let color = if problem.kind.is_mild() {
-                    theme.muted_foreground
-                } else {
-                    theme.warning
-                };
-                ("tracker-problem", tracker_problem_text(problem), color)
+                (
+                    "tracker-problem",
+                    tracker_problem_text(problem),
+                    problem_note_color(problem.kind.is_mild(), theme),
+                )
             }),
             ..Row::new(
                 "general-trackers",

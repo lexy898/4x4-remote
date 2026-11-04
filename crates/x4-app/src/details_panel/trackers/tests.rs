@@ -474,12 +474,16 @@ fn each_status_says_itself_and_the_next_announce_says_why_it_is_not_a_time(
 fn a_failed_scrape_is_a_note_beside_a_working_tracker(cx: &mut TestAppContext) {
     let film = torrent("film");
     let panel = trackers_of(&film, cx);
+    // The tracker reported no counts either, so the note says why they are missing.
     take(
         panel,
         details_of(
             &film,
             vec![TrackerStat {
                 last_scrape: Some(answer(TrackerOutcome::Failed, "refused", 20)),
+                seeders: None,
+                leechers: None,
+                downloads: None,
                 ..working(7, "a.example.org:6969")
             }],
         ),
@@ -499,6 +503,46 @@ fn a_failed_scrape_is_a_note_beside_a_working_tracker(cx: &mut TestAppContext) {
         cell_label(panel, 7, "tracker-scrape", cx).as_deref(),
         Some("No peer counts")
     );
+    assert_eq!(
+        cell_label(panel, 7, "tracker-seeders", cx).as_deref(),
+        Some("—")
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_scrape_says_nothing_beside_the_counts_the_tracker_gave(cx: &mut TestAppContext) {
+    let film = torrent("film");
+    let panel = trackers_of(&film, cx);
+    // The daemon took the counts from the announces: "No peer counts" would be false.
+    take(
+        panel,
+        details_of(
+            &film,
+            vec![
+                TrackerStat {
+                    last_scrape: Some(answer(TrackerOutcome::Failed, "refused", 20)),
+                    ..working(7, "a.example.org:6969")
+                },
+                TrackerStat {
+                    last_scrape: Some(answer(TrackerOutcome::TimedOut, "", 20)),
+                    seeders: None,
+                    ..working(8, "b.example.org:6969")
+                },
+            ],
+        ),
+        cx,
+    );
+
+    assert_eq!(
+        cell_label(panel, 7, "tracker-seeders", cx).as_deref(),
+        Some("5")
+    );
+    assert_eq!(cell_label(panel, 7, "tracker-scrape", cx), None);
+    assert_eq!(
+        cell_label(panel, 8, "tracker-leechers", cx).as_deref(),
+        Some("12")
+    );
+    assert_eq!(cell_label(panel, 8, "tracker-scrape", cx), None);
 }
 
 #[gpui_kit::test]

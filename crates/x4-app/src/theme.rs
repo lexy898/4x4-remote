@@ -101,10 +101,16 @@ pub(crate) fn tracker_color(status: TrackerStatus, theme: &Theme) -> Hsla {
     }
 }
 
-/// The color of the note that a tracker's last scrape failed: the warning color. It marks a tracker
-/// whose announces work, so the dot stays the working color; many trackers never answer a scrape.
-pub(crate) fn scrape_problem_color(theme: &Theme) -> Hsla {
-    theme.warning
+/// The color of a note about a tracker's trouble, in the General tab and after a tracker's status
+/// line in the Trackers tab: muted for a `mild` kind (see `TrackerProblemKind::is_mild`), such as a
+/// scrape that many trackers never answer while their announces work, and the warning color
+/// otherwise. Both tabs take it from here, so that they say the same trouble in the same color.
+pub(crate) fn problem_note_color(mild: bool, theme: &Theme) -> Hsla {
+    if mild {
+        theme.muted_foreground
+    } else {
+        theme.warning
+    }
 }
 
 /// The color of a download or upload rate in the table: the color of the torrent's state while
@@ -183,7 +189,9 @@ pub(crate) fn follow_appearance(choice: ThemeChoice, window: &mut Window, cx: &m
 mod tests {
     use gpui_kit::TestAppContext;
     use gpui_kit::component::ActiveTheme as _;
-    use x4_core::{ConnectionError, QueueKind, TrackerStatus, UnsupportedReason};
+    use x4_core::{
+        ConnectionError, QueueKind, TrackerProblemKind, TrackerStatus, UnsupportedReason,
+    };
 
     use super::*;
 
@@ -323,14 +331,41 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_scrape_problem_is_a_warning_beside_a_dot_that_stays_green(cx: &mut TestAppContext) {
-        let theme = theme(ThemeMode::Dark, cx);
+    fn a_scrape_problem_is_a_muted_note_beside_a_dot_that_stays_green(cx: &mut TestAppContext) {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let theme = theme(mode, cx);
+            // The Trackers tab's note: a scrape's trouble is always mild.
+            let scrape_note = problem_note_color(true, &theme);
 
-        assert_eq!(scrape_problem_color(&theme), theme.warning);
-        assert_ne!(
-            scrape_problem_color(&theme),
-            tracker_color(TrackerStatus::Working, &theme)
-        );
+            assert_eq!(scrape_note, theme.muted_foreground, "{mode:?}");
+            // The General tab says a scrape's trouble in the same color.
+            for kind in [
+                TrackerProblemKind::ScrapeFailed,
+                TrackerProblemKind::ScrapeTimedOut,
+            ] {
+                assert_eq!(
+                    problem_note_color(kind.is_mild(), &theme),
+                    scrape_note,
+                    "{kind:?}"
+                );
+            }
+            // An announce's trouble is a warning.
+            for kind in [
+                TrackerProblemKind::AnnounceFailed,
+                TrackerProblemKind::AnnounceTimedOut,
+            ] {
+                assert_eq!(
+                    problem_note_color(kind.is_mild(), &theme),
+                    theme.warning,
+                    "{kind:?}"
+                );
+            }
+            assert_ne!(
+                scrape_note,
+                tracker_color(TrackerStatus::Working, &theme),
+                "{mode:?}"
+            );
+        }
     }
 
     #[gpui_kit::test]

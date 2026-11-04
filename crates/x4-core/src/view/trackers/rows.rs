@@ -69,8 +69,10 @@ pub struct TrackerRow {
     pub leechers: Option<u32>,
     /// How many times the tracker saw the torrent completed; `None` when it did not say.
     pub downloads: Option<u32>,
-    /// Whether the last scrape failed or timed out. Many trackers cannot be scraped while their
-    /// announces work, so the view says it quietly.
+    /// Whether the last scrape failed or timed out and the tracker reported neither seeders nor
+    /// leechers. Transmission also takes the counts from the answers to announces, so after a
+    /// failed scrape they may be there all the same, and then there is nothing to say. Many
+    /// trackers cannot be scraped while their announces work, so the view says it quietly.
     pub scrape_problem: bool,
 }
 
@@ -126,12 +128,14 @@ fn row(stat: &TrackerStat) -> TrackerRow {
         seeders: stat.seeders,
         leechers: stat.leechers,
         downloads: stat.downloads,
-        scrape_problem: stat.last_scrape.as_ref().is_some_and(|answer| {
-            matches!(
-                answer.outcome,
-                TrackerOutcome::Failed | TrackerOutcome::TimedOut
-            )
-        }),
+        scrape_problem: stat.seeders.is_none()
+            && stat.leechers.is_none()
+            && stat.last_scrape.as_ref().is_some_and(|answer| {
+                matches!(
+                    answer.outcome,
+                    TrackerOutcome::Failed | TrackerOutcome::TimedOut
+                )
+            }),
     }
 }
 
@@ -516,9 +520,12 @@ mod tests {
 
     #[test]
     fn a_scrape_that_failed_or_timed_out_is_flagged_without_changing_the_status() {
+        // The tracker reported no seeders and no leechers: the note says why they are missing.
         let scrape = |last_scrape: Option<TrackerAnswer>| {
             row_of(TrackerStat {
                 last_scrape,
+                seeders: None,
+                leechers: None,
                 ..announced("a.example.org:80", TrackerOutcome::Succeeded, "Success")
             })
         };
@@ -532,6 +539,33 @@ mod tests {
         assert!(!scrape(Some(answer(TrackerOutcome::Succeeded, "Success", 900))).scrape_problem);
         // Many trackers have no scrape at all.
         assert!(!scrape(None).scrape_problem);
+    }
+
+    #[test]
+    fn a_failed_scrape_is_not_flagged_when_the_tracker_gave_counts_all_the_same() {
+        // Transmission also takes the counts from the answers to announces, so a failed scrape
+        // does not mean that the counts are missing.
+        let with_counts = |outcome: TrackerOutcome, seeders, leechers| {
+            row_of(TrackerStat {
+                last_scrape: Some(answer(outcome, "HTTP 404", 900)),
+                seeders,
+                leechers,
+                ..announced("a.example.org:80", TrackerOutcome::Succeeded, "Success")
+            })
+        };
+
+        for outcome in [TrackerOutcome::Failed, TrackerOutcome::TimedOut] {
+            for (seeders, leechers) in [(Some(5), None), (None, Some(0)), (Some(5), Some(12))] {
+                let row = with_counts(outcome, seeders, leechers);
+                assert!(!row.scrape_problem, "{outcome:?} {seeders:?} {leechers:?}");
+                assert_eq!((row.seeders, row.leechers), (seeders, leechers));
+            }
+            // The downloads alone do not say who is on the torrent.
+            assert!(
+                with_counts(outcome, None, None).scrape_problem,
+                "{outcome:?}"
+            );
+        }
     }
 
     #[test]
