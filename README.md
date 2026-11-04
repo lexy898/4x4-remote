@@ -708,7 +708,8 @@ arguments after `--` go to the program, as in `just measure --synthetic --cpu 30
 taken out of a package (not with `--synthetic`, which builds the demo); a relative path is taken
 from the repository's directory. `--offline` gives the program a temporary config directory of its
 own, removed afterwards, whose `config.toml` names a closed port on this machine
-(`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting.
+(`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting; it is
+refused with `--synthetic`, as the demo reads no config and reaches no network anyway.
 Without it the app reads your `config.toml`, and inside `just virtual`, whose config directory is
 empty, it polls the default address, which is your daemon's (`192.168.1.5`). For example,
 `just virtual just measure --binary /usr/bin/4x4 --offline --cpu 60` measures the installed 4x4 off

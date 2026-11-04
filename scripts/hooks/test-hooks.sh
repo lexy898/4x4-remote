@@ -1222,6 +1222,21 @@ test_measure_refuses_a_binary_with_the_synthetic_demo() {
     [[ ! -e $dir/args-installed.txt && ! -e $dir/args-x4-synthetic.txt ]] || fail "something ran"
 }
 
+# The demo reads no config and has no daemon to reach, so --offline would promise a guarantee the
+# demo has no use for; the caller is told, as with --binary, and nothing is built or run.
+test_measure_refuses_offline_with_the_synthetic_demo() {
+    local dir order
+    dir=$(new_measure_env)
+    for order in '--synthetic --offline' '--offline --synthetic'; do
+        run_measure_script "$dir" $order
+        expect_status 2
+        expect_contains "--offline" "$stderr" "stderr with $order"
+        expect_contains "--synthetic" "$stderr" "stderr with $order"
+        [[ ! -e $dir/just.txt && ! -e $dir/cargo.txt ]] || fail "with $order, something was built"
+        [[ ! -e $dir/args-x4-synthetic.txt ]] || fail "with $order, something ran"
+    done
+}
+
 # Inside `just virtual` the config dir is empty, so the app would poll the default daemon, the
 # owner's. --offline gives it a config dir of its own, whose config.toml names a closed port on
 # this machine, whatever the caller's config dir holds; the dir is removed at the end.
@@ -2818,6 +2833,7 @@ cases=(
     measure_takes_a_relative_binary_from_the_callers_directory
     measure_refuses_a_binary_it_cannot_run
     measure_refuses_a_binary_with_the_synthetic_demo
+    measure_refuses_offline_with_the_synthetic_demo
     measure_offline_gives_the_program_a_config_of_a_closed_port
     measure_offline_config_dir_is_absolute_under_a_relative_tmpdir
     measure_without_offline_keeps_the_callers_config_dir

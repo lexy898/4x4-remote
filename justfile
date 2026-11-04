@@ -144,7 +144,7 @@ demo-synthetic *args:
     RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
         cargo run -p x4-app --features synthetic --bin x4-synthetic --locked -- {{args}}
 
-# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `--binary <path>` (measure that file, build nothing), `--offline` (a config of a closed port, so no daemon is reached), `-- <args>`.
+# Startup time, PSS, USS, anonymous and resident memory, threads, GL stack and binary size of the release build; also `--synthetic` (the demo), `--cpu <s>`, `--binary <path>` (measure that file, build nothing), `--offline` (a config of a closed port, so no daemon is reached; not with `--synthetic`), `-- <args>`.
 [positional-arguments]
 measure *args:
     scripts/measure.sh "$@"
