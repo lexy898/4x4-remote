@@ -1275,10 +1275,12 @@ contain it.
 
 ### Live tests
 
-`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` and `crates/x4-core/tests/live.rs`
-against a real Transmission 4.1+ daemon; `just test` and `just check` skip them. They never touch
-existing torrents or the daemon's settings. One test only reads the server version. Each of the
-others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a few
+`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs`, `crates/x4-core/tests/live.rs`
+and `crates/x4-app/tests/live.rs` against a real Transmission 4.1+ daemon; `just test` and
+`just check` skip them. They never touch existing torrents or the daemon's settings. Two tests only
+read the server version: x4-rpc's through the client, and x4-app's as the Connection dialog's Test
+does, with the one `session_get` that Test sends, whose answer must name a Transmission 4. Each of
+the others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a few
 KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
 start, start now, verify, reannounce, sequential download on and off, which files are downloaded and
 their priorities, a file index past the last file, which the daemon refuses, adding it twice), and
