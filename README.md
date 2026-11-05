@@ -227,10 +227,10 @@ dot's tooltip names the server, such as "Connected to nas:9091".
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing
 in the window ever waits for the network. With no server set, it connects to nothing and opens the
-Connection dialog (see [Connection](#connection)). The first time it opens at 1200 by 720 pixels, where
-every column fits at its first width, which leaves room for its usual text: "Downloading", a time
-left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
-last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
+Connection dialog (see [Connection](#connection)). The first time it opens at 1200 by 720 pixels,
+where every column fits at its first width, which leaves room for its usual text: "Downloading", a
+time left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it
+had last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
 The window has five parts: a toolbar along the top, with the search box, the Add file and Add
 magnet buttons, the Start and Pause buttons and the Remove menu on the left and the Connection
@@ -1391,8 +1391,8 @@ and `crates/x4-app/tests/live.rs` against a real Transmission 4.1+ daemon; `just
 `just check` skip them. They never touch existing torrents or the daemon's settings. Two tests only
 read the server version: x4-rpc's through the client, and x4-app's as the Connection dialog's Test
 does, with the one `session_get` that Test sends, whose answer must name a Transmission 4. Each of
-the others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a few
-KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
+the others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a
+few KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
 start, start now, verify, reannounce, sequential download on and off, which files are downloaded and
 their priorities, a file index past the last file, which the daemon refuses, adding it twice), and
 removes it together with its data. Most write the data into the test directory first. Some do not:
