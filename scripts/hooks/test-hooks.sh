@@ -570,10 +570,11 @@ test_check_tools_passes_when_all_present() {
 # tree-<crate>.stderr if that exists. Each call appends its arguments to cargo-args.txt.
 # Clean by default: x4-app's tree is the vendored crate, the vendored renderer is patched, the
 # workspace denies unsafe_code, limits an unsafe block to one operation, and the allocator holds the
-# one exception to it.
+# one exception to it. It is a git repository without Markdown files; track_markdown adds those.
 new_policy_root() {
     local dir crate
     dir=$(mktemp -d "$tmp_root/policy.XXXXXX")
+    git -C "$dir" init -q
     for crate in x4-core x4-rpc; do
         mkdir -p "$dir/crates/$crate/src"
         printf '[package]\nname = "%s"\n\n[lints]\nworkspace = true\n' "$crate" >"$dir/crates/$crate/Cargo.toml"
@@ -865,6 +866,145 @@ test_lint_policy_rejects_a_workspace_unsafe_level_other_than_deny() {
     run_policy "$dir"
     expect_status 1
     expect_contains "Cargo.toml: workspace.lints.rust.unsafe_code is 'unset', not deny" "$stderr" stderr
+}
+
+# The link check reads the Markdown files git tracks, so a case's files are added to the index.
+track_markdown() { # <root>
+    git -C "$1" add -- '*.md'
+}
+
+test_lint_policy_accepts_markdown_links_that_resolve() {
+    local dir
+    dir=$(new_policy_root)
+    mkdir -p "$dir/docs/images"
+    : >"$dir/docs/images/shot.png"
+    cat >"$dir/README.md" <<'EOF'
+# Demo
+
+See the [guide](docs/guide.md), its
+[first start](docs/guide.md#first-start), the [keys](#keys-and-more) and the
+[docs folder](docs/). ![A picture](docs/images/shot.png "A title") [A link that
+wraps](docs/guide.md#first-start). Web links are not looked at:
+[home](https://example.org/missing.md), [mail](mailto:someone@example.org).
+
+## Keys and more
+
+## Notes
+
+## Notes
+
+The second notes are [here](#notes-1), and so are the [`4x4 --version` heading](#4x4---version-and--v),
+the [stage heading](#the-main-window-stage-2), the [letters](#über-alles--und-mehr) and
+[a reference][guide].
+
+### `4x4 --version` and -V!
+
+### The main window (stage 2)
+
+## Über alles — und mehr
+
+[guide]: docs/guide.md#first-start
+EOF
+    cat >"$dir/docs/guide.md" <<'EOF'
+# Guide
+
+## First start
+
+Back to the [README](../README.md#keys-and-more).
+EOF
+    track_markdown "$dir"
+    run_policy "$dir"
+    expect_status 0
+}
+
+test_lint_policy_rejects_a_markdown_link_to_a_missing_file() {
+    local dir
+    dir=$(new_policy_root)
+    mkdir -p "$dir/docs"
+    cat >"$dir/README.md" <<'EOF'
+# Demo
+
+A [gone
+page](docs/gone.md) and
+![a gone picture](images/gone.png).
+EOF
+    cat >"$dir/docs/guide.md" <<'EOF'
+# Guide
+
+Up to the [README](README.md).
+EOF
+    track_markdown "$dir"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "README.md:3: link (docs/gone.md): docs/gone.md does not exist" "$stderr" stderr
+    expect_contains "README.md:5: link (images/gone.png): images/gone.png does not exist" "$stderr" stderr
+    expect_contains "docs/guide.md:3: link (README.md): docs/README.md does not exist" "$stderr" stderr
+}
+
+# A heading in a code block is no heading, and a third heading of a name is its -2.
+test_lint_policy_rejects_a_markdown_link_to_a_missing_anchor() {
+    local dir
+    dir=$(new_policy_root)
+    mkdir -p "$dir/docs"
+    cat >"$dir/README.md" <<'EOF'
+# Demo
+
+[Nowhere](#nowhere), the [third notes](#notes-2), [a fake heading](#fake) and
+[the guide's nowhere](docs/guide.md#nowhere).
+
+## Notes
+
+## Notes
+
+```bash
+# Fake
+```
+EOF
+    printf '# Guide\n' >"$dir/docs/guide.md"
+    track_markdown "$dir"
+    run_policy "$dir"
+    expect_status 1
+    expect_contains "README.md:3: link (#nowhere): README.md has no heading with the anchor #nowhere" \
+        "$stderr" stderr
+    expect_contains "README.md:3: link (#notes-2): README.md has no heading with the anchor #notes-2" \
+        "$stderr" stderr
+    expect_contains "README.md:3: link (#fake)" "$stderr" stderr
+    expect_contains "README.md:4: link (docs/guide.md#nowhere): docs/guide.md has no heading with the anchor #nowhere" \
+        "$stderr" stderr
+}
+
+test_lint_policy_ignores_markdown_links_in_code_and_outside_the_checked_files() {
+    local dir
+    dir=$(new_policy_root)
+    mkdir -p "$dir/vendor/crate" "$dir/.specs"
+    cat >"$dir/README.md" <<'EOF'
+# Demo
+
+```markdown
+[gone](gone.md)
+```
+
+~~~
+[gone](gone.md#nowhere)
+~~~
+
+- A list item with a block:
+
+  ```text
+  [gone](gone.md)
+  ```
+
+Inline code `[gone](gone.md)` and ``a `[gone](gone.md)` span`` are no links, nor is code that
+wraps, `[gone](gone.md)
+and more`.
+EOF
+    printf '[gone](gone.md)\n' >"$dir/vendor/crate/PATCHED.md"
+    printf '[gone](gone.md)\n' >"$dir/.specs/notes.md"
+    track_markdown "$dir"
+    git -C "$dir" add -f -- .specs/notes.md
+    printf '[gone](gone.md)\n' >"$dir/untracked.md"
+    run_policy "$dir"
+    expect_status 0
 }
 
 # Canned copies of /proc/<pid>/smaps_rollup, status and maps in a fresh directory, as
@@ -2823,6 +2963,10 @@ cases=(
     lint_policy_accepts_an_unsafe_code_exception_on_a_let_in_any_layout
     lint_policy_ignores_unsafe_code_in_comments_and_reasons
     lint_policy_rejects_a_workspace_unsafe_level_other_than_deny
+    lint_policy_accepts_markdown_links_that_resolve
+    lint_policy_rejects_a_markdown_link_to_a_missing_file
+    lint_policy_rejects_a_markdown_link_to_a_missing_anchor
+    lint_policy_ignores_markdown_links_in_code_and_outside_the_checked_files
     measure_report_line_has_every_metric_in_order
     measure_report_line_flags_each_gl_stack_library
     measure_report_line_rejects_unreadable_metrics

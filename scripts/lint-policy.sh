@@ -15,6 +15,9 @@
 #       block to one operation, but not a statement to one block), and the workspace level of
 #       `unsafe_code` is `deny` (`forbid` cannot be excepted) and of
 #       `multiple_unsafe_ops_per_block` is `warn` or `deny`
+#   (g) the links of the Markdown files git tracks (but those in vendor/ and .specs/) resolve: a
+#       link or image with a relative target names a file or directory that exists, and an
+#       `#anchor`, alone or after a `.md` target, a heading of that file, as GitHub makes anchors
 #
 # Prints one line per violation (file or crate, and the rule) and exits 1 if there is any.
 # Usage: scripts/lint-policy.sh [repository root] (default: the repository of this script).
@@ -160,6 +163,244 @@ unsafe_ops_level=$(taplo get -f Cargo.toml workspace.lints.clippy.multiple_unsaf
 if [[ $unsafe_ops_level != warn && $unsafe_ops_level != deny ]]; then
     violation Cargo.toml "workspace.lints.clippy.multiple_unsafe_ops_per_block is '${unsafe_ops_level:-unset}', not warn or deny (an unsafe block may hold only the one call)"
 fi
+
+# (g) Text moved between README.md and docs/ takes its links along, and a link that no longer
+# resolves fails nowhere else. markdown_items prints one line per heading and per link of a
+# Markdown file, outside fenced code blocks:
+#   heading <TAB> <line> <TAB> <its text, without code marks, link targets and HTML tags>
+#   link <TAB> <line> <TAB> <target>
+# The lines of a paragraph are joined first, so that a link may wrap, and code spans are blanked,
+# so that a `[text](target)` in one is no link. It works on bytes (LC_ALL=C), so that any awk
+# gives the same; md_slug lowercases the heading text by the letters of Unicode.
+markdown_items() { # <file>
+    LC_ALL=C awk '
+        function spaces(n,    s) { s = ""; while (n-- > 0) s = s " "; return s }
+        # The text with each code span blanked to spaces of its length; a run of backticks
+        # without a closing run of the same length stays as it is.
+        function blank_code(s,    out, p, n, run, after, q, m, skipped) {
+            out = ""
+            while ((p = index(s, "`")) > 0) {
+                out = out substr(s, 1, p - 1)
+                s = substr(s, p)
+                n = 0
+                while (substr(s, n + 1, 1) == "`") n++
+                run = substr(s, 1, n)
+                after = substr(s, n + 1)
+                skipped = 0
+                while ((q = index(after, run)) > 0) {
+                    m = 0
+                    while (substr(after, q + m, 1) == "`") m++
+                    if (m == n) break
+                    skipped += q + m - 1
+                    after = substr(after, q + m)
+                }
+                if (q > 0) {
+                    out = out spaces(n + skipped + q - 1 + n)
+                    s = substr(s, n + skipped + q + n)
+                } else {
+                    out = out run
+                    s = substr(s, n + 1)
+                }
+            }
+            return out s
+        }
+        # A target, without the title after it or the <> around it.
+        function link(at, target) {
+            sub(/^[ \t\n]+/, "", target)
+            if (substr(target, 1, 1) == "<") {
+                target = substr(target, 2)
+                sub(/>.*/, "", target)
+            } else {
+                sub(/[ \t\n].*/, "", target)
+            }
+            if (target != "") printf "link\t%d\t%s\n", at, target
+        }
+        # The links of the paragraph gathered so far, each with the line it starts on.
+        function flush(    text, offset, k, at, target) {
+            if (count == 0) return
+            text = blank_code(para)
+            offset = 0
+            while (match(text, /!?\[[^]]*\]\([^)]*\)/)) {
+                offset += RSTART
+                at = lines[1]
+                for (k = 2; k <= count; k++) if (starts[k] <= offset) at = lines[k]
+                target = substr(text, RSTART, RLENGTH)
+                sub(/^!?\[[^]]*\]\(/, "", target)
+                sub(/\)$/, "", target)
+                link(at, target)
+                offset += RLENGTH - 1
+                text = substr(text, RSTART + RLENGTH)
+            }
+            para = ""
+            count = 0
+        }
+        function add_line(line) {
+            if (count > 0) para = para "\n"
+            count++
+            starts[count] = length(para) + 1
+            lines[count] = NR
+            para = para line
+        }
+        # The fence a line opens, three or more backticks or tildes, or "".
+        function fence_of(line,    c, n) {
+            sub(/^[ \t]*/, "", line)
+            c = substr(line, 1, 1)
+            if (c != "`" && c != "~") return ""
+            n = 0
+            while (substr(line, n + 1, 1) == c) n++
+            if (n < 3 || (c == "`" && index(substr(line, n + 1), "`") > 0)) return ""
+            return substr(line, 1, n)
+        }
+        function closes(line, fence,    c, n) {
+            sub(/^[ \t]*/, "", line)
+            sub(/[ \t]*$/, "", line)
+            c = substr(fence, 1, 1)
+            n = 0
+            while (substr(line, n + 1, 1) == c) n++
+            return n >= length(fence) && n == length(line)
+        }
+        # The number of the # marks that make a line a heading (1 to 6), or 0.
+        function heading_level(line) {
+            if (!match(line, /^ ? ? ?#+([ \t]|$)/)) return 0
+            sub(/^ */, "", line)
+            match(line, /^#+/)
+            return RLENGTH <= 6 ? RLENGTH : 0
+        }
+        # A heading as GitHub shows it, which its anchor is made of.
+        function heading_text(line,    out, item) {
+            sub(/^ *#+[ \t]*/, "", line)
+            sub(/[ \t]+#+[ \t]*$/, "", line)
+            sub(/^#+[ \t]*$/, "", line)
+            sub(/[ \t]+$/, "", line)
+            gsub(/`/, "", line)
+            gsub(/<[^>]*>/, "", line)
+            out = ""
+            while (match(line, /!?\[[^]]*\]\([^)]*\)/)) {
+                out = out substr(line, 1, RSTART - 1)
+                item = substr(line, RSTART, RLENGTH)
+                sub(/^!?\[/, "", item)
+                sub(/\]\(.*$/, "", item)
+                out = out item
+                line = substr(line, RSTART + RLENGTH)
+            }
+            return out line
+        }
+        fence != "" {
+            if (closes($0, fence)) fence = ""
+            next
+        }
+        fence_of($0) != "" {
+            flush()
+            fence = fence_of($0)
+            next
+        }
+        /^[ \t]*$/ { flush(); next }
+        heading_level($0) > 0 {
+            flush()
+            printf "heading\t%d\t%s\n", NR, heading_text($0)
+            add_line($0)
+            flush()
+            next
+        }
+        # A link reference definition, "[label]: target"; not a footnote, "[^1]: text".
+        /^ ? ? ?\[[^]^][^]]*\]:/ {
+            flush()
+            target = $0
+            sub(/^[^]]*\]:/, "", target)
+            link(NR, target)
+            next
+        }
+        { add_line($0) }
+        END { flush() }
+    ' "$1"
+}
+
+# GitHub's anchor of a heading: lowercase, with only letters, digits, spaces, - and _ kept, and
+# each space a -.
+md_slug() { # <heading text>: sets md_slug_value
+    local LC_ALL=C.UTF-8
+    local text=${1,,}
+    text=${text//[^[:alnum:] _-]/}
+    md_slug_value=${text// /-}
+}
+
+declare -A md_anchors=() md_scanned=()
+md_links=()
+
+# Records the anchors of a file's headings in md_anchors, as "<file>#<anchor>", where a slug met
+# before gets -1, -2 and so on, as on GitHub; with `links`, appends its links to md_links too.
+md_scan() { # <file> [links]
+    local file=$1 kind line text base slug count
+    local -A seen=()
+    while IFS=$'\t' read -r kind line text; do
+        if [[ $kind == link ]]; then
+            [[ -z ${2-} ]] || md_links+=("$file"$'\t'"$line"$'\t'"$text")
+            continue
+        fi
+        md_slug "$text"
+        base=$md_slug_value
+        slug=$base
+        # The keys carry a prefix: a heading of no letters has an empty slug, and no array takes
+        # an empty key.
+        while [[ -n ${seen["s:$slug"]+set} ]]; do
+            count=$((${seen["s:$base"]} + 1))
+            seen["s:$base"]=$count
+            slug=$base-$count
+        done
+        seen["s:$slug"]=0
+        md_anchors["$file#$slug"]=1
+    done < <(markdown_items "$file")
+    md_scanned[$file]=1
+}
+
+check_markdown_links() {
+    local listing file line target path anchor resolved dir entry
+    if ! listing=$(git -c core.quotePath=false ls-files -- '*.md' ':(exclude)vendor/' ':(exclude).specs/'); then
+        violation "$root" "git ls-files failed, cannot check the links of the Markdown files"
+        return
+    fi
+    while IFS= read -r file; do
+        # A file deleted from the work tree but not yet from the index has no links left.
+        [[ -n $file && -f $file ]] || continue
+        md_scan "$file" links
+    done <<<"$listing"
+    for entry in "${md_links[@]}"; do
+        IFS=$'\t' read -r file line target <<<"$entry"
+        # A URL (https:, mailto: and the like) is not looked at.
+        if [[ $target =~ ^[A-Za-z][A-Za-z0-9+.-]*: || $target == //* ]]; then
+            continue
+        fi
+        path=${target%%#*}
+        path=${path%%\?*}
+        anchor=
+        [[ $target != *#* ]] || anchor=${target#*#}
+        if [[ -z $path ]]; then
+            resolved=$file
+        else
+            # A path that starts with / is taken from the top of the repository, as on GitHub.
+            if [[ $path == /* ]]; then
+                resolved=${path#/}
+            else
+                dir=.
+                [[ $file != */* ]] || dir=${file%/*}
+                resolved=$dir/$path
+                resolved=${resolved#./}
+            fi
+            if [[ ! -e $resolved ]]; then
+                violation "$file:$line" "link ($target): $resolved does not exist"
+                continue
+            fi
+        fi
+        # An anchor of another kind of file, such as a line of code, is not looked at.
+        [[ -n $anchor && $resolved == *.md && -f $resolved ]] || continue
+        [[ -n ${md_scanned[$resolved]+set} ]] || md_scan "$resolved"
+        if [[ -z ${md_anchors["$resolved#$anchor"]+set} ]]; then
+            violation "$file:$line" "link ($target): $resolved has no heading with the anchor #$anchor"
+        fi
+    done
+}
+
+check_markdown_links
 
 if ((failures > 0)); then
     echo "lint-policy: $failures violation(s); see AGENTS.md (Code Style, Architecture, Dependencies)" >&2
