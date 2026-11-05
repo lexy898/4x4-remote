@@ -258,6 +258,9 @@ while it runs, and where it finds the GeoIP files.
   architecture, the synthetic demo, the live tests and localization. [`AGENTS.md`](AGENTS.md)
   holds the rules every change follows.
 - [Performance](docs/performance.md): how 4x4 is measured, and the figures of each stage.
+- [Changelog](CHANGELOG.md): what each version added or changed.
+- [Releasing](docs/releasing.md): how a version is released.
+- [Security policy](SECURITY.md): which versions get fixes and how to report a vulnerability.
 
 ## License
 
