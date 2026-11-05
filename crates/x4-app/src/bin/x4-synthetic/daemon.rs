@@ -81,6 +81,8 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 /// How many polls of the recently active torrents a verify takes.
 pub(crate) const VERIFY_POLLS: u32 = 3;
+/// The version the daemon says it is, in `session_get`: a Transmission 4.1, which 4x4 can use.
+pub(crate) const VERSION: &str = "4.1.3 (synthetic)";
 
 /// How the made-up torrents behave between polls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -511,7 +513,7 @@ impl Session {
             "speed_limit_up": self.speed_limit_up,
             "speed_limit_up_enabled": self.speed_limit_up_enabled,
             "start_added_torrents": true,
-            "version": "4.1.3 (synthetic)",
+            "version": VERSION,
         })
     }
 
