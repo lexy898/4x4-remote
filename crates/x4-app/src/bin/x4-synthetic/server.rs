@@ -88,7 +88,7 @@ mod tests {
     use x4_core::Event;
 
     use super::*;
-    use crate::daemon::{Activity, SHOWCASE_NAMES, TORRENTS};
+    use crate::daemon::{Activity, SHOWCASE, TORRENTS};
 
     /// How long a test waits for the service's first list.
     const WAIT: Duration = Duration::from_secs(10);
@@ -162,7 +162,7 @@ mod tests {
             showcase: true,
         });
 
-        assert_eq!(listed, SHOWCASE_NAMES.len());
+        assert_eq!(listed, SHOWCASE.len());
     }
 
     #[gpui_kit::test]

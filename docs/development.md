@@ -173,49 +173,51 @@ every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per fra
 logs the intervals between the frames and quits; `--select N` selects the row at index `N` (from 0)
 once the list is there, and `--extend K` then extends the selection `K` rows down, as Shift+Down
 would. `--showcase` makes 24 torrents instead, named like free software, films and texts that anyone
-may share (an Arch Linux ISO, "Big Buck Bunny (2008) 1080p"), in a mix of states: every main state
-is among them, and the first rows show several. `--theme system|light|dark` starts the window with
-that theme instead of following the desktop's, so that a shot of either theme changes nothing on the
-desktop. Both are for [screenshots](#screenshots); the default demo is the same with and without them. The made-up
-daemon carries out the actions on its own torrents: pausing, starting (a torrent
-that lacks data downloads, a complete one seeds), starting ahead of the queue, verifying (the
-torrent checks for three updates, then goes back to what it was), removing, the speed settings, and
-what the Files tab changes: which files download, their priorities and downloading in order. It
-also adds torrents, from the content of a `.torrent` file (with the files it lists, in its order) or
-from a magnet link (which stays without its metadata), honouring `paused`, the folder and the files
-left out; it reports a torrent it already has as a duplicate and changes nothing; and its free space
-answers for the session's folder and the folders of its torrents, and their parent folders, with
-Transmission's error 5, "No such file or directory", for any other. Its torrents have files, most
-one, some a folder of several, a few dozens, "Synthetic torrent 0005" (`--select 4`) 2000 in
-folders, and "Synthetic torrent 0006" (`--select 5`, Down from it), a seed, 50 000 in folders, the
-most the Files tab shows; their pieces follow the download, from the start when it is in order. The running
-torrents have peers, at addresses reserved for documentation (192.0.2.0/24, 198.51.100.0/24,
-203.0.113.0/24 and 2001:db8::/32), which stay from one read to the next while the torrent's rates
-are shared out among them; a country database the demo makes in memory puts them in countries
-(Japan, South Korea and Finland among them, whose flags are mostly white), in the region EU or in
-none, and the installed GeoIP files are not read. Their trackers, none, one or twelve in tiers
-with a backup in the first, announce every 30 minutes counted from the clock, and a few wait for a
-slot or announce right now; some fail, time out or fail only their scrape, and those of a stopped
-torrent that has not run since the made-up daemon started were never contacted. "Synthetic torrent
-0016" (`--select 15`; with `--static`, "Synthetic torrent 0011", `--select 10`) is busy: it
-downloads from 150 peers and has a tracker of every status, so that `just virtual just
-demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4` the Trackers
-tab with each kind of row. `--press KEY`, which can be given several times, presses each key in turn
-once the list is there and selected, one every three seconds, as on the keyboard: for example `just
-virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth
-torrent and starts it again, `--press shift-delete` opens the dialog that would delete its files,
-and `--press ctrl-o` opens the desktop's file dialog, with its filter for torrent files. `--add
-PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent` file or magnet
-link at the start, as if 4x4 had been opened with them, which opens the add dialog; what it does not
-open makes its notification. The window is set to a made-up server, `synthetic.invalid:9091`, and
-`--connection` opens the Connection dialog after the first frame, as `Ctrl+,` would. Its Test
-answers for any server with the made-up daemon's version ("Connected: Transmission 4.1.3
-(synthetic)"), and its Save switches to a new made-up daemon, whatever other server the fields name,
-as a switch in 4x4 does; it writes no `config.toml`. `just virtual just demo-synthetic --scroll`
-runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up daemon logs each request it
-answers with the bytes of the request and of the answer, which is how the requests and the bytes the
-app asks of a daemon are counted (see [Performance](performance.md)). The demo is the `x4-synthetic`
-binary of the `synthetic` feature, so the `4x4` build does not contain it.
+may share (an Arch Linux ISO, "Big Buck Bunny (2008) 1080p"), each as big as such content is (the
+ISO 1.4 GiB, the Wikipedia dump 24 GiB), in a mix of states: every main state is among them, and the
+first rows show several. None is the demo's torrent of 2000 files or the one of 50 000. `--theme
+system|light|dark` starts the window with that theme instead of following the desktop's, so that a
+shot of either theme changes nothing on the desktop. Both are for [screenshots](#screenshots); the
+default demo is the same with and without them. The made-up daemon carries out the actions on its
+own torrents: pausing, starting (a torrent that lacks data downloads, a complete one seeds),
+starting ahead of the queue, verifying (the torrent checks for three updates, then goes back to what
+it was), removing, the speed settings, and what the Files tab changes: which files download, their
+priorities and downloading in order. It also adds torrents, from the content of a `.torrent` file
+(with the files it lists, in its order) or from a magnet link (which stays without its metadata),
+honouring `paused`, the folder and the files left out; it reports a torrent it already has as a
+duplicate and changes nothing; and its free space answers for the session's folder and the folders
+of its torrents, and their parent folders, with Transmission's error 5, "No such file or directory",
+for any other. Its torrents have files, most one, some a folder of several, a few dozens, "Synthetic
+torrent 0005" (`--select 4`) 2000 in folders, and "Synthetic torrent 0006" (`--select 5`, Down from
+it), a seed, 50 000 in folders, the most the Files tab shows; their pieces follow the download, from
+the start when it is in order. The running torrents have peers, at addresses reserved for
+documentation (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 and 2001:db8::/32), which stay from one
+read to the next while the torrent's rates are shared out among them; a country database the demo
+makes in memory puts them in countries (Japan, South Korea and Finland among them, whose flags are
+mostly white), in the region EU or in none, and the installed GeoIP files are not read. Their
+trackers, none, one or twelve in tiers with a backup in the first, announce every 30 minutes counted
+from the clock, and a few wait for a slot or announce right now; some fail, time out or fail only
+their scrape, and those of a stopped torrent that has not run since the made-up daemon started were
+never contacted. "Synthetic torrent 0016" (`--select 15`; with `--static`, "Synthetic torrent 0011",
+`--select 10`) is busy: it downloads from 150 peers and has a tracker of every status, so that `just
+virtual just demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4`
+the Trackers tab with each kind of row. `--press KEY`, which can be given several times, presses
+each key in turn once the list is there and selected, one every three seconds, as on the keyboard:
+for example `just virtual just demo-synthetic --static --select 5 --press ctrl-p --press space`
+pauses the sixth torrent and starts it again, `--press shift-delete` opens the dialog that would
+delete its files, and `--press ctrl-o` opens the desktop's file dialog, with its filter for torrent
+files. `--add PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent`
+file or magnet link at the start, as if 4x4 had been opened with them, which opens the add dialog;
+what it does not open makes its notification. The window is set to a made-up server,
+`synthetic.invalid:9091`, and `--connection` opens the Connection dialog after the first frame, as
+`Ctrl+,` would. Its Test answers for any server with the made-up daemon's version ("Connected:
+Transmission 4.1.3 (synthetic)"), and its Save switches to a new made-up daemon, whatever other
+server the fields name, as a switch in 4x4 does; it writes no `config.toml`. `just virtual just
+demo-synthetic --scroll` runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up daemon
+logs each request it answers with the bytes of the request and of the answer, which is how the
+requests and the bytes the app asks of a daemon are counted (see [Performance](performance.md)). The
+demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build does not contain
+it.
 
 ## Screenshots
 
@@ -224,7 +226,7 @@ binary of the `synthetic` feature, so the `4x4` build does not contain it.
 picks between by the reader's theme, and `peers-dark.png`, the Peers tab. They are shots of the
 `--showcase` demo (see [Synthetic demo](#synthetic-demo)), so they show no one's torrents, server or
 addresses: the names are the showcase's and the peers are at addresses reserved for documentation.
-Retake them when the UI changes, so that the README shows what 4x4 looks like.
+Retake them when the UI or the showcase changes, so that the README shows what 4x4 looks like.
 
 The shots are taken inside `just virtual`, off your screens, with spectacle. The session's own
 `HOME` is removed when it ends, so `shots` is a directory outside it. The demo is built first, and
@@ -247,16 +249,19 @@ shot() {
 }
 shot main-dark 12 --theme dark --select 4
 shot main-light 12 --theme light --select 4
-shot peers-dark 16 --theme dark --select 15 --press alt-3
+shot peers-dark 14 --theme dark --select 15 --press alt-3
 '
 ```
 
 `--select 4` is the fifth row, a download with 40 peers; `--select 15` is the busy download, with
-150 peers, and `--press alt-3` opens its Peers tab three seconds after the list is there, which the
-longer wait allows for. The rows are in the default order, by name. The virtual screen is 1440x900
-and the window opens 1200x720, centered, under KWin's title bar, so the crop `1200x750+120+75` is
-the window and nothing else. `zopflipng` squeezes the files without loss, to 120 to 135 KiB each;
-keep each under 150 KiB (the repository is cloned by everyone):
+150 peers, and `--press alt-3` opens its Peers tab three seconds after the list is there. The rows
+are in the default order, by name. The rates change on every poll, so what a shot holds depends on
+how long it waits; with these waits the shots come out the same each time, but the ETA column is too
+narrow for `37 m 34 s`, so if a retake cuts the ETA of the selected row off, change that shot's wait
+by a second. The virtual screen is 1440x900 and the window opens 1200x720, centered, under KWin's
+title bar, so the crop `1200x750+120+75` is the window and nothing else. `zopflipng` squeezes the
+files without loss, to about 120 to 130 KiB each; keep each under 150 KiB (the repository is cloned
+by everyone):
 
 ```bash
 for name in main-dark main-light peers-dark; do

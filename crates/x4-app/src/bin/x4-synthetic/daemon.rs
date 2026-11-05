@@ -62,7 +62,7 @@ use torrent::{Kind, Torrent};
 use trackers::Trackers;
 
 pub(crate) use peers::country_blocks;
-pub(crate) use showcase::SHOWCASE_NAMES;
+pub(crate) use showcase::SHOWCASE;
 
 /// How many torrents the default daemon has.
 pub(crate) const TORRENTS: u32 = 2000;
@@ -104,7 +104,7 @@ pub(crate) enum Activity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Recipe {
     pub(crate) activity: Activity,
-    /// The few torrents of [`SHOWCASE_NAMES`] instead of the default mix of many.
+    /// The few torrents of [`SHOWCASE`] instead of the default mix of many.
     pub(crate) showcase: bool,
 }
 
@@ -121,7 +121,7 @@ impl Recipe {
     /// How many torrents the daemon the recipe makes has.
     pub(crate) fn torrents(self) -> usize {
         if self.showcase {
-            SHOWCASE_NAMES.len()
+            SHOWCASE.len()
         } else {
             usize::try_from(TORRENTS).unwrap_or(usize::MAX)
         }
