@@ -29,8 +29,10 @@ just release          # optimized build
 just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp
                       # state dir; --synthetic measures the demo, --binary <path> a built file;
                       # agents run it inside `just virtual` and measure the app with --offline (the
-                      # session's config dir is empty, so the app would poll the owner's daemon;
-                      # not with --synthetic: the demo reads no config, so it is refused there)
+                      # session's config dir is empty, so the app would set no server, show the
+                      # Connection dialog and poll nothing; --offline names a closed port, which
+                      # it keeps polling; not with --synthetic: the demo reads no config, so it is
+                      # refused there)
 just package          # the Arch package of the committed master under ~/.cache/4x4-pkg; prints its
                       # path (installing it is the owner's). Agents run it only from a scratch
                       # clone, with XDG_CACHE_HOME under ~/.cache/x4-scratch, never in the owner's

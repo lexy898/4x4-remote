@@ -41,6 +41,7 @@ const TOOLKIT_PLACES: &[&str] = &[
     "in a removal dialog",
     "in the speed limits",
     "in the add dialog",
+    "in the Connection dialog",
 ];
 
 /// Where the README says that `keys`, bound in `context`, work.
