@@ -1266,6 +1266,39 @@ The app itself, which reached no daemon and kept reconnecting to a closed port
   embedded flags. The RSS is 20 MiB lower probably because fewer shared driver pages were resident
   in these sessions, as the PSS and USS figures suggest (see above).
 
+### The connection (stage 8)
+
+Measured on 2026-11-05 on the same laptop, in one session of `just virtual`, with release builds:
+the app of `master` (stage 7, built in a separate clone with `cargo build --release --locked`) and
+the app of this stage, taken in turn, three runs each
+(`X4_MEASURE_SETTLE_SECONDS=10 just measure --offline --cpu 20 --binary <file>`); each figure is
+the median of the three. Both reached no daemon and kept reconnecting to the closed port that
+`--offline` names, so a server was set and the Connection dialog stayed closed. The CPU is that of
+the 20 seconds after the memory figures; "not met" marks every cell over its target:
+
+| Metric                     | Target              | App, stage 7        | App, stage 8        |
+| -------------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 196 ms              | 190 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 140.6 MiB (not met) | 140.9 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 57.5 MiB (not met)  | 57.8 MiB (not met)  |
+| Unique memory (USS)        | —                   | 47.1 MiB            | 47.4 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.3 MiB            | 15.4 MiB            |
+| Threads                    | —                   | 29                  | 29                  |
+| CPU over 20 s, one core    | near 0 % when idle  | 0.05 %              | 0.00 %              |
+| Binary size                | —                   | 40.1 MiB            | 40.4 MiB            |
+
+- Stage 8 adds 0.1 MiB of private memory at startup and 0.3 MiB of PSS and USS, about what the
+  runs differ by among themselves (stage 8's private memory was 15.4 to 15.5 MiB); the first frame
+  and the idle CPU, 0.00 to 0.05 % in either build, are unchanged. The binary grew by 0.35 MiB:
+  the Connection dialog, the credentials sent with each request, and the writer that edits
+  `config.toml` (`toml_edit`, whose code the binary did not hold before: only the macros of
+  gpui-component used it, while building). How much of it each takes was not measured.
+- The first run of the session, which was `master`'s, had 35 threads, 16.0 MiB of private memory,
+  63.7 MiB of PSS and a first frame of 275 ms; every later run, of either build, had 29 threads.
+  The app's figures of stages 6 and 7 above, each from first starts of sessions, show 35 threads
+  too, so the figures here compare with each other, not with those. That run sways none of the
+  medians.
+
 ## Development
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and
