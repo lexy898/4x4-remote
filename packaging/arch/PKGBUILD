@@ -6,7 +6,7 @@
 
 pkgname=4x4-git
 # makepkg replaces this with what pkgver() prints, in the copy of this file that it runs.
-pkgver=0.1.0.r229.g927ee24
+pkgver=1.0.0.r0.g0000000
 pkgrel=1
 pkgdesc='Native desktop client for a remote Transmission daemon'
 arch=('x86_64')

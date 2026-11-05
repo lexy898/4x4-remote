@@ -9034,7 +9034,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "x4-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -9062,7 +9062,7 @@ dependencies = [
 
 [[package]]
 name = "x4-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel",
  "crossbeam-channel",
@@ -9081,7 +9081,7 @@ dependencies = [
 
 [[package]]
 name = "x4-rpc"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "serde",
