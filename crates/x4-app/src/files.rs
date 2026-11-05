@@ -191,7 +191,8 @@ pub(crate) fn read_ui_state(path: &Path) -> Result<LoadedState, FilesError> {
 ///
 /// A missing file is a new one. A file that is not TOML at all (not even UTF-8) cannot be edited:
 /// it is moved to `config.toml.bad`, replacing an older one, and a new file is written, which the
-/// log says with both paths and [`SavedConfig::moved_aside`] tells.
+/// log says with both paths and [`SavedConfig::moved_aside`] tells; the old file is private to the
+/// owner as `config.toml.bad`, as it may hold a password.
 ///
 /// If `path` is a symbolic link (dotfiles kept in a repository), it is written through: the file
 /// the link names is read, edited and replaced, in its own directory, and the link stays a link.
@@ -248,6 +249,8 @@ pub(crate) fn save_connection(
         to: bad.clone(),
         source,
     })?;
+    // The rename keeps the mode of the broken file, which may be readable to others.
+    make_private(&bad);
     if let Err(error) = persist(staged, path) {
         if let Err(back) = fs::rename(&bad, path) {
             tracing::warn!(path = %path.display(), moved_to = %bad.display(), error = %back, "config.toml could not be moved back after the new one failed");
@@ -305,6 +308,21 @@ fn write_target(path: &Path) -> Result<PathBuf, FilesError> {
     Err(read_error(io::Error::other(
         "too many levels of symbolic links",
     )))
+}
+
+/// Makes `path` readable and writable by the owner only (mode 0600 on Unix). It is done for a file
+/// that holds a password it should not have shown to others; if it cannot be done, the log says so
+/// and the file stays as it was.
+fn make_private(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(path = %path.display(), %error, "the file could not be made private to the owner");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// Writes `text` to `path` atomically, private to the owner: [`stage`], then [`persist`].
@@ -1235,6 +1253,46 @@ mod tests {
 
         assert!(matches!(&error, FilesError::Read { .. }), "{error:?}");
         assert_eq!(names(dir.path()), ["config.toml", "other.toml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_aside_config_is_private_to_the_owner() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        let bad = dir.path().join("config.toml.bad");
+        fs::write(&path, "[connection\npassword = \"hunter2\"\n").expect("written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let saved = save_connection(&path, &nas()).expect("saved");
+
+        assert!(saved.moved_aside);
+        assert_eq!(mode(&bad), 0o600, "the broken file may hold a password");
+        assert_eq!(mode(&path), 0o600);
+
+        // An older `.bad` file that others could read is replaced, and the new one is private.
+        fs::write(&path, "[connection\n").expect("written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("chmod");
+        fs::set_permissions(&bad, fs::Permissions::from_mode(0o644)).expect("chmod");
+        save_connection(&path, &nas()).expect("saved again");
+        assert_eq!(mode(&bad), 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_made_private_is_a_warning() {
+        let dir = dir();
+        let missing = dir.path().join("config.toml.bad");
+
+        let records = crate::test_log::records_of(|| make_private(&missing));
+
+        let warning = records
+            .iter()
+            .find(|record| record.level == tracing::Level::WARN)
+            .expect("the log says that the mode was not changed");
+        assert_eq!(warning.field("path"), Some(&*missing.to_string_lossy()));
     }
 
     #[test]

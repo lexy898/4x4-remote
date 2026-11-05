@@ -782,9 +782,9 @@ Save in the Connection dialog writes only the `[connection]` table's `url` (alwa
 comments and every other key and table of the file stay as they were. It writes the file atomically,
 as `state.toml`, with mode 0600, so that only you can read it, because the password is in it as
 plain text. A file that is not TOML at all cannot be edited: Save moves it to `config.toml.bad`
-(replacing an older one), writes a new one, and the log says so. If `config.toml` is a symbolic link
-(dotfiles kept in a repository), Save writes through it: the file the link names gets the new text,
-and the link stays a link.
+(replacing an older one; only you can read it either, as it may hold the password), writes a new
+one, and the log says so. If `config.toml` is a symbolic link (dotfiles kept in a repository), Save
+writes through it: the file the link names gets the new text, and the link stays a link.
 
 4x4 writes `state.toml` atomically, so a crash cannot leave half a file. If the file cannot be
 parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
