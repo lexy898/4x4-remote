@@ -189,12 +189,12 @@ daemon that asks for a login, User name and Password; for one that does not, lea
 password is masked, and the eye at the end of its field shows it and hides it again. Under the
 fields a muted line shows the address they make, such as
 `http://192.168.1.10:9091/transmission/rpc`, which never holds the user name or the password. A
-whole address pasted into Host, such as `http://alice:secret@nas:9091/transmission/rpc` or
-`nas:9091`, is spread over the fields at once; a typed one is spread when the focus leaves Host, or
-at Save or Test. Only plain `http://` works: an `https://` address is refused with "HTTPS is not
-supported yet". The port is a number from 1 to 65535, the path cannot hold `?`, `#` or spaces, and
-a user name cannot hold a colon. The user name and the password are taken as typed, spaces
-included.
+whole address pasted into Host, such as `http://alice:secret@nas:9091/transmission/rpc`, `nas:9091`
+or `nas:9091/transmission/rpc`, is spread over the fields at once; a typed one is spread when the
+focus leaves Host, or at Save or Test. Only plain `http://` works: an `https://` address is refused
+with "HTTPS is not supported yet". The port is a number from 1 to 65535, the path cannot hold `?`,
+`#` or spaces, and a user name cannot hold a colon. The user name and the password are taken as
+typed, spaces included.
 
 Test asks the server for its version once (one `session_get`, given up after 5 seconds without an
 answer), off the window's thread, so that the window never waits. The button says "Testing…" until

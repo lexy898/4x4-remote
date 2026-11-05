@@ -146,10 +146,11 @@ impl ConnectionForm {
     ///
     /// A full address is `http://[user[:password]@]host[:port][/path]`, which fills every field it
     /// has: the user name and the password percent-decoded, no port meaning 80, and a path of `/`
-    /// leaving the path as it is. It is also `host:port` with a number for a port (an IPv6 host in
-    /// brackets), which fills the host and the port. Anything else is not spread, and the check
-    /// tells what is wrong with it: a plain host, an IPv6 literal, an `https://` address, an
-    /// address with a query or a fragment.
+    /// leaving the path as it is. It is also `host:port[/path]` with a number for a port (an IPv6
+    /// host in brackets), which fills the host, the port and the path, if there is one, as a
+    /// browser's address bar without the `http://` has them; it has no user name, query or
+    /// fragment. Anything else is not spread, and the check tells what is wrong with it: a plain
+    /// host, an IPv6 literal, an `https://` address, an address with a query or a fragment.
     ///
     /// Spreading changes nothing here; the dialog decides when to use the result.
     #[must_use]
@@ -180,23 +181,37 @@ impl ConnectionForm {
         Some(form)
     }
 
-    /// Spreads `host:port` and `[v6]:port`.
+    /// Spreads `host:port` and `[v6]:port`, each with a path or without.
     fn spread_host_port(&self, text: &str) -> Option<Self> {
-        let (host, port) = match text.strip_prefix('[') {
+        // The host and the port end at the first `/`; the rest is the path.
+        let (authority, path) = text.split_at(text.find('/').unwrap_or(text.len()));
+        let (host, port) = match authority.strip_prefix('[') {
             Some(rest) => rest
                 .split_once("]:")
                 .filter(|(host, _)| host.contains(':'))?,
-            None => text.split_once(':')?,
+            None => authority.split_once(':')?,
         };
         // An IPv6 literal without brackets has more colons, and no digits-only port after the first.
         if host.is_empty() || port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
-        Some(Self {
+        let mut form = Self {
             host: host.to_owned(),
             port: port.to_owned(),
             ..self.clone()
-        })
+        };
+        if !path.is_empty() {
+            // The rules of a full address for the path: a query, a fragment, a space or a control
+            // character refuses it, as does a user name before the host.
+            let address = Address::parse(&format!("http://{text}")).ok()?;
+            if address.has_credentials() {
+                return None;
+            }
+            if address.path != "/" {
+                form.path = address.path;
+            }
+        }
+        Some(form)
     }
 }
 

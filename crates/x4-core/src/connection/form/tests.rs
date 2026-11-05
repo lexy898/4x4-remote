@@ -445,6 +445,68 @@ fn spread_takes_host_colon_port() {
 }
 
 #[test]
+fn spread_takes_host_colon_port_and_a_path() {
+    assert_eq!(
+        spread("nas:9091/rpc").unwrap(),
+        form("nas", "9091", "/rpc", "", "")
+    );
+    let browser = spread(" 192.168.1.5:9091/transmission/rpc ").unwrap();
+    assert_eq!(
+        browser,
+        form("192.168.1.5", "9091", "/transmission/rpc", "", "")
+    );
+    assert_eq!(
+        browser.check().unwrap().url(),
+        "http://192.168.1.5:9091/transmission/rpc"
+    );
+    assert_eq!(
+        spread("[::1]:8080/a/b").unwrap(),
+        form("::1", "8080", "/a/b", "", "")
+    );
+    // A path of `/` leaves the path as it is, as for a full address.
+    assert_eq!(
+        spread("nas:9091/").unwrap(),
+        form("nas", "9091", "/transmission/rpc", "", "")
+    );
+    // The path is read by the rules of a full address: the `url` crate writes it.
+    assert_eq!(spread("nas:80/a%20b/ä").unwrap().path, "/a%20b/%C3%A4");
+}
+
+#[test]
+fn spread_leaves_ipv6_without_brackets_and_a_path_to_the_check() {
+    for host in [
+        "::1/rpc",
+        "fe80::1/rpc",
+        "fe80::1:9091/transmission/rpc",
+        "2001:db8::1/rpc",
+        "[::1]/rpc",
+        "[nas]:9091/rpc",
+    ] {
+        assert_eq!(spread(host), None, "{host:?}");
+    }
+}
+
+#[test]
+fn spread_leaves_a_path_with_userinfo_a_query_or_a_fragment_to_the_check() {
+    for host in [
+        "bob@nas:9091/rpc",
+        "bob:pw@nas:9091/rpc",
+        "nas:9091/rpc?x=1",
+        "nas:9091/rpc#f",
+        "nas:9091?x=1",
+        "nas:9091#f/rpc",
+        "nas:9091/a b",
+        "nas:9091/r\npc",
+        "nas:0/rpc",
+        ":9091/rpc",
+        "nas:/rpc",
+        "nas:port/rpc",
+    ] {
+        assert_eq!(spread(host), None, "{host:?}");
+    }
+}
+
+#[test]
 fn spread_ignores_plain_hosts_and_ipv6() {
     for host in [
         "",
