@@ -1,6 +1,7 @@
-# 4x4 — Development Guide
+# 4x4 Remote — Development Guide
 
-4x4 is a native desktop client for a remote Transmission daemon, written in Rust on GPUI.
+4x4 Remote (4x4 for short) is a native desktop client for a remote Transmission daemon, written in
+Rust on GPUI.
 This file is the rulebook for every change. Product scope lives in the owner's local design notes.
 
 ## Tech Stack
@@ -136,7 +137,8 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 
 ### UI text and localization
 - The UI is English and localization-ready: every user-visible string goes through the i18n layer
-  by key. The only allowed literal is the product name "4x4".
+  by key. The only allowed literal is the product name "4x4 Remote" (`PRODUCT_NAME`); the
+  command, the package, the config and log folders and the messages keep the short name, 4x4.
 - To add a string: add the message to `crates/x4-app/i18n/en/x4.ftl` and fetch it with `t!` from
   `crates/x4-app/src/i18n.rs` (`t!("id")` or `t!("id", name = value)`). `t!` wraps `fl!`, which
   checks the message id against `en` at compile time. It checks the argument names only when the
@@ -205,6 +207,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Conventional Commits in English: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `ci:`, `build:`.
 - No AI attribution of any kind in commits, PRs or other git metadata.
 - `.specs/` is local working material and is never committed.
+- The repository is public: commits and merge commits carry the owner's GitHub noreply address,
+  never a private one. This checkout sets `user.email` to it; merge PRs with
+  `gh pr merge --merge --author-email 14843441+lexy898@users.noreply.github.com`.
 - One branch per stage or feature, merged through a PR once CI is green.
 - Work in place in this checkout on a branch per stage/feature; do not create git worktrees — the
   Stop hook and the build cache live in this directory.

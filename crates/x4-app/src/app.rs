@@ -1206,6 +1206,10 @@ mod tests {
         assert_eq!(value("Type"), Some("Application"));
         assert_eq!(value("Name"), Some(PRODUCT_NAME));
         assert_eq!(
+            PRODUCT_NAME, "4x4 Remote",
+            "the full name; the command keeps the short one"
+        );
+        assert_eq!(
             value("Exec"),
             Some("4x4 %U"),
             "one process for every file and link"

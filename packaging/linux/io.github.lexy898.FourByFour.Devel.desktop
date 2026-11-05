@@ -4,7 +4,7 @@
 # id. Hidden from menus and search and never a handler; its command runs the installed 4x4 under
 # the development id, which hands over to a running debug build.
 Type=Application
-Name=4x4 (debug build)
+Name=4x4 Remote (debug build)
 Comment=A development run of 4x4 from its source checkout
 Exec=env X4_DEVEL=1 4x4 %U
 TryExec=4x4
