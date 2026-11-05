@@ -956,7 +956,7 @@ add-rejected =
        *[other] Could not open { $count } of the items 4x4 was given; the first is { $reason }
     }
 add-rejected-url = a web address, and only magnet links and .torrent files can be added
-add-rejected-option = an option, and 4x4 has none
+add-rejected-option = an option 4x4 does not know
 add-rejected-bare-hash = a bare info hash, which must be given as a magnet link
 add-rejected-empty = empty
 add-rejected-not-text = a magnet link that is not text

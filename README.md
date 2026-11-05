@@ -631,6 +631,11 @@ as wait to be added; the notification that some were left out counts the others,
 looked at. From the source tree, `just run 'magnet:?xt=…'` passes them on; quote a magnet link, as
 its `&` means something to the shell.
 
+`4x4 --version`, or `4x4 -V`, prints the name and the version of the build, such as
+`4x4 Remote 1.0.0`, on one line and exits. It opens no window, writes no log and does not reach the
+4x4 that runs, so it answers at any time; it is understood next to files too, but not after a `--`.
+It is the only option 4x4 knows: every other option is refused, as above.
+
 One 4x4 runs at a time for each user. Starting it again, with or without files and links, hands
 them to the 4x4 that runs already and exits at once: that one offers them in its add dialog, after
 any it is showing, and brings its window to the front. Where the desktop does not let it come to the

@@ -22,16 +22,18 @@
 //! there, and the `files` module reads and writes `config.toml` and `state.toml`; the `saving`
 //! module decides when the window's state is written, and the `window_state` module turns the
 //! window's bounds into the size to remember and back. [`instance`] keeps one 4x4 per user: a later
-//! launch hands its arguments to the first one and exits. The `4x4` binary pins the allocator
-//! ([`allocator`]), finds the paths, starts the logging, hands its arguments over or calls
-//! [`app::run`] with them. [`keymap`] is the one table of key bindings, with the actions the keys
-//! run. Every text the windows show comes from the Fluent messages in `i18n/`, through the `i18n`
-//! module.
+//! launch hands its arguments to the first one and exits. The `4x4` binary first asks [`cli`]
+//! whether it was started for `--version`, which it prints and exits; otherwise it pins the
+//! allocator ([`allocator`]), finds the paths, starts the logging, hands its arguments over or
+//! calls [`app::run`] with them. [`keymap`] is the one table of key bindings, with the actions the
+//! keys run. Every text the windows show comes from the Fluent messages in `i18n/`, through the
+//! `i18n` module.
 
 pub mod actions;
 pub mod adding;
 pub mod allocator;
 pub mod app;
+pub mod cli;
 mod clipboard;
 pub mod connection;
 mod connection_dialog;

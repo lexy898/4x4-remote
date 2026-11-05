@@ -45,7 +45,8 @@ pub enum RejectKind {
     ///
     /// 4x4 never has the daemon fetch a URL.
     Url,
-    /// An option (it starts with `-`); none are defined.
+    /// An option (it starts with `-`) that 4x4 does not know; `--version` is answered before the
+    /// arguments get here.
     Option,
     /// A bare info hash: only the explicit `magnet:?` form is taken.
     BareHash,
