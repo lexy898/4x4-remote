@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # gpui-kit is bumped by hand together with the vendored renderer, see
+    # vendor/gpui-pre-wgpu/PATCHED.md.
+    ignore:
+      - dependency-name: gpui-kit
     commit-message:
       prefix: build
       include: scope
