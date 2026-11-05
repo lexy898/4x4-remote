@@ -6,9 +6,9 @@
 # /proc/<pid>/status and /proc/<pid>/maps, so a test can feed it canned ones.
 
 # Reference limits of `just measure`, in MiB. A breach prints a warning and never changes the
-# exit code. They are not the targets in README.md. Private (anonymous) memory and PSS are the
-# honest costs of the app; RSS counts every shared file-backed page in full, so the 120 MiB limit
-# is looser than the 100 MiB target and a reference only (README.md, "Performance").
+# exit code. They are not the targets in docs/performance.md. Private (anonymous) memory and PSS
+# are the honest costs of the app; RSS counts every shared file-backed page in full, so the 120 MiB
+# limit is looser than the 100 MiB target and a reference only (docs/performance.md).
 RSS_ANON_LIMIT_MIB=16
 PSS_LIMIT_MIB=55
 RSS_LIMIT_MIB=120

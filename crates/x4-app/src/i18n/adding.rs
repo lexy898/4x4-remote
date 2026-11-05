@@ -464,7 +464,7 @@ mod tests {
                 RejectKind::Url,
                 "a web address, and only magnet links and .torrent files can be added",
             ),
-            (RejectKind::Option, "an option, and 4x4 has none"),
+            (RejectKind::Option, "an option 4x4 does not know"),
             (
                 RejectKind::BareHash,
                 "a bare info hash, which must be given as a magnet link",
@@ -484,7 +484,7 @@ mod tests {
         }
         assert_eq!(
             rejected_text(rejected(RejectKind::Option), 2),
-            "Could not open 2 of the items 4x4 was given; the first is an option, and 4x4 has none"
+            "Could not open 2 of the items 4x4 was given; the first is an option 4x4 does not know"
         );
     }
 }

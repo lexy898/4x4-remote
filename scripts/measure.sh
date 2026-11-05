@@ -35,12 +35,12 @@
 # /proc/<pid>/stat) over the window_s seconds that followed, as a percentage of one core.
 #
 # The reference limits checked in scripts/measure-lib.sh are rss_anon_mib <= 16, pss_mib <= 55,
-# rss_mib <= 120 and gl_stack_mapped=no; they are not the targets in README.md (rss_mib <= 120 is
-# looser than its 100 MiB target). A breach prints a "WARN: ..." line on stderr and does not
-# change the exit code, which is non-zero only if the measurement itself failed: the app did not
-# start, did not log its first frame, or its /proc files could not be read (2 for a bad command
-# line, or a --binary that is not an executable file). The first-frame target (<= 500 ms) is
-# reported in README.md, not checked here.
+# rss_mib <= 120 and gl_stack_mapped=no; they are not the targets in docs/performance.md
+# (rss_mib <= 120 is looser than its 100 MiB target). A breach prints a "WARN: ..." line on stderr
+# and does not change the exit code, which is non-zero only if the measurement itself failed: the
+# app did not start, did not log its first frame, or its /proc files could not be read (2 for a bad
+# command line, or a --binary that is not an executable file). The first-frame target (<= 500 ms)
+# is reported in docs/performance.md, not checked here.
 #
 # Env: X4_MEASURE_SETTLE_SECONDS (default: 5), CARGO_TARGET_DIR (default: target). The program is
 # started with X4_DEVEL=1 (the development app id) and with XDG_STATE_HOME in a temp dir, so that

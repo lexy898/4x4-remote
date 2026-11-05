@@ -45,6 +45,7 @@ mod free_space;
 mod metainfo;
 mod peers;
 mod refusal;
+mod showcase;
 mod torrent;
 mod trackers;
 
@@ -61,7 +62,10 @@ use torrent::{Kind, Torrent};
 use trackers::Trackers;
 
 pub(crate) use peers::country_blocks;
+pub(crate) use showcase::SHOWCASE;
 
+/// How many torrents the default daemon has.
+pub(crate) const TORRENTS: u32 = 2000;
 /// The seed of the torrents, so that every run shows the same ones.
 const SEED: u64 = 0x0004_0004_0004_0004;
 /// Where every torrent downloads to.
@@ -93,6 +97,35 @@ pub(crate) enum Activity {
     Ticking,
     /// Every rate stays at 0 and no torrent is ever recently active: an idle daemon.
     Static,
+}
+
+/// Which daemon to make up, which the demo's service is started from, and again after each switch
+/// of server: how its torrents behave, and whether it is the showcase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Recipe {
+    pub(crate) activity: Activity,
+    /// The few torrents of [`SHOWCASE`] instead of the default mix of many.
+    pub(crate) showcase: bool,
+}
+
+impl Recipe {
+    /// A new daemon made by the recipe.
+    pub(crate) fn daemon(self) -> SyntheticDaemon {
+        if self.showcase {
+            SyntheticDaemon::showcase(self.activity)
+        } else {
+            SyntheticDaemon::new(TORRENTS, self.activity)
+        }
+    }
+
+    /// How many torrents the daemon the recipe makes has.
+    pub(crate) fn torrents(self) -> usize {
+        if self.showcase {
+            SHOWCASE.len()
+        } else {
+            usize::try_from(TORRENTS).unwrap_or(usize::MAX)
+        }
+    }
 }
 
 /// The daemon: its torrents behind a lock, because [`Transport::post`] takes `&self`.

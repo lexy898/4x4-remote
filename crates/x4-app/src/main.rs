@@ -1,19 +1,28 @@
-//! The `4x4` binary: pins the allocator ([`x4_app::allocator`]), finds the app's directories and
-//! sets up logging; then hands its arguments to the 4x4 the user runs already
+//! The `4x4` binary: prints its version and exits when asked for it ([`x4_app::cli`]), before it
+//! does anything else; otherwise pins the allocator ([`x4_app::allocator`]), finds the app's
+//! directories and sets up logging; then hands its arguments to the 4x4 the user runs already
 //! ([`x4_app::instance`]) and exits, or runs the application from [`x4_app::app`] with them.
 
 use std::env;
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use x4_app::adding::launch_requests;
 use x4_app::allocator::{log_pin, pin_mmap_threshold};
 use x4_app::app::app_id;
+use x4_app::cli::{version_line, wants_version};
 use x4_app::instance::{self, Claim};
 use x4_app::logging::init_logging;
 use x4_app::paths::{AppPaths, runtime_dir};
 
 fn main() -> anyhow::Result<()> {
+    // Before anything that leaves a trace: no log file, no lock or socket, no hand-over to a 4x4
+    // that runs, so that the version can be asked for at any time.
+    if wants_version(env::args_os().skip(1)) {
+        writeln!(io::stdout().lock(), "{}", version_line())?;
+        return Ok(());
+    }
     // First of all: no thread exists yet (the log writer is started below), and mallopt is not
     // thread-safe. Logged once logging is up.
     let mmap_pinned = pin_mmap_threshold();
@@ -23,6 +32,7 @@ fn main() -> anyhow::Result<()> {
     // Kept until the end of `main`: dropping it flushes the log file.
     let _log_guard = init_logging(paths.as_ref().ok().map(|paths| paths.log_dir.as_path()))?;
     log_pin(mmap_pinned);
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "4x4 starting");
     // Before the config, the service and the window: a later launch only hands its arguments over.
     let instance = match instance::claim(app_id(), runtime_dir().as_deref()) {
         Claim::HandedOff => return Ok(()),

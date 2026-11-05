@@ -11,10 +11,10 @@
 //! dragged in from another app move no mouse of this window, only the drag, so a drop after a key
 //! press would land nowhere. [`hover_while_dragging`] makes the drag count as the mouse.
 //!
-//! That is how gpui-pre 0.3.10 behaves: `Window::dispatch_event` sets the input modality from the
-//! raw event before it turns a `FileDrop` into mouse events (window.rs:5640-5646), and `on_drop`
+//! That is how gpui-pre 0.3.11 behaves: `Window::dispatch_event` sets the input modality from the
+//! raw event before it turns a `FileDrop` into mouse events (window.rs:5849-5855), and `on_drop`
 //! and `drag_over` ask `Hitbox::is_hovered`, which is false while the keyboard is in use
-//! (window.rs:797, div.rs:2968). Check again at each gpui-kit bump whether the workaround is still
+//! (window.rs:790, div.rs:2970). Check again at each gpui-kit bump whether the workaround is still
 //! needed; the test `a_drop_after_a_key_press_still_lands` guards that drops land either way.
 
 use gpui_kit::component::ActiveTheme as _;

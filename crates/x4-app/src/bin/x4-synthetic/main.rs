@@ -29,6 +29,11 @@
 //!   press is logged, for screenshots of what the actions do.
 //! - `--connection` opens the Connection dialog after the first frame, as `Ctrl+,` would, for
 //!   screenshots of the dialog.
+//! - `--showcase` makes 24 torrents named like free software, films and texts that anyone may
+//!   share, in a mix of states, instead of the 2000 "Synthetic torrent NNNN": the demo for the
+//!   screenshots of the README.
+//! - `--theme system|light|dark` starts the window with that theme, which the toolbar's button
+//!   changes as ever, instead of `system`, which follows the desktop.
 //!
 //! The daemon carries out the actions on its own made-up torrents, so they can be tried here.
 //! Its peers are at addresses reserved for documentation, which the demo's own country database,
@@ -58,12 +63,10 @@ use x4_app::app::{self, ServiceStart, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
-use x4_core::{CountryDb, Edition, GeoIp, UiState, build_country_file};
+use x4_core::{CountryDb, Edition, GeoIp, ThemeChoice, UiState, build_country_file};
 
-use crate::daemon::Activity;
+use crate::daemon::{Activity, Recipe};
 
-/// How many torrents the daemon has.
-const TORRENTS: u32 = 2000;
 /// How long `--scroll` waits before it scrolls, for the list to arrive and the window to settle.
 const SCROLL_AFTER: Duration = Duration::from_secs(3);
 /// How long `--scroll` scrolls.
@@ -84,8 +87,11 @@ fn main() -> anyhow::Result<()> {
     init_stderr_logging()?;
     log_pin(mmap_pinned);
     let options = Options::parse(env::args().skip(1))?;
+    let recipe = options.recipe();
     tracing::info!(
-        torrents = TORRENTS,
+        torrents = recipe.torrents(),
+        showcase = options.showcase,
+        theme = ?options.theme,
         activity = ?options.activity,
         scroll = options.scroll,
         select = ?options.select,
@@ -97,9 +103,9 @@ fn main() -> anyhow::Result<()> {
         "synthetic daemon"
     );
     let startup = Startup {
-        service: ServiceStart::from(server::spawn(options.activity)),
-        connection: server::setup(options.activity)?,
-        ui: UiState::default(),
+        service: ServiceStart::from(server::spawn(recipe)),
+        connection: server::setup(recipe)?,
+        ui: ui_state(options.theme),
         state_writable: false,
         state_path: None,
         config_problem: None,
@@ -332,8 +338,24 @@ fn countries() -> GeoIp {
     GeoIp::new(open(Edition::V4), open(Edition::V6))
 }
 
+/// The UI state the window starts from: the defaults, with `theme` when one is given. The demo
+/// never saves it.
+fn ui_state(theme: Option<ThemeChoice>) -> UiState {
+    match theme {
+        Some(theme) => UiState {
+            theme,
+            ..UiState::default()
+        },
+        None => UiState::default(),
+    }
+}
+
 /// The command line.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a command-line switch of its own, and none depends on another's value"
+)]
 struct Options {
     activity: Activity,
     scroll: bool,
@@ -349,9 +371,21 @@ struct Options {
     add: Vec<String>,
     /// Whether to open the Connection dialog after the first frame.
     connection: bool,
+    /// Whether the daemon is the showcase of a few named torrents, not the default mix of many.
+    showcase: bool,
+    /// The theme to start with; `None` is the default, which follows the system.
+    theme: Option<ThemeChoice>,
 }
 
 impl Options {
+    /// The daemon these options ask for.
+    fn recipe(&self) -> Recipe {
+        Recipe {
+            activity: self.activity,
+            showcase: self.showcase,
+        }
+    }
+
     /// The options of `args`, the arguments after the program name.
     fn parse(args: impl IntoIterator<Item = String>) -> anyhow::Result<Self> {
         let mut options = Self::default();
@@ -362,6 +396,7 @@ impl Options {
                 "--scroll" => options.scroll = true,
                 "--right-click" => options.right_click = true,
                 "--connection" => options.connection = true,
+                "--showcase" => options.showcase = true,
                 "--select" => {
                     let row = args
                         .next()
@@ -395,9 +430,23 @@ impl Options {
                     })?;
                     options.add.push(item);
                 }
+                "--theme" => {
+                    let choice = args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--theme needs one of system, light or dark")
+                    })?;
+                    options.theme = Some(match choice.as_str() {
+                        "system" => ThemeChoice::System,
+                        "light" => ThemeChoice::Light,
+                        "dark" => ThemeChoice::Dark,
+                        _ => anyhow::bail!(
+                            "--theme needs one of system, light or dark, not {choice:?}"
+                        ),
+                    });
+                }
                 other => anyhow::bail!(
                     "unknown argument {other:?}; the options are --static, --scroll, --select N, \
-                     --extend K, --right-click, --press KEY, --add PATH_OR_MAGNET and --connection"
+                     --extend K, --right-click, --press KEY, --add PATH_OR_MAGNET, --connection, \
+                     --showcase and --theme system|light|dark"
                 ),
             }
         }
@@ -432,6 +481,8 @@ mod tests {
                 press: Vec::new(),
                 add: Vec::new(),
                 connection: false,
+                showcase: false,
+                theme: None,
             }
         );
     }
@@ -449,6 +500,8 @@ mod tests {
                 press: Vec::new(),
                 add: Vec::new(),
                 connection: false,
+                showcase: false,
+                theme: None,
             }
         );
     }
@@ -517,8 +570,80 @@ mod tests {
     }
 
     #[test]
+    fn showcase_makes_the_daemon_a_showcase() {
+        assert!(!parse(&[]).expect("no flags").showcase);
+        let options = parse(&["--showcase", "--static"]).expect("the showcase");
+        assert!(options.showcase);
+        assert_eq!(options.activity, Activity::Static);
+    }
+
+    #[test]
+    fn theme_takes_one_of_the_three_choices() {
+        assert_eq!(parse(&[]).expect("no flags").theme, None);
+        for (name, choice) in [
+            ("system", ThemeChoice::System),
+            ("light", ThemeChoice::Light),
+            ("dark", ThemeChoice::Dark),
+        ] {
+            let options = parse(&["--theme", name, "--static"]).expect("a theme");
+            assert_eq!(options.theme, Some(choice), "--theme {name}");
+        }
+    }
+
+    #[test]
+    fn theme_without_a_choice_or_with_another_names_the_choices() {
+        let missing = parse(&["--theme"]).expect_err("no choice");
+        let invalid = parse(&["--theme", "blue"]).expect_err("not a choice");
+        for error in [&missing, &invalid] {
+            let message = error.to_string();
+            assert!(
+                ["system", "light", "dark"]
+                    .iter()
+                    .all(|choice| message.contains(choice)),
+                "{message}"
+            );
+        }
+        assert!(invalid.to_string().contains("\"blue\""), "{invalid}");
+    }
+
+    #[test]
+    fn a_theme_flag_sets_the_theme_of_the_ui_state_and_nothing_else() {
+        assert_eq!(ui_state(None), UiState::default());
+        assert_eq!(
+            ui_state(Some(ThemeChoice::Dark)),
+            UiState {
+                theme: ThemeChoice::Dark,
+                ..UiState::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_flags_choose_the_daemon_to_make() {
+        assert_eq!(
+            parse(&[]).expect("no flags").recipe(),
+            Recipe {
+                activity: Activity::Ticking,
+                showcase: false
+            }
+        );
+        assert_eq!(
+            parse(&["--showcase", "--static"])
+                .expect("both flags")
+                .recipe(),
+            Recipe {
+                activity: Activity::Static,
+                showcase: true
+            }
+        );
+    }
+
+    #[test]
     fn an_unknown_argument_is_an_error() {
         let error = parse(&["--static", "--fast"]).expect_err("an unknown flag");
-        assert!(error.to_string().contains("\"--fast\""), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("\"--fast\""), "{message}");
+        assert!(message.contains("--showcase"), "{message}");
+        assert!(message.contains("--theme"), "{message}");
     }
 }

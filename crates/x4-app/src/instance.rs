@@ -29,7 +29,7 @@
 //! [`QUEUE_CAP`](x4_core::QUEUE_CAP) items of its arguments are told apart
 //! ([`launch_requests`](crate::adding::launch_requests)); the others are counted. Nothing is added
 //! by them: they only fill the add dialog's queue. The tokens are kept in the frame and logged:
-//! gpui-pre 0.3.10 has no way to raise an open window with a token from another process, so the
+//! gpui-pre 0.3.11 has no way to raise an open window with a token from another process, so the
 //! window asks for its own.
 //!
 //! Unix only: elsewhere every launch runs on its own.

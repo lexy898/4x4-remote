@@ -92,13 +92,13 @@ fn ui_state_default_is_the_first_run() {
 #[test]
 fn default_columns_show_everything_at_their_widths() {
     let expected = [
-        (ColumnId::Name, 285.0),
+        (ColumnId::Name, 279.0),
         (ColumnId::Size, 80.0),
         (ColumnId::Progress, 120.0),
         (ColumnId::State, 105.0),
         (ColumnId::Down, 88.0),
         (ColumnId::Up, 88.0),
-        (ColumnId::Eta, 82.0),
+        (ColumnId::Eta, 88.0),
         (ColumnId::Ratio, 64.0),
         (ColumnId::Peers, 66.0),
     ]
@@ -107,6 +107,29 @@ fn default_columns_show_everything_at_their_widths() {
     assert_eq!(default_columns(), expected);
     let total: f32 = expected.iter().map(|column| column.width).sum();
     assert!((total - 978.0).abs() < f32::EPSILON, "{total}");
+}
+
+#[test]
+fn the_eta_column_holds_a_two_part_time_in_every_font_gpui_falls_back_to() {
+    // The cell pads 8 px on each side. The widths are "23 h 59 m", the widest time with at most
+    // two digits in its largest unit, at 14 px with tabular digits, measured from the font files
+    // of the families GPUI draws with on Linux, in the order of its fallback list. GPUI cuts a
+    // text whose whole pixels exceed the room, so the room has to cover the widest of them.
+    const CELL_PADDING: f32 = 16.0;
+    let widest_time = [
+        ("Adwaita Sans", 68.1),
+        ("Cantarell", 62.1),
+        ("Noto Sans", 64.7),
+        ("DejaVu Sans", 71.5),
+    ];
+    let room = default_width(ColumnId::Eta) - CELL_PADDING;
+
+    for (font, width) in widest_time {
+        assert!(
+            width <= room,
+            "\"23 h 59 m\" is {width} px in {font}, the column holds {room} px"
+        );
+    }
 }
 
 #[test]
@@ -141,7 +164,7 @@ maximized = false
 [[columns]]
 id = "name"
 visible = true
-width = 285.0
+width = 279.0
 
 [[columns]]
 id = "size"
@@ -171,7 +194,7 @@ width = 88.0
 [[columns]]
 id = "eta"
 visible = true
-width = 82.0
+width = 88.0
 
 [[columns]]
 id = "ratio"
@@ -476,7 +499,7 @@ fn ui_state_normalizes_columns() {
             column(ColumnId::State, true, 105.0),
             column(ColumnId::Down, true, 88.0),
             column(ColumnId::Up, true, 88.0),
-            column(ColumnId::Eta, true, 82.0),
+            column(ColumnId::Eta, true, 88.0),
             column(ColumnId::Ratio, true, 64.0),
         ]
     );
@@ -649,7 +672,7 @@ fn ui_state_parse_returns_a_normalized_state() {
         [
             column(ColumnId::Peers, true, 1200.0),
             column(ColumnId::Name, true, 360.0),
-            column(ColumnId::Eta, true, 82.0),
+            column(ColumnId::Eta, true, 88.0),
             column(ColumnId::Size, true, 80.0),
             column(ColumnId::Progress, true, 120.0),
             column(ColumnId::State, true, 105.0),

@@ -1,12 +1,12 @@
-# gpui-pre-wgpu 0.3.10, patched for 4x4
+# gpui-pre-wgpu 0.3.11, patched for 4x4
 
-This directory is the crates.io package `gpui-pre-wgpu` 0.3.10, the renderer that `gpui-kit`
-0.8.1 pulls in through `gpui-pre`. It is Zed's `gpui_wgpu` crate (snapshot of zed@08cbb88),
+This directory is the crates.io package `gpui-pre-wgpu` 0.3.11, the renderer that `gpui-kit`
+0.9.0 pulls in through `gpui-pre`. It is Zed's `gpui_wgpu` crate (snapshot of zed@f816e1f),
 licensed under the Apache License 2.0 (`LICENSE-APACHE`). The root `Cargo.toml` uses it through
 `[patch.crates-io]`.
 
 It was extracted from the published `.crate` file (SHA-256
-`ce693915768aae38bf788f245af75aae78e3e1179245860fc80ce831d0a8f74e`, the checksum `Cargo.lock` had
+`211cf352de1a0b0c9bea3f105df5572ce1d2c899389b924a888e5af36b50f93d`, the checksum `Cargo.lock` had
 for the registry crate). Two files are modified, as described below; `PATCHED.md` and
 `rustfmt.toml` are added. Everything else is exactly as published.
 
@@ -24,8 +24,9 @@ are loaded. Upstream tracks the problem in
 fallback itself must stay: machines without a Vulkan driver (VMs, old GPUs) need it, see
 [zed-industries/zed#65960](https://github.com/zed-industries/zed/issues/65960).
 
-Measured on 2026-10-28 (KDE Plasma 6 on Wayland, AMD Radeon 780M with RADV, Mesa 26.2.5; window
-on the built-in screen without focus; medians of three runs, MiB), before and after this patch:
+Measured on 2026-10-28 (gpui-pre-wgpu 0.3.10; KDE Plasma 6 on Wayland, AMD Radeon 780M with RADV,
+Mesa 26.2.5; window on the built-in screen without focus; medians of three runs, MiB), before and
+after this patch:
 
 | Metric              | Before | After |
 | ------------------- | ------ | ----- |
@@ -35,8 +36,8 @@ on the built-in screen without focus; medians of three runs, MiB), before and af
 | RssAnon (= private) | 17.2   | 12.6  |
 | Threads             | 33     | 26    |
 
-The first frame did not change. The [README](../../README.md#performance) puts these numbers in
-context; the full investigation is in the owner's local notes.
+The first frame did not change. The [performance notes](../../docs/performance.md) put these numbers
+in context; the full investigation is in the owner's local notes.
 
 ## What changed
 
@@ -52,6 +53,9 @@ context; the full investigation is in the owner's local notes.
   before, when it recovers from a lost device. Each failed attempt logs a warning
   (`No usable Backends(VULKAN) adapter (hardware only: true): ...`); if all attempts fail, the error
   lists each of them.
+  It passes the window's surface configuration (`WgpuSurfaceConfig`) to each attempt: since 0.3.11
+  adapter selection configures the surface with the configuration the renderer will use, and the
+  renderer skips its own `configure` for a surface that came with a new context.
 - Both files got a `// Modified for 4x4` line under gpui-pre's own notice (Apache License 2.0,
   section 4(b)).
 
@@ -75,7 +79,7 @@ before (checked during the investigation).
 1. Check upstream first. If the new `gpui-pre-wgpu` no longer initializes OpenGL when Vulkan
    works (see zed#63327), delete `vendor/`, the `[patch.crates-io]` entry, lint-policy check (e),
    the `vendor/` exclusions (`_typos.toml`, `.taplo.toml`, `just machete`) and the notes about the
-   vendored crate in `AGENTS.md` and `README.md`. Stop here.
+   vendored crate in `AGENTS.md` and `docs/performance.md`. Stop here.
 2. Bump `gpui-kit` and run `cargo update -p gpui-kit`. Cargo warns that the patch was not used;
    note the new `gpui-pre-wgpu` version `V` and its `checksum` in `Cargo.lock`.
 3. Replace the copy with the published crate, keeping `PATCHED.md` and `rustfmt.toml`:
@@ -116,20 +120,20 @@ directory with the extracted `.crate` (`diff -ru`) shows the whole patch against
 
 ## The patch
 
-Against the published `gpui-pre-wgpu` 0.3.10, paths relative to this directory:
+Against the published `gpui-pre-wgpu` 0.3.11, paths relative to this directory:
 
 ```diff
 diff --git a/src/wgpu_context.rs b/src/wgpu_context.rs
-index 51cf8b0..e1ae75f 100644
+index dd06135..9f59f5f 100644
 --- a/src/wgpu_context.rs
 +++ b/src/wgpu_context.rs
 @@ -1,4 +1,5 @@
- // Modified for gpui-pre (snapshot of zed@08cbb88): adapt device queues and sRGB detection to wgpu 30.0.1.
+ // Modified for gpui-pre (snapshot of zed@f816e1f): adapt device queues and sRGB detection to wgpu 30.0.1.
 +// Modified for 4x4: create the GPU context Vulkan-first, see PATCHED.md.
  #[cfg(not(target_family = "wasm"))]
- use anyhow::Context as _;
+ use crate::{WgpuRenderer, WgpuSurfaceConfig};
  #[cfg(not(target_family = "wasm"))]
-@@ -203,7 +204,8 @@ impl WgpuContext {
+@@ -209,7 +210,8 @@ impl WgpuContext {
          any(test, feature = "bench-support", feature = "test-support")
      ))]
      fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
@@ -139,7 +143,7 @@ index 51cf8b0..e1ae75f 100644
          let device_id_filter = Self::device_id_filter();
          let (adapter, device, queue, dual_source_blending, color_texture_format, target_format) =
              gpui::block_on(async {
-@@ -472,8 +474,16 @@ impl WgpuContext {
+@@ -478,8 +480,16 @@ impl WgpuContext {
  
      #[cfg(not(target_family = "wasm"))]
      pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
@@ -158,16 +162,16 @@ index 51cf8b0..e1ae75f 100644
              backend_options: wgpu::BackendOptions::default(),
              memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
 diff --git a/src/wgpu_renderer.rs b/src/wgpu_renderer.rs
-index f6611df..8557b16 100644
+index c3650ed..eadfe6f 100644
 --- a/src/wgpu_renderer.rs
 +++ b/src/wgpu_renderer.rs
 @@ -1,4 +1,5 @@
- // Modified for gpui-pre (snapshot of zed@08cbb88): adapt device queues and sRGB detection to wgpu 30.0.1.
+ // Modified for gpui-pre (snapshot of zed@f816e1f): adapt device queues and sRGB detection to wgpu 30.0.1.
 +// Modified for 4x4: create the GPU context Vulkan-first, see PATCHED.md.
  use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext};
  use anyhow::{Context as _, Result};
  use bytemuck::{Pod, Zeroable};
-@@ -299,41 +300,22 @@ impl WgpuRenderer {
+@@ -299,47 +300,23 @@ impl WgpuRenderer {
      where
          W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
      {
@@ -200,6 +204,7 @@ index f6611df..8557b16 100644
 -        };
 -
          let mut ctx_ref = gpu_context.borrow_mut();
+         let surface_configured = ctx_ref.is_none();
 -        let context = match ctx_ref.as_mut() {
 +        let (context, surface) = match ctx_ref.as_mut() {
              Some(context) => {
@@ -214,27 +219,36 @@ index f6611df..8557b16 100644
 +            }
 +            None => {
 +                let (surface, new_context) =
-+                    create_context_vulkan_first(window, compositor_gpu, false)?;
++                    create_context_vulkan_first(window, &config, compositor_gpu, false)?;
 +                (ctx_ref.insert(new_context), surface)
              }
--            None => ctx_ref.insert(WgpuContext::new(instance, &surface, compositor_gpu)?),
+-            None => ctx_ref.insert(WgpuContext::new(
+-                instance,
+-                &surface,
+-                &config,
+-                compositor_gpu,
+-            )?),
          };
  
          let atlas = Arc::new(WgpuAtlas::from_context(context));
-@@ -2232,10 +2214,8 @@ impl WgpuRenderer {
+@@ -2271,14 +2248,8 @@ impl WgpuRenderer {
              // may need more time to come back (e.g. after suspend/resume).
              std::thread::sleep(std::time::Duration::from_millis(350));
  
 -            let instance = WgpuContext::instance(Some(Box::new(window.clone())));
 -            let surface = create_surface(&instance, window_handle.as_raw())?;
--            let new_context =
--                WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?;
+-            let new_context = WgpuContext::new_rejecting_software(
+-                instance,
+-                &surface,
+-                &config,
+-                self.compositor_gpu,
+-            )?;
 +            let (surface, new_context) =
-+                create_context_vulkan_first(window, self.compositor_gpu, true)?;
++                create_context_vulkan_first(window, &config, self.compositor_gpu, true)?;
              *gpu_context.borrow_mut() = Some(new_context);
              surface
          } else {
-@@ -2544,6 +2524,58 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
+@@ -2580,6 +2551,61 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
      range.start as u32..range.end as u32
  }
  
@@ -245,9 +259,12 @@ index f6611df..8557b16 100644
 +/// OpenGL adapter (VMs and old GPUs without a Vulkan driver); and only then any adapter,
 +/// software renderers included, unless the caller rejects them. This keeps the old preference
 +/// of a hardware OpenGL adapter over a software Vulkan one (lavapipe).
++///
++/// Adapter selection configures the returned surface with `config`.
 +#[cfg(not(target_family = "wasm"))]
 +fn create_context_vulkan_first<W>(
 +    window: &W,
++    config: &WgpuSurfaceConfig,
 +    compositor_gpu: Option<CompositorGpuHint>,
 +    reject_software: bool,
 +) -> anyhow::Result<(wgpu::Surface<'static>, WgpuContext)>
@@ -265,9 +282,9 @@ index f6611df..8557b16 100644
 +        let surface = create_surface(&instance, raw_window_handle)
 +            .context("Failed to create surface")?;
 +        let context = if hardware_only {
-+            WgpuContext::new_rejecting_software(instance, &surface, compositor_gpu)?
++            WgpuContext::new_rejecting_software(instance, &surface, config, compositor_gpu)?
 +        } else {
-+            WgpuContext::new(instance, &surface, compositor_gpu)?
++            WgpuContext::new(instance, &surface, config, compositor_gpu)?
 +        };
 +        Ok((surface, context))
 +    };

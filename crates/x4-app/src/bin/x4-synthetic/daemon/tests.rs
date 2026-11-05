@@ -22,6 +22,7 @@ mod details;
 mod file_set;
 mod peers;
 mod pieces;
+mod showcase;
 mod support;
 mod trackers;
 
