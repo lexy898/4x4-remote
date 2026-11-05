@@ -574,8 +574,8 @@ next change and when the window closes.
 
 ## Files and logs
 
-The table of the files and an example `config.toml` are in the README's
-[Files and logs](../README.md#files-and-logs).
+The README's [Files and logs](../README.md#files-and-logs) lists the files 4x4 keeps in the XDG
+directories, `config.toml`, `state.toml` and the daily log, with an example `config.toml`.
 
 While it runs, the first 4x4 also keeps two files in `$XDG_RUNTIME_DIR` (`/run/user/<uid>`), named
 after its app id (with `.Devel` in debug builds): `io.github.lexy898.FourByFour.lock`, which says
@@ -584,13 +584,14 @@ links to. Only you can use them. The socket is removed when 4x4 quits, and one l
 crashed is replaced by the next one; the lock file stays and is safe to delete while 4x4 is not
 running.
 
-4x4 reads it at startup and connects to that address. There is no built-in server: without the
-file, or without `url` in it, no server is set, and the Connection dialog opens. The address may not
-hold the user name or the password (`http://alice:secret@…`), which belong in their own keys, nor a
-query or a fragment; without a port it means port 80. A file 4x4 cannot use, such as one that is not
-valid TOML, has a value of the wrong type or an `https://` address, is reported in the log and in
-the status bar ("Config file not used"; the tooltip says why, and "Dismiss" hides it); no server is
-set then either, and the dialog opens. Neither ever shows the password.
+4x4 reads `config.toml` at startup and connects to the address of its `url`. There is no built-in
+server: without the file, or without `url` in it, no server is set, and the Connection dialog opens.
+The address may not hold the user name or the password (`http://alice:secret@…`), which belong in
+their own keys, nor a query or a fragment; without a port it means port 80. A file 4x4 cannot use,
+such as one that is not valid TOML, has a value of the wrong type or an `https://` address, is
+reported in the log and in the status bar ("Config file not used"; the tooltip says why, and
+"Dismiss" hides it); no server is set then either, and the dialog opens. Neither ever shows the
+password.
 
 Save in the Connection dialog writes only the `[connection]` table's `url` (always with its port),
 `username` and `password`, and removes `username` and `password` when there is no login; the
