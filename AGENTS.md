@@ -24,7 +24,8 @@ just test-live        # live tests against the owner's daemon, and geoip_live, w
                       # installed GeoIP files and needs no daemon; never part of check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
 just lint-policy      # lint exceptions, workspace lints, the one unsafe call, dependency
-                      # direction, the vendored gpui-pre-wgpu patch (scripts/lint-policy.sh)
+                      # direction, the vendored gpui-pre-wgpu patch, Markdown links
+                      # (scripts/lint-policy.sh)
 just run              # run the app (debug build)
 just release          # optimized build
 just measure          # startup time, memory and (--cpu <s>) CPU of the release build, with a temp

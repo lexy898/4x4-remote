@@ -14,10 +14,18 @@ take a few days.
 
 ## What is in scope
 
-- The password of the daemon, kept as plain text in `config.toml` (readable by its owner only) and
-  sent with every request over plain `http://` with basic authentication, which the network
-  carries unencrypted; HTTPS is not supported yet (see [Limitations](README.md#limitations)).
+- The handling of the password of the daemon: 4x4 keeps it in `config.toml`, readable by its owner
+  only, and sends it with each request to the daemon. A leak of it anywhere else, such as the log,
+  is a vulnerability.
 - The parsing of `.torrent` files and magnet links, which come from files, the clipboard, the
   command line and other programs.
+- The parsing of the daemon's RPC responses, which a daemon, or whatever stands between it and 4x4,
+  controls.
 - The per-user socket and lock file of the single instance, through which a second start hands its
   files and links to the first.
+
+## What is out of scope
+
+The documented plain `http://` connection (HTTPS is not supported yet) and the plain-text password
+in `config.toml` are known limitations, not vulnerabilities; see
+[Limitations](README.md#limitations).

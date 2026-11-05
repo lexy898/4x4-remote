@@ -26,7 +26,7 @@ spell:
     typos
 
 # AGENTS.md rules clippy cannot express: lint exceptions, workspace lints, dependency direction,
-# and that the vendored gpui-pre-wgpu patch is applied.
+# that the vendored gpui-pre-wgpu patch is applied, and that Markdown links resolve.
 lint-policy:
     scripts/lint-policy.sh
 

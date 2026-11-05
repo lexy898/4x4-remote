@@ -60,9 +60,9 @@
 
 On Arch Linux, 4x4 installs as the package `4x4-git`. Without a checkout of this repository, build
 it from GitHub's `master` branch: download the build file into an empty directory and run `makepkg`
-there (makepkg comes with pacman; the build also needs `base-devel`). `-s` installs the build
-dependencies that are missing and `-i` installs the package once it is built; both ask for your
-password through `sudo`.
+there (makepkg comes with pacman; the build also needs `base-devel`, which
+`sudo pacman -S --needed base-devel` installs). `-s` installs the build dependencies that are
+missing and `-i` installs the package once it is built; both ask for your password through `sudo`.
 
 ```bash
 mkdir 4x4-build && cd 4x4-build
@@ -77,7 +77,8 @@ the repository, the compiled crates (about 2 GiB, which make the next build fast
 file. Cargo keeps the crates it downloads in `~/.cargo`.
 
 To update, run the `curl` and `makepkg -si` above again in `4x4-build`: makepkg builds the newest
-`master`, and pacman replaces the installed version.
+`master`, and pacman replaces the installed version. If makepkg stops with "A package has already
+been built", nothing has changed on `master` since your last build, and you are up to date.
 
 To uninstall, run `sudo pacman -R 4x4-git`, and if you made 4x4 the default app for `.torrent`
 files and magnet links (below), choose another app for them in your desktop's settings. Your
@@ -97,9 +98,10 @@ xdg-mime default io.github.lexy898.FourByFour.desktop \
 A browser may ask once more the first time it meets a magnet link, offering 4x4 as the system
 default.
 
-4x4 is packaged for Arch Linux only. On another Linux system, build it from source, as
-[Development](docs/development.md#build-from-source) describes (the package names there are those
-of Arch Linux).
+There are no install steps for other systems yet: 4x4 is for Linux only and packaged for Arch Linux
+only. To try it on another Linux system, you can build it from source and run it from the checkout,
+as [Development](docs/development.md#build-from-source) describes (its package names are those of
+Arch Linux); that is a debug build for development, not an installation.
 
 ## First start
 

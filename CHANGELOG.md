@@ -3,8 +3,7 @@
 All notable changes to 4x4 Remote are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). What the version number promises: the
-`config.toml` and `state.toml` files, the command line (files, magnet links, `--version`) and the
-desktop entry.
+`config.toml` file, the command line (files, magnet links, `--version`) and the desktop entry.
 
 ## [1.0.0] - Unreleased
 
