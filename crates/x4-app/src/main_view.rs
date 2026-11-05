@@ -48,13 +48,16 @@
 //! The window can switch to another server without a restart (the `switching` module): it drops
 //! the service of the old one, forgets what the old daemon showed, and starts a service for the
 //! new one, which it tells what it tells a service at the start. A window with no server set says
-//! so in the status bar.
+//! so in the status bar. The Connection dialog sets the server (the `connection` module): the
+//! toolbar's Connection button, Ctrl+, and a click on the status bar's connection indicator open
+//! it, and its Save writes `config.toml` and switches.
 //!
 //! What the user changes in the [`UiState`] (the columns, the sort order, the filter, the theme,
 //! the window size and the details panel) is saved a second after the last change, and when the
 //! window closes or the app quits (the `persistence` module).
 
 mod adding;
+mod connection;
 mod copying;
 mod details;
 mod events;
@@ -95,6 +98,7 @@ use crate::adding::{AddRequests, drop_highlight_layer, hover_while_dragging};
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
 use crate::connection::ConnectionSetup;
+use crate::connection_dialog::ConnectionDialog;
 use crate::details_panel::DetailsPanel;
 use crate::i18n::{connection_text, torrent_count_text};
 use crate::key_repeats::KeyRepeats;
@@ -113,6 +117,7 @@ use crate::torrent_table::{
 };
 pub(crate) use adding::AddButton;
 use adding::on_add_actions;
+use connection::on_connection_actions;
 use details::on_details_actions;
 use persistence::Saver;
 use selection_keys::on_selection_keys;
@@ -187,6 +192,9 @@ pub struct MainView {
     adds: adding::Adds,
     /// The server the window is set to, and how it switches to another one.
     connection: ConnectionSetup,
+    /// The open Connection dialog, and its events; `None` while it is closed, when nothing of it
+    /// is kept.
+    connection_dialog: Option<(Entity<ConnectionDialog>, Subscription)>,
     /// The event pump of the service; dropping it, with the view or at a switch of servers,
     /// cancels it.
     pump: Task<()>,
@@ -315,6 +323,7 @@ impl MainView {
             fitted_split: None,
             adds: adding::Adds::default(),
             connection: ConnectionSetup::default(),
+            connection_dialog: None,
             pump,
             service,
             _subscriptions: subscriptions,
@@ -770,10 +779,14 @@ impl Render for MainView {
             cx,
         );
         let repeats = &self.key_repeats;
-        let root = on_add_actions(
-            on_details_actions(
-                on_speed_actions(
-                    on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+        let root = on_connection_actions(
+            on_add_actions(
+                on_details_actions(
+                    on_speed_actions(
+                        on_selection_keys(on_torrent_actions(v_flex(), repeats, cx), cx),
+                        repeats,
+                        cx,
+                    ),
                     repeats,
                     cx,
                 ),

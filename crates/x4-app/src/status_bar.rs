@@ -3,7 +3,8 @@
 //! total speeds.
 //!
 //! [`StatusModel`] from `x4-core` decides the values, down to which state the connection
-//! indicator shows ([`Indicator`]); this module words them and lays them out.
+//! indicator shows ([`Indicator`]); this module words them and lays them out. A click on the
+//! indicator opens the Connection dialog, as the toolbar's Connection button and Ctrl+, do.
 //!
 //! The turtle switches the daemon's alternative speed limits; it is drawn selected while they
 //! apply, and its tooltip gives them. The limits button shows the normal limits and opens the
@@ -34,7 +35,7 @@ use crate::i18n::{
 use crate::keymap::{EditSpeedLimits, MAIN_CONTEXT, ToggleAltSpeed};
 use crate::main_view::MainView;
 use crate::speed_limits::SpeedLimits;
-use crate::theme::{STALE_OPACITY, alt_speed_color, connection_color, tabular_digits};
+use crate::theme::{STALE_OPACITY, alt_speed_color, connection_color, ghost_hover, tabular_digits};
 
 /// The diameter of the connection dot.
 const DOT_SIZE: f32 = 8.;
@@ -80,7 +81,7 @@ pub(crate) fn status_bar(
     cx: &Context<'_, MainView>,
 ) -> StatusBar {
     let theme = cx.theme();
-    let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), server, theme));
+    let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), server, cx));
     if let Some(problem) = config_problem {
         bar = bar.left(config_notice(problem, on_dismiss));
     }
@@ -184,12 +185,19 @@ fn limits_button(
         .content(move |_, _, _| form.clone())
 }
 
-/// The dot and the text that tell how the connection to `server` is doing.
+/// The dot and the text that tell how the connection to `server` is doing; a click opens the
+/// Connection dialog of the view of `cx`. Under the pointer it is drawn as the bar's ghost buttons
+/// are, and it is otherwise as it was before it could be clicked.
+///
+/// For screen readers it stays a status, which says how the connection is doing as that changes,
+/// and Tab passes it by: the toolbar's Connection button and Ctrl+, open the dialog from the
+/// keyboard.
 fn connection_indicator(
     indicator: &Indicator,
     server: Option<&str>,
-    theme: &Theme,
-) -> impl IntoElement {
+    cx: &Context<'_, MainView>,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
     let label = connection_text(indicator);
     let tooltip = connection_tooltip(indicator, server);
     // The dot alone says nothing to a screen reader, so the indicator is named either way.
@@ -198,9 +206,15 @@ fn connection_indicator(
     } else {
         label.clone()
     };
+    let hover = ghost_hover(theme);
     h_flex()
-        .id("connection")
+        .id("status-connection")
         .gap_1p5()
+        .px_1()
+        .rounded(theme.radius)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .on_click(cx.listener(|view, _, window, cx| view.open_connection(window, cx)))
         .child(
             div()
                 .size(px(DOT_SIZE))

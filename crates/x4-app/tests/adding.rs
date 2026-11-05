@@ -71,7 +71,7 @@ const TABLE: &str = "torrent-list";
 const SEARCH: &str = "search";
 const COLUMN_MENU: &str = "column-menu";
 /// The dot of the connection in the status bar.
-const STATUS_BAR_DOT: &str = "connection";
+const STATUS_BAR_DOT: &str = "status-connection";
 /// The content of the add dialog, and the layers that highlight it and the window while files
 /// are dragged over them.
 const DIALOG: &str = "add-dialog";

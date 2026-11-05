@@ -27,6 +27,14 @@
 //! own Enter is bound to nothing in its key context `ConnectionDialog`, so that Enter on a focused
 //! button presses it, and its confirm closes nothing. Tab goes from the host through the fields,
 //! then the buttons.
+//!
+//! The repeats of a held key press nothing: a held Enter saves once, so that a Save that fails is
+//! not tried again many times a second. The record of the key held is the main view's, which sees
+//! the key-downs first; the dialog lies beside the main view, which does not see its key-ups, so
+//! the dialog passes them on.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogFooter, DialogTitle};
@@ -35,9 +43,9 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Div, Entity, EventEmitter, FocusHandle,
-    Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    TestSupportExt as _, WeakEntity, Window, div, px, rems,
+    Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
+    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, TestSupportExt as _, WeakEntity, Window, div, px, rems,
 };
 use x4_core::{CheckOutcome, ConnectionForm, ConnectionSettings, FormProblems};
 
@@ -46,6 +54,7 @@ use crate::i18n::{
     connection_address_text, connection_save_failed_text, connection_test_text, host_problem_text,
     path_problem_text, port_problem_text, t, username_problem_text,
 };
+use crate::key_repeats::KeyRepeats;
 use crate::keymap::CONNECTION_DIALOG_CONTEXT;
 
 /// The width of the dialog.
@@ -154,6 +163,8 @@ pub(crate) struct ConnectionDialog {
     save_error: Option<SharedString>,
     /// What gets the focus at the next build of the dialog: the host field, once it opens.
     pending_focus: Option<FocusHandle>,
+    /// The key held down now, shared with the main view, so that a held Enter saves once.
+    key_repeats: Rc<RefCell<KeyRepeats>>,
     /// The fields' events.
     _subscriptions: Vec<Subscription>,
 }
@@ -162,8 +173,10 @@ impl EventEmitter<ConnectionDialogEvent> for ConnectionDialog {}
 
 impl ConnectionDialog {
     /// The dialog for `settings`, the server in use, or for a first one when no server is set;
-    /// Test asks `check`. [`open`] shows it.
+    /// Test asks `check`. `key_repeats` is the main view's record of the key held. [`open`] shows
+    /// it.
     pub(crate) fn new(
+        key_repeats: Rc<RefCell<KeyRepeats>>,
         settings: Option<&ConnectionSettings>,
         check: Option<ServerCheck>,
         window: &mut Window,
@@ -189,7 +202,7 @@ impl ConnectionDialog {
             window,
             |dialog, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => dialog.edited(cx),
-                InputEvent::PressEnter { .. } => dialog.save(window, cx),
+                InputEvent::PressEnter { .. } => dialog.enter_in_a_field(window, cx),
                 // An address typed in is spread once the user is done with it.
                 InputEvent::Blur => dialog.spread_host(window, cx),
                 InputEvent::Focus => {}
@@ -201,7 +214,7 @@ impl ConnectionDialog {
                 window,
                 |dialog, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => dialog.edited(cx),
-                    InputEvent::PressEnter { .. } => dialog.save(window, cx),
+                    InputEvent::PressEnter { .. } => dialog.enter_in_a_field(window, cx),
                     InputEvent::Focus | InputEvent::Blur => {}
                 },
             ));
@@ -220,6 +233,7 @@ impl ConnectionDialog {
             tested: None,
             save_error: None,
             pending_focus,
+            key_repeats,
             _subscriptions: subscriptions,
         }
     }
@@ -337,6 +351,15 @@ impl ConnectionDialog {
                 None
             }
         }
+    }
+
+    /// Enter in a field: saves, for a new press of the key.
+    fn enter_in_a_field(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.key_repeats.borrow().repeating() {
+            tracing::trace!("a held Enter repeats; nothing saved again");
+            return;
+        }
+        self.save(window, cx);
     }
 
     /// Hands the settings of the fields to the main view, unless a field is wrong.
@@ -502,14 +525,15 @@ impl ConnectionDialog {
     }
 
     /// Test on the left; Cancel and Save on the right. Test is disabled while a test runs and in
-    /// a window that cannot test; Save always works.
-    fn buttons(&self, cx: &mut Context<'_, Self>) -> DialogFooter {
+    /// a window that cannot test; Save always works. The repeats of a held key press none of them.
+    fn buttons(&self, cx: &mut Context<'_, Self>) -> Div {
         let test = if self.testing.is_some() {
             t!("connection-testing")
         } else {
             t!("connection-test")
         };
-        DialogFooter::new()
+        let held = Rc::clone(&self.key_repeats);
+        let footer = DialogFooter::new()
             .child(
                 Button::new("connection-test")
                     .label(test)
@@ -527,7 +551,15 @@ impl ConnectionDialog {
                     .primary()
                     .label(t!("connection-save"))
                     .on_click(cx.listener(|dialog, _, window, cx| dialog.save(window, cx))),
-            )
+            );
+        div()
+            // Before the focused button takes the key-down that its key-up would turn into a press.
+            .capture_key_down(move |event: &KeyDownEvent, window, _| {
+                if event.is_held || held.borrow().repeating() {
+                    window.prevent_default();
+                }
+            })
+            .child(footer)
     }
 }
 
@@ -558,6 +590,7 @@ fn text_line(id: &'static str, text: &SharedString) -> Stateful<Div> {
 impl Render for ConnectionDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let title = SharedString::from(t!("connection-title"));
+        let repeats = Rc::clone(&self.key_repeats);
         v_flex()
             .id("connection-dialog")
             .key_context(CONNECTION_DIALOG_CONTEXT)
@@ -565,6 +598,8 @@ impl Render for ConnectionDialog {
             .p_4()
             .gap_3()
             .text_sm()
+            // The dialog lies beside the main view, which would not see the key go up.
+            .capture_key_up(move |_: &KeyUpEvent, _, _| repeats.borrow_mut().release())
             .child(DialogTitle::new().child(text_line("connection-title", &title).test_support()))
             .child(self.fields(cx))
             .child(self.lines(cx))

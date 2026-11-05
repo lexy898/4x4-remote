@@ -64,13 +64,6 @@ pub(crate) use trackers::{
 };
 
 mod adding;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Connection dialog is its only user, and nothing opens the dialog yet"
-    )
-)]
 mod connection;
 mod details;
 mod files;

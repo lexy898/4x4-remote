@@ -195,13 +195,6 @@ pub(crate) fn read_ui_state(path: &Path) -> Result<LoadedState, FilesError> {
 /// old file is left as it was and no temporary file stays behind; only if the new file cannot
 /// take a broken one's place once that was moved aside, and the broken one cannot be moved back
 /// either, does it stay as `config.toml.bad`, which the log says.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Connection dialog's Save is its caller, and is not built yet"
-    )
-)]
 pub(crate) fn save_connection(
     path: &Path,
     settings: &ConnectionSettings,

@@ -34,13 +34,6 @@ pub mod allocator;
 pub mod app;
 mod clipboard;
 pub mod connection;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the main view's ways to open the dialog are its users, and are not built yet"
-    )
-)]
 mod connection_dialog;
 mod context_menu;
 mod details_panel;

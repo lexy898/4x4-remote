@@ -129,7 +129,10 @@ fn window_opens_without_network(cx: &mut TestAppContext) {
     assert_eq!(window.connection_text(cx), "Connecting…");
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("connection").label(), Some("Connecting…"));
+        assert_eq!(
+            window.find("status-connection").label(),
+            Some("Connecting…")
+        );
     })
     .expect("the window is open");
 }
@@ -157,7 +160,7 @@ fn snapshot_updates_status_and_rows(cx: &mut TestAppContext) {
     );
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("connection").label(), Some("Connected"));
+        assert_eq!(window.find("status-connection").label(), Some("Connected"));
         assert_eq!(window.find("rate-down").label(), Some("↓ 2.4 MiB/s"));
         assert_eq!(window.find("rate-up").label(), Some("↑ 180 KiB/s"));
         assert_eq!(window.find("free-space").label(), Some("22.9 GiB free"));
@@ -378,7 +381,10 @@ fn closed_events_channel_marks_stale(cx: &mut TestAppContext) {
     assert_eq!(window.rows(cx), 2, "the last data stays visible, dimmed");
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("connection").label(), Some("Service stopped"));
+        assert_eq!(
+            window.find("status-connection").label(),
+            Some("Service stopped")
+        );
     })
     .expect("the window is open");
 }

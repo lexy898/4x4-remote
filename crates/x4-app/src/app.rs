@@ -2,9 +2,10 @@
 //! the key bindings of [`keymap`](crate::keymap), the main window and the first-frame log.
 //!
 //! [`run`] is the front door the `4x4` binary uses: it reads the files, starts the service
-//! against the server `config.toml` sets (none is built in: without one, no service starts and the
-//! window says that no server is set), queues the requests of the binary's own arguments and, in
-//! the first 4x4 of the user, answers the launches after it ([`instance`](crate::instance)).
+//! against the server `config.toml` sets (none is built in: without one, no service starts, the
+//! window says that no server is set and the Connection dialog asks for one), queues the requests
+//! of the binary's own arguments and, in the first 4x4 of the user, answers the launches after it
+//! ([`instance`](crate::instance)).
 //! [`run_with`] takes a [`Startup`] built by its caller instead, so that a demo or a measurement
 //! can run the window against a service of its own, and [`run_driven`] also hands it the open
 //! window to drive. [`launch`] opens the window of a [`Startup`] in an application that runs
@@ -376,10 +377,11 @@ fn load_ui_state(path: &Path) -> (UiState, bool) {
 }
 
 /// Opens the main window for `startup`, at the remembered size and maximized if it was. A service
-/// that could not start, no server set and a config problem are shown in the status bar. The
-/// window saves its UI state to `startup.state_path` if it may, takes the requests to add torrents
-/// that arrive on `startup.adds`, and reaches other servers as `startup.connection` says. Call
-/// [`init`] first.
+/// that could not start, no server set and a config problem are shown in the status bar; with no
+/// server set ([`ServiceStart::NotConfigured`], which an unusable `config.toml` gives too), the
+/// Connection dialog opens over the window at once. The window saves its UI state to
+/// `startup.state_path` if it may, takes the requests to add torrents that arrive on
+/// `startup.adds`, and reaches other servers as `startup.connection` says. Call [`init`] first.
 ///
 /// # Errors
 ///
@@ -424,6 +426,12 @@ pub fn launch(
             }
             if let Some(problem) = config_problem {
                 view.show_config_problem(problem, cx);
+            }
+            // With no server set nothing will show until the user sets one, so the dialog asks
+            // for it at once, over the notice of a config file that cannot be used, if any. The
+            // torrents to add wait for it.
+            if not_configured {
+                view.open_connection(window, cx);
             }
             view.listen_for_adds(adds, window, cx);
         });
@@ -539,6 +547,7 @@ mod tests {
 
     use gpui_kit::TestAppContext;
     use gpui_kit::WindowBounds;
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
     use x4_core::test_support::torrent;
     use x4_core::{
@@ -665,7 +674,10 @@ mod tests {
         assert_eq!(settings, None);
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
-            assert_eq!(window.find("connection").label(), Some("No server set"));
+            assert_eq!(
+                window.find("status-connection").label(),
+                Some("No server set")
+            );
             assert!(window.try_find("config-problem").is_none());
         })
         .expect("the window is open");
@@ -690,7 +702,14 @@ mod tests {
         let (window, _) = launched(startup, cx);
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
-            assert_eq!(window.find("connection").label(), Some("No server set"));
+            assert_eq!(
+                window.find("status-connection").label(),
+                Some("No server set")
+            );
+            assert!(
+                window.try_find("connection-title").is_some(),
+                "the Connection dialog opens over it"
+            );
             let notice = window.find("config-problem");
             assert_eq!(notice.label(), Some("Config file not used"));
             assert_eq!(
@@ -704,6 +723,55 @@ mod tests {
             text,
             "reading never changes the file"
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_start_without_a_server_opens_it(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let (startup, _) = start_from(&paths_in(dir.path()));
+
+        let (window, _) = launched(startup, cx);
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("connection-title").label(), Some("Connection"));
+            assert_eq!(
+                window.find("connection-port").value(),
+                Some("9091"),
+                "ready for a first server"
+            );
+            assert_eq!(window.find("connection-host").focused(), Some(true));
+            assert_eq!(
+                window.find("status-connection").label(),
+                Some("No server set"),
+                "the window behind it says so"
+            );
+        })
+        .expect("the window is open");
+    }
+
+    #[gpui_kit::test]
+    fn a_start_with_a_server_does_not(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let paths = paths_in(dir.path());
+        fs::create_dir_all(paths.config_file.parent().expect("a folder")).expect("created");
+        // A closed port on this machine: the service only starts a thread, which gets nowhere.
+        fs::write(
+            &paths.config_file,
+            "[connection]\nurl = \"http://127.0.0.1:1/rpc\"\n",
+        )
+        .expect("written");
+        let (startup, _) = start_from(&paths);
+        assert!(matches!(startup.service, ServiceStart::Started(_)));
+
+        let (window, _) = launched(startup, cx);
+
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(!window.has_active_dialog(cx));
+            assert!(window.try_find("connection-title").is_none());
+        })
+        .expect("the window is open");
     }
 
     #[test]
@@ -796,6 +864,10 @@ mod tests {
         let (window, view) = launched(
             Startup {
                 ui: ui.clone(),
+                connection: ConnectionSetup {
+                    settings: ConnectionSettings::from_url("http://pi/rpc", None).ok(),
+                    ..ConnectionSetup::default()
+                },
                 ..failed_start(None)
             },
             cx,
@@ -817,10 +889,14 @@ mod tests {
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             assert_eq!(
-                window.find("connection").label(),
+                window.find("status-connection").label(),
                 Some("Service could not start")
             );
             assert!(window.try_find("config-problem").is_none());
+            assert!(
+                !window.has_active_dialog(cx),
+                "a server is set: the Connection dialog does not open by itself"
+            );
         })
         .expect("the window is open");
     }

@@ -1,14 +1,18 @@
 //! The Connection dialog in a window of its own, driven as the user drives it: the fields typed
-//! into or pasted into, Save, Test, Enter, Escape and Tab. A fake check stands in for the server
-//! and answers when the test says. What the main view does with the dialog's events is the main
-//! view's to test.
+//! into or pasted into, Save, Test, Enter, Escape, Tab and a held key. A fake check stands in for
+//! the server and answers when the test says, and the window records the key held as the main
+//! view does. What the main view does with the dialog's events is the main view's to test.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, ClipboardItem, TestAppContext, WindowOptions, div};
+// The platform's input events; the dialog's own `InputEvent` is the text field's.
+use gpui_kit::InputEvent as _;
+use gpui_kit::{
+    AnyWindowHandle, ClipboardItem, Keystroke, OperatingSystem, TestAppContext, WindowOptions, div,
+};
 use x4_core::{CheckOutcome, ConnectionError, UnsupportedReason};
 use x4_rpc::Credentials;
 
@@ -97,11 +101,14 @@ struct Shown {
     handle: AnyWindowHandle,
     dialog: Entity<ConnectionDialog>,
     events: Rc<RefCell<Vec<ConnectionDialogEvent>>>,
+    /// Records the key-downs of the window in the dialog's record of the key held, as the main
+    /// view's keystroke interceptor does.
+    _keys: Subscription,
 }
 
 impl Shown {
     /// Opens the dialog for `settings`, testing with `check`, in an active window with the app's
-    /// keys and animations off.
+    /// keys and animations off, which records the key held as the main window does.
     fn open(
         settings: Option<&ConnectionSettings>,
         check: Option<ServerCheck>,
@@ -118,9 +125,17 @@ impl Shown {
             .expect("the window opens");
         let events = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&events);
+        let repeats = Rc::new(RefCell::new(KeyRepeats::default()));
+        let recorded = Rc::clone(&repeats);
+        let keys = cx.update(|cx| {
+            cx.intercept_keystrokes(move |event, _, _| {
+                recorded.borrow_mut().key_down(&event.keystroke);
+            })
+        });
         let dialog = cx
             .update_window(handle, |_, window, cx| {
-                let dialog = cx.new(|cx| ConnectionDialog::new(settings, check, window, cx));
+                let dialog =
+                    cx.new(|cx| ConnectionDialog::new(repeats, settings, check, window, cx));
                 cx.subscribe(&dialog, move |_, event: &ConnectionDialogEvent, _| {
                     seen.borrow_mut().push(event.clone());
                 })
@@ -135,6 +150,7 @@ impl Shown {
             handle,
             dialog,
             events,
+            _keys: keys,
         }
     }
 
@@ -155,6 +171,27 @@ impl Shown {
 
     fn press(&self, key: &str, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| window.press(key, cx));
+    }
+
+    /// Holds `key` down until the system has repeated it `repeats` times, then lets it go. The
+    /// repeats are marked held, as Wayland marks them; X11 does not, and sends no key-up between
+    /// them either, which the record of the key held tells all the same.
+    fn hold(&self, key: &str, repeats: usize, cx: &mut TestAppContext) {
+        let keystroke = Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key");
+        for is_held in std::iter::once(false).chain(std::iter::repeat_n(true, repeats)) {
+            let down = KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held,
+                prefer_character_input: false,
+            };
+            self.act(cx, |window, cx| {
+                window.dispatch_event(down.to_platform_input(), cx);
+            });
+        }
+        let up = KeyUpEvent { keystroke };
+        self.act(cx, |window, cx| {
+            window.dispatch_event(up.to_platform_input(), cx);
+        });
     }
 
     /// Types `text` into what has the focus, a key at a time.
@@ -728,4 +765,38 @@ fn the_save_error_is_shown(cx: &mut TestAppContext) {
     shown.click(PATH, cx);
     shown.type_text("x", cx);
     assert_eq!(shown.label(SAVE_ERROR, cx), None, "an edit takes it away");
+}
+
+#[gpui_kit::test]
+fn a_held_enter_saves_once(cx: &mut TestAppContext) {
+    let current = settings("http://nas:9091/transmission/rpc", None);
+    let shown = Shown::open(Some(&current), None, cx);
+
+    // In a field: the press saves, the repeats do not.
+    shown.click(PATH, cx);
+    shown.hold("enter", 5, cx);
+    assert_eq!(
+        shown.events(),
+        [ConnectionDialogEvent::Save(current.clone())]
+    );
+
+    // On the focused Save, the last stop of Tab: its key-up presses it, once.
+    shown.click(HOST, cx);
+    for _ in 0..8 {
+        if shown.focused(SAVE, cx) {
+            break;
+        }
+        shown.press("tab", cx);
+    }
+    assert!(shown.focused(SAVE, cx));
+    shown.hold("enter", 5, cx);
+    assert_eq!(
+        shown.events(),
+        [ConnectionDialogEvent::Save(current.clone())]
+    );
+
+    // A new press after the key went up saves again.
+    shown.click(HOST, cx);
+    shown.press("enter", cx);
+    assert_eq!(shown.events(), [ConnectionDialogEvent::Save(current)]);
 }

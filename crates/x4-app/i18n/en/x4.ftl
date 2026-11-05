@@ -218,6 +218,10 @@ theme-system = System theme
 theme-light = Light theme
 theme-dark = Dark theme
 theme-switch-tooltip = Switch between the system, light and dark themes
+# The toolbar button that opens the Connection dialog, where the server is set: its name for screen
+# readers, and its tooltip, which names its key.
+toolbar-connection = Connection
+toolbar-connection-tooltip = Connection (Ctrl+,)
 
 # The toolbar buttons that add torrents: their names for screen readers, which their tooltips show
 # too, with the key. Add file opens the file dialog to choose .torrent files; Add magnet adds the

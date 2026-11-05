@@ -638,6 +638,7 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Alt+1`, `Alt+2`, `Alt+3`, `Alt+4`                  | anywhere in the window    | show the panel's tabs in the bar's order     |
 | `Ctrl+O`                                            | anywhere in the window    | opens the file dialog to add .torrent files  |
 | `Ctrl+U`                                            | anywhere in the window    | adds the clipboard's magnet links, or a form |
+| `Ctrl+,`                                            | anywhere in the window    | opens the Connection dialog                  |
 | `Ctrl+V`                                            | in the table              | adds the magnet links on the clipboard       |
 | `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the file list          | move between files and folders               |
 | `Left`, `Right`                                     | in the file list          | close or open a folder, or go up or in       |

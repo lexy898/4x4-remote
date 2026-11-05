@@ -60,8 +60,10 @@ mod tests {
             IconName::Play,
             IconName::Pause,
             IconName::Search,
-            // The globe of a peer without a flag is among gpui-component's own.
+            // The globe of a peer without a flag and the gear of the toolbar's Connection button
+            // are among gpui-component's own.
             IconName::Globe,
+            IconName::Settings,
         ] {
             assert!(loads(&icon.path()), "{icon:?}");
         }

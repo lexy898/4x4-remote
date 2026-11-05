@@ -502,6 +502,30 @@ fn actions_of(keys: &str, context: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// Ctrl+, opens the Connection dialog anywhere in the window, the search box included, and does
+/// nothing while a menu or the speed limits popover is open, so that nothing opens behind them.
+/// The open dialogs keep it too (`the_open_connection_dialog_keeps_every_window_key`).
+#[test]
+fn ctrl_comma_opens_the_connection_dialog_from_the_window() {
+    assert_eq!(actions_of("ctrl-,", MAIN_CONTEXT), ["x4::OpenConnection"]);
+    for keeper in [ANY_MENU, SPEED_LIMITS_CONTEXT] {
+        assert_eq!(
+            actions_of("ctrl-,", keeper),
+            [NoAction.name()],
+            "Ctrl+, in {keeper}"
+        );
+    }
+    let in_the_search_box: BTreeSet<&str> = keys_acting_in(&[IN_THE_SEARCH_BOX_STACK], &[], &[])
+        .into_iter()
+        .map(|(keys, _, _)| keys)
+        .collect();
+    assert!(
+        in_the_search_box.contains("ctrl-,"),
+        "{in_the_search_box:?}"
+    );
+    assert_eq!(spelled("ctrl-,"), "Ctrl+,", "as the README writes it");
+}
+
 /// Alt+1, Alt+2, Alt+3 and Alt+4 open the panel's tabs in the order of its bar, anywhere in the
 /// window, and do nothing while a menu or the speed limits popover is open.
 #[test]

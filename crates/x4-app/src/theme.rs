@@ -144,6 +144,18 @@ pub(crate) fn connection_color(indicator: &Indicator, theme: &Theme) -> Hsla {
     }
 }
 
+/// The background of a clickable part of the status bar under the pointer: the one of
+/// gpui-component's ghost buttons, as the turtle and the limits button have, so that the
+/// connection indicator gets no more of a button's look than they do. It is the accent color, at
+/// half strength in the dark theme.
+pub(crate) fn ghost_hover(theme: &Theme) -> Hsla {
+    if theme.is_dark() {
+        theme.accent.opacity(0.5)
+    } else {
+        theme.accent
+    }
+}
+
 /// The color of the turtle's icon while the alternative speed limits apply: the warning color, so
 /// that slowed-down transfers show at a glance. While they do not apply, the icon keeps the
 /// button's own muted look.
@@ -437,6 +449,15 @@ mod tests {
                 "{mode:?}"
             );
         }
+    }
+
+    #[gpui_kit::test]
+    fn the_ghost_hover_is_the_accent_and_half_of_it_in_the_dark(cx: &mut TestAppContext) {
+        let light = theme(ThemeMode::Light, cx);
+        assert_eq!(ghost_hover(&light), light.accent);
+        let dark = theme(ThemeMode::Dark, cx);
+        assert_eq!(ghost_hover(&dark), dark.accent.opacity(0.5));
+        assert_ne!(ghost_hover(&dark), dark.accent);
     }
 
     #[gpui_kit::test]

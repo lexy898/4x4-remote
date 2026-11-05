@@ -182,7 +182,7 @@ impl Switchable {
     fn indicator(&self, cx: &mut TestAppContext) -> Option<String> {
         cx.update_window(self.handle, |_, window, cx| {
             window.render_frame(cx);
-            window.find("connection").label().map(str::to_owned)
+            window.find("status-connection").label().map(str::to_owned)
         })
         .expect("the window is open")
     }

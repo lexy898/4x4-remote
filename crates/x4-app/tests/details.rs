@@ -53,7 +53,7 @@ const HANDLE: (&str, usize) = ("resizable-handle", 0usize);
 /// The torrent list above the panel.
 const LIST: &str = "torrent-list";
 /// The connection dot, in the status bar under the panel.
-const STATUS_BAR_DOT: &str = "connection";
+const STATUS_BAR_DOT: &str = "status-connection";
 /// The copy buttons of the General tab.
 const COPY_PATH: &str = "copy-path";
 const COPY_HASH: &str = "copy-hash";
