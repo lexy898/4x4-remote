@@ -352,7 +352,12 @@ fn use_desktop_file_dialog(view: &Entity<MainView>, cx: &mut App) {
 fn load_config(path: &Path) -> (Config, Option<ConfigProblem>) {
     match read_config(path) {
         Ok(config) => {
-            tracing::info!(path = %path.display(), "config loaded");
+            // A missing file reads as the defaults, which the log must not call a loaded config.
+            if path.exists() {
+                tracing::info!(path = %path.display(), "config loaded");
+            } else {
+                tracing::info!(path = %path.display(), "no config file");
+            }
             (config, None)
         }
         Err(error) => {
@@ -653,6 +658,12 @@ mod tests {
             !logs_at(tracing::Level::WARN, &records),
             "a first run is no problem: {records:?}"
         );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.message != "config loaded"),
+            "there is no file to load: {records:?}"
+        );
 
         let mut opened = None;
         let records = records_of(|| opened = Some(launched(startup, cx)));
@@ -799,6 +810,47 @@ mod tests {
             .find(|record| record.message == "connecting")
             .expect("the log says where it connects");
         assert_eq!(connecting.field("server"), Some("127.0.0.1:1"));
+    }
+
+    #[test]
+    fn a_missing_config_file_is_logged_as_missing_and_not_as_loaded() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let missing = dir.path().join("config.toml");
+
+        let records = records_of(|| {
+            load_config(&missing);
+        });
+
+        assert!(
+            records
+                .iter()
+                .all(|record| record.message != "config loaded"),
+            "{records:?}"
+        );
+        let record = records
+            .iter()
+            .find(|record| record.message == "no config file")
+            .expect("the log says that there is no file");
+        assert_eq!(record.level, tracing::Level::INFO);
+        assert_eq!(record.field("path"), Some(&*missing.to_string_lossy()));
+
+        // A file that is there is loaded, even an empty one.
+        let present = dir.path().join("present.toml");
+        fs::write(&present, "").expect("written");
+        let records = records_of(|| {
+            load_config(&present);
+        });
+        let record = records
+            .iter()
+            .find(|record| record.message == "config loaded")
+            .expect("the log says that the file was loaded");
+        assert_eq!(record.field("path"), Some(&*present.to_string_lossy()));
+        assert!(
+            records
+                .iter()
+                .all(|record| record.message != "no config file"),
+            "{records:?}"
+        );
     }
 
     #[test]
