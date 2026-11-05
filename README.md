@@ -26,9 +26,9 @@ its tab are remembered too. Torrents are added from `.torrent` files, chosen in 
 dialog or dropped on the window, and from magnet links on the clipboard, in a dialog that picks the
 folder on the server (with its free space and the folders used lately), the files to download and
 whether to start at once. One 4x4 runs for each user: starting it again, as with a file or a link,
-hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built from this checkout
-and shows in the application menu with its icon; one command makes it the default app for `.torrent`
-files and magnet links, and undoes that again (see [Install](#install)).
+hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built from GitHub or from
+this checkout and shows in the application menu with its icon; one command makes it the default app
+for `.torrent` files and magnet links, and undoes that again (see [Install](#install)).
 
 ## What it will do
 
@@ -82,8 +82,19 @@ and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quit
 
 ## Install
 
-On Arch Linux, 4x4 installs as the package `4x4-git`, built from the local `master` branch of this
-checkout, so build it after what you want is merged into `master`:
+On Arch Linux, 4x4 installs as the package `4x4-git`. Without a checkout of this repository, build
+it from GitHub's `master` branch: download the build file into an empty directory and run `makepkg`
+there (it comes with `base-devel`). `-s` installs the build dependencies that are missing and `-i`
+installs the package once it is built; both ask for your password through `sudo`.
+
+```bash
+mkdir 4x4-build && cd 4x4-build
+curl -LO https://raw.githubusercontent.com/lexy898/4x4-remote/master/packaging/arch/PKGBUILD
+makepkg -si
+```
+
+With a checkout, `just package` builds the local `master` branch of it instead, so build it after
+what you want is merged into `master`:
 
 ```bash
 git switch master
@@ -102,23 +113,24 @@ Everything it makes stays in `~/.cache/4x4-pkg` (crates come from cargo's own ca
 the build dir keeps the compiled crates, about 2 GiB, so later builds are faster, and all of it is
 safe to delete.
 
-The package is always built from the commits of the local `master` branch: not from the working
-tree, so uncommitted changes are left out, and not from the branch checked out; the first line
-`just package` prints names the commit it builds. While `master` has no `packaging/arch/PKGBUILD`,
-`just package` stops before it writes anything and says to merge and pull first. Outside a git
-repository (a copy of the files without `.git`) it also stops before it writes anything, but it
-shows git's message and does not mention merging. If the local `master` is behind the
-`origin/master` you last fetched, `just package` warns and still builds the local `master`; it
-fetches nothing itself. After the checkout has moved to another directory, the next build starts
-over from it and takes the full four minutes again. The package installs `/usr/bin/4x4`, its
-desktop file in `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 Remote
-shows in the application menu with its icon at once, without logging out. It also installs a second,
-hidden desktop file for debug builds (described below). It depends on `geoip-database`, which holds
-the country files that the peers' flags come from (see [Files and logs](#files-and-logs)), and
-installs, next to the licenses of 4x4, the notice of the flag pictures it embeds
-(`LICENSE-country-flag-icons` in `/usr/share/licenses/4x4-git`; see [License](#license)).
+`just package` always builds the commits of the local `master` branch: not the working tree, so
+uncommitted changes are left out, and not the branch checked out; its first line names the commit it
+builds. While `master` has no `packaging/arch/PKGBUILD`, `just package` stops before it writes
+anything and says to merge and pull first. Outside a git repository (a copy of the files without
+`.git`) it also stops before it writes anything, but it shows git's message and does not mention
+merging. If the local `master` is behind the `origin/master` you last fetched, `just package` warns
+and still builds the local `master`; it fetches nothing itself. After the checkout has moved to
+another directory, the next build starts over from it and takes the full four minutes again. The
+package installs `/usr/bin/4x4`, its desktop file in `/usr/share/applications` and its icon in
+`/usr/share/icons/hicolor`, so 4x4 Remote shows in the application menu with its icon at once,
+without logging out. It also installs a second, hidden desktop file for debug builds (described
+below). It depends on `geoip-database`, which holds the country files that the peers' flags come
+from (see [Files and logs](#files-and-logs)), and installs, next to the licenses of 4x4, the notice
+of the flag pictures it embeds (`LICENSE-country-flag-icons` in `/usr/share/licenses/4x4-git`; see
+[License](#license)).
 
-To update, run the same four commands again; pacman replaces the installed version.
+To update, run the same commands again (the `curl` and `makepkg -si` above in the directory, or the
+four of a checkout); pacman replaces the installed version.
 
 To uninstall, first run `just default-handler --undo` if you made 4x4 the default app for
 `.torrent` files and magnet links (described below), then `sudo pacman -R 4x4-git`. Your

@@ -1,8 +1,10 @@
 # Maintainer: lexy898
 #
-# Builds 4x4 from a local checkout: the commit at the tip of its master branch, never the working
-# tree. Run it through `just package` (from the checkout), which sets X4_REPO and keeps every
-# build file under ~/.cache/4x4-pkg; install the result with `sudo pacman -U <file>`.
+# Builds 4x4 from the commit at the tip of the master branch, never from a working tree. On its own
+# (makepkg -si, in an empty directory with only this file) it clones GitHub's master. Through
+# `just package`, run in a checkout, X4_REPO names that checkout and its local master is built
+# instead; every build file then stays under ~/.cache/4x4-pkg, and the result is installed with
+# `sudo pacman -U <file>`.
 
 pkgname=4x4-git
 # makepkg replaces this with what pkgver() prints, in the copy of this file that it runs.
@@ -37,10 +39,12 @@ conflicts=(4x4)
 # GCC's LTO objects; Cargo's own LTO ([profile.release]) still applies. !debug: the release
 # profile strips the binary, so a -debug package would be empty.
 options=(!lto !debug)
-source=("4x4::git+file://${X4_REPO:?run makepkg through just package, which sets X4_REPO}#branch=master")
+# X4_REPO, when set and not empty (just package does that), names a local checkout to clone instead.
+_repo=${X4_REPO:+file://$X4_REPO}
+source=("4x4::git+${_repo:-https://github.com/lexy898/4x4-remote.git}#branch=master")
 b2sums=('SKIP')
 
-# The workspace version, then the number of commits and the commit: 0.1.0.r229.g927ee24. The
+# The workspace version, then the number of commits and the commit: 1.0.0.r320.g1a2b3c4. The
 # count only grows while master is never rewritten, so every new build is an upgrade for pacman.
 pkgver() {
   cd 4x4

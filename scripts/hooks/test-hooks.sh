@@ -1635,8 +1635,9 @@ test_package_build_file_describes_4x4_git_built_from_the_local_master() {
     expect_srcinfo b2sums SKIP
 }
 
-# Run by hand, without the recipe, makepkg stops at once and names the recipe.
-test_package_build_file_stops_without_just_package() {
+# Run by hand, outside `just package`, in an empty directory, the PKGBUILD builds from GitHub. An
+# X4_REPO that is set but empty does not turn the source into a bare file:// either.
+test_package_build_file_takes_the_sources_from_github_by_default() {
     local dir
     if ! command -v makepkg >/dev/null 2>&1; then
         skip "makepkg not found; it exists only on Arch Linux"
@@ -1646,9 +1647,13 @@ test_package_build_file_stops_without_just_package() {
     cp "$pkgbuild" "$dir/PKGBUILD" 2>/dev/null || fail "no PKGBUILD at $pkgbuild"
     run_with_input '' env -u X4_REPO -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" \
         makepkg --printsrcinfo
-    ((status != 0)) || fail "makepkg read the PKGBUILD without X4_REPO: $stdout"
-    expect_contains "X4_REPO: run makepkg through just package, which sets X4_REPO" "$stderr" stderr
-    [[ $stdout != *pkgname* ]] || fail "makepkg printed a .SRCINFO: $stdout"
+    expect_status 0
+    expect_srcinfo pkgname 4x4-git
+    expect_srcinfo source "4x4::git+https://github.com/lexy898/4x4-remote.git#branch=master"
+    run_with_input '' env -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" X4_REPO= \
+        makepkg --printsrcinfo
+    expect_status 0
+    expect_srcinfo source "4x4::git+https://github.com/lexy898/4x4-remote.git#branch=master"
 }
 
 # pkgver() in a stand-in of makepkg's $srcdir, whose 4x4 is a clone with three commits and a
@@ -2855,7 +2860,7 @@ cases=(
     virtual_session_refuses_a_tmpdir_too_long_for_the_socket
     virtual_session_reports_a_session_that_never_ran
     package_build_file_describes_4x4_git_built_from_the_local_master
-    package_build_file_stops_without_just_package
+    package_build_file_takes_the_sources_from_github_by_default
     package_version_is_the_workspace_version_with_the_commit_count_and_hash
     package_version_stops_without_a_workspace_version
     package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped
