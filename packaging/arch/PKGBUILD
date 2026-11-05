@@ -10,7 +10,7 @@ pkgver=0.1.0.r229.g927ee24
 pkgrel=1
 pkgdesc='Native desktop client for a remote Transmission daemon'
 arch=('x86_64')
-url='https://github.com/lexy898/4x4'
+url='https://github.com/lexy898/4x4-remote'
 license=('MIT OR Apache-2.0')
 # geoip-database holds the country files in /usr/share/GeoIP that the Peers tab reads for its flags.
 # It is a dependency, not an optional one: 4x4 works without it, but pacman -Rs of the package that

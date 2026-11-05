@@ -66,5 +66,6 @@ mod toolbar;
 pub mod torrent_table;
 mod window_state;
 
-/// The product name: the only user-visible literal allowed outside the i18n messages.
-const PRODUCT_NAME: &str = "4x4";
+/// The product name: the only user-visible literal allowed outside the i18n messages. The
+/// command, the package, the config and log folders and the messages keep the short name, 4x4.
+const PRODUCT_NAME: &str = "4x4 Remote";

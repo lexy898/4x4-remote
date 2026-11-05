@@ -1,7 +1,7 @@
-# 4x4
+# 4x4 Remote
 
-A native desktop client for a remote [Transmission](https://transmissionbt.com/) daemon, written
-in Rust.
+4x4 Remote (4x4 for short; its command is `4x4`) is a native desktop client for a remote
+[Transmission](https://transmissionbt.com/) daemon, written in Rust.
 
 ## Status
 
@@ -111,8 +111,8 @@ shows git's message and does not mention merging. If the local `master` is behin
 `origin/master` you last fetched, `just package` warns and still builds the local `master`; it
 fetches nothing itself. After the checkout has moved to another directory, the next build starts
 over from it and takes the full four minutes again. The package installs `/usr/bin/4x4`, its
-desktop file in `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 shows
-in the application menu with its icon at once, without logging out. It also installs a second,
+desktop file in `/usr/share/applications` and its icon in `/usr/share/icons/hicolor`, so 4x4 Remote
+shows in the application menu with its icon at once, without logging out. It also installs a second,
 hidden desktop file for debug builds (described below). It depends on `geoip-database`, which holds
 the country files that the peers' flags come from (see [Files and logs](#files-and-logs)), and
 installs, next to the licenses of 4x4, the notice of the flag pictures it embeds

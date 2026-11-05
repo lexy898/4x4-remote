@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/lexy898/4x4"
+repository = "https://github.com/lexy898/4x4-remote"
 publish = false
 
 [workspace.dependencies]

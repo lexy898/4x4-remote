@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=4x4
+Name=4x4 Remote
 GenericName=Torrent Client
 Comment=Control a remote Transmission daemon
 Exec=4x4 %U

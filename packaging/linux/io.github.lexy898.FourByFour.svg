@@ -1,4 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100">
-  <title>4x4</title>
+  <title>4x4 Remote</title>
   <path d="M20 16 V84 M50 16 V84 M80 50 V84 M20 50 H80" fill="none" stroke="#e0612a" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
