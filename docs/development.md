@@ -176,7 +176,7 @@ would. `--showcase` makes 24 torrents instead, named like free software, films a
 may share (an Arch Linux ISO, "Big Buck Bunny (2008) 1080p"), in a mix of states: every main state
 is among them, and the first rows show several. `--theme system|light|dark` starts the window with
 that theme instead of following the desktop's, so that a shot of either theme changes nothing on the
-desktop. Both are for screenshots; the default demo is the same with and without them. The made-up
+desktop. Both are for [screenshots](#screenshots); the default demo is the same with and without them. The made-up
 daemon carries out the actions on its own torrents: pausing, starting (a torrent
 that lacks data downloads, a complete one seeds), starting ahead of the queue, verifying (the
 torrent checks for three updates, then goes back to what it was), removing, the speed settings, and
@@ -216,6 +216,59 @@ runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up daemon logs e
 answers with the bytes of the request and of the answer, which is how the requests and the bytes the
 app asks of a daemon are counted (see [Performance](performance.md)). The demo is the `x4-synthetic`
 binary of the `synthetic` feature, so the `4x4` build does not contain it.
+
+## Screenshots
+
+`docs/images/` holds the pictures the [README](../README.md) shows: `main-dark.png` and
+`main-light.png`, the main window with a torrent selected and its details open, which the README
+picks between by the reader's theme, and `peers-dark.png`, the Peers tab. They are shots of the
+`--showcase` demo (see [Synthetic demo](#synthetic-demo)), so they show no one's torrents, server or
+addresses: the names are the showcase's and the peers are at addresses reserved for documentation.
+Retake them when the UI changes, so that the README shows what 4x4 looks like.
+
+The shots are taken inside `just virtual`, off your screens, with spectacle. The session's own
+`HOME` is removed when it ends, so `shots` is a directory outside it. The demo is built first, and
+`--theme` makes each shot in its theme without a change of the desktop's colors:
+
+```bash
+cargo build -p x4-app --features synthetic --bin x4-synthetic --locked
+export shots=/tmp/4x4-shots
+mkdir -p "$shots"
+just virtual bash -c '
+shot() {
+    name=$1 wait=$2
+    shift 2
+    target/debug/x4-synthetic --showcase "$@" 2>/dev/null &
+    demo=$!
+    sleep "$wait"
+    spectacle -b -n -f -o "$shots/$name-full.png"
+    kill "$demo"
+    wait "$demo" || true
+}
+shot main-dark 12 --theme dark --select 4
+shot main-light 12 --theme light --select 4
+shot peers-dark 16 --theme dark --select 15 --press alt-3
+'
+```
+
+`--select 4` is the fifth row, a download with 40 peers; `--select 15` is the busy download, with
+150 peers, and `--press alt-3` opens its Peers tab three seconds after the list is there, which the
+longer wait allows for. The rows are in the default order, by name. The virtual screen is 1440x900
+and the window opens 1200x720, centered, under KWin's title bar, so the crop `1200x750+120+75` is
+the window and nothing else. `zopflipng` squeezes the files without loss, to 120 to 135 KiB each;
+keep each under 150 KiB (the repository is cloned by everyone):
+
+```bash
+for name in main-dark main-light peers-dark; do
+    magick "$shots/$name-full.png" -crop 1200x750+120+75 +repage -strip "$shots/$name.png"
+    zopflipng -y "$shots/$name.png" docs/images/$name.png
+done
+```
+
+It needs ImageMagick (`magick`), `zopfli` (`zopflipng`) and spectacle, besides what
+[Windows off screen](#windows-off-screen) needs. Look at each picture before committing it: only
+the showcase's names, only addresses reserved for documentation, nothing cut off, no black margin
+around the window.
 
 ## Live tests
 

@@ -3,7 +3,10 @@
 4x4 Remote (4x4 for short; its command is `4x4`) is a native desktop client for a remote
 [Transmission](https://transmissionbt.com/) daemon, written in Rust.
 
-<!-- screenshot: Task 6 -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
+  <img alt="The 4x4 Remote main window, with a torrent selected and its details open" src="docs/images/main-light.png">
+</picture>
 
 ## Features
 
@@ -141,6 +144,9 @@ table, the details panel under the table and the status bar along the bottom.
   General, Files, Peers and Trackers (`Alt+1` to `Alt+4`). In the Files tab, the checkboxes skip
   files, a click on a priority changes it, and "Download in order (sequential)" downloads the
   torrent from its start.
+
+![The Peers tab, with each peer's country flag](docs/images/peers-dark.png)
+
 - Add file (`Ctrl+O`) opens the desktop's file dialog for `.torrent` files, and Add magnet
   (`Ctrl+U`) takes the magnet links on the clipboard, or opens a form for one; `Ctrl+V` in the table
   and `.torrent` files dropped on the window add too. The add dialog then shows each torrent, with
