@@ -224,16 +224,24 @@ fn default_column(id: ColumnId) -> ColumnState {
 
 /// How wide a column is before the user resizes it: room for its widest usual text
 /// ("Downloading", a two-part ETA such as "23 h 59 m", a sorted header with its mark) in a 14 px
-/// sans-serif font plus the cell's padding. Together they take 978 px, which fits the default
-/// 1200 px window next to the sidebar.
+/// sans-serif font plus the cell's 16 px of padding. Together they take 978 px, which fits the
+/// default 1200 px window next to the sidebar.
+///
+/// The font is the one GPUI really draws with, not the one it asks for. On Linux GPUI asks for IBM
+/// Plex Sans, which desktops rarely have, and takes the first installed family of its fallback
+/// list: Adwaita Sans (`adwaita-fonts` on Arch), then Cantarell, Noto Sans and `DejaVu Sans`. In
+/// tabular digits "23 h 59 m" measures 68.1 px in Adwaita Sans, 62.1 px in Cantarell, 64.7 px in
+/// Noto Sans and 71.5 px in `DejaVu Sans`, so the ETA column holds 72 px of text, which fits all
+/// four. At 82 px it held 66 and cut "37 m 30 s" (67.2 px in Adwaita Sans). A time with three
+/// digits of days, such as "100 d 23 h" (73.5 px in Adwaita Sans), is still wider; the user can
+/// widen the column, and the width is kept.
 fn default_width(id: ColumnId) -> f32 {
     match id {
-        ColumnId::Name => 285.0,
+        ColumnId::Name => 279.0,
         ColumnId::Size => 80.0,
         ColumnId::Progress => 120.0,
         ColumnId::State => 105.0,
-        ColumnId::Down | ColumnId::Up => 88.0,
-        ColumnId::Eta => 82.0,
+        ColumnId::Down | ColumnId::Up | ColumnId::Eta => 88.0,
         ColumnId::Ratio => 64.0,
         ColumnId::Peers => 66.0,
     }

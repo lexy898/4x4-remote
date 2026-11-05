@@ -256,12 +256,10 @@ shot peers-dark 14 --theme dark --select 15 --press alt-3
 `--select 4` is the fifth row, a download with 40 peers; `--select 15` is the busy download, with
 150 peers, and `--press alt-3` opens its Peers tab three seconds after the list is there. The rows
 are in the default order, by name. The rates change on every poll, so what a shot holds depends on
-how long it waits; with these waits the shots come out the same each time, but the ETA column is too
-narrow for `37 m 34 s`, so if a retake cuts the ETA of the selected row off, change that shot's wait
-by a second. The virtual screen is 1440x900 and the window opens 1200x720, centered, under KWin's
-title bar, so the crop `1200x750+120+75` is the window and nothing else. `zopflipng` squeezes the
-files without loss, to about 120 to 130 KiB each; keep each under 150 KiB (the repository is cloned
-by everyone):
+how long it waits; with these waits the shots come out the same each time. The virtual screen is
+1440x900 and the window opens 1200x720, centered, under KWin's title bar, so the crop
+`1200x750+120+75` is the window and nothing else. `zopflipng` squeezes the files without loss, to
+about 120 to 130 KiB each; keep each under 150 KiB (the repository is cloned by everyone):
 
 ```bash
 for name in main-dark main-light peers-dark; do
