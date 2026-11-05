@@ -3,6 +3,7 @@
 //! A transport only moves bytes and the `X-Transmission-Session-Id` header; status codes and the
 //! session-id handshake are interpreted by [`Client`](crate::Client).
 
+use std::fmt;
 use std::io;
 use std::time::Duration;
 
@@ -13,8 +14,13 @@ use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
+use crate::credentials::Credentials;
+
 /// The CSRF header Transmission requires on every request (rpc-spec §2.2.1).
 const SESSION_ID_HEADER: &str = "X-Transmission-Session-Id";
+
+/// The header that carries HTTP basic credentials (RFC 7617).
+const AUTHORIZATION_HEADER: &str = "Authorization";
 
 /// One JSON-RPC POST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,13 +80,18 @@ pub trait Transport: Send {
 /// It always connects directly to the daemon: the proxy environment variables (`HTTP_PROXY`,
 /// `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are ignored. `NO_PROXY` cannot exempt a LAN range, so
 /// honouring them would send requests for a LAN daemon to the proxy. A proxy option is future work.
-#[derive(Debug, Clone)]
+///
+/// Its `Debug` says only whether credentials are set: the `Authorization` header value it keeps
+/// holds the password in base64.
+#[derive(Clone)]
 pub struct UreqTransport {
     agent: ureq::Agent,
     url: String,
     /// The timeout of every request, and of the host lookup and connecting of a request with a
     /// longer one.
     timeout: Duration,
+    /// The `Authorization` header value sent with every request, if credentials are set.
+    authorization: Option<String>,
 }
 
 impl UreqTransport {
@@ -108,7 +119,36 @@ impl UreqTransport {
             agent,
             url: url.to_owned(),
             timeout,
+            authorization: None,
         }
+    }
+
+    /// Sends `credentials` as HTTP basic authentication with every request. Empty credentials
+    /// (see [`Credentials::is_empty`]) and `None` send nothing.
+    ///
+    /// The header is never attached to a request that redirects to another place: `ureq` drops it
+    /// there by default.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Option<Credentials>) -> Self {
+        self.authorization = credentials
+            .filter(|credentials| !credentials.is_empty())
+            .map(|credentials| credentials.header_value());
+        self
+    }
+}
+
+impl fmt::Debug for UreqTransport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let credentials = if self.authorization.is_some() {
+            "<set>"
+        } else {
+            "<none>"
+        };
+        f.debug_struct("UreqTransport")
+            .field("url", &self.url)
+            .field("timeout", &self.timeout)
+            .field("credentials", &format_args!("{credentials}"))
+            .finish_non_exhaustive()
     }
 }
 
@@ -144,6 +184,9 @@ impl Transport for UreqTransport {
             TransportError::Connect(format!("invalid URL {:?}: {error}", self.url))
         })?;
         let mut builder = self.agent.post(uri).content_type("application/json");
+        if let Some(authorization) = &self.authorization {
+            builder = builder.header(AUTHORIZATION_HEADER, authorization);
+        }
         if let Some(session_id) = request.session_id {
             builder = builder.header(SESSION_ID_HEADER, session_id);
         }
@@ -342,6 +385,119 @@ mod tests {
             })
         );
         assert!(!request.contains("x-transmission-session-id"), "{request}");
+    }
+
+    /// Accepts `count` connections one after the other, answering each request with a small `200`
+    /// that closes the connection. Joining returns the raw requests in order.
+    fn serve_requests(count: usize) -> (String, JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/transmission/rpc", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            (0..count)
+                .map(|_| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let request = read_request(&mut stream);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                        )
+                        .unwrap();
+                    request
+                })
+                .collect()
+        });
+        (url, server)
+    }
+
+    /// The values of the header `name` in a raw request, in any letter case of the name.
+    fn header_values<'a>(request: &'a str, name: &str) -> Vec<&'a str> {
+        let head = request.split("\r\n\r\n").next().unwrap_or_default();
+        head.lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(": "))
+            .filter(|(field, _)| field.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value)
+            .collect()
+    }
+
+    fn post_empty(transport: &UreqTransport) -> Result<HttpResponse, TransportError> {
+        transport.post(&HttpRequest {
+            body: b"{}",
+            session_id: None,
+            timeout: None,
+        })
+    }
+
+    #[test]
+    fn credentials_are_sent_on_every_request() {
+        let (url, server) = serve_requests(2);
+        let transport = UreqTransport::new(&url, TIMEOUT).with_credentials(Some(Credentials {
+            username: "Aladdin".to_owned(),
+            password: "open sesame".to_owned(),
+        }));
+
+        let first = post_empty(&transport);
+        let second = post_empty(&transport);
+        let requests = server.join().unwrap();
+
+        assert_eq!(first.map(|response| response.status), Ok(200));
+        assert_eq!(second.map(|response| response.status), Ok(200));
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            assert_eq!(
+                header_values(request, "authorization"),
+                ["Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="],
+                "{request}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_credentials_send_no_authorization_header() {
+        let (url, server) = serve_requests(1);
+        let transport = UreqTransport::new(&url, TIMEOUT);
+
+        let response = post_empty(&transport);
+        let requests = server.join().unwrap();
+
+        assert_eq!(response.map(|response| response.status), Ok(200));
+        assert!(
+            header_values(&requests[0], "authorization").is_empty(),
+            "{}",
+            requests[0]
+        );
+    }
+
+    #[test]
+    fn empty_credentials_are_no_credentials() {
+        let (url, server) = serve_requests(2);
+        let empty = Credentials {
+            username: String::new(),
+            password: String::new(),
+        };
+        let with_empty = UreqTransport::new(&url, TIMEOUT).with_credentials(Some(empty.clone()));
+        // A user name alone is something to send, even with no password.
+        let name_only = UreqTransport::new(&url, TIMEOUT).with_credentials(Some(Credentials {
+            username: "alice".to_owned(),
+            password: String::new(),
+        }));
+
+        let first = post_empty(&with_empty);
+        let second = post_empty(&name_only);
+        let requests = server.join().unwrap();
+
+        assert_eq!(first.map(|response| response.status), Ok(200));
+        assert_eq!(second.map(|response| response.status), Ok(200));
+        assert!(empty.is_empty());
+        assert!(
+            header_values(&requests[0], "authorization").is_empty(),
+            "{}",
+            requests[0]
+        );
+        assert_eq!(
+            header_values(&requests[1], "authorization"),
+            ["Basic YWxpY2U6"]
+        );
     }
 
     #[test]

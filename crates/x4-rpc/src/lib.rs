@@ -27,10 +27,15 @@
 //! report its totals; [`Client::check_server`] tells whether the server's RPC version is one
 //! 4x4 supports (Transmission 4.1+).
 //!
+//! A daemon that asks for a user name and password gets them as HTTP basic authentication on
+//! every request, from [`UreqTransport::with_credentials`]; [`Credentials`] never shows the
+//! password in its `Debug`.
+//!
 //! The `test-support` feature adds the `testing` module with a fake transport, and
 //! `Client::call_raw`, an untyped call for tooling such as the fixture recorder.
 
 mod client;
+mod credentials;
 mod download_dir;
 mod error;
 mod ids;
@@ -46,6 +51,7 @@ mod torrent_methods;
 mod transport;
 
 pub use client::{ADD_TIMEOUT, Client, DEFAULT_TIMEOUT};
+pub use credentials::Credentials;
 pub use download_dir::{DownloadDir, DownloadDirError, MAX_DOWNLOAD_DIR_BYTES};
 pub use error::{RpcError, UnsupportedReason};
 pub use ids::{GetIds, HashString, IdError, TorrentId, TorrentRef, TorrentSelection};
