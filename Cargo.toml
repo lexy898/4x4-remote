@@ -42,6 +42,11 @@ i18n-embed-fl = "0.10.1"
 # `O_NONBLOCK` for opening a .torrent file, so that a FIFO swapped in after the first look never
 # blocks the open. gpui already pulls it in.
 libc = "0.2.191"
+# The user name and password pasted inside an address are percent-decoded (x4-core). `url` already
+# pulls it in with the same features, so it adds no crate.
+percent-encoding = { version = "2.3.2", default-features = false, features = [
+  "std",
+] }
 # The window and display handles that parent the file dialog (Linux only). gpui already pulls in
 # this version.
 raw-window-handle = "0.6.2"

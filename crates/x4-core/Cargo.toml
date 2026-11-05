@@ -15,6 +15,7 @@ test-support = ["dep:serde_json", "x4-rpc/test-support"]
 [dependencies]
 async-channel.workspace = true
 crossbeam-channel.workspace = true
+percent-encoding.workspace = true
 serde.workspace = true
 # Only `test_support::fixture_result` uses it outside of tests.
 serde_json = { workspace = true, optional = true }

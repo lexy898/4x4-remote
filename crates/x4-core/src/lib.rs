@@ -65,6 +65,14 @@
 //! text a limit's input starts with, and [`limit_edit`] the [`LimitEdit`] that leaving it sends;
 //! [`limit_needs_value`] tells when it was switched on without a speed.
 //!
+//! Where the daemon is, and the dialog that sets it, are decided here as well. A
+//! [`ConnectionSettings`] is a host, a port, a path and the [`x4_rpc::Credentials`] of one daemon,
+//! read from an `http://` address by [`ConnectionSettings::from_url`] (or refused with a
+//! [`UrlProblem`]); its [`url`](ConnectionSettings::url) never holds the credentials. A
+//! [`ConnectionForm`] is the text of the dialog's fields: [`ConnectionForm::check`] turns it into
+//! settings or into [`FormProblems`] for each field, and [`ConnectionForm::spread`] splits an
+//! address pasted into the host field over the fields.
+//!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme, details panel, and the folders
 //! torrents were added to), read tolerantly and repaired by [`UiState::parse`] (see also
@@ -136,6 +144,7 @@
 mod action;
 mod adding;
 mod config;
+mod connection;
 mod details;
 mod engine;
 mod files;
@@ -171,6 +180,10 @@ pub use adding::{
     stopped_outcome,
 };
 pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
+pub use connection::{
+    ConnectionForm, ConnectionSettings, DEFAULT_PATH, DEFAULT_PORT, FormProblems, HostProblem,
+    PathProblem, PortProblem, UrlProblem, UsernameProblem,
+};
 pub use details::{
     FileEntry, NextAnnounce, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat,
 };
