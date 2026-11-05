@@ -16,8 +16,8 @@
 //!
 //! The `details` module holds the texts of the details panel that carry values, the `files`
 //! module those of its Files tab, the `peers` module those of its Peers tab, the `trackers`
-//! module those of its Trackers tab, and the `adding` module those of the add dialog and of what
-//! became of a torrent to add.
+//! module those of its Trackers tab, the `adding` module those of the add dialog and of what
+//! became of a torrent to add, and the `connection` module those of the Connection dialog.
 
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,6 +44,11 @@ pub(crate) use adding::{
     add_notice_text, add_reason_text, add_title_text, chosen_not_local_text, dropped_others_text,
     free_space_line_text, load_failure_text, no_choice_text, queue_full_text, rejected_text,
 };
+pub(crate) use connection::{
+    connection_address_text, connection_save_failed_text, connection_save_reason_text,
+    connection_test_text, host_problem_text, path_problem_text, port_problem_text,
+    username_problem_text,
+};
 pub(crate) use details::{
     created_text, details_placeholder_text, error_texts, pieces_text, size_with_wanted_text,
     tracker_problem_text, trackers_text,
@@ -60,6 +65,7 @@ pub(crate) use trackers::{
 };
 
 mod adding;
+mod connection;
 mod details;
 mod files;
 #[cfg(test)]
@@ -517,13 +523,8 @@ pub(crate) fn connection_text(indicator: &Indicator) -> SharedString {
     match indicator {
         Indicator::ServiceFailed => t!("connection-service-failed"),
         Indicator::ServiceStopped => t!("connection-service-stopped"),
-        Indicator::Unsupported(reason) => match reason {
-            UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
-            UnsupportedReason::NoVersion => t!("connection-unsupported-no-version"),
-            UnsupportedReason::Version(version) => {
-                t!("connection-unsupported-version", version = version.as_str())
-            }
-        },
+        Indicator::NotConfigured => t!("connection-not-configured"),
+        Indicator::Unsupported(reason) => unsupported_string(reason),
         Indicator::Reconnecting {
             attempt,
             last_error,
@@ -536,6 +537,24 @@ pub(crate) fn connection_text(indicator: &Indicator) -> SharedString {
         Indicator::Connected => String::new(),
     }
     .into()
+}
+
+/// Why 4x4 cannot use a daemon that answered, such as "Transmission 4.1 or newer required (server
+/// RPC 5.0.1)": the status bar and the Connection dialog's Test say it alike.
+fn unsupported_string(reason: &UnsupportedReason) -> String {
+    match reason {
+        UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
+        UnsupportedReason::NoVersion => t!("connection-unsupported-no-version"),
+        UnsupportedReason::Version(version) => {
+            t!("connection-unsupported-version", version = version.as_str())
+        }
+    }
+}
+
+/// What the connection dot means while connected, with the server as people name it
+/// (`host:port`), such as "Connected to nas:9091".
+pub(crate) fn connected_to_text(server: &str) -> SharedString {
+    t!("connection-connected-to", server = server).into()
 }
 
 /// Why the connection failed, in a few words for the status bar, such as "timed out".

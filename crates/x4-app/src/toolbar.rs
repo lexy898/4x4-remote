@@ -1,6 +1,6 @@
 //! The toolbar along the top of the main window: the search box, the buttons that add torrents
 //! (Add file and Add magnet), the buttons that start and pause the selected torrents and the Remove
-//! menu on the left, the theme switch and the column menu on the right.
+//! menu on the left, the Connection button, the theme switch and the column menu on the right.
 //!
 //! Add file and Add magnet are always enabled, as the add dialog says itself whether the daemon is
 //! connected; a click goes through the same request as their keys, Ctrl+O and Ctrl+U.
@@ -11,6 +11,9 @@
 //! from list…" and "Remove and delete files…"; each item opens the dialog that asks first, as its
 //! key does. The tooltips name the action and its key. The main view draws the toolbar again
 //! whenever the availability changes.
+//!
+//! The Connection button opens the Connection dialog, as Ctrl+, does; it is always enabled, and
+//! the main view opens nothing while another dialog is open.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
@@ -112,6 +115,7 @@ pub(crate) fn toolbar(
                 .child(remove_menu(state.availability.remove, cx)),
         )
         .child(div().flex_1())
+        .child(connection_button(cx))
         .child(
             Button::new("theme-toggle")
                 .ghost()
@@ -121,6 +125,18 @@ pub(crate) fn toolbar(
                 .on_click(cx.listener(|view, _, window, cx| view.switch_theme(window, cx))),
         )
         .child(column_menu(state.columns, cx))
+}
+
+/// The icon button that opens the Connection dialog of the view of `cx`; its tooltip names the key,
+/// Ctrl+, too.
+fn connection_button(cx: &Context<'_, MainView>) -> Button {
+    Button::new("toolbar-connection")
+        .ghost()
+        .small()
+        .icon(gpui_kit::assets::IconName::Settings)
+        .accessibility_label(SharedString::from(t!("toolbar-connection")))
+        .tooltip(t!("toolbar-connection-tooltip"))
+        .on_click(cx.listener(|view, _, window, cx| view.open_connection(window, cx)))
 }
 
 /// The icon button `id` of the toolbar that adds torrents, named `name`: a click carries out

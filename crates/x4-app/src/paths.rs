@@ -16,7 +16,8 @@ const APPLICATION: &str = "4x4";
 /// The files and directories the app reads and writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
-    /// The owner's `config.toml`. The app only reads it.
+    /// The owner's `config.toml`. The app reads it at the start, and the Connection dialog writes
+    /// the server into it.
     pub config_file: PathBuf,
     /// The app's own `state.toml`.
     pub state_file: PathBuf,

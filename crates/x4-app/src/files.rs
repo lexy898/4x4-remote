@@ -1,7 +1,8 @@
-//! Reading the owner's `config.toml` and reading and writing the app's `state.toml`.
+//! Reading and writing the owner's `config.toml` and the app's `state.toml`.
 //!
-//! The contents of both files are turned into values by `x4-core`; this module only does the file
-//! I/O. No error here shows what a file contains, as a config may hold a URL with a password.
+//! The contents of both files are turned into values, and values into text, by `x4-core`; this
+//! module only does the file I/O. Both are written atomically, private to the owner. No error here
+//! shows what a file contains, as a config holds the password.
 
 use std::ffi::OsString;
 use std::io::{self, Write as _};
@@ -9,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::{fs, str};
 
 use tempfile::NamedTempFile;
-use x4_core::{Config, ConfigError, TextPosition, UiState, UiStateError};
+use x4_core::{
+    Config, ConfigError, ConnectionSettings, TextPosition, UiState, UiStateError,
+    config_with_connection,
+};
 
 use crate::private_dir::create_private_dir;
 
@@ -49,6 +53,16 @@ pub(crate) enum FilesError {
         /// What the serializer said.
         source: UiStateError,
     },
+    /// A file that is not valid cannot be moved aside to make room for a new one.
+    #[error("cannot move {} aside to {}", path.display(), to.display())]
+    MoveAside {
+        /// The file.
+        path: PathBuf,
+        /// Where it was to go.
+        to: PathBuf,
+        /// What the system said.
+        source: io::Error,
+    },
     /// The file cannot be written.
     #[error("cannot write {}", path.display())]
     Write {
@@ -56,6 +70,12 @@ pub(crate) enum FilesError {
         path: PathBuf,
         /// What the system said.
         source: io::Error,
+    },
+    /// The path names no file, so that a file there cannot be moved aside next to itself.
+    #[error("{} names no file", path.display())]
+    NoFileName {
+        /// The path.
+        path: PathBuf,
     },
 }
 
@@ -86,14 +106,22 @@ pub(crate) struct LoadedState {
     pub writable: bool,
 }
 
+/// What [`save_connection`] did besides writing the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SavedConfig {
+    /// Whether the old file was not TOML at all, and was moved to `config.toml.bad` (replacing an
+    /// older one) before a new file was written.
+    pub(crate) moved_aside: bool,
+}
+
 /// Reads the owner's `config.toml`. A missing file gives [`Config::default`].
 ///
 /// # Errors
 ///
 /// [`FilesError::Read`] if the file exists but cannot be read, and [`FilesError::Config`] if its
-/// contents are unusable (not TOML, a value of the wrong type, a URL that is not `http://`). The
-/// file is never changed; the caller decides what to do, such as showing the error and using the
-/// defaults.
+/// contents are unusable (not TOML, a value of the wrong type, an address that is not plain
+/// `http://` or holds a user name or password). Reading never changes the file; the caller
+/// decides what to do, such as showing the error and setting no server.
 pub(crate) fn read_config(path: &Path) -> Result<Config, FilesError> {
     let Some(bytes) = read(path)? else {
         return Ok(Config::default());
@@ -155,6 +183,85 @@ pub(crate) fn read_ui_state(path: &Path) -> Result<LoadedState, FilesError> {
     }
 }
 
+/// Writes `settings` into the owner's `config.toml` at `path`, as the Connection dialog saves
+/// them: the `[connection]` table's `url`, and `username` and `password` when there are
+/// credentials (removed when there are none). The comments, the other keys and tables of the file
+/// stay. The file is written atomically, as [`write_ui_state`] writes, with mode 0600 on Unix, as
+/// it holds the password in plain text; its directory is created if needed.
+///
+/// A missing file is a new one. A file that is not TOML at all (not even UTF-8) cannot be edited:
+/// it is moved to `config.toml.bad`, replacing an older one, and a new file is written, which the
+/// log says with both paths and [`SavedConfig::moved_aside`] tells; the old file is private to the
+/// owner as `config.toml.bad`, as it may hold a password.
+///
+/// If `path` is a symbolic link (dotfiles kept in a repository), it is written through: the file
+/// the link names is read, edited and replaced, in its own directory, and the link stays a link.
+/// A broken file is moved aside next to the file the link names. A link to nothing is written
+/// through too: the file it names, and its directory, are created.
+///
+/// # Errors
+///
+/// [`FilesError::Read`] if the old file cannot be read (or `path` is a loop of links),
+/// [`FilesError::CreateDir`] if the
+/// directory cannot be created, [`FilesError::MoveAside`] if a file that is not TOML cannot be
+/// moved aside ([`FilesError::NoFileName`] if `path` names no file to move), and
+/// [`FilesError::Write`] if the new file cannot be written. On any error the old file is left as
+/// it was and no temporary file stays behind; only if the new file cannot take a broken one's
+/// place once that was moved aside, and the broken one cannot be moved back either, does it stay
+/// as `config.toml.bad`, which the log says.
+pub(crate) fn save_connection(
+    path: &Path,
+    settings: &ConnectionSettings,
+) -> Result<SavedConfig, FilesError> {
+    // Renaming a new file over a link would replace the link, not the file it names.
+    let target = write_target(path)?;
+    let path = target.as_path();
+    let old = read(path)?.unwrap_or_default();
+    let edited = str::from_utf8(&old)
+        .map_err(|error| ConfigError::Parse {
+            position: None,
+            message: utf8_problem(error),
+        })
+        .and_then(|text| config_with_connection(text, settings));
+    let config_error = |source| FilesError::Config {
+        path: path.to_path_buf(),
+        source,
+    };
+    let problem = match edited {
+        Ok(text) => {
+            write_atomically(path, &text)?;
+            tracing::info!(path = %path.display(), server = %settings.server_label(), "connection saved");
+            return Ok(SavedConfig { moved_aside: false });
+        }
+        Err(problem @ ConfigError::Parse { .. }) => problem,
+        // Only reading checks the address.
+        Err(other @ ConfigError::InvalidUrl(_)) => return Err(config_error(other)),
+    };
+    let text = config_with_connection("", settings).map_err(config_error)?;
+    let bad = bad_path(path).ok_or_else(|| FilesError::NoFileName {
+        path: path.to_path_buf(),
+    })?;
+    // The new file is ready before the old one moves, so that a failed write leaves it in place.
+    let staged = stage(path, &text)?;
+    // `rename` replaces an older `.bad` file.
+    fs::rename(path, &bad).map_err(|source| FilesError::MoveAside {
+        path: path.to_path_buf(),
+        to: bad.clone(),
+        source,
+    })?;
+    // The rename keeps the mode of the broken file, which may be readable to others.
+    make_private(&bad);
+    if let Err(error) = persist(staged, path) {
+        if let Err(back) = fs::rename(&bad, path) {
+            tracing::warn!(path = %path.display(), moved_to = %bad.display(), error = %back, "config.toml could not be moved back after the new one failed");
+        }
+        return Err(error);
+    }
+    tracing::warn!(path = %path.display(), moved_to = %bad.display(), error = %problem, "config.toml was not valid TOML; moved it aside and wrote a new one");
+    tracing::info!(path = %path.display(), server = %settings.server_label(), "connection saved");
+    Ok(SavedConfig { moved_aside: true })
+}
+
 /// Writes the app's `state.toml` atomically: the text goes to a temporary file in the same
 /// directory, which is flushed to disk and then renamed over the old file, so a crash leaves
 /// either the old file or the new one. The directory is created if needed.
@@ -169,6 +276,64 @@ pub(crate) fn write_ui_state(path: &Path, state: &UiState) -> Result<(), FilesEr
         path: path.to_path_buf(),
         source,
     })?;
+    write_atomically(path, &text)
+}
+
+/// The file that a write to `path` is to replace: `path` itself, or, if it is a symbolic link, the
+/// file at the end of the chain of links, relative links being read from the directory of the link.
+/// That file need not exist (a link to nothing is written through, so that it names the new file).
+fn write_target(path: &Path) -> Result<PathBuf, FilesError> {
+    // The limit of Linux (`ELOOP`), so that a loop ends in an error and not in a hang.
+    const MAX_LINKS: usize = 40;
+    let read_error = |source| FilesError::Read {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut current = path.to_path_buf();
+    for _ in 0..MAX_LINKS {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let to = fs::read_link(&current).map_err(read_error)?;
+                // An absolute `to` replaces `current`, as it should.
+                current = current
+                    .parent()
+                    .map_or(to.clone(), |parent| parent.join(&to));
+            }
+            // Not a link, or not there yet: this is the file.
+            Ok(_) => return Ok(current),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(current),
+            Err(error) => return Err(read_error(error)),
+        }
+    }
+    Err(read_error(io::Error::other(
+        "too many levels of symbolic links",
+    )))
+}
+
+/// Makes `path` readable and writable by the owner only (mode 0600 on Unix). It is done for a file
+/// that holds a password it should not have shown to others; if it cannot be done, the log says so
+/// and the file stays as it was.
+fn make_private(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(path = %path.display(), %error, "the file could not be made private to the owner");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// Writes `text` to `path` atomically, private to the owner: [`stage`], then [`persist`].
+fn write_atomically(path: &Path, text: &str) -> Result<(), FilesError> {
+    persist(stage(path, text)?, path)
+}
+
+/// `text` in a temporary file next to `path`, flushed to disk and readable and writable by the
+/// owner only (mode 0600 on Unix), ready to take the place of `path`. The directory is created
+/// if needed, private to the owner too.
+fn stage(path: &Path, text: &str) -> Result<NamedTempFile, FilesError> {
     // A bare file name has an empty parent, which means the current directory.
     let dir = path
         .parent()
@@ -186,14 +351,31 @@ pub(crate) fn write_ui_state(path: &Path, state: &UiState) -> Result<(), FilesEr
     // creating the file and renaming it leaves a `.tmpXXXXXX` file behind; it is harmless and
     // nothing sweeps it.
     let mut temporary = NamedTempFile::new_in(dir).map_err(write_error)?;
+    // tempfile makes it 0600 already; said here, as the file may hold a password.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        temporary
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(write_error)?;
+    }
     temporary.write_all(text.as_bytes()).map_err(write_error)?;
     // `persist` renames without flushing, and a rename that reaches the disk before the data
     // would leave an empty file after a power loss.
     temporary.as_file().sync_all().map_err(write_error)?;
-    temporary
+    Ok(temporary)
+}
+
+/// Renames `staged` over `path`. A temporary file that cannot be renamed is removed.
+fn persist(staged: NamedTempFile, path: &Path) -> Result<(), FilesError> {
+    staged
         .persist(path)
-        .map_err(|error| write_error(error.error))?;
-    Ok(())
+        .map(drop)
+        .map_err(|error| FilesError::Write {
+            path: path.to_path_buf(),
+            source: error.error,
+        })
 }
 
 /// The contents of the file, or `None` if there is no such file.
@@ -255,7 +437,7 @@ fn bad_path(path: &Path) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
-    use x4_core::{DEFAULT_RPC_URL, ThemeChoice, UI_STATE_VERSION};
+    use x4_core::{ThemeChoice, UI_STATE_VERSION};
 
     use super::*;
 
@@ -286,7 +468,7 @@ mod tests {
         let config = read_config(&dir.path().join("config.toml")).expect("a missing file is fine");
 
         assert_eq!(config, Config::default());
-        assert_eq!(config.connection.url, DEFAULT_RPC_URL);
+        assert_eq!(config.connection, None, "no file, no server");
     }
 
     #[test]
@@ -297,7 +479,8 @@ mod tests {
 
         let config = read_config(&path).expect("a valid file");
 
-        assert_eq!(config.connection.url, "http://pi.local:9091/rpc");
+        let settings = config.connection.expect("the file names a server");
+        assert_eq!(settings.url(), "http://pi.local:9091/rpc");
     }
 
     #[test]
@@ -696,6 +879,432 @@ mod tests {
             1,
             "{parse}"
         );
+    }
+
+    /// A made-up password with the characters TOML and URLs treat specially.
+    const PASSWORD: &str = "hu\"nt\\er#2= \n ä@:";
+
+    /// The settings the Connection dialog saves in these tests, with credentials.
+    fn nas() -> ConnectionSettings {
+        ConnectionSettings::from_url(
+            "http://nas:9091/transmission/rpc",
+            Some(x4_rpc::Credentials {
+                username: "bob".to_owned(),
+                password: PASSWORD.to_owned(),
+            }),
+        )
+        .expect("a plain http address")
+    }
+
+    /// The mode bits of `path`.
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::metadata(path).expect("metadata").permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn saving_writes_mode_0600_and_reads_back() {
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+
+        let saved = save_connection(&path, &nas()).expect("saved");
+
+        assert_eq!(saved, SavedConfig { moved_aside: false });
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(
+            names(dir.path()),
+            ["config.toml"],
+            "no temporary file is left"
+        );
+        #[cfg(unix)]
+        assert_eq!(mode(&path), 0o600);
+
+        // A file the owner made readable to others is private once 4x4 writes it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+            save_connection(&path, &nas()).expect("saved again");
+            assert_eq!(mode(&path), 0o600);
+        }
+        let without = ConnectionSettings::from_url("http://nas:9091/transmission/rpc", None)
+            .expect("a plain http address");
+        save_connection(&path, &without).expect("saved without credentials");
+        let text = fs::read_to_string(&path).expect("readable");
+        assert!(!text.contains("password"), "{text}");
+        assert!(!text.contains("username"), "{text}");
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(without)
+        );
+    }
+
+    #[test]
+    fn saving_keeps_the_rest_of_the_file() {
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        let old = "# my settings\n\
+                   top = true\n\
+                   \n\
+                   [connection]\n\
+                   # the Pi\n\
+                   url = 5 # was wrong\n\
+                   timeout = 3\n\
+                   \n\
+                   [later]\n\
+                   # a table 4x4 does not know\n\
+                   key = \"value\"\n";
+        fs::write(&path, old).expect("written");
+
+        let saved = save_connection(&path, &nas()).expect("saved");
+
+        assert!(!saved.moved_aside);
+        let text = fs::read_to_string(&path).expect("readable");
+        for kept in [
+            "# my settings\ntop = true\n",
+            "[connection]\n# the Pi\nurl = \"http://nas:9091/transmission/rpc\" # was wrong\n",
+            "timeout = 3\n",
+            "[later]\n# a table 4x4 does not know\nkey = \"value\"\n",
+        ] {
+            assert!(text.contains(kept), "{kept:?} in {text}");
+        }
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(names(dir.path()), ["config.toml"], "nothing moved aside");
+
+        // `connection` that is not a table becomes one; the rest stays too.
+        fs::write(&path, "connection = \"x\"\n[later]\nkey = 1\n").expect("written");
+        assert!(!save_connection(&path, &nas()).expect("saved").moved_aside);
+        let text = fs::read_to_string(&path).expect("readable");
+        assert!(text.contains("[later]\nkey = 1\n"), "{text}");
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(nas())
+        );
+    }
+
+    #[test]
+    fn saving_moves_broken_toml_aside() {
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        let bad = dir.path().join("config.toml.bad");
+        fs::write(&bad, "an older broken file = =").expect("written");
+        let broken = "[connection\nurl = \"http://pi\"\npassword = \"hunter2\"\n";
+        fs::write(&path, broken).expect("written");
+
+        let mut saved = None;
+        let records = crate::test_log::records_of(|| {
+            saved = Some(save_connection(&path, &nas()));
+        });
+
+        assert_eq!(
+            saved.map(|saved| saved.expect("saved")),
+            Some(SavedConfig { moved_aside: true })
+        );
+        assert_eq!(
+            fs::read_to_string(&bad).expect("the .bad file"),
+            broken,
+            "the old text, in place of the older one"
+        );
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(names(dir.path()), ["config.toml", "config.toml.bad"]);
+        #[cfg(unix)]
+        assert_eq!(mode(&path), 0o600);
+        let warning = records
+            .iter()
+            .find(|record| record.level == tracing::Level::WARN)
+            .expect("the log says that the file was moved");
+        assert_eq!(warning.field("path"), Some(&*path.to_string_lossy()));
+        assert_eq!(warning.field("moved_to"), Some(&*bad.to_string_lossy()));
+        let logged = format!("{records:?}");
+        assert!(!logged.contains("hunter2"), "{logged}");
+        assert!(!logged.contains(PASSWORD), "{logged}");
+
+        // Not even UTF-8 is not TOML either.
+        fs::write(&path, [b'#', 0xff, b'\n']).expect("written");
+        assert!(save_connection(&path, &nas()).expect("saved").moved_aside);
+        assert_eq!(fs::read(&bad).expect("the .bad file"), [b'#', 0xff, b'\n']);
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(nas())
+        );
+    }
+
+    #[test]
+    fn saving_into_a_missing_directory_creates_it() {
+        let dir = dir();
+        let config_dir = dir.path().join("config").join("4x4");
+        let path = config_dir.join("config.toml");
+
+        save_connection(&path, &nas()).expect("saved");
+
+        assert_eq!(
+            read_config(&path).expect("readable").connection,
+            Some(nas())
+        );
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(&config_dir), 0o700);
+            assert_eq!(mode(&path), 0o600);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_save_that_cannot_write_leaves_the_old_file() {
+        let dir = dir();
+        let config_dir = dir.path().join("4x4");
+        fs::create_dir(&config_dir).expect("a directory");
+        let path = config_dir.join("config.toml");
+        let old = "# mine\n[connection]\nurl = \"http://pi/rpc\"\n";
+        fs::write(&path, old).expect("written");
+        let Some(locked) = crate::test_dirs::make_read_only(&config_dir) else {
+            return;
+        };
+
+        let error = save_connection(&path, &nas()).expect_err("the directory cannot be written");
+
+        assert!(
+            matches!(&error, FilesError::Write { path: failed, .. } if failed == &path),
+            "{error:?}"
+        );
+        assert!(!error.report().contains("hunter2"), "{}", error.report());
+        assert_eq!(fs::read_to_string(&path).expect("untouched"), old);
+        assert_eq!(names(&config_dir), ["config.toml"]);
+
+        // Broken TOML that cannot be moved aside stays too.
+        drop(locked);
+        fs::write(&path, "[connection").expect("written");
+        let Some(_locked) = crate::test_dirs::make_read_only(&config_dir) else {
+            return;
+        };
+        assert!(save_connection(&path, &nas()).is_err());
+        assert_eq!(fs::read_to_string(&path).expect("untouched"), "[connection");
+        assert_eq!(names(&config_dir), ["config.toml"]);
+    }
+
+    /// Whether `path` is a symbolic link, and where it points.
+    #[cfg(unix)]
+    fn link_target(path: &Path) -> Option<PathBuf> {
+        fs::symlink_metadata(path)
+            .ok()?
+            .file_type()
+            .is_symlink()
+            .then(|| fs::read_link(path).expect("a readable link"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_symlink_keeps_the_link_and_writes_its_target() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = dir();
+        let dotfiles = dir.path().join("dotfiles");
+        fs::create_dir(&dotfiles).expect("a directory");
+        let real = dotfiles.join("config.toml");
+        fs::write(&real, "# mine\n[later]\nkey = 1\n").expect("written");
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o644)).expect("chmod");
+        let home = dir.path().join("home");
+        fs::create_dir(&home).expect("a directory");
+        let absolute = home.join("absolute.toml");
+        let relative = home.join("config.toml");
+        symlink(&real, &absolute).expect("a link");
+        symlink("../dotfiles/config.toml", &relative).expect("a link");
+
+        for link in [&absolute, &relative] {
+            let saved = save_connection(link, &nas()).expect("saved");
+
+            assert!(!saved.moved_aside);
+            assert!(
+                link_target(link).is_some(),
+                "{} is still a link",
+                link.display()
+            );
+            let text = fs::read_to_string(&real).expect("readable");
+            assert!(text.contains("# mine\n"), "{text}");
+            assert!(text.contains("[later]\nkey = 1\n"), "{text}");
+            assert_eq!(
+                read_config(&real).expect("readable").connection,
+                Some(nas())
+            );
+            assert_eq!(
+                read_config(link)
+                    .expect("readable through the link")
+                    .connection,
+                Some(nas())
+            );
+            assert_eq!(mode(&real), 0o600, "the file the link names is private");
+            assert_eq!(
+                names(&dotfiles),
+                ["config.toml"],
+                "no temporary file is left"
+            );
+        }
+        assert_eq!(link_target(&absolute), Some(real));
+        assert_eq!(
+            link_target(&relative),
+            Some(PathBuf::from("../dotfiles/config.toml"))
+        );
+        assert_eq!(names(&home), ["absolute.toml", "config.toml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_chain_of_symlinks_writes_the_last_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let real = dir.path().join("real.toml");
+        fs::write(&real, "# mine\n").expect("written");
+        let middle = dir.path().join("middle.toml");
+        let first = dir.path().join("config.toml");
+        symlink("real.toml", &middle).expect("a link");
+        symlink("middle.toml", &first).expect("a link");
+
+        save_connection(&first, &nas()).expect("saved");
+
+        assert_eq!(link_target(&first), Some(PathBuf::from("middle.toml")));
+        assert_eq!(link_target(&middle), Some(PathBuf::from("real.toml")));
+        assert_eq!(link_target(&real), None, "the last one is a file");
+        assert_eq!(
+            read_config(&real).expect("readable").connection,
+            Some(nas())
+        );
+        let text = fs::read_to_string(&real).expect("readable");
+        assert!(text.contains("# mine\n"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_dangling_symlink_creates_the_file_it_names() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let link = dir.path().join("config.toml");
+        // The directory of the file does not exist either.
+        let real = dir.path().join("dotfiles").join("4x4").join("config.toml");
+        symlink(&real, &link).expect("a link");
+
+        save_connection(&link, &nas()).expect("saved");
+
+        assert_eq!(link_target(&link), Some(real.clone()), "still a link");
+        assert_eq!(
+            read_config(&real).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(mode(&real), 0o600);
+        assert_eq!(names(dir.path()), ["config.toml", "dotfiles"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_toml_behind_a_symlink_is_moved_aside_next_to_the_file_it_names() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let dotfiles = dir.path().join("dotfiles");
+        fs::create_dir(&dotfiles).expect("a directory");
+        let real = dotfiles.join("config.toml");
+        fs::write(&real, "[connection\n").expect("written");
+        let link = dir.path().join("config.toml");
+        symlink(&real, &link).expect("a link");
+
+        let saved = save_connection(&link, &nas()).expect("saved");
+
+        assert!(saved.moved_aside);
+        assert_eq!(link_target(&link), Some(real.clone()), "still a link");
+        assert_eq!(
+            read_config(&real).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(
+            fs::read_to_string(dotfiles.join("config.toml.bad")).expect("the .bad file"),
+            "[connection\n"
+        );
+        assert_eq!(names(&dotfiles), ["config.toml", "config.toml.bad"]);
+        assert_eq!(
+            names(dir.path()),
+            ["config.toml", "dotfiles"],
+            "the link has no .bad"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_loop_of_symlinks_is_a_read_error() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let first = dir.path().join("config.toml");
+        let second = dir.path().join("other.toml");
+        symlink("other.toml", &first).expect("a link");
+        symlink("config.toml", &second).expect("a link");
+
+        let error = save_connection(&first, &nas()).expect_err("a loop leads nowhere");
+
+        assert!(matches!(&error, FilesError::Read { .. }), "{error:?}");
+        assert_eq!(names(dir.path()), ["config.toml", "other.toml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_aside_config_is_private_to_the_owner() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        let bad = dir.path().join("config.toml.bad");
+        fs::write(&path, "[connection\npassword = \"hunter2\"\n").expect("written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let saved = save_connection(&path, &nas()).expect("saved");
+
+        assert!(saved.moved_aside);
+        assert_eq!(mode(&bad), 0o600, "the broken file may hold a password");
+        assert_eq!(mode(&path), 0o600);
+
+        // An older `.bad` file that others could read is replaced, and the new one is private.
+        fs::write(&path, "[connection\n").expect("written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("chmod");
+        fs::set_permissions(&bad, fs::Permissions::from_mode(0o644)).expect("chmod");
+        save_connection(&path, &nas()).expect("saved again");
+        assert_eq!(mode(&bad), 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_made_private_is_a_warning() {
+        let dir = dir();
+        let missing = dir.path().join("config.toml.bad");
+
+        let records = crate::test_log::records_of(|| make_private(&missing));
+
+        let warning = records
+            .iter()
+            .find(|record| record.level == tracing::Level::WARN)
+            .expect("the log says that the mode was not changed");
+        assert_eq!(warning.field("path"), Some(&*missing.to_string_lossy()));
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_read_is_not_saved_over() {
+        let dir = dir();
+        let path = dir.path().join("config.toml");
+        fs::create_dir(&path).expect("a directory");
+
+        let error = save_connection(&path, &nas()).expect_err("a directory is not a file");
+
+        assert!(matches!(&error, FilesError::Read { .. }), "{error:?}");
+        assert!(path.is_dir(), "left alone");
     }
 
     #[test]

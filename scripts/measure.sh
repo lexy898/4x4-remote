@@ -46,9 +46,9 @@
 # started with X4_DEVEL=1 (the development app id) and with XDG_STATE_HOME in a temp dir, so that
 # it can never save over the owner's state.toml; its log file goes there too, and the dir is
 # removed at the end. Without --offline it reads config.toml as usual, from the caller's
-# XDG_CONFIG_HOME or ~/.config, so without one it polls the default daemon: the owner's, also
-# inside `just virtual`, whose config dir is empty. With --offline the config dir is a temp dir
-# too, removed at the end.
+# XDG_CONFIG_HOME or ~/.config; without one no server is set, so it polls nothing and shows the
+# Connection dialog, also inside `just virtual`, whose config dir is empty. With --offline the
+# config dir is a temp dir too, removed at the end.
 set -euo pipefail
 
 settle_seconds=${X4_MEASURE_SETTLE_SECONDS:-5}

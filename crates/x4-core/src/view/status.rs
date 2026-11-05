@@ -17,18 +17,23 @@ pub enum ServiceStatus {
     Stopped,
     /// It could not be started, so no data will come.
     Failed,
+    /// No server is set, so no service was started and no data will come until the user sets one.
+    NotConfigured,
 }
 
 /// What the connection indicator of the status bar shows, one state at a time.
 ///
 /// A service that is not running outranks what its last snapshot said: [`Indicator::ServiceFailed`],
-/// then [`Indicator::ServiceStopped`], then the state of the link to the daemon, of which only one
-/// holds at a time ([`Indicator::Unsupported`], [`Indicator::Reconnecting`],
-/// [`Indicator::Connecting`], [`Indicator::Connected`]). The UI words it and picks its color.
+/// then [`Indicator::NotConfigured`], then [`Indicator::ServiceStopped`], then the state of the
+/// link to the daemon, of which only one holds at a time ([`Indicator::Unsupported`],
+/// [`Indicator::Reconnecting`], [`Indicator::Connecting`], [`Indicator::Connected`]). The UI words
+/// it and picks its color.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Indicator {
     /// The service could not be started.
     ServiceFailed,
+    /// No server is set, so there is no service and nothing to connect to.
+    NotConfigured,
     /// The service stopped; the data shown is the last it sent.
     ServiceStopped,
     /// The daemon speaks an RPC version 4x4 cannot use, for this reason.
@@ -96,10 +101,15 @@ pub struct StatusModel {
 
 impl StatusModel {
     /// The service stopped: the numbers will not change again, so they are stale. A service
-    /// that never started stays [`ServiceStatus::Failed`].
+    /// that never started stays [`ServiceStatus::Failed`], and a window with no server stays
+    /// [`ServiceStatus::NotConfigured`] and not stale.
     pub fn service_stopped(&mut self) {
-        if self.service == ServiceStatus::Running {
-            self.service = ServiceStatus::Stopped;
+        match self.service {
+            ServiceStatus::Running => self.service = ServiceStatus::Stopped,
+            // A window with no server has a service channel that closes at once; nothing ran,
+            // so there is no data to be old and nothing to report.
+            ServiceStatus::NotConfigured => return,
+            ServiceStatus::Stopped | ServiceStatus::Failed => {}
         }
         self.stale = true;
     }
@@ -108,6 +118,15 @@ impl StatusModel {
     pub fn service_failed(&mut self) {
         self.service = ServiceStatus::Failed;
         self.stale = true;
+    }
+
+    /// No server is set, so no service was started: there is no data, which is not stale. A
+    /// service that never started stays [`ServiceStatus::Failed`].
+    pub fn not_configured(&mut self) {
+        if self.service != ServiceStatus::Failed {
+            self.service = ServiceStatus::NotConfigured;
+            self.stale = false;
+        }
     }
 
     /// Whether actions can go to the daemon: the service runs and the daemon answers. Only then
@@ -136,6 +155,7 @@ impl StatusModel {
     pub fn indicator(&self) -> Indicator {
         match self.service {
             ServiceStatus::Failed => Indicator::ServiceFailed,
+            ServiceStatus::NotConfigured => Indicator::NotConfigured,
             ServiceStatus::Stopped => Indicator::ServiceStopped,
             ServiceStatus::Running => match &self.connection {
                 ConnectionState::Unsupported { reason } => Indicator::Unsupported(reason.clone()),
@@ -490,6 +510,74 @@ mod tests {
         failed.service_failed();
         assert_eq!(failed.service, ServiceStatus::Failed);
         assert!(failed.stale);
+    }
+
+    #[test]
+    fn not_configured_shows_no_server_set() {
+        let mut status = StatusModel::default();
+        status.not_configured();
+
+        assert_eq!(status.service, ServiceStatus::NotConfigured);
+        assert_eq!(status.indicator(), Indicator::NotConfigured);
+        assert!(!status.stale, "there is no data to be old");
+        assert!(!status.connected(), "there is no daemon to send actions to");
+        assert_eq!(status.changeable_speed(), None);
+
+        // The link's state cannot say otherwise: no service ever sent it.
+        for connection in [
+            ConnectionState::Connected,
+            ConnectionState::Connecting,
+            reconnecting(),
+            unsupported(),
+        ] {
+            let mut status = running(connection.clone());
+            status.not_configured();
+            assert_eq!(
+                status.indicator(),
+                Indicator::NotConfigured,
+                "{connection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_service_outranks_no_server_set() {
+        let mut status = StatusModel::default();
+        status.not_configured();
+        status.service_failed();
+        assert_eq!(status.indicator(), Indicator::ServiceFailed);
+
+        // In either order.
+        let mut status = StatusModel::default();
+        status.service_failed();
+        status.not_configured();
+        assert_eq!(status.indicator(), Indicator::ServiceFailed);
+        assert!(status.stale, "a failure to start keeps what it said");
+    }
+
+    #[test]
+    fn no_server_set_outranks_a_stopped_service_and_the_link() {
+        // A window without a server has a service whose events channel closes at once.
+        let mut status = StatusModel::default();
+        status.not_configured();
+        status.service_stopped();
+
+        assert_eq!(status.service, ServiceStatus::NotConfigured);
+        assert_eq!(status.indicator(), Indicator::NotConfigured);
+        assert!(!status.stale, "nothing ran, so nothing is old");
+    }
+
+    #[test]
+    fn a_new_status_model_is_running_again() {
+        let mut gone = StatusModel::default();
+        gone.not_configured();
+        assert_eq!(gone.service, ServiceStatus::NotConfigured);
+
+        // The next server gets a model of its own, so nothing of the empty one is left.
+        let fresh = StatusModel::default();
+        assert_eq!(fresh.service, ServiceStatus::Running);
+        assert_eq!(fresh.indicator(), Indicator::Connecting);
+        assert_eq!(status_model(&snapshot()).service, ServiceStatus::Running);
     }
 
     #[test]

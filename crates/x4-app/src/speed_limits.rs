@@ -231,6 +231,31 @@ impl SpeedLimits {
         cx.notify();
     }
 
+    /// Empties the form and forgets the limits it was filled from, as the window switches to
+    /// another server: they were the old daemon's. The next [`SpeedLimits::fill`] fills it again.
+    pub(crate) fn forget(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.opened = None;
+        self.opener = None;
+        for field in [&mut self.down, &mut self.up] {
+            field.enabled = false;
+            field.feedback = None;
+            field
+                .input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Whether the form holds nothing of a daemon: no limits it was filled from, no switch on and
+    /// no text. For the tests.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self, cx: &App) -> bool {
+        self.opened.is_none()
+            && [&self.down, &self.up]
+                .iter()
+                .all(|field| !field.enabled && field.input.read(cx).value().is_empty())
+    }
+
     /// Enables Apply while `can_apply`: the daemon is connected and its settings are known.
     pub(crate) fn set_can_apply(&mut self, can_apply: bool, cx: &mut Context<'_, Self>) {
         if self.can_apply != can_apply {

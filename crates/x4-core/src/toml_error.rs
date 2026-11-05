@@ -48,6 +48,20 @@ pub(crate) fn locate(error: &toml::de::Error, text: &str) -> (Option<TextPositio
     (position, without_value(error.message()))
 }
 
+/// Where `error`, found while editing `text`, is (when the parser knows) and what it says.
+///
+/// Its own display repeats the offending line of the file, so only the message and the position
+/// are passed on, as [`locate`] does for serde's errors.
+pub(crate) fn locate_edit(
+    error: &toml_edit::TomlError,
+    text: &str,
+) -> (Option<TextPosition>, String) {
+    let position = error
+        .span()
+        .and_then(|span| TextPosition::of(text, span.start));
+    (position, error.message().to_owned())
+}
+
 /// `message`, after its position if there is one: "line L, column C: message".
 pub(crate) fn with_position(position: Option<TextPosition>, message: &str) -> String {
     match position {

@@ -5,33 +5,36 @@ in Rust.
 
 ## Status
 
-Early development — stage 6, installation. The window connects to the daemon set in `config.toml`
-and shows every torrent in a table, with its state, progress and speeds; a sidebar filters them by
-state, with live counts, and a search box finds them by name. The status bar shows the total
-download and upload speeds, the free space and the state of the connection; it switches the
-alternative speed limits and sets the global download and upload limits. The window remembers its
-columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
-started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
-the toolbar and a context menu; removing asks first, and deleting the files too only after an
-explicit confirmation. A panel under the table shows the selected torrent in four tabs. General gives
-where its data is, its size, hash, dates, share ratio and metainfo, and how its trackers are doing,
-with the worst problem in plain words. Files shows its files as a tree, with each one's progress and
-how much of it already plays from the start; each file or folder can be skipped or given a Low,
-Normal or High priority, and the torrent can be downloaded in order. Peers lists who the torrent is
-connected to, with their countries, and Trackers lists each tracker with its state, its last and
-next announce and the counts it knows, to see why a torrent has few peers or is stuck. Whether the
-panel is shown, its height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
-desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
-that picks the folder on the server (with its free space and the folders used lately), the files to
-download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
-file or a link, hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built
-from this checkout and shows in the application menu with its icon; one command makes it the
-default app for `.torrent` files and magnet links, and undoes that again (see [Install](#install)).
+Early development — stage 8, the connection. The window connects to the Transmission daemon set in
+its Connection dialog, with a user name and password when the daemon asks for them, and switches to
+another daemon without a restart; with none set, it says so and opens the dialog. It shows every
+torrent in a table, with its state, progress and speeds; a sidebar filters them by state, with live
+counts, and a search box finds them by name. The status bar shows the total download and upload
+speeds, the free space and the state of the connection; it switches the alternative speed limits and
+sets the global download and upload limits. The window remembers its columns, sorting, filter, theme
+and size between runs. Several torrents can be selected, and started, paused, started ahead of the
+queue, verified, reannounced and removed, from the keyboard, the toolbar and a context menu;
+removing asks first, and deleting the files too only after an explicit confirmation. A panel under
+the table shows the selected torrent in four tabs. General gives where its data is, its size, hash,
+dates, share ratio and metainfo, and how its trackers are doing, with the worst problem in plain
+words. Files shows its files as a tree, with each one's progress and how much of it already plays
+from the start; each file or folder can be skipped or given a Low, Normal or High priority, and the
+torrent can be downloaded in order. Peers lists who the torrent is connected to, with their
+countries, and Trackers lists each tracker with its state, its last and next announce and the counts
+it knows, to see why a torrent has few peers or is stuck. Whether the panel is shown, its height and
+its tab are remembered too. Torrents are added from `.torrent` files, chosen in the desktop's file
+dialog or dropped on the window, and from magnet links on the clipboard, in a dialog that picks the
+folder on the server (with its free space and the folders used lately), the files to download and
+whether to start at once. One 4x4 runs for each user: starting it again, as with a file or a link,
+hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built from this checkout
+and shows in the application menu with its icon; one command makes it the default app for `.torrent`
+files and magnet links, and undoes that again (see [Install](#install)).
 
 ## What it will do
 
-- Connect to a Transmission daemon by host, port and RPC path, show the connection state, and
-  reconnect automatically. While offline, the last data stays visible and is marked as stale.
+- Connect to a Transmission daemon by host, port and RPC path, with a user name and password when
+  it asks for them, show the connection state, and reconnect automatically. While offline, the
+  last data stays visible and is marked as stale.
 - Show the state of every torrent at a glance: a distinct color and icon for downloading, seeding,
   paused, queued, checking and error, with a progress bar in every row.
 - Highlight what is active and dim what is idle.
@@ -153,9 +156,9 @@ back: `xdg-mime default <app>.desktop <type>` sets that app again.
 
 The installed 4x4 and a debug build (`just run`) run side by side. The debug build has its own app
 id (`io.github.lexy898.FourByFour.Devel`), so neither hands its files and links to the other, and
-window rules for the one never catch the other. But both read the same `config.toml` and write the
-same `state.toml` and log: whichever saves last decides the window size, columns and filter the next
-start remembers.
+window rules for the one never catch the other. But both read and write the same `config.toml` and
+`state.toml`, and the same log: whichever saves last decides the server, the window size, columns
+and filter the next start has. A server saved in one does not switch the other while it runs.
 
 KDE and GNOME take a window's icon from the desktop file named after its app id, so the package also
 installs `io.github.lexy898.FourByFour.Devel.desktop`, which gives the windows of `just run` the
@@ -170,17 +173,68 @@ sizes would be installed under the same name into `16x16/apps`, `22x22/apps`, `2
 `32x32/apps` of `hicolor` too, four more `install` lines in the PKGBUILD's `package()`; KDE takes
 the icon of a fixed size when one matches the size it draws, and the scalable one for every other.
 
+## Connection
+
+4x4 talks to one Transmission daemon at a time: the server set in the Connection dialog. The
+toolbar's Connection button (the gear on the right, before the theme button), `Ctrl+,` from
+anywhere in the window and a click on the connection dot in the status bar open it. It never opens
+over another dialog, and `Ctrl+,` does nothing while a menu or the speed limits are open. There is
+no built-in server: the first time 4x4 starts, no server is set, so it asks nothing of any daemon,
+the status bar says "No server set" (its tooltip says where to set one) and the dialog opens at
+once. So it does when `config.toml` cannot be used (see [Files and logs](#files-and-logs)).
+
+The dialog has the fields Host (a name or an IP address; an IPv6 address with or without its
+brackets), Port (9091 at first, Transmission's own), Path (`/transmission/rpc` at first) and, for a
+daemon that asks for a login, User name and Password; for one that does not, leave both empty. The
+password is masked, and the eye at the end of its field shows it and hides it again. Under the
+fields a muted line shows the address they make, such as
+`http://192.168.1.10:9091/transmission/rpc`, which never holds the user name or the password. A
+whole address pasted into Host, such as `http://alice:secret@nas:9091/transmission/rpc`, `nas:9091`
+or `nas:9091/transmission/rpc`, is spread over the fields at once; a typed one is spread when the
+focus leaves Host, or at Save or Test. Only plain `http://` works: an `https://` address is refused
+with "HTTPS is not supported yet". The port is a number from 1 to 65535, the path cannot hold `?`,
+`#` or spaces, and a user name cannot hold a colon. The user name and the password are taken as
+typed, spaces included.
+
+Test asks the server for its version once (one `session_get`, given up after 5 seconds without an
+answer), off the window's thread, so that the window never waits. The button says "Testing…" until
+the answer comes; a line under the fields then says, in green, "Connected: Transmission 4.1.3
+(…)", or in red why not: "The server cannot be reached", "The server did not answer in time", "The
+server rejected the credentials", "The server does not accept requests from this computer" (the
+daemon's whitelist), "Transmission 4.1 or newer required", and the like. Any edit takes the line
+away, and drops the answer of a test still running, so that the line always speaks of the fields as
+they are. Save needs no test.
+
+Save, or `Enter` in a field, checks the fields first: each problem is shown under its field, the
+focus goes to the first one, and nothing is saved. With the server the window has already, Save
+only closes the dialog. Otherwise it writes the server to `config.toml` and switches to it at once,
+without a restart: 4x4 stops talking to the old daemon, forgets all it showed of it (the list, the
+selection, the details panel, the numbers in the status bar, the notifications, the speed limits,
+and the actions and copies of magnet links still waiting for its answers) and connects to the new
+one. What you arranged stays: the columns, the sorting, the filter, the search, the theme and the
+details panel with its tab, and so do the torrents waiting to be added. If the file cannot be
+written, the dialog stays open and says why, and nothing changes. Cancel or `Escape` closes the
+dialog and changes nothing; a click beside it does nothing, so that what was typed is not lost by a
+slip. While the dialog is open, the torrents to add wait for it.
+
+The user name and the password are kept in `config.toml` as plain text, in a file only you can read
+(mode 0600); 4x4 uses no keyring. They go with every request (HTTP basic authentication), and over
+plain `http://` the network carries them unencrypted, as it does for any Transmission client without
+https. The log names a server as `host:port` and never shows the password. Once connected, the
+dot's tooltip names the server, such as "Connected to nas:9091".
+
 ## The main window
 
 The window opens at once, before the daemon has answered, and connects in the background; nothing
-in the window ever waits for the network. The first time it opens at 1200 by 720 pixels, where
-every column fits at its first width, which leaves room for its usual text: "Downloading", a time
-left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it had
-last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
+in the window ever waits for the network. With no server set, it connects to nothing and opens the
+Connection dialog (see [Connection](#connection)). The first time it opens at 1200 by 720 pixels,
+where every column fits at its first width, which leaves room for its usual text: "Downloading", a
+time left such as "23 h 59 m", or a header with its sort mark. After that it opens at the size it
+had last time, and maximized if it was (see [What 4x4 remembers](#what-4x4-remembers)).
 
 The window has five parts: a toolbar along the top, with the search box, the Add file and Add
-magnet buttons, the Start and Pause buttons and the Remove menu on the left and the theme button
-and the "Columns" menu on the right;
+magnet buttons, the Start and Pause buttons and the Remove menu on the left and the Connection
+button, the theme button and the "Columns" menu on the right;
 the filter sidebar down the left side; the torrent table, which takes the rest; the details panel
 under the table; and the status bar along the bottom.
 
@@ -453,10 +507,12 @@ search is not remembered between runs.
 
 The status bar at the bottom shows:
 
-- a dot for the connection: green when connected, grey while connecting, yellow while
-  reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or newer). Next to
-  it, "Connecting…" or "Reconnecting (attempt N)… timed out" and the like; the tooltip says more
-  about why the daemon could not be reached;
+- a dot for the connection: green when connected, grey while connecting or when no server is set,
+  yellow while reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or
+  newer). Next to it, "Connecting…", "No server set" or "Reconnecting (attempt N)… timed out" and
+  the like; the tooltip names the server once connected ("Connected to nas:9091") and says more
+  about why the daemon could not be reached. A click on the dot or its text opens the Connection
+  dialog;
 - the turtle, which switches the daemon's alternative speed limits on and off (`Ctrl+T`). It is
   highlighted, in yellow, while they apply, and its tooltip gives them, such as "Alternative speed
   limits: ↓ 50 KiB/s ↑ 50 KiB/s";
@@ -638,6 +694,7 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Alt+1`, `Alt+2`, `Alt+3`, `Alt+4`                  | anywhere in the window    | show the panel's tabs in the bar's order     |
 | `Ctrl+O`                                            | anywhere in the window    | opens the file dialog to add .torrent files  |
 | `Ctrl+U`                                            | anywhere in the window    | adds the clipboard's magnet links, or a form |
+| `Ctrl+,`                                            | anywhere in the window    | opens the Connection dialog                  |
 | `Ctrl+V`                                            | in the table              | adds the magnet links on the clipboard       |
 | `Up`, `Down`, `Page Up`, `Page Down`, `Home`, `End` | in the file list          | move between files and folders               |
 | `Left`, `Right`                                     | in the file list          | close or open a folder, or go up or in       |
@@ -647,6 +704,8 @@ While the window is minimized or does not have the focus, 4x4 asks the daemon fo
 | `Escape`                                            | in the speed limits       | closes them and changes nothing              |
 | `Enter`                                             | in the add dialog         | adds it from a field, or presses the button  |
 | `Escape`                                            | in the add dialog         | skips the torrent shown; adds nothing        |
+| `Enter`                                             | in the Connection dialog  | saves from a field, or presses the button    |
+| `Escape`                                            | in the Connection dialog  | closes it and changes nothing                |
 | `Alt+Down`                                          | in the folder field       | opens the folders used lately                |
 | `Tab`, `Shift+Tab`                                  | anywhere                  | move to the next or the previous control     |
 | `Ctrl+Q`                                            | anywhere                  | quits 4x4                                    |
@@ -688,7 +747,7 @@ to `~/.config` and `~/.local/state`):
 
 | File                                | What it is                                                              |
 | ----------------------------------- | ----------------------------------------------------------------------- |
-| `~/.config/4x4/config.toml`         | Your settings. 4x4 only reads it and never changes it.                  |
+| `~/.config/4x4/config.toml`         | The server. The Connection dialog writes it, readable by you only.      |
 | `~/.local/state/4x4/state.toml`     | What 4x4 remembers between runs. It is safe to delete.                  |
 | `~/.local/state/4x4/4x4.<date>.log` | The log, one file per day (UTC date); the last 7 daily files are kept.  |
 
@@ -699,17 +758,33 @@ links to. Only you can use them. The socket is removed when 4x4 quits, and one l
 crashed is replaced by the next one; the lock file stays and is safe to delete while 4x4 is not
 running.
 
-`config.toml` is optional. It holds the daemon's address; only plain `http://` is supported, and a
-missing key takes the default:
+`config.toml` holds the server, which the Connection dialog sets (see [Connection](#connection));
+it can be written by hand too. Only plain `http://` is supported, and `username` and `password` are
+only for a daemon that asks for a login (either one alone counts the other as empty):
 
 ```toml
 [connection]
-url = "http://192.168.1.5:9091/transmission/rpc"
+url = "http://192.168.1.10:9091/transmission/rpc"
+username = "alice"
+password = "secret"
 ```
 
-4x4 reads it at startup and connects to that address. A file it cannot use is reported in the log
-and in the status bar ("Config file not used"; the tooltip says why, and "Dismiss" hides it), and
-the defaults are used; neither ever shows the URL, which may hold a password.
+4x4 reads it at startup and connects to that address. There is no built-in server: without the
+file, or without `url` in it, no server is set, and the Connection dialog opens. The address may not
+hold the user name or the password (`http://alice:secret@…`), which belong in their own keys, nor a
+query or a fragment; without a port it means port 80. A file 4x4 cannot use, such as one that is not
+valid TOML, has a value of the wrong type or an `https://` address, is reported in the log and in
+the status bar ("Config file not used"; the tooltip says why, and "Dismiss" hides it); no server is
+set then either, and the dialog opens. Neither ever shows the password.
+
+Save in the Connection dialog writes only the `[connection]` table's `url` (always with its port),
+`username` and `password`, and removes `username` and `password` when there is no login; the
+comments and every other key and table of the file stay as they were. It writes the file atomically,
+as `state.toml`, with mode 0600, so that only you can read it, because the password is in it as
+plain text. A file that is not TOML at all cannot be edited: Save moves it to `config.toml.bad`
+(replacing an older one; only you can read it either, as it may hold the password), writes a new
+one, and the log says so. If `config.toml` is a symbolic link (dotfiles kept in a repository), Save
+writes through it: the file the link names gets the new text, and the link stays a link.
 
 4x4 writes `state.toml` atomically, so a crash cannot leave half a file. If the file cannot be
 parsed, 4x4 moves it to `state.toml.bad` (replacing an older one) and starts from the defaults. A
@@ -776,8 +851,9 @@ from the repository's directory. `--offline` gives the program a temporary confi
 own, removed afterwards, whose `config.toml` names a closed port on this machine
 (`http://127.0.0.1:1/transmission/rpc`), so the app reaches no daemon and keeps reconnecting; it is
 refused with `--synthetic`, as the demo reads no config and reaches no network anyway.
-Without it the app reads your `config.toml`, and inside `just virtual`, whose config directory is
-empty, it polls the default address, which is your daemon's (`192.168.1.5`). For example,
+Without it the app reads your `config.toml`; inside `just virtual`, whose config directory is
+empty, no server is set, so the app polls nothing and shows the Connection dialog over the window,
+which is not how it runs in use. For example,
 `just virtual just measure --binary /usr/bin/4x4 --offline --cpu 60` measures the installed 4x4 off
 screen and off the network. Measure the app with no development 4x4 running in the same session, or
 inside `just virtual`: otherwise the measured start hands over to it and exits. (`just measure`
@@ -1192,6 +1268,39 @@ The app itself, which reached no daemon and kept reconnecting to a closed port
   embedded flags. The RSS is 20 MiB lower probably because fewer shared driver pages were resident
   in these sessions, as the PSS and USS figures suggest (see above).
 
+### The connection (stage 8)
+
+Measured on 2026-11-05 on the same laptop, in one session of `just virtual`, with release builds:
+the app of `master` (stage 7, built in a separate clone with `cargo build --release --locked`) and
+the app of this stage, taken in turn, three runs each
+(`X4_MEASURE_SETTLE_SECONDS=10 just measure --offline --cpu 20 --binary <file>`); each figure is
+the median of the three. Both reached no daemon and kept reconnecting to the closed port that
+`--offline` names, so a server was set and the Connection dialog stayed closed. The CPU is that of
+the 20 seconds after the memory figures; "not met" marks every cell over its target:
+
+| Metric                     | Target              | App, stage 7        | App, stage 8        |
+| -------------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 196 ms              | 190 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 140.6 MiB (not met) | 140.9 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 57.5 MiB (not met)  | 57.8 MiB (not met)  |
+| Unique memory (USS)        | —                   | 47.1 MiB            | 47.4 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.3 MiB            | 15.4 MiB            |
+| Threads                    | —                   | 29                  | 29                  |
+| CPU over 20 s, one core    | near 0 % when idle  | 0.05 %              | 0.00 %              |
+| Binary size                | —                   | 40.1 MiB            | 40.4 MiB            |
+
+- Stage 8 adds 0.1 MiB of private memory at startup and 0.3 MiB of PSS and USS, about what the
+  runs differ by among themselves (stage 8's private memory was 15.4 to 15.5 MiB); the first frame
+  and the idle CPU, 0.00 to 0.05 % in either build, are unchanged. The binary grew by 0.35 MiB:
+  the Connection dialog, the credentials sent with each request, and the writer that edits
+  `config.toml` (`toml_edit`, whose code the binary did not hold before: only the macros of
+  gpui-component used it, while building). How much of it each takes was not measured.
+- The first run of the session, which was `master`'s, had 35 threads, 16.0 MiB of private memory,
+  63.7 MiB of PSS and a first frame of 275 ms; every later run, of either build, had 29 threads.
+  The app's figures of stages 6 and 7 above, each from first starts of sessions, show 35 threads
+  too, so the figures here compare with each other, not with those. That run sways none of the
+  medians.
+
 ## Development
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and
@@ -1257,28 +1366,32 @@ torrent that has not run since the made-up daemon started were never contacted. 
 0016" (`--select 15`; with `--static`, "Synthetic torrent 0011", `--select 10`) is busy: it
 downloads from 150 peers and has a tracker of every status, so that `just virtual just
 demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4` the Trackers
-tab with each kind of row. `--press KEY`,
-which can be given several times, presses each key in turn once the list is there and selected,
-one every three seconds, as on the keyboard: for example `just virtual just
-demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
-it again, `--press shift-delete` opens the dialog that would delete its files, and `--press ctrl-o`
-opens the desktop's file dialog, with its filter for torrent files. `--add
+tab with each kind of row. `--press KEY`, which can be given several times, presses each key in turn
+once the list is there and selected, one every three seconds, as on the keyboard: for example `just
+virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth
+torrent and starts it again, `--press shift-delete` opens the dialog that would delete its files,
+and `--press ctrl-o` opens the desktop's file dialog, with its filter for torrent files. `--add
 PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent` file or magnet
 link at the start, as if 4x4 had been opened with them, which opens the add dialog; what it does not
-open makes its notification. `just virtual just demo-synthetic --scroll` runs it off screen. With
-`RUST_LOG=x4_synthetic=debug` the made-up daemon logs each request it answers with the bytes of the
-request and of the answer, which is how the requests and the bytes the app asks of a daemon are
-counted (see [Performance](#performance)).
-The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build does not
-contain it.
+open makes its notification. The window is set to a made-up server, `synthetic.invalid:9091`, and
+`--connection` opens the Connection dialog after the first frame, as `Ctrl+,` would. Its Test
+answers for any server with the made-up daemon's version ("Connected: Transmission 4.1.3
+(synthetic)"), and its Save switches to a new made-up daemon, whatever other server the fields name,
+as a switch in 4x4 does; it writes no `config.toml`. `just virtual just demo-synthetic --scroll`
+runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up daemon logs each request it
+answers with the bytes of the request and of the answer, which is how the requests and the bytes the
+app asks of a daemon are counted (see [Performance](#performance)). The demo is the `x4-synthetic`
+binary of the `synthetic` feature, so the `4x4` build does not contain it.
 
 ### Live tests
 
-`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs` and `crates/x4-core/tests/live.rs`
-against a real Transmission 4.1+ daemon; `just test` and `just check` skip them. They never touch
-existing torrents or the daemon's settings. One test only reads the server version. Each of the
-others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a few
-KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
+`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs`, `crates/x4-core/tests/live.rs`
+and `crates/x4-app/tests/live.rs` against a real Transmission 4.1+ daemon; `just test` and
+`just check` skip them. They never touch existing torrents or the daemon's settings. Two tests only
+read the server version: x4-rpc's through the client, and x4-app's as the Connection dialog's Test
+does, with the one `session_get` that Test sends, whose answer must name a Transmission 4. Each of
+the others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a
+few KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
 start, start now, verify, reannounce, sequential download on and off, which files are downloaded and
 their priorities, a file index past the last file, which the daemon refuses, adding it twice), and
 removes it together with its data. Most write the data into the test directory first. Some do not:

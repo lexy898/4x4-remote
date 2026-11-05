@@ -1237,9 +1237,9 @@ test_measure_refuses_offline_with_the_synthetic_demo() {
     done
 }
 
-# Inside `just virtual` the config dir is empty, so the app would poll the default daemon, the
-# owner's. --offline gives it a config dir of its own, whose config.toml names a closed port on
-# this machine, whatever the caller's config dir holds; the dir is removed at the end.
+# Inside `just virtual` the config dir is empty, so the app would set no server and poll nothing.
+# --offline gives it a config dir of its own, whose config.toml names a closed port on this
+# machine, whatever the caller's config dir holds; the dir is removed at the end.
 test_measure_offline_gives_the_program_a_config_of_a_closed_port() {
     local dir config_dir binary
     dir=$(new_measure_env)

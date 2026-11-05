@@ -438,9 +438,17 @@ impl PendingActions {
         }
     }
 
+    /// Forgets every action that waits for its answer, as the window switches to another server:
+    /// the old service's answers will not come. The ids given out stay given, so that a new one
+    /// is never mistaken for an old one.
+    pub(crate) fn forget_all(&mut self) {
+        self.newest_action = None;
+        self.pending.clear();
+    }
+
     /// How many actions are waiting for their answer.
     #[cfg(test)]
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.pending.len()
     }
 }
@@ -706,6 +714,22 @@ mod tests {
         };
         assert!(start != read && start != pause, "{start:?}");
         assert_eq!(pending.len(), 2, "a read is not kept as an action");
+    }
+
+    #[test]
+    fn forgetting_every_action_keeps_the_ids_new() {
+        let mut pending = PendingActions::default();
+        let first = pending
+            .start(ActionKind::Pause, &[hash("a")])
+            .expect("a new action");
+
+        pending.forget_all();
+
+        assert_eq!(pending.len(), 0);
+        let again = pending
+            .start(ActionKind::Pause, &[hash("a")])
+            .expect("the same action goes again, as nothing waits");
+        assert!(again.0 > first.0, "{again:?} after {first:?}");
     }
 
     #[test]

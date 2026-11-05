@@ -129,7 +129,10 @@ fn window_opens_without_network(cx: &mut TestAppContext) {
     assert_eq!(window.connection_text(cx), "Connecting…");
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("connection").label(), Some("Connecting…"));
+        assert_eq!(
+            window.find("status-connection").label(),
+            Some("Connecting…")
+        );
     })
     .expect("the window is open");
 }
@@ -157,7 +160,7 @@ fn snapshot_updates_status_and_rows(cx: &mut TestAppContext) {
     );
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("connection").label(), Some("Connected"));
+        assert_eq!(window.find("status-connection").label(), Some("Connected"));
         assert_eq!(window.find("rate-down").label(), Some("↓ 2.4 MiB/s"));
         assert_eq!(window.find("rate-up").label(), Some("↑ 180 KiB/s"));
         assert_eq!(window.find("free-space").label(), Some("22.9 GiB free"));
@@ -191,6 +194,24 @@ fn status_bar_shows_reconnecting_and_stale(cx: &mut TestAppContext) {
 
     window.send(Event::Snapshot(Arc::new(snapshot(&["alpha", "beta"]))), cx);
     assert!(!window.table_stale(cx), "fresh data is drawn as such again");
+}
+
+/// The connection's dot is as far in from the left end of the status bar as the upload speed is
+/// from the right end: the room the indicator keeps around itself for its hover background does
+/// not push the dot further in.
+#[gpui_kit::test]
+fn the_connection_dot_is_as_far_in_as_the_speed_at_the_other_end(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(Event::Snapshot(Arc::new(snapshot(&["alpha"]))), cx);
+
+    cx.update_window(window.handle, |_, window, cx| {
+        window.render_frame(cx);
+        let width = window.viewport_size().width;
+        let dot = window.find("status-connection-dot").bounds();
+        let speed = window.find("rate-up").bounds();
+        assert_eq!(dot.left(), width - speed.right());
+    })
+    .expect("the window is open");
 }
 
 #[gpui_kit::test]
@@ -378,7 +399,10 @@ fn closed_events_channel_marks_stale(cx: &mut TestAppContext) {
     assert_eq!(window.rows(cx), 2, "the last data stays visible, dimmed");
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("connection").label(), Some("Service stopped"));
+        assert_eq!(
+            window.find("status-connection").label(),
+            Some("Service stopped")
+        );
     })
     .expect("the window is open");
 }

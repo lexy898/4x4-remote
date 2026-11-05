@@ -58,12 +58,12 @@ record-fixtures:
 # --no-capture runs the tests one at a time and streams their output, so the hash each test
 # prints for its torrent stays visible even if the run is interrupted (nextest drops the captured
 # output of a cancelled test).
-# Live tests (x4-rpc's and x4-core's) on torrents they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults. x4-core's geoip_live reads the installed GeoIP country files, from X4_GEOIP_DIR if set.
+# Live tests (x4-rpc's and x4-core's) on torrents they create in a test directory: X4_LIVE_URL, X4_LIVE_REMOTE_DIR (daemon's path) and X4_LIVE_LOCAL_DIR (mounted here) override the defaults. x4-app's checks the server as the Connection dialog's Test does, reading only. x4-core's geoip_live reads the installed GeoIP country files, from X4_GEOIP_DIR if set.
 test-live:
     X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" \
     X4_LIVE_REMOTE_DIR="${X4_LIVE_REMOTE_DIR:-/mnt/hdd/torrents/4x4-test}" \
     X4_LIVE_LOCAL_DIR="${X4_LIVE_LOCAL_DIR:-/mnt/pi-hdd/torrents/4x4-test}" \
-    cargo nextest run -p x4-rpc -p x4-core --test live --test geoip_live --run-ignored only --locked --no-capture
+    cargo nextest run -p x4-rpc -p x4-core -p x4-app --test live --test geoip_live --run-ignored only --locked --no-capture
 
 # Enable the git hooks and verify the required tools are installed.
 setup:
@@ -139,7 +139,7 @@ package:
 default-handler *args:
     scripts/default-handler.sh "$@"
 
-# The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N), `--extend K` (then Shift+Down K times), `--right-click` (then right-click row N), `--press KEY` (press a key, repeatable, one every 3 s).
+# The main window over a synthetic daemon of 2000 torrents, no network: `--static` (rates stay 0), `--scroll` (scroll 10 s, log frame intervals, quit), `--select N` (select row N), `--extend K` (then Shift+Down K times), `--right-click` (then right-click row N), `--press KEY` (press a key, repeatable, one every 3 s), `--connection` (open the Connection dialog).
 demo-synthetic *args:
     RUST_LOG="${RUST_LOG:-warn,x4_app=info,x4_core=info,x4_synthetic=info}" \
         cargo run -p x4-app --features synthetic --bin x4-synthetic --locked -- {{args}}

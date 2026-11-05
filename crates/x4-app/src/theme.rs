@@ -131,16 +131,28 @@ pub(crate) fn rate_color(state: DisplayState, active: bool, theme: &Theme) -> Hs
 }
 
 /// The color of the connection dot in the status bar: the success color while connected, muted
-/// while connecting, the warning color while reconnecting, and the danger color when the daemon
-/// is too old or the service is not running.
+/// while connecting or while no server is set, the warning color while reconnecting, and the
+/// danger color when the daemon is too old or the service is not running.
 pub(crate) fn connection_color(indicator: &Indicator, theme: &Theme) -> Hsla {
     match indicator {
         Indicator::ServiceFailed | Indicator::ServiceStopped | Indicator::Unsupported(_) => {
             theme.danger
         }
         Indicator::Reconnecting { .. } => theme.warning,
-        Indicator::Connecting => theme.muted_foreground,
+        Indicator::Connecting | Indicator::NotConfigured => theme.muted_foreground,
         Indicator::Connected => theme.success,
+    }
+}
+
+/// The background of a clickable part of the status bar under the pointer: the one of
+/// gpui-component's ghost buttons, as the turtle and the limits button have, so that the
+/// connection indicator gets no more of a button's look than they do. It is the accent color, at
+/// half strength in the dark theme.
+pub(crate) fn ghost_hover(theme: &Theme) -> Hsla {
+    if theme.is_dark() {
+        theme.accent.opacity(0.5)
+    } else {
+        theme.accent
     }
 }
 
@@ -430,7 +442,22 @@ mod tests {
             for gone in [Indicator::ServiceStopped, Indicator::ServiceFailed] {
                 assert_eq!(color(gone), theme.danger, "{mode:?}");
             }
+            // No server set is not an error: the dot is muted, like one still connecting.
+            assert_eq!(
+                color(Indicator::NotConfigured),
+                theme.muted_foreground,
+                "{mode:?}"
+            );
         }
+    }
+
+    #[gpui_kit::test]
+    fn the_ghost_hover_is_the_accent_and_half_of_it_in_the_dark(cx: &mut TestAppContext) {
+        let light = theme(ThemeMode::Light, cx);
+        assert_eq!(ghost_hover(&light), light.accent);
+        let dark = theme(ThemeMode::Dark, cx);
+        assert_eq!(ghost_hover(&dark), dark.accent.opacity(0.5));
+        assert_ne!(ghost_hover(&dark), dark.accent);
     }
 
     #[gpui_kit::test]

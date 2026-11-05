@@ -18,7 +18,7 @@ use gpui_kit::{
     size,
 };
 use tempfile::TempDir;
-use x4_app::app::{self, Startup};
+use x4_app::app::{self, ServiceStart, Startup};
 use x4_app::main_view::MainView;
 use x4_core::{
     ColumnId, ColumnState, DetailsTab, Filter, SortDirection, SortKey, SortState, ThemeChoice,
@@ -105,7 +105,7 @@ impl Window {
     )]
     fn open(path: &Path, cx: &mut TestAppContext) -> Self {
         let startup = Startup::from_state_file(
-            Err(io::Error::other("the tests run no service")),
+            ServiceStart::Failed(io::Error::other("the tests run no service")),
             Some(path.to_path_buf()),
         );
         let (handle, view) = cx

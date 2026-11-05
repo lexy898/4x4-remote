@@ -204,6 +204,9 @@ fn connection_texts() {
     assert_eq!(text(Indicator::Connected), "");
     assert_eq!(text(Indicator::ServiceStopped), "Service stopped");
     assert_eq!(text(Indicator::ServiceFailed), "Service could not start");
+    assert_eq!(text(Indicator::NotConfigured), "No server set");
+    assert_eq!(connected_to_text("nas:9091"), "Connected to nas:9091");
+    assert_eq!(connected_to_text("[::1]:9091"), "Connected to [::1]:9091");
     assert_eq!(
         text(Indicator::Unsupported(UnsupportedReason::Legacy)),
         "Transmission 4.1 or newer required"
@@ -224,19 +227,19 @@ fn connection_texts() {
 fn config_problem_texts() {
     assert_eq!(
         config_problem_text(ConfigProblem::Unreadable),
-        "config.toml cannot be read, so the defaults are used"
+        "config.toml cannot be read, so no server is set"
     );
     assert_eq!(
         config_problem_text(ConfigProblem::Invalid { line: 2, column: 7 }),
-        "config.toml has an error at line 2, column 7, so the defaults are used"
+        "config.toml has an error at line 2, column 7, so no server is set"
     );
     assert_eq!(
         config_problem_text(ConfigProblem::Malformed),
-        "config.toml is not valid, so the defaults are used"
+        "config.toml is not valid, so no server is set"
     );
     assert_eq!(
         config_problem_text(ConfigProblem::UnsupportedUrl),
-        "The address in config.toml must start with http://, so the defaults are used"
+        "config.toml has an address 4x4 cannot use, so no server is set"
     );
 }
 

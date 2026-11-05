@@ -97,6 +97,9 @@ subtitle-tracker-error-generic = Tracker error: no details from the server
 
 # What the dot alone says: its accessible name and its tooltip.
 connection-connected = Connected
+# The same, when the window knows the server. $server: the server as host:port, such as
+# "nas:9091" or "[::1]:9091"; never the user name or the password.
+connection-connected-to = Connected to { $server }
 connection-connecting = Connecting…
 # $attempt: failed tries in a row (a number); $reason: one of the connection-reason-* messages. The
 # status bar shows this next to the speeds, so the reasons are a few words each.
@@ -120,6 +123,55 @@ connection-unsupported-no-version = Transmission 4.1 or newer required (server d
 connection-unsupported-version = Transmission 4.1 or newer required (server RPC { $version })
 connection-service-stopped = Service stopped
 connection-service-failed = Service could not start
+# No server has been set yet: the status bar's words and the tooltip that says what to do.
+connection-not-configured = No server set
+connection-not-configured-detail = Set the server in Connection (Ctrl+,)
+
+## The Connection dialog, where the server is set
+
+connection-title = Connection
+# The fields, and the hint the empty host field shows.
+connection-host = Host
+connection-host-placeholder = Name or IP address
+connection-port = Port
+connection-path = Path
+connection-username = User name
+connection-password = Password
+connection-credentials-hint = Leave empty if the server asks for no login
+# The address the fields make. $url: such as http://nas:9091/transmission/rpc; it never holds the
+# user name or the password.
+connection-address = Address: { $url }
+# The button that asks the server once whether 4x4 can use it, and what it says while it asks.
+connection-test = Test
+connection-testing = Testing…
+# What the test found. $version: the server's version as it reports it, such as "4.1.0 (abc123)".
+# A failure says one of the connection-reason-*-detail messages, a server too old one of the
+# connection-unsupported-* messages.
+connection-test-ok = Connected: Transmission { $version }
+connection-test-not-run = The test could not run
+connection-save = Save
+connection-cancel = Cancel
+# $reason: why the file could not be written, one of the connection-save-* messages below.
+connection-save-failed = The settings could not be saved: { $reason }
+# The reasons. $path: the file or the folder, such as "/home/alex/.config/4x4/config.toml"; $to:
+# where the file was to be moved; $error: what the system said, in its own words, such as
+# "Permission denied (os error 13)".
+connection-save-read = { $path } cannot be read ({ $error })
+connection-save-create-dir = the folder { $path } cannot be created ({ $error })
+connection-save-move-aside = { $path } is not valid TOML and cannot be moved to { $to } ({ $error })
+connection-save-write = { $path } cannot be written ({ $error })
+connection-save-no-file-name = { $path } does not name a file
+# The settings themselves cannot be written into the file; the log says why.
+connection-save-invalid = these settings cannot be written to { $path }
+# Under a field, after Save or Test, when it is wrong.
+connection-host-empty = Enter the server's name or IP address
+connection-host-invalid = Not a valid name or IP address
+connection-host-https = HTTPS is not supported yet
+connection-port-empty = Enter the port
+connection-port-invalid = The port is a number from 1 to 65535
+connection-path-empty = Enter the path, usually /transmission/rpc
+connection-path-invalid = The path cannot hold ?, # or spaces
+connection-username-colon = A user name cannot contain a colon
 
 ## The status bar
 
@@ -161,13 +213,13 @@ limit-not-a-number = Enter a whole number of KiB/s
 limit-out-of-range = Enter a speed from { $min } to { $max }
 limit-needs-value = Enter a speed to turn the limit on
 
-## Why config.toml is not used (the defaults are used instead)
+## Why config.toml is not used (no server is set then; the log has the details)
 
-config-problem-unreadable = config.toml cannot be read, so the defaults are used
+config-problem-unreadable = config.toml cannot be read, so no server is set
 # $line and $column: where the error is (numbers, from 1).
-config-problem-invalid = config.toml has an error at line { $line }, column { $column }, so the defaults are used
-config-problem-malformed = config.toml is not valid, so the defaults are used
-config-problem-unsupported-url = The address in config.toml must start with http://, so the defaults are used
+config-problem-invalid = config.toml has an error at line { $line }, column { $column }, so no server is set
+config-problem-malformed = config.toml is not valid, so no server is set
+config-problem-unsupported-url = config.toml has an address 4x4 cannot use, so no server is set
 
 ## The toolbar
 
@@ -176,6 +228,10 @@ theme-system = System theme
 theme-light = Light theme
 theme-dark = Dark theme
 theme-switch-tooltip = Switch between the system, light and dark themes
+# The toolbar button that opens the Connection dialog, where the server is set: its name for screen
+# readers, and its tooltip, which names its key.
+toolbar-connection = Connection
+toolbar-connection-tooltip = Connection (Ctrl+,)
 
 # The toolbar buttons that add torrents: their names for screen readers, which their tooltips show
 # too, with the key. Add file opens the file dialog to choose .torrent files; Add magnet adds the

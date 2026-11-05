@@ -3,7 +3,8 @@
 //! total speeds.
 //!
 //! [`StatusModel`] from `x4-core` decides the values, down to which state the connection
-//! indicator shows ([`Indicator`]); this module words them and lays them out.
+//! indicator shows ([`Indicator`]); this module words them and lays them out. A click on the
+//! indicator opens the Connection dialog, as the toolbar's Connection button and Ctrl+, do.
 //!
 //! The turtle switches the daemon's alternative speed limits; it is drawn selected while they
 //! apply, and its tooltip gives them. The limits button shows the normal limits and opens the
@@ -28,25 +29,29 @@ use x4_core::{Indicator, StatusModel};
 
 use crate::app::ConfigProblem;
 use crate::i18n::{
-    alt_speed_tooltip_text, config_problem_text, connection_reason_detail_text, connection_text,
-    download_rate_text, free_space_text, limits_button_text, t, upload_rate_text,
+    alt_speed_tooltip_text, config_problem_text, connected_to_text, connection_reason_detail_text,
+    connection_text, download_rate_text, free_space_text, limits_button_text, t, upload_rate_text,
 };
 use crate::keymap::{EditSpeedLimits, MAIN_CONTEXT, ToggleAltSpeed};
 use crate::main_view::MainView;
 use crate::speed_limits::SpeedLimits;
-use crate::theme::{STALE_OPACITY, alt_speed_color, connection_color, tabular_digits};
+use crate::theme::{STALE_OPACITY, alt_speed_color, connection_color, ghost_hover, tabular_digits};
 
 /// The diameter of the connection dot.
 const DOT_SIZE: f32 = 8.;
 
 /// The tooltip of the connection indicator, when there is more to say than its text: what the
-/// dot alone means, or why the last try to reconnect failed.
-fn connection_tooltip(indicator: &Indicator) -> Option<SharedString> {
+/// dot alone means, with the name of `server` (`host:port`) when the window knows it, or why the
+/// last try to reconnect failed.
+fn connection_tooltip(indicator: &Indicator, server: Option<&str>) -> Option<SharedString> {
     match indicator {
-        Indicator::Connected => Some(t!("connection-connected").into()),
+        Indicator::Connected => {
+            Some(server.map_or_else(|| t!("connection-connected").into(), connected_to_text))
+        }
         Indicator::Reconnecting { last_error, .. } => {
             Some(connection_reason_detail_text(last_error))
         }
+        Indicator::NotConfigured => Some(t!("connection-not-configured-detail").into()),
         Indicator::ServiceFailed
         | Indicator::ServiceStopped
         | Indicator::Unsupported(_)
@@ -62,11 +67,13 @@ pub(crate) struct LimitsPopover<'a> {
     pub(crate) open: bool,
 }
 
-/// The status bar for `status`, whose buttons act on the view of `cx`. `config_problem` adds a
-/// notice whose button calls `on_dismiss`, and `state_not_saved` one that the UI state cannot be
-/// saved. `limits` is the popover the limits button opens.
+/// The status bar for `status`, of the window set to `server` (`host:port`, if one is set), whose
+/// buttons act on the view of `cx`. `config_problem` adds a notice whose button calls
+/// `on_dismiss`, and `state_not_saved` one that the UI state cannot be saved. `limits` is the
+/// popover the limits button opens.
 pub(crate) fn status_bar(
     status: &StatusModel,
+    server: Option<&str>,
     config_problem: Option<ConfigProblem>,
     state_not_saved: bool,
     limits: &LimitsPopover<'_>,
@@ -74,7 +81,11 @@ pub(crate) fn status_bar(
     cx: &Context<'_, MainView>,
 ) -> StatusBar {
     let theme = cx.theme();
-    let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), theme));
+    // The indicator, always first on the left, pads itself by the rest of the bar's padding on
+    // that side, room for its hover background: its dot stays as far in as the speeds at the
+    // right end.
+    let indicator = connection_indicator(&status.indicator(), server, cx);
+    let mut bar = StatusBar::new().pl_1().left(indicator);
     if let Some(problem) = config_problem {
         bar = bar.left(config_notice(problem, on_dismiss));
     }
@@ -178,25 +189,45 @@ fn limits_button(
         .content(move |_, _, _| form.clone())
 }
 
-/// The dot and the text that tell how the connection is doing.
-fn connection_indicator(indicator: &Indicator, theme: &Theme) -> impl IntoElement {
+/// The dot and the text that tell how the connection to `server` is doing; a click opens the
+/// Connection dialog of the view of `cx`. Under the pointer it is drawn as the bar's ghost buttons
+/// are, and it is otherwise as it was before it could be clicked: its padding, where the hover
+/// background shows, is taken from the bar's own ([`status_bar`]).
+///
+/// For screen readers it stays a status, which says how the connection is doing as that changes,
+/// and Tab passes it by: the toolbar's Connection button and Ctrl+, open the dialog from the
+/// keyboard.
+fn connection_indicator(
+    indicator: &Indicator,
+    server: Option<&str>,
+    cx: &Context<'_, MainView>,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
     let label = connection_text(indicator);
-    let tooltip = connection_tooltip(indicator);
+    let tooltip = connection_tooltip(indicator, server);
     // The dot alone says nothing to a screen reader, so the indicator is named either way.
     let name = if label.is_empty() {
         tooltip.clone().unwrap_or_default()
     } else {
         label.clone()
     };
+    let hover = ghost_hover(theme);
     h_flex()
-        .id("connection")
+        .id("status-connection")
         .gap_1p5()
+        .px_1()
+        .rounded(theme.radius)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .on_click(cx.listener(|view, _, window, cx| view.open_connection(window, cx)))
         .child(
             div()
+                .id("status-connection-dot")
                 .size(px(DOT_SIZE))
                 .flex_none()
                 .rounded_full()
-                .bg(connection_color(indicator, theme)),
+                .bg(connection_color(indicator, theme))
+                .test_support(),
         )
         .when(!label.is_empty(), |indicator| indicator.child(label))
         .when_some(tooltip, |indicator, tooltip| {
@@ -276,14 +307,22 @@ mod tests {
     #[test]
     fn the_tooltip_explains_the_dot_and_the_reconnect_reason() {
         assert_eq!(
-            connection_tooltip(&Indicator::Connected),
-            Some("Connected".into())
+            connection_tooltip(&Indicator::Connected, None),
+            Some("Connected".into()),
+            "a window that knows no server"
         );
         assert_eq!(
-            connection_tooltip(&Indicator::Reconnecting {
-                attempt: 1,
-                last_error: ConnectionError::Unauthorized,
-            }),
+            connection_tooltip(&Indicator::Connected, Some("nas:9091")),
+            Some("Connected to nas:9091".into())
+        );
+        assert_eq!(
+            connection_tooltip(
+                &Indicator::Reconnecting {
+                    attempt: 1,
+                    last_error: ConnectionError::Unauthorized,
+                },
+                Some("nas:9091")
+            ),
             Some("The server rejected the credentials".into())
         );
         for indicator in [
@@ -293,10 +332,18 @@ mod tests {
             Indicator::Unsupported(UnsupportedReason::Legacy),
         ] {
             assert_eq!(
-                connection_tooltip(&indicator),
+                connection_tooltip(&indicator, Some("nas:9091")),
                 None,
                 "the text says it all: {indicator:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_tooltip_without_a_server_says_where_to_set_one() {
+        assert_eq!(
+            connection_tooltip(&Indicator::NotConfigured, None),
+            Some("Set the server in Connection (Ctrl+,)".into())
+        );
     }
 }

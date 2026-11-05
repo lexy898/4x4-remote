@@ -65,14 +65,27 @@
 //! text a limit's input starts with, and [`limit_edit`] the [`LimitEdit`] that leaving it sends;
 //! [`limit_needs_value`] tells when it was switched on without a speed.
 //!
+//! Where the daemon is, and the dialog that sets it, are decided here as well. A
+//! [`ConnectionSettings`] is a host, a port, a path and the [`x4_rpc::Credentials`] of one daemon,
+//! read from an `http://` address by [`ConnectionSettings::from_url`] (or refused with a
+//! [`UrlProblem`]); its [`url`](ConnectionSettings::url) never holds the credentials. A
+//! [`ConnectionForm`] is the text of the dialog's fields: [`ConnectionForm::check`] turns it into
+//! settings or into [`FormProblems`] for each field, and [`ConnectionForm::spread`] splits an
+//! address pasted into the host field over the fields.
+//! The dialog's Test button ends in a [`CheckOutcome`]: the daemon's version, or the reason it
+//! cannot be used. A window with no server set has no service; its status is
+//! [`ServiceStatus::NotConfigured`], and its [`Indicator`] says so.
+//!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme, details panel, and the folders
 //! torrents were added to), read tolerantly and repaired by [`UiState::parse`] (see also
 //! [`UiState::normalized`]); [`set_column_shown`], [`move_shown_column`] and [`set_shown_widths`]
 //! apply what the user does to its columns, which the table counts by [`shown_columns`].
-//! [`Config`] is the owner's `config.toml`, which the app only reads. Both turn text into values
-//! and back; reading and writing the files is left to the app. A [`ConfigError`] names the
-//! [`TextPosition`] of a parse error as numbers, so the app can word it.
+//! [`Config`] is the owner's `config.toml`: the [`ConnectionSettings`] it names, if any (there is
+//! no built-in daemon), which [`config_with_connection`] writes back into a text with the owner's
+//! comments, keys and tables kept. Both files turn text into values and back; reading and writing
+//! them is left to the app. A [`ConfigError`] names the [`TextPosition`] of a parse error as
+//! numbers, so the app can word it.
 //!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
@@ -136,6 +149,7 @@
 mod action;
 mod adding;
 mod config;
+mod connection;
 mod details;
 mod engine;
 mod files;
@@ -170,7 +184,11 @@ pub use adding::{
     add_outcome, chosen_files, clipboard_magnets, dropped_files, folder_picks, magnet_form_items,
     stopped_outcome,
 };
-pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
+pub use config::{Config, ConfigError, config_with_connection};
+pub use connection::{
+    CheckOutcome, ConnectionForm, ConnectionSettings, DEFAULT_PATH, DEFAULT_PORT, FormProblems,
+    HostProblem, PathProblem, PortProblem, UrlProblem, UsernameProblem,
+};
 pub use details::{
     FileEntry, NextAnnounce, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat,
 };

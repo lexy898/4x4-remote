@@ -27,15 +27,20 @@
 //!   there (and selected), one every few seconds, as the user would on the keyboard: `ctrl-p`
 //!   pauses the selected torrents, `space` toggles them. The keys are in gpui's spelling, and each
 //!   press is logged, for screenshots of what the actions do.
+//! - `--connection` opens the Connection dialog after the first frame, as `Ctrl+,` would, for
+//!   screenshots of the dialog.
 //!
 //! The daemon carries out the actions on its own made-up torrents, so they can be tried here.
 //! Its peers are at addresses reserved for documentation, which the demo's own country database,
-//! made in memory, puts in countries. It reads and writes none of the app's files: there is no
-//! `config.toml`, the UI state starts from the defaults and is never saved, the installed `GeoIP`
-//! files are not opened, and the log goes to stderr only.
+//! made in memory, puts in countries. The window is set to a made-up server, and the Connection
+//! dialog's Test and Save answer as if every server were the synthetic daemon: Save switches to a
+//! new one ([`server`]). It reads and writes none of the app's files: there is no `config.toml`,
+//! which Save would write, the UI state starts from the defaults and is never saved, the installed
+//! `GeoIP` files are not opened, and the log goes to stderr only.
 
 mod daemon;
 mod frames;
+mod server;
 
 use std::env;
 use std::io::Cursor;
@@ -49,15 +54,13 @@ use gpui_kit::{
 };
 use x4_app::adding::{AddRequest, AddRequests, launch_requests};
 use x4_app::allocator::{log_pin, pin_mmap_threshold};
-use x4_app::app::{self, Startup};
+use x4_app::app::{self, ServiceStart, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
-use x4_core::service;
-use x4_core::{CountryDb, Edition, EngineConfig, GeoIp, UiState, build_country_file};
-use x4_rpc::Client;
+use x4_core::{CountryDb, Edition, GeoIp, UiState, build_country_file};
 
-use crate::daemon::{Activity, SyntheticDaemon};
+use crate::daemon::Activity;
 
 /// How many torrents the daemon has.
 const TORRENTS: u32 = 2000;
@@ -90,11 +93,12 @@ fn main() -> anyhow::Result<()> {
         right_click = options.right_click,
         press = ?options.press,
         adds = options.add.len(),
+        connection = options.connection,
         "synthetic daemon"
     );
-    let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
     let startup = Startup {
-        service: service::spawn(client, EngineConfig::default(), Box::new(countries)),
+        service: ServiceStart::from(server::spawn(options.activity)),
+        connection: server::setup(options.activity)?,
         ui: UiState::default(),
         state_writable: false,
         state_path: None,
@@ -107,6 +111,9 @@ fn main() -> anyhow::Result<()> {
     app::run_driven(started, startup, move |window, view, cx| {
         if !options.add.is_empty() {
             ask_to_add(&adds, &options.add, &cwd);
+        }
+        if options.connection {
+            open_connection_after_the_first_frame(window, view.clone(), cx);
         }
         if options.select.is_some() || !options.press.is_empty() {
             drive_when_listed(window, view.clone(), options, cx);
@@ -163,6 +170,27 @@ fn drive_when_listed(
         }
     })
     .detach();
+}
+
+/// Opens the Connection dialog over `view` once the first frame of `window` is drawn, as `Ctrl+,`
+/// would then.
+fn open_connection_after_the_first_frame(
+    window: AnyWindowHandle,
+    view: Entity<MainView>,
+    cx: &mut App,
+) {
+    let asked = window.update(cx, |_, window, _| {
+        // The first hop runs ahead of the first frame; the second once it has been presented.
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |window, cx| {
+                tracing::info!("opening the Connection dialog");
+                view.update(cx, |view, cx| view.open_connection(window, cx));
+            });
+        });
+    });
+    if let Err(error) = asked {
+        tracing::error!(%error, "the Connection dialog could not be opened");
+    }
 }
 
 /// Asks the main window, through its channel `adds`, to add `args`, with the requests the same
@@ -319,6 +347,8 @@ struct Options {
     press: Vec<String>,
     /// The `.torrent` files and magnet links to ask to add at the start.
     add: Vec<String>,
+    /// Whether to open the Connection dialog after the first frame.
+    connection: bool,
 }
 
 impl Options {
@@ -331,6 +361,7 @@ impl Options {
                 "--static" => options.activity = Activity::Static,
                 "--scroll" => options.scroll = true,
                 "--right-click" => options.right_click = true,
+                "--connection" => options.connection = true,
                 "--select" => {
                     let row = args
                         .next()
@@ -366,7 +397,7 @@ impl Options {
                 }
                 other => anyhow::bail!(
                     "unknown argument {other:?}; the options are --static, --scroll, --select N, \
-                     --extend K, --right-click, --press KEY and --add PATH_OR_MAGNET"
+                     --extend K, --right-click, --press KEY, --add PATH_OR_MAGNET and --connection"
                 ),
             }
         }
@@ -400,6 +431,7 @@ mod tests {
                 right_click: false,
                 press: Vec::new(),
                 add: Vec::new(),
+                connection: false,
             }
         );
     }
@@ -416,6 +448,7 @@ mod tests {
                 right_click: false,
                 press: Vec::new(),
                 add: Vec::new(),
+                connection: false,
             }
         );
     }
@@ -473,6 +506,14 @@ mod tests {
         assert_eq!(options.add, ["show.torrent", link.as_str()]);
         let missing = parse(&["--add"]).expect_err("nothing to add");
         assert!(missing.to_string().contains("magnet link"), "{missing}");
+    }
+
+    #[test]
+    fn connection_opens_the_connection_dialog() {
+        assert!(!parse(&[]).expect("no flags").connection);
+        let options = parse(&["--connection", "--static"]).expect("the dialog");
+        assert!(options.connection);
+        assert_eq!(options.activity, Activity::Static);
     }
 
     #[test]
