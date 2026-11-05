@@ -78,9 +78,11 @@
 //! torrents were added to), read tolerantly and repaired by [`UiState::parse`] (see also
 //! [`UiState::normalized`]); [`set_column_shown`], [`move_shown_column`] and [`set_shown_widths`]
 //! apply what the user does to its columns, which the table counts by [`shown_columns`].
-//! [`Config`] is the owner's `config.toml`, which the app only reads. Both turn text into values
-//! and back; reading and writing the files is left to the app. A [`ConfigError`] names the
-//! [`TextPosition`] of a parse error as numbers, so the app can word it.
+//! [`Config`] is the owner's `config.toml`: the [`ConnectionSettings`] it names, if any (there is
+//! no built-in daemon), which [`config_with_connection`] writes back into a text with the owner's
+//! comments, keys and tables kept. Both files turn text into values and back; reading and writing
+//! them is left to the app. A [`ConfigError`] names the [`TextPosition`] of a parse error as
+//! numbers, so the app can word it.
 //!
 //! The [`Store`] holds the torrents by hash, which survives the daemon renumbering its ids;
 //! [`torrents_from_records`] turns a `torrent_get` answer into [`Converted`] torrents and the
@@ -179,7 +181,7 @@ pub use adding::{
     add_outcome, chosen_files, clipboard_magnets, dropped_files, folder_picks, magnet_form_items,
     stopped_outcome,
 };
-pub use config::{Config, ConfigError, ConnectionConfig, DEFAULT_RPC_URL};
+pub use config::{Config, ConfigError, config_with_connection};
 pub use connection::{
     ConnectionForm, ConnectionSettings, DEFAULT_PATH, DEFAULT_PORT, FormProblems, HostProblem,
     PathProblem, PortProblem, UrlProblem, UsernameProblem,

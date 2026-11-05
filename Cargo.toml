@@ -62,6 +62,13 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 # The persisted UI state and the owner's config file; both are TOML.
 toml = "1.1.8"
+# Writes the Connection dialog's settings into config.toml and keeps the owner's comments, keys
+# and tables as they were. gpui's proc macros already pull it in (0.25.17), so Cargo.lock gains no
+# crate; only the parser and the writer are enabled, with no serde glue.
+toml_edit = { version = "0.25.17", default-features = false, features = [
+  "parse",
+  "display",
+] }
 tracing = "0.1.44"
 # The daily log file, written on a thread of its own so that logging never waits on the disk.
 tracing-appender = "0.2.5"

@@ -24,7 +24,8 @@ use gpui_kit::{
 };
 use x4_core::service::{self, ServiceHandle};
 use x4_core::{
-    Command, Config, ConfigError, EngineConfig, Event, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, UiState,
+    Command, Config, ConfigError, ConnectionSettings, EngineConfig, Event, MIN_WINDOW_HEIGHT,
+    MIN_WINDOW_WIDTH, UiState,
 };
 use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
@@ -136,7 +137,8 @@ pub enum ConfigProblem {
     },
     /// The file is not valid, and the parser cannot say where.
     Malformed,
-    /// `connection.url` is not a plain `http://` address.
+    /// `connection.url` cannot be used: it is not a plain `http://` address, or it holds the user
+    /// name or password that belong in their own keys.
     UnsupportedUrl,
 }
 
@@ -166,10 +168,11 @@ impl ConfigProblem {
 
 /// Runs the application until it quits: reads the config and the saved state from `paths`
 /// (`None` when the home directory is unknown), starts the service against the configured
-/// daemon, and runs the window as [`run_with`] does, with `requests`, those of the binary's own
-/// arguments, waiting for it. With `instance`, the place of the first 4x4 of the user, it answers
-/// the launches after it from the start: their requests join the same channel, after `requests`.
-/// When it quits, it removes the socket of `instance` and then lets go of its lock.
+/// daemon (if the config names one), and runs the window as [`run_with`] does, with `requests`,
+/// those of the binary's own arguments, waiting for it. With `instance`, the place of the first
+/// 4x4 of the user, it answers the launches after it from the start: their requests join the same
+/// channel, after `requests`. When it quits, it removes the socket of `instance` and then lets go
+/// of its lock.
 ///
 /// The service only starts a thread here; the window opens at once and shows the connection
 /// being made, so the first frame never waits for the daemon.
@@ -187,13 +190,7 @@ pub fn run(
         || (Config::default(), None),
         |paths| load_config(&paths.config_file),
     );
-    let client = Client::new(UreqTransport::new(&config.connection.url, DEFAULT_TIMEOUT));
-    // Spawning only starts the thread; the state file is read while it connects.
-    let service = service::spawn(
-        client,
-        EngineConfig::default(),
-        Box::new(geoip::open_installed),
-    );
+    let service = start_service(config.connection.as_ref());
     let startup = Startup {
         config_problem,
         ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))
@@ -205,6 +202,24 @@ pub fn run(
         }
     }
     run_app(started, startup, instance, |_, _, _| {})
+}
+
+/// Starts the service against `connection`. Without one no thread starts, and the error is what a
+/// service that could not start gives, so the window opens as it does then.
+fn start_service(connection: Option<&ConnectionSettings>) -> io::Result<ServiceHandle> {
+    let Some(settings) = connection else {
+        // Until the window has a state of its own for this, it is shown as a failed start.
+        tracing::info!("no server set; no service started");
+        return Err(io::Error::other("no server set"));
+    };
+    let transport = UreqTransport::new(&settings.url(), DEFAULT_TIMEOUT)
+        .with_credentials(settings.credentials().cloned());
+    // Spawning only starts the thread; the state file is read while it connects.
+    service::spawn(
+        Client::new(transport),
+        EngineConfig::default(),
+        Box::new(geoip::open_installed),
+    )
 }
 
 /// Runs the application until it quits with what `startup` holds: initializes the UI, opens the
@@ -535,6 +550,13 @@ mod tests {
     }
 
     #[test]
+    fn no_server_set_starts_no_service() {
+        let error = start_service(None).expect_err("there is nothing to connect to");
+
+        assert_eq!(error.to_string(), "no server set");
+    }
+
+    #[test]
     fn a_usable_config_has_no_problem() {
         assert_eq!(
             problem_with("[connection]\nurl = \"http://pi/rpc\"\n"),
@@ -552,6 +574,10 @@ mod tests {
         );
         assert_eq!(
             problem_with("[connection]\nurl = \"https://user:secret@pi/rpc\"\n"),
+            Some(ConfigProblem::UnsupportedUrl)
+        );
+        assert_eq!(
+            problem_with("[connection]\nurl = \"http://user:secret@pi/rpc\"\n"),
             Some(ConfigProblem::UnsupportedUrl)
         );
 

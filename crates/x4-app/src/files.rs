@@ -91,9 +91,9 @@ pub(crate) struct LoadedState {
 /// # Errors
 ///
 /// [`FilesError::Read`] if the file exists but cannot be read, and [`FilesError::Config`] if its
-/// contents are unusable (not TOML, a value of the wrong type, a URL that is not `http://`). The
-/// file is never changed; the caller decides what to do, such as showing the error and using the
-/// defaults.
+/// contents are unusable (not TOML, a value of the wrong type, an address that is not plain
+/// `http://` or holds a user name or password). The file is never changed; the caller decides
+/// what to do, such as showing the error and using the defaults.
 pub(crate) fn read_config(path: &Path) -> Result<Config, FilesError> {
     let Some(bytes) = read(path)? else {
         return Ok(Config::default());
@@ -255,7 +255,7 @@ fn bad_path(path: &Path) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
-    use x4_core::{DEFAULT_RPC_URL, ThemeChoice, UI_STATE_VERSION};
+    use x4_core::{ThemeChoice, UI_STATE_VERSION};
 
     use super::*;
 
@@ -286,7 +286,7 @@ mod tests {
         let config = read_config(&dir.path().join("config.toml")).expect("a missing file is fine");
 
         assert_eq!(config, Config::default());
-        assert_eq!(config.connection.url, DEFAULT_RPC_URL);
+        assert_eq!(config.connection, None, "no file, no server");
     }
 
     #[test]
@@ -297,7 +297,8 @@ mod tests {
 
         let config = read_config(&path).expect("a valid file");
 
-        assert_eq!(config.connection.url, "http://pi.local:9091/rpc");
+        let settings = config.connection.expect("the file names a server");
+        assert_eq!(settings.url(), "http://pi.local:9091/rpc");
     }
 
     #[test]
