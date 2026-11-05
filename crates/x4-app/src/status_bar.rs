@@ -81,7 +81,11 @@ pub(crate) fn status_bar(
     cx: &Context<'_, MainView>,
 ) -> StatusBar {
     let theme = cx.theme();
-    let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), server, cx));
+    // The indicator, always first on the left, pads itself by the rest of the bar's padding on
+    // that side, room for its hover background: its dot stays as far in as the speeds at the
+    // right end.
+    let indicator = connection_indicator(&status.indicator(), server, cx);
+    let mut bar = StatusBar::new().pl_1().left(indicator);
     if let Some(problem) = config_problem {
         bar = bar.left(config_notice(problem, on_dismiss));
     }
@@ -187,7 +191,8 @@ fn limits_button(
 
 /// The dot and the text that tell how the connection to `server` is doing; a click opens the
 /// Connection dialog of the view of `cx`. Under the pointer it is drawn as the bar's ghost buttons
-/// are, and it is otherwise as it was before it could be clicked.
+/// are, and it is otherwise as it was before it could be clicked: its padding, where the hover
+/// background shows, is taken from the bar's own ([`status_bar`]).
 ///
 /// For screen readers it stays a status, which says how the connection is doing as that changes,
 /// and Tab passes it by: the toolbar's Connection button and Ctrl+, open the dialog from the
@@ -217,10 +222,12 @@ fn connection_indicator(
         .on_click(cx.listener(|view, _, window, cx| view.open_connection(window, cx)))
         .child(
             div()
+                .id("status-connection-dot")
                 .size(px(DOT_SIZE))
                 .flex_none()
                 .rounded_full()
-                .bg(connection_color(indicator, theme)),
+                .bg(connection_color(indicator, theme))
+                .test_support(),
         )
         .when(!label.is_empty(), |indicator| indicator.child(label))
         .when_some(tooltip, |indicator, tooltip| {

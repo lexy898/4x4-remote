@@ -196,6 +196,24 @@ fn status_bar_shows_reconnecting_and_stale(cx: &mut TestAppContext) {
     assert!(!window.table_stale(cx), "fresh data is drawn as such again");
 }
 
+/// The connection's dot is as far in from the left end of the status bar as the upload speed is
+/// from the right end: the room the indicator keeps around itself for its hover background does
+/// not push the dot further in.
+#[gpui_kit::test]
+fn the_connection_dot_is_as_far_in_as_the_speed_at_the_other_end(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    window.send(Event::Snapshot(Arc::new(snapshot(&["alpha"]))), cx);
+
+    cx.update_window(window.handle, |_, window, cx| {
+        window.render_frame(cx);
+        let width = window.viewport_size().width;
+        let dot = window.find("status-connection-dot").bounds();
+        let speed = window.find("rate-up").bounds();
+        assert_eq!(dot.left(), width - speed.right());
+    })
+    .expect("the window is open");
+}
+
 #[gpui_kit::test]
 fn unsupported_server_is_named_in_the_status_bar(cx: &mut TestAppContext) {
     let window = Window::open(cx);
