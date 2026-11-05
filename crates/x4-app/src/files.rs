@@ -193,9 +193,15 @@ pub(crate) fn read_ui_state(path: &Path) -> Result<LoadedState, FilesError> {
 /// it is moved to `config.toml.bad`, replacing an older one, and a new file is written, which the
 /// log says with both paths and [`SavedConfig::moved_aside`] tells.
 ///
+/// If `path` is a symbolic link (dotfiles kept in a repository), it is written through: the file
+/// the link names is read, edited and replaced, in its own directory, and the link stays a link.
+/// A broken file is moved aside next to the file the link names. A link to nothing is written
+/// through too: the file it names, and its directory, are created.
+///
 /// # Errors
 ///
-/// [`FilesError::Read`] if the old file cannot be read, [`FilesError::CreateDir`] if the
+/// [`FilesError::Read`] if the old file cannot be read (or `path` is a loop of links),
+/// [`FilesError::CreateDir`] if the
 /// directory cannot be created, [`FilesError::MoveAside`] if a file that is not TOML cannot be
 /// moved aside ([`FilesError::NoFileName`] if `path` names no file to move), and
 /// [`FilesError::Write`] if the new file cannot be written. On any error the old file is left as
@@ -206,6 +212,9 @@ pub(crate) fn save_connection(
     path: &Path,
     settings: &ConnectionSettings,
 ) -> Result<SavedConfig, FilesError> {
+    // Renaming a new file over a link would replace the link, not the file it names.
+    let target = write_target(path)?;
+    let path = target.as_path();
     let old = read(path)?.unwrap_or_default();
     let edited = str::from_utf8(&old)
         .map_err(|error| ConfigError::Parse {
@@ -265,6 +274,37 @@ pub(crate) fn write_ui_state(path: &Path, state: &UiState) -> Result<(), FilesEr
         source,
     })?;
     write_atomically(path, &text)
+}
+
+/// The file that a write to `path` is to replace: `path` itself, or, if it is a symbolic link, the
+/// file at the end of the chain of links, relative links being read from the directory of the link.
+/// That file need not exist (a link to nothing is written through, so that it names the new file).
+fn write_target(path: &Path) -> Result<PathBuf, FilesError> {
+    // The limit of Linux (`ELOOP`), so that a loop ends in an error and not in a hang.
+    const MAX_LINKS: usize = 40;
+    let read_error = |source| FilesError::Read {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut current = path.to_path_buf();
+    for _ in 0..MAX_LINKS {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let to = fs::read_link(&current).map_err(read_error)?;
+                // An absolute `to` replaces `current`, as it should.
+                current = current
+                    .parent()
+                    .map_or(to.clone(), |parent| parent.join(&to));
+            }
+            // Not a link, or not there yet: this is the file.
+            Ok(_) => return Ok(current),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(current),
+            Err(error) => return Err(read_error(error)),
+        }
+    }
+    Err(read_error(io::Error::other(
+        "too many levels of symbolic links",
+    )))
 }
 
 /// Writes `text` to `path` atomically, private to the owner: [`stage`], then [`persist`].
@@ -1032,6 +1072,169 @@ mod tests {
         assert!(save_connection(&path, &nas()).is_err());
         assert_eq!(fs::read_to_string(&path).expect("untouched"), "[connection");
         assert_eq!(names(&config_dir), ["config.toml"]);
+    }
+
+    /// Whether `path` is a symbolic link, and where it points.
+    #[cfg(unix)]
+    fn link_target(path: &Path) -> Option<PathBuf> {
+        fs::symlink_metadata(path)
+            .ok()?
+            .file_type()
+            .is_symlink()
+            .then(|| fs::read_link(path).expect("a readable link"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_symlink_keeps_the_link_and_writes_its_target() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = dir();
+        let dotfiles = dir.path().join("dotfiles");
+        fs::create_dir(&dotfiles).expect("a directory");
+        let real = dotfiles.join("config.toml");
+        fs::write(&real, "# mine\n[later]\nkey = 1\n").expect("written");
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o644)).expect("chmod");
+        let home = dir.path().join("home");
+        fs::create_dir(&home).expect("a directory");
+        let absolute = home.join("absolute.toml");
+        let relative = home.join("config.toml");
+        symlink(&real, &absolute).expect("a link");
+        symlink("../dotfiles/config.toml", &relative).expect("a link");
+
+        for link in [&absolute, &relative] {
+            let saved = save_connection(link, &nas()).expect("saved");
+
+            assert!(!saved.moved_aside);
+            assert!(
+                link_target(link).is_some(),
+                "{} is still a link",
+                link.display()
+            );
+            let text = fs::read_to_string(&real).expect("readable");
+            assert!(text.contains("# mine\n"), "{text}");
+            assert!(text.contains("[later]\nkey = 1\n"), "{text}");
+            assert_eq!(
+                read_config(&real).expect("readable").connection,
+                Some(nas())
+            );
+            assert_eq!(
+                read_config(link)
+                    .expect("readable through the link")
+                    .connection,
+                Some(nas())
+            );
+            assert_eq!(mode(&real), 0o600, "the file the link names is private");
+            assert_eq!(
+                names(&dotfiles),
+                ["config.toml"],
+                "no temporary file is left"
+            );
+        }
+        assert_eq!(link_target(&absolute), Some(real));
+        assert_eq!(
+            link_target(&relative),
+            Some(PathBuf::from("../dotfiles/config.toml"))
+        );
+        assert_eq!(names(&home), ["absolute.toml", "config.toml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_chain_of_symlinks_writes_the_last_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let real = dir.path().join("real.toml");
+        fs::write(&real, "# mine\n").expect("written");
+        let middle = dir.path().join("middle.toml");
+        let first = dir.path().join("config.toml");
+        symlink("real.toml", &middle).expect("a link");
+        symlink("middle.toml", &first).expect("a link");
+
+        save_connection(&first, &nas()).expect("saved");
+
+        assert_eq!(link_target(&first), Some(PathBuf::from("middle.toml")));
+        assert_eq!(link_target(&middle), Some(PathBuf::from("real.toml")));
+        assert_eq!(link_target(&real), None, "the last one is a file");
+        assert_eq!(
+            read_config(&real).expect("readable").connection,
+            Some(nas())
+        );
+        let text = fs::read_to_string(&real).expect("readable");
+        assert!(text.contains("# mine\n"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_dangling_symlink_creates_the_file_it_names() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let link = dir.path().join("config.toml");
+        // The directory of the file does not exist either.
+        let real = dir.path().join("dotfiles").join("4x4").join("config.toml");
+        symlink(&real, &link).expect("a link");
+
+        save_connection(&link, &nas()).expect("saved");
+
+        assert_eq!(link_target(&link), Some(real.clone()), "still a link");
+        assert_eq!(
+            read_config(&real).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(mode(&real), 0o600);
+        assert_eq!(names(dir.path()), ["config.toml", "dotfiles"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_toml_behind_a_symlink_is_moved_aside_next_to_the_file_it_names() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let dotfiles = dir.path().join("dotfiles");
+        fs::create_dir(&dotfiles).expect("a directory");
+        let real = dotfiles.join("config.toml");
+        fs::write(&real, "[connection\n").expect("written");
+        let link = dir.path().join("config.toml");
+        symlink(&real, &link).expect("a link");
+
+        let saved = save_connection(&link, &nas()).expect("saved");
+
+        assert!(saved.moved_aside);
+        assert_eq!(link_target(&link), Some(real.clone()), "still a link");
+        assert_eq!(
+            read_config(&real).expect("readable").connection,
+            Some(nas())
+        );
+        assert_eq!(
+            fs::read_to_string(dotfiles.join("config.toml.bad")).expect("the .bad file"),
+            "[connection\n"
+        );
+        assert_eq!(names(&dotfiles), ["config.toml", "config.toml.bad"]);
+        assert_eq!(
+            names(dir.path()),
+            ["config.toml", "dotfiles"],
+            "the link has no .bad"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_loop_of_symlinks_is_a_read_error() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir();
+        let first = dir.path().join("config.toml");
+        let second = dir.path().join("other.toml");
+        symlink("other.toml", &first).expect("a link");
+        symlink("config.toml", &second).expect("a link");
+
+        let error = save_connection(&first, &nas()).expect_err("a loop leads nowhere");
+
+        assert!(matches!(&error, FilesError::Read { .. }), "{error:?}");
+        assert_eq!(names(dir.path()), ["config.toml", "other.toml"]);
     }
 
     #[test]
