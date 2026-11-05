@@ -7,8 +7,11 @@
 //! details panel, the status, the actions and the read of magnet links waiting for their answers,
 //! the last failure and the notifications on screen, the speed limits form and its popover, the
 //! adds sent, the torrent waiting to be selected, and the notice that `config.toml` set no server.
-//! What the user arranged stays: the columns, the sort order, the filter, the search, the theme,
-//! the panel and its tab, and the torrents waiting to be added.
+//! An open add dialog, filled from the old daemon's session and free space, closes; its torrent
+//! stays first in the queue and is offered again in a fresh dialog, which takes the new daemon's
+//! (a folder typed in the old one is lost). What the user arranged stays: the columns, the sort
+//! order, the filter, the search, the theme, the panel and its tab, and the torrents waiting to be
+//! added.
 //!
 //! The new service is told what a service is told at the start (`MainView::new`): whether the
 //! user can see the window, and which tab of the panel is open. A connector that cannot start the
@@ -52,8 +55,9 @@ impl MainView {
     /// Switches the window to the server of `settings`: drops the old service, forgets what the
     /// old daemon showed, and starts a service for the new one with the connector of
     /// [`MainView::set_connection`], which it tells the window's visibility and the open tab. The
-    /// UI state and the torrents waiting to be added stay. A window without a connector cannot
-    /// switch, and stays as it is.
+    /// UI state and the torrents waiting to be added stay; an open add dialog closes, and its
+    /// torrent is offered again first, in a fresh dialog for the new server. A window without a
+    /// connector cannot switch, and stays as it is.
     pub fn switch_to(
         &mut self,
         settings: ConnectionSettings,
@@ -89,7 +93,8 @@ impl MainView {
         self.show_status(cx);
         self.refresh_availability(cx);
         self.follow_details(cx);
-        self.follow_adds(window, cx);
+        // The head of the queue, in a fresh dialog that takes the new daemon's session.
+        self.advance_adds(window, cx);
         cx.notify();
     }
 
@@ -116,7 +121,7 @@ impl MainView {
         // nothing.
         // The notice said that no server is set, which no longer holds.
         self.config_problem = None;
-        self.adds_switched(cx);
+        self.adds_switched(window, cx);
     }
 
     /// Tells the new service what a service starts without knowing: whether the user can see the

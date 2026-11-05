@@ -293,27 +293,24 @@ impl MainView {
 
     /// The window switched to another server: the adds sent to the old one will not be answered
     /// here, and the torrent waiting to be selected was the old daemon's, so both are forgotten.
-    /// An open dialog that waits for one of those adds takes its form back, for the new server.
-    /// What waits in the queue, and the head being read, stay. The switch hands the dialog the
-    /// new status afterwards ([`MainView::follow_adds`]).
-    pub(super) fn adds_switched(&mut self, cx: &mut Context<'_, Self>) {
+    /// An open dialog was filled from the old daemon (the folder, "Start immediately", the free
+    /// space of its folders), so it closes, without skipping: its torrent is still the head of the
+    /// queue, which the switch offers again in a fresh dialog for the new server
+    /// ([`MainView::advance_adds`]). A folder the user typed in it is lost. What waits in the
+    /// queue, and the head being read, stay.
+    pub(super) fn adds_switched(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         if !self.adds.out.is_empty() {
             tracing::info!(
                 count = self.adds.out.len(),
                 "the adds sent to the old server are forgotten; whether they went through is not known here"
             );
         }
-        if let Some((dialog, _)) = &self.adds.dialog {
-            let waits_for_old = dialog
-                .read(cx)
-                .waiting()
-                .is_some_and(|id| self.adds.out.contains_key(&id));
-            if waits_for_old {
-                dialog.update(cx, |dialog, cx| dialog.set_waiting(None, cx));
-            }
-        }
         self.adds.out.clear();
         self.adds.pending = PendingSelection::default();
+        if self.adds.dialog.is_some() {
+            tracing::debug!("the add dialog was filled from the old server; it opens again");
+            self.close_add_dialog(window, cx);
+        }
     }
 
     /// Takes the service's answer `result` to the add `id`, and does what x4-core's
@@ -435,7 +432,7 @@ impl MainView {
 
     /// Offers the head of the queue: the dialog keeps showing it, or reads it; with nothing left,
     /// the dialog closes. While another dialog is open, the queue waits.
-    fn advance_adds(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    pub(super) fn advance_adds(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(head) = self.adds.queue.head().cloned() else {
             self.adds.reading = None;
             self.close_add_dialog(window, cx);

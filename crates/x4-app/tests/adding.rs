@@ -1728,11 +1728,28 @@ fn adds_still_out_when_the_service_stops_are_not_confirmed(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn a_switch_forgets_the_adds_sent_and_keeps_the_torrent_offered(cx: &mut TestAppContext) {
+fn a_switch_offers_the_open_dialogs_torrent_again_for_the_new_server(cx: &mut TestAppContext) {
+    /// The download folder of the server switched to, and its free space.
+    const NAS_DIR: &str = "/srv/nas";
+    const NAS_FREE: u64 = 5 << 30;
     let mut window = Window::open(cx);
     let content = show();
     let hash = hash_of(&content);
-    window.request_torrent("show.torrent", &content, cx);
+    let path = window.file("show.torrent", &content);
+    window.request(
+        AddRequest::Items(vec![
+            AddItem::File(path),
+            AddItem::Magnet(Some(magnet('e', Some("Film")))),
+        ]),
+        cx,
+    );
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
+    assert_eq!(window.value(FOLDER, cx).as_deref(), Some(SESSION_DIR));
+    assert_eq!(
+        window.label(FREE_SPACE, cx).as_deref(),
+        Some("800 GiB free")
+    );
+    assert_eq!(window.checked(START, cx), Some(true));
     window.click(CONFIRM, cx);
     let (sent, _) = window.sent_add();
     assert_eq!(window.label(CONFIRM, cx).as_deref(), Some("Adding…"));
@@ -1740,12 +1757,21 @@ fn a_switch_forgets_the_adds_sent_and_keeps_the_torrent_offered(cx: &mut TestApp
 
     window.switch_server(cx);
 
-    assert!(window.dialog_open(cx), "the torrent is still offered");
+    // A fresh dialog for the same torrent, still first, before the new server has answered:
+    // nothing of the old server's session or free space.
+    assert!(window.dialog_open(cx));
+    assert_eq!(window.label(NAME, cx).as_deref(), Some("Show"));
     assert_eq!(
-        window.label(CONFIRM, cx).as_deref(),
-        Some("Add"),
-        "the form is the user's again, for the new server"
+        window.label(TITLE, cx).as_deref(),
+        Some("Add torrent (1 of 2)")
     );
+    assert_eq!(window.value(FOLDER, cx).as_deref(), Some(""));
+    assert_ne!(
+        window.label(FREE_SPACE, cx).as_deref(),
+        Some("800 GiB free")
+    );
+    assert_eq!(window.label(CONFIRM, cx).as_deref(), Some("Add"));
+    assert!(window.disabled(CONFIRM, cx), "until the new server answers");
     assert!(
         old.send_blocking(Event::AddFinished {
             id: sent,
@@ -1755,15 +1781,45 @@ fn a_switch_forgets_the_adds_sent_and_keeps_the_torrent_offered(cx: &mut TestApp
         "the old service no longer reaches the window"
     );
 
-    // The new server is connected; the torrent goes there.
-    window.send(Vec::new(), cx);
+    // The new server's session fills the form.
+    window.send_event(
+        Event::Snapshot(Arc::new(Snapshot {
+            torrents: Vec::new(),
+            listed: true,
+            session: Some(SessionSummary {
+                download_dir: NAS_DIR.to_owned(),
+                start_added_torrents: false,
+                ..session()
+            }),
+            free_space_bytes: Some(NAS_FREE),
+            rate_down: 0,
+            rate_up: 0,
+            connection: ConnectionState::Connected,
+            stale: false,
+        })),
+        cx,
+    );
+    assert_eq!(window.value(FOLDER, cx).as_deref(), Some(NAS_DIR));
+    assert_eq!(
+        window.label(FREE_SPACE, cx).as_deref(),
+        Some("5.0 GiB free")
+    );
+    assert_eq!(
+        window.checked(START, cx),
+        Some(false),
+        "as the new server starts them"
+    );
     window.click(CONFIRM, cx);
-    let (again, _) = window.sent_add();
+    let (again, add) = window.sent_add();
     assert_ne!(again, sent, "an id never given before");
+    assert_eq!(add.download_dir, None, "the new server's own folder");
+    assert!(add.paused);
     window.finish(again, Ok(added(&hash, "Show", false)), cx);
-    assert!(!window.dialog_open(cx));
-    window.send(vec![listed("Show", &hash)], cx);
-    assert_eq!(window.selected(cx), [hash]);
+    assert_eq!(
+        window.label(NAME, cx).as_deref(),
+        Some("Film"),
+        "the next one"
+    );
 
     // The add sent to the old server is not waited for: a stop of the new service says nothing of
     // it.
