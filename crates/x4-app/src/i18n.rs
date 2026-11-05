@@ -517,6 +517,7 @@ pub(crate) fn connection_text(indicator: &Indicator) -> SharedString {
     match indicator {
         Indicator::ServiceFailed => t!("connection-service-failed"),
         Indicator::ServiceStopped => t!("connection-service-stopped"),
+        Indicator::NotConfigured => t!("connection-not-configured"),
         Indicator::Unsupported(reason) => match reason {
             UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
             UnsupportedReason::NoVersion => t!("connection-unsupported-no-version"),

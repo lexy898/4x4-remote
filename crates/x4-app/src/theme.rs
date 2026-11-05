@@ -131,15 +131,15 @@ pub(crate) fn rate_color(state: DisplayState, active: bool, theme: &Theme) -> Hs
 }
 
 /// The color of the connection dot in the status bar: the success color while connected, muted
-/// while connecting, the warning color while reconnecting, and the danger color when the daemon
-/// is too old or the service is not running.
+/// while connecting or while no server is set, the warning color while reconnecting, and the
+/// danger color when the daemon is too old or the service is not running.
 pub(crate) fn connection_color(indicator: &Indicator, theme: &Theme) -> Hsla {
     match indicator {
         Indicator::ServiceFailed | Indicator::ServiceStopped | Indicator::Unsupported(_) => {
             theme.danger
         }
         Indicator::Reconnecting { .. } => theme.warning,
-        Indicator::Connecting => theme.muted_foreground,
+        Indicator::Connecting | Indicator::NotConfigured => theme.muted_foreground,
         Indicator::Connected => theme.success,
     }
 }
@@ -430,6 +430,12 @@ mod tests {
             for gone in [Indicator::ServiceStopped, Indicator::ServiceFailed] {
                 assert_eq!(color(gone), theme.danger, "{mode:?}");
             }
+            // No server set is not an error: the dot is muted, like one still connecting.
+            assert_eq!(
+                color(Indicator::NotConfigured),
+                theme.muted_foreground,
+                "{mode:?}"
+            );
         }
     }
 

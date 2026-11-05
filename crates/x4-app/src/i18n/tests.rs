@@ -204,6 +204,7 @@ fn connection_texts() {
     assert_eq!(text(Indicator::Connected), "");
     assert_eq!(text(Indicator::ServiceStopped), "Service stopped");
     assert_eq!(text(Indicator::ServiceFailed), "Service could not start");
+    assert_eq!(text(Indicator::NotConfigured), "No server set");
     assert_eq!(
         text(Indicator::Unsupported(UnsupportedReason::Legacy)),
         "Transmission 4.1 or newer required"

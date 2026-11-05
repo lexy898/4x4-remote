@@ -120,6 +120,9 @@ connection-unsupported-no-version = Transmission 4.1 or newer required (server d
 connection-unsupported-version = Transmission 4.1 or newer required (server RPC { $version })
 connection-service-stopped = Service stopped
 connection-service-failed = Service could not start
+# No server has been set yet: the status bar's words and the tooltip that says what to do.
+connection-not-configured = No server set
+connection-not-configured-detail = Set the server in Connection (Ctrl+,)
 
 ## The status bar
 

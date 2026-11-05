@@ -47,6 +47,7 @@ fn connection_tooltip(indicator: &Indicator) -> Option<SharedString> {
         Indicator::Reconnecting { last_error, .. } => {
             Some(connection_reason_detail_text(last_error))
         }
+        Indicator::NotConfigured => Some(t!("connection-not-configured-detail").into()),
         Indicator::ServiceFailed
         | Indicator::ServiceStopped
         | Indicator::Unsupported(_)
@@ -298,5 +299,13 @@ mod tests {
                 "the text says it all: {indicator:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_tooltip_without_a_server_says_where_to_set_one() {
+        assert_eq!(
+            connection_tooltip(&Indicator::NotConfigured),
+            Some("Set the server in Connection (Ctrl+,)".into())
+        );
     }
 }

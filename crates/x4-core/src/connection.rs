@@ -11,6 +11,7 @@
 //! `config.toml` can never disagree about what an address is. The `url` crate has the last word on
 //! hosts, ports and paths.
 
+mod check;
 mod form;
 
 use std::fmt;
@@ -18,6 +19,7 @@ use std::fmt;
 use url::{Host, ParseError, Url};
 use x4_rpc::Credentials;
 
+pub use check::CheckOutcome;
 pub use form::{
     ConnectionForm, FormProblems, HostProblem, PathProblem, PortProblem, UsernameProblem,
 };

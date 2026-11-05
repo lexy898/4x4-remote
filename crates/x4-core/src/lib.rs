@@ -72,6 +72,9 @@
 //! [`ConnectionForm`] is the text of the dialog's fields: [`ConnectionForm::check`] turns it into
 //! settings or into [`FormProblems`] for each field, and [`ConnectionForm::spread`] splits an
 //! address pasted into the host field over the fields.
+//! The dialog's Test button ends in a [`CheckOutcome`]: the daemon's version, or the reason it
+//! cannot be used. A window with no server set has no service; its status is
+//! [`ServiceStatus::NotConfigured`], and its [`Indicator`] says so.
 //!
 //! What the app remembers between runs is described here too: [`UiState`] is the `state.toml`
 //! the app writes (window, columns, sort order, filter, theme, details panel, and the folders
@@ -183,8 +186,8 @@ pub use adding::{
 };
 pub use config::{Config, ConfigError, config_with_connection};
 pub use connection::{
-    ConnectionForm, ConnectionSettings, DEFAULT_PATH, DEFAULT_PORT, FormProblems, HostProblem,
-    PathProblem, PortProblem, UrlProblem, UsernameProblem,
+    CheckOutcome, ConnectionForm, ConnectionSettings, DEFAULT_PATH, DEFAULT_PORT, FormProblems,
+    HostProblem, PathProblem, PortProblem, UrlProblem, UsernameProblem,
 };
 pub use details::{
     FileEntry, NextAnnounce, TorrentDetails, TrackerAnswer, TrackerOutcome, TrackerStat,
