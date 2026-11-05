@@ -208,8 +208,10 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - No AI attribution of any kind in commits, PRs or other git metadata.
 - `.specs/` is local working material and is never committed.
 - The repository is public: commits and merge commits carry the owner's GitHub noreply address,
-  never a private one. This checkout sets `user.email` to it; merge PRs with
-  `gh pr merge --merge --author-email 14843441+lexy898@users.noreply.github.com`.
+  never a private one; this checkout sets `user.email` to it. `gh pr merge` would sign the merge
+  with the account's private address (and refuses the noreply one), so merge a green PR here:
+  `git merge --no-ff origin/<branch> -m "Merge pull request #<n> from lexy898/<branch>"`, then
+  push `master`; GitHub marks the PR merged.
 - One branch per stage or feature, merged through a PR once CI is green.
 - Work in place in this checkout on a branch per stage/feature; do not create git worktrees — the
   Stop hook and the build cache live in this directory.
