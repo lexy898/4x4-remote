@@ -24,8 +24,9 @@ are loaded. Upstream tracks the problem in
 fallback itself must stay: machines without a Vulkan driver (VMs, old GPUs) need it, see
 [zed-industries/zed#65960](https://github.com/zed-industries/zed/issues/65960).
 
-Measured on 2026-10-28 (KDE Plasma 6 on Wayland, AMD Radeon 780M with RADV, Mesa 26.2.5; window
-on the built-in screen without focus; medians of three runs, MiB), before and after this patch:
+Measured on 2026-10-28 (gpui-pre-wgpu 0.3.10; KDE Plasma 6 on Wayland, AMD Radeon 780M with RADV,
+Mesa 26.2.5; window on the built-in screen without focus; medians of three runs, MiB), before and
+after this patch:
 
 | Metric              | Before | After |
 | ------------------- | ------ | ----- |

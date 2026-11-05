@@ -1301,6 +1301,67 @@ the 20 seconds after the memory figures; "not met" marks every cell over its tar
   too, so the figures here compare with each other, not with those. That run sways none of the
   medians.
 
+### The gpui-kit 0.9 bump (stage 9)
+
+Measured on 2026-11-05 on the same laptop, in two sessions of `just virtual`, with release builds:
+the app of this stage (gpui-kit 0.9.0, which brings `gpui-pre-wgpu` 0.3.11, with the Vulkan-first
+patch on it) and the app of `master` at stage 8 (gpui-kit 0.8.1, `gpui-pre-wgpu` 0.3.10), built
+again in a separate clone with `cargo build --release --locked`, so that both ran in the same
+sessions. Each session ran the two apps in turn, three runs each, one session starting with each
+(`X4_MEASURE_SETTLE_SECONDS=10 just measure --offline --cpu 20 --binary <file>`); each figure is the
+median of the six runs of a build. Both reached no daemon and kept reconnecting to the closed port
+that `--offline` names. "Stage 8 (above)" is the table of the previous subsection, taken in another
+session; "not met" marks every cell over its target:
+
+| Metric                     | Target              | Stage 8 (above)     | Stage 8 (rebuilt)   | Stage 9             |
+| -------------------------- | ------------------- | ------------------- | ------------------- | ------------------- |
+| First frame                | ≤ 500 ms            | 190 ms              | 193 ms              | 198 ms              |
+| Resident memory (RSS)      | ≤ 100 MiB           | 140.9 MiB (not met) | 141.6 MiB (not met) | 140.9 MiB (not met) |
+| Proportional memory (PSS)  | ≤ 55 MiB (proposed) | 57.8 MiB (not met)  | 55.0 MiB (not met)  | 54.4 MiB            |
+| Unique memory (USS)        | —                   | 47.4 MiB            | 46.1 MiB            | 45.4 MiB            |
+| Private memory (`RssAnon`) | ≤ 16 MiB (proposed) | 15.4 MiB            | 15.4 MiB            | 15.6 MiB            |
+| Threads                    | —                   | 29                  | 29                  | 31                  |
+| CPU over 20 s, one core    | near 0 % when idle  | 0.00 %              | 0.00 to 0.05 %      | 0.00 to 0.10 %      |
+| Binary size                | —                   | 40.4 MiB            | 40.4 MiB            | 40.6 MiB            |
+
+- Mesa's OpenGL stack was not mapped (`gl_stack_mapped=no`) in any of the 18 runs, the 12 of this
+  stage's app (6 above, 4 of plain `just measure --offline`, three runs then one with `--cpu 30`,
+  and 2 more first starts) and the 6 of the stage 8 app, and no `WARN:` line named it: the patch
+  still keeps the OpenGL driver out of a process that Vulkan draws, so the numbers in
+  [`PATCHED.md`](vendor/gpui-pre-wgpu/PATCHED.md) stand. The only `WARN:` lines were the usual ones
+  on the memory figures: PSS in 2 of the 6 runs above (4 of the 6 of the stage 8 app, whose 55.0 MiB
+  is a hair over the proposed 55) and private memory in the first run of a session.
+- The bump changes the memory figures by about what the runs differ among themselves: PSS 0.6 MiB
+  and USS 0.7 MiB lower, private memory 0.2 MiB higher, and the binary 0.2 MiB bigger. The first
+  frame (193 and 198 ms) and the idle CPU (a tick of the 20 seconds is 0.05 %, so these are 0 to 2
+  ticks) did not change.
+- Stage 9 has two threads more. One is a third `zbus` D-Bus connection thread, always there; GPUI's
+  listener for the system's power profile is the likely source. The other is a `blocking-2` pool
+  thread, there in most runs: 31 threads in four of the six, 30 in one, 37 in the first run of a
+  session.
+- As in stage 8, the first run of a session is higher in either build: 35 threads, 16.3 MiB of
+  private memory, 59.6 MiB of PSS and 267 ms for the stage 8 app; 37 threads, 16.2 to 16.5 MiB,
+  58.9 to 60.1 MiB and 223 to 288 ms for the stage 9 app (the first runs of four sessions, apart
+  from one first frame: the very first run of the day, right after the release build, took 928 ms
+  and did not come back in the other three). The medians above are not moved by them.
+- The OpenGL fallback works: started offline with `VK_DRIVER_FILES=/nonexistent/icd.json`, the
+  release build logs `No usable Backends(VULKAN) adapter (hardware only: true)`, draws its window
+  through OpenGL (`libgallium` and `libEGL_mesa` mapped; first frame 309 ms) and keeps reconnecting.
+- Spot checks with the [synthetic demo](#synthetic-demo) (a debug build) in `just virtual`, each
+  next to the stage 8 app's picture of the same scene, taken the same way. The main window with
+  row 4 selected and General open (`--select 4`) is identical to the pixel, dark and light. The add
+  dialog over a made-up magnet link with a 120-character name of dots, dashes and slashes breaks
+  the line after a slash ("`…/Extras/`" over "`Behind-The-Scenes…`") where the stage 8 app broke it
+  before one: GPUI now wraps by Unicode line breaking, and a narrow General tab does the same with
+  the path ("`/data/torrents/`" over "`Synthetic torrent`"); nothing else wraps differently, and
+  the hash still breaks at any character. In the torrent's context menu
+  (`--select 4 --right-click --press down`) the first Down lands on Pause, the first item that can
+  be clicked, as the torrent is downloading and Start is dimmed; the stage 8 app showed no
+  highlight there. The Connection dialog (`--connection`) is the same as before. A window resized
+  0.5 to 1.2 seconds after start (KWin scripting through D-Bus), to 900x600, 1300x820 and 760x520
+  in turn, is redrawn whole at 1300x820 and at 760x520, the two sizes looked at, with no stale or
+  black area.
+
 ## Development
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything: it holds the commands, the architecture and
