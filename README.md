@@ -167,7 +167,7 @@ no files or links. Its command runs the installed 4x4 under the development id (
 hands over to a running debug build, as a second start of 4x4 does, or opens a window of its own
 when none runs. Until the package is installed, debug windows show the desktop's generic icon.
 
-The icon, a rose under a resin dome, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
+The icon, a gearshift pattern, is one SVG, `packaging/linux/io.github.lexy898.FourByFour.svg`,
 installed into `hicolor/scalable/apps`, which serves every size. A separate drawing for small
 sizes would be installed under the same name into `16x16/apps`, `22x22/apps`, `24x24/apps` and
 `32x32/apps` of `hicolor` too, four more `install` lines in the PKGBUILD's `package()`; KDE takes
