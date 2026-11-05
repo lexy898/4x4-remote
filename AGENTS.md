@@ -52,7 +52,7 @@ just setup            # enable git hooks and verify required tools
 
 - `just check` exits 0; cargo-deny duplicate-version warnings are expected.
 - New behavior is covered by tests that fail without the change.
-- `README.md` reflects every user-visible change.
+- `README.md` and `docs/user-guide.md` reflect every user-visible change.
 - Hooks enforce this. `.claude/settings.json` formats each edited `.rs` file; a guard hook refuses
   Bash commands that bypass the gates (`git commit --no-verify` or `-n`, `git push --no-verify`,
   changing `core.hooksPath`, writing to `target/.agent-hooks`), commands that change the

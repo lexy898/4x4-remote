@@ -5,7 +5,7 @@
 //! Work done on a thread of GPUI's background pool left its memory with that thread: glibc keeps an
 //! arena of freed memory for each thread that allocates, and a pool thread never ends, so each one
 //! that did such work kept its own. In stage 5, five `.torrent` files of 2000 entries read on the
-//! pool held 5.5 MiB more than one (README, Performance). For the file trees the measurements did
+//! pool held 5.5 MiB more than one (docs/performance.md). For the file trees the measurements did
 //! not tell the two apart: the Files tab of the synthetic demo's 50 000 files, opened five times,
 //! left 125.8 MiB of private memory on threads of their own and 126.2 on the pool, against 137.1 on
 //! the window's thread. A thread that ends gives its arena back for the next one to take, so the

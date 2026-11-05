@@ -36,8 +36,8 @@ after this patch:
 | RssAnon (= private) | 17.2   | 12.6  |
 | Threads             | 33     | 26    |
 
-The first frame did not change. The [README](../../README.md#performance) puts these numbers in
-context; the full investigation is in the owner's local notes.
+The first frame did not change. The [performance notes](../../docs/performance.md) put these numbers
+in context; the full investigation is in the owner's local notes.
 
 ## What changed
 
@@ -79,7 +79,7 @@ before (checked during the investigation).
 1. Check upstream first. If the new `gpui-pre-wgpu` no longer initializes OpenGL when Vulkan
    works (see zed#63327), delete `vendor/`, the `[patch.crates-io]` entry, lint-policy check (e),
    the `vendor/` exclusions (`_typos.toml`, `.taplo.toml`, `just machete`) and the notes about the
-   vendored crate in `AGENTS.md` and `README.md`. Stop here.
+   vendored crate in `AGENTS.md` and `docs/performance.md`. Stop here.
 2. Bump `gpui-kit` and run `cargo update -p gpui-kit`. Cargo warns that the patch was not used;
    note the new `gpui-pre-wgpu` version `V` and its `checksum` in `Cargo.lock`.
 3. Replace the copy with the published crate, keeping `PATCHED.md` and `rustfmt.toml`:
