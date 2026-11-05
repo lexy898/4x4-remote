@@ -97,6 +97,9 @@ subtitle-tracker-error-generic = Tracker error: no details from the server
 
 # What the dot alone says: its accessible name and its tooltip.
 connection-connected = Connected
+# The same, when the window knows the server. $server: the server as host:port, such as
+# "nas:9091" or "[::1]:9091"; never the user name or the password.
+connection-connected-to = Connected to { $server }
 connection-connecting = Connecting…
 # $attempt: failed tries in a row (a number); $reason: one of the connection-reason-* messages. The
 # status bar shows this next to the speeds, so the reasons are a few words each.
@@ -164,13 +167,13 @@ limit-not-a-number = Enter a whole number of KiB/s
 limit-out-of-range = Enter a speed from { $min } to { $max }
 limit-needs-value = Enter a speed to turn the limit on
 
-## Why config.toml is not used (the defaults are used instead)
+## Why config.toml is not used (no server is set then; the log has the details)
 
-config-problem-unreadable = config.toml cannot be read, so the defaults are used
+config-problem-unreadable = config.toml cannot be read, so no server is set
 # $line and $column: where the error is (numbers, from 1).
-config-problem-invalid = config.toml has an error at line { $line }, column { $column }, so the defaults are used
-config-problem-malformed = config.toml is not valid, so the defaults are used
-config-problem-unsupported-url = The address in config.toml must start with http://, so the defaults are used
+config-problem-invalid = config.toml has an error at line { $line }, column { $column }, so no server is set
+config-problem-malformed = config.toml is not valid, so no server is set
+config-problem-unsupported-url = config.toml has an address 4x4 cannot use, so no server is set
 
 ## The toolbar
 

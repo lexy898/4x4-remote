@@ -291,6 +291,31 @@ impl MainView {
         }
     }
 
+    /// The window switched to another server: the adds sent to the old one will not be answered
+    /// here, and the torrent waiting to be selected was the old daemon's, so both are forgotten.
+    /// An open dialog that waits for one of those adds takes its form back, for the new server.
+    /// What waits in the queue, and the head being read, stay. The switch hands the dialog the
+    /// new status afterwards ([`MainView::follow_adds`]).
+    pub(super) fn adds_switched(&mut self, cx: &mut Context<'_, Self>) {
+        if !self.adds.out.is_empty() {
+            tracing::info!(
+                count = self.adds.out.len(),
+                "the adds sent to the old server are forgotten; whether they went through is not known here"
+            );
+        }
+        if let Some((dialog, _)) = &self.adds.dialog {
+            let waits_for_old = dialog
+                .read(cx)
+                .waiting()
+                .is_some_and(|id| self.adds.out.contains_key(&id));
+            if waits_for_old {
+                dialog.update(cx, |dialog, cx| dialog.set_waiting(None, cx));
+            }
+        }
+        self.adds.out.clear();
+        self.adds.pending = PendingSelection::default();
+    }
+
     /// Takes the service's answer `result` to the add `id`, and does what x4-core's
     /// [`add_outcome`] says follows.
     pub(super) fn add_finished(

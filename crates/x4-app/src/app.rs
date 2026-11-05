@@ -2,8 +2,9 @@
 //! the key bindings of [`keymap`](crate::keymap), the main window and the first-frame log.
 //!
 //! [`run`] is the front door the `4x4` binary uses: it reads the files, starts the service
-//! against the configured daemon, queues the requests of the binary's own arguments and, in the
-//! first 4x4 of the user, answers the launches after it ([`instance`](crate::instance)).
+//! against the server `config.toml` sets (none is built in: without one, no service starts and the
+//! window says that no server is set), queues the requests of the binary's own arguments and, in
+//! the first 4x4 of the user, answers the launches after it ([`instance`](crate::instance)).
 //! [`run_with`] takes a [`Startup`] built by its caller instead, so that a demo or a measurement
 //! can run the window against a service of its own, and [`run_driven`] also hands it the open
 //! window to drive. [`launch`] opens the window of a [`Startup`] in an application that runs
@@ -22,17 +23,18 @@ use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, QuitMode, TitlebarOptions,
     WindowOptions, px, size,
 };
-use x4_core::service::{self, ServiceHandle};
+use x4_core::service::ServiceHandle;
 use x4_core::{
-    Command, Config, ConfigError, ConnectionSettings, EngineConfig, Event, MIN_WINDOW_HEIGHT,
-    MIN_WINDOW_WIDTH, UiState,
+    Command, Config, ConfigError, ConnectionSettings, Event, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+    UiState,
 };
-use x4_rpc::{Client, DEFAULT_TIMEOUT, UreqTransport};
 
 use crate::PRODUCT_NAME;
 use crate::adding::{AddRequest, AddRequests};
+use crate::connection::{
+    ConnectionSetup, ServiceChannels, real_connector, real_server_check, spawn_service,
+};
 use crate::files::{FilesError, read_config, read_ui_state};
-use crate::geoip;
 use crate::icons::AppAssets;
 use crate::instance::{Listener, Serving};
 use crate::keymap::{Quit, key_bindings};
@@ -52,15 +54,18 @@ pub const DEVEL_APP_ID: &str = "io.github.lexy898.FourByFour.Devel";
 /// Set to `1` to give a release build the development id, as `just measure` does.
 const DEVEL_ENV: &str = "X4_DEVEL";
 
-/// Everything the app starts with, as plain values: the service, the saved UI state and what
-/// went wrong while reading the files.
+/// Everything the app starts with, as plain values: the service, how the window reaches other
+/// servers, the saved UI state and what went wrong while reading the files.
 ///
 /// [`Startup::from_state_file`] reads the UI state the way [`run`] does.
 #[derive(Debug)]
 pub struct Startup {
-    /// The service thread the window shows, or why it could not be started. On an error the
-    /// window still opens and says that the service could not start.
-    pub service: io::Result<ServiceHandle>,
+    /// The service thread the window shows, why it could not be started, or that no server is
+    /// set. Without a service the window still opens and says why.
+    pub service: ServiceStart,
+    /// The server the window is set to, and how it switches to another one, checks one and saves
+    /// the choice. The default cannot switch.
+    pub connection: ConnectionSetup,
     /// The UI state to start from: the saved one, or the defaults.
     pub ui: UiState,
     /// Whether the UI state may be saved over `state_path`. It is not when the file there could
@@ -80,22 +85,21 @@ pub struct Startup {
 }
 
 impl Startup {
-    /// A start with `service`, the UI state saved at `state_path` and no config problem.
+    /// A start with `service`, the UI state saved at `state_path`, no config problem and a
+    /// window that cannot switch servers ([`ConnectionSetup::default`]).
     ///
     /// The file is read as [`run`] reads it: a missing file gives the defaults, which are saved
     /// there once the user changes something; a corrupt one is moved aside first. A file that
     /// cannot be read, or that a newer version wrote, gives the defaults, and nothing is saved over
     /// it. With no `state_path`, the state is the defaults and is never saved.
     #[must_use]
-    pub fn from_state_file(
-        service: io::Result<ServiceHandle>,
-        state_path: Option<PathBuf>,
-    ) -> Self {
+    pub fn from_state_file(service: ServiceStart, state_path: Option<PathBuf>) -> Self {
         let (ui, state_writable) = state_path
             .as_deref()
             .map_or_else(|| (UiState::default(), false), load_ui_state);
         Self {
             service,
+            connection: ConnectionSetup::default(),
             ui,
             state_writable,
             state_path,
@@ -122,8 +126,27 @@ impl Startup {
     }
 }
 
+/// How the service of a start came out.
+#[derive(Debug)]
+pub enum ServiceStart {
+    /// The service thread runs against the server set.
+    Started(ServiceHandle),
+    /// The service thread could not be started: the window says so, and no data will come.
+    Failed(io::Error),
+    /// No server is set, so no service was started: the window says so, and the server can be
+    /// set in the Connection dialog.
+    NotConfigured,
+}
+
+impl From<io::Result<ServiceHandle>> for ServiceStart {
+    /// A started service, or why it could not be started.
+    fn from(started: io::Result<ServiceHandle>) -> Self {
+        started.map_or_else(Self::Failed, Self::Started)
+    }
+}
+
 /// Why `config.toml` is not used, as the window tells the user (in their language). The log
-/// gets the full report, with the path and the parser's message.
+/// gets the full report, with the path and the parser's message. Such a file sets no server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigProblem {
     /// The file is there but cannot be read.
@@ -138,7 +161,8 @@ pub enum ConfigProblem {
     /// The file is not valid, and the parser cannot say where.
     Malformed,
     /// `connection.url` cannot be used: it is not a plain `http://` address, or it holds the user
-    /// name or password that belong in their own keys.
+    /// name or password that belong in their own keys; or `connection.username` holds a `:`. The
+    /// log says which.
     UnsupportedUrl,
 }
 
@@ -157,18 +181,19 @@ impl ConfigProblem {
                 source: ConfigError::InvalidUrl(_),
                 ..
             } => Self::UnsupportedUrl,
-            // Reading gives only `Read`; the others come from writing the state.
+            // Reading gives only `Read`; the others come from writing.
             FilesError::Read { .. }
             | FilesError::CreateDir { .. }
             | FilesError::Serialize { .. }
+            | FilesError::MoveAside { .. }
             | FilesError::Write { .. } => Self::Unreadable,
         }
     }
 }
 
 /// Runs the application until it quits: reads the config and the saved state from `paths`
-/// (`None` when the home directory is unknown), starts the service against the configured
-/// daemon (if the config names one), and runs the window as [`run_with`] does, with `requests`,
+/// (`None` when the home directory is unknown), starts the service against the server the config
+/// sets (if it sets one), and runs the window as [`run_with`] does, with `requests`,
 /// those of the binary's own arguments, waiting for it. With `instance`, the place of the first
 /// 4x4 of the user, it answers the launches after it from the start: their requests join the same
 /// channel, after `requests`. When it quits, it removes the socket of `instance` and then lets go
@@ -186,15 +211,7 @@ pub fn run(
     requests: Vec<AddRequest>,
     instance: Option<Listener>,
 ) -> anyhow::Result<()> {
-    let (config, config_problem) = paths.map_or_else(
-        || (Config::default(), None),
-        |paths| load_config(&paths.config_file),
-    );
-    let service = start_service(config.connection.as_ref());
-    let startup = Startup {
-        config_problem,
-        ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))
-    };
+    let startup = startup_from_files(paths);
     // The channel keeps them until the window listens.
     for request in requests {
         if startup.adds.sender.try_send(request).is_err() {
@@ -204,22 +221,36 @@ pub fn run(
     run_app(started, startup, instance, |_, _, _| {})
 }
 
-/// Starts the service against `connection`. Without one no thread starts, and the error is what a
-/// service that could not start gives, so the window opens as it does then.
-fn start_service(connection: Option<&ConnectionSettings>) -> io::Result<ServiceHandle> {
-    let Some(settings) = connection else {
-        // Until the window has a state of its own for this, it is shown as a failed start.
-        tracing::info!("no server set; no service started");
-        return Err(io::Error::other("no server set"));
-    };
-    let transport = UreqTransport::new(&settings.url(), DEFAULT_TIMEOUT)
-        .with_credentials(settings.credentials().cloned());
+/// The start [`run`] makes from the files of `paths` (`None` when the home directory is unknown):
+/// the server `config.toml` sets and its service, the saved UI state, the app's own connector and
+/// check, and `config.toml` as the place the Connection dialog saves to.
+fn startup_from_files(paths: Option<&AppPaths>) -> Startup {
+    let (config, config_problem) = paths.map_or_else(
+        || (Config::default(), None),
+        |paths| load_config(&paths.config_file),
+    );
+    let settings = config.connection;
     // Spawning only starts the thread; the state file is read while it connects.
-    service::spawn(
-        Client::new(transport),
-        EngineConfig::default(),
-        Box::new(geoip::open_installed),
-    )
+    let service = start_service(settings.as_ref());
+    Startup {
+        config_problem,
+        connection: ConnectionSetup {
+            settings,
+            connector: Some(real_connector()),
+            check: Some(real_server_check()),
+            config_file: paths.map(|paths| paths.config_file.clone()),
+        },
+        ..Startup::from_state_file(service, paths.map(|paths| paths.state_file.clone()))
+    }
+}
+
+/// Starts the service against `connection`. Without one no thread starts: no server is set.
+fn start_service(connection: Option<&ConnectionSettings>) -> ServiceStart {
+    let Some(settings) = connection else {
+        tracing::info!("no server set; no service started");
+        return ServiceStart::NotConfigured;
+    };
+    spawn_service(settings).into()
 }
 
 /// Runs the application until it quits with what `startup` holds: initializes the UI, opens the
@@ -313,9 +344,9 @@ fn use_desktop_file_dialog(view: &Entity<MainView>, cx: &mut App) {
     let _ = (view, cx);
 }
 
-/// Reads `config.toml`. A file that cannot be used gives the defaults and the problem for the
-/// window; the full report goes to the log, which never shows the URL, as it may hold a
-/// password.
+/// Reads `config.toml`. A file that cannot be used gives the defaults, which set no server, and
+/// the problem for the window; the full report goes to the log, which never shows the URL or
+/// the password.
 fn load_config(path: &Path) -> (Config, Option<ConfigProblem>) {
     match read_config(path) {
         Ok(config) => {
@@ -323,7 +354,7 @@ fn load_config(path: &Path) -> (Config, Option<ConfigProblem>) {
             (config, None)
         }
         Err(error) => {
-            tracing::warn!(error = %error.report(), "config not loaded; using the defaults");
+            tracing::warn!(error = %error.report(), "config not loaded; no server is set");
             (Config::default(), Some(ConfigProblem::of(&error)))
         }
     }
@@ -345,9 +376,10 @@ fn load_ui_state(path: &Path) -> (UiState, bool) {
 }
 
 /// Opens the main window for `startup`, at the remembered size and maximized if it was. A service
-/// that could not start, and a config problem, are shown in the status bar. The window saves its
-/// UI state to `startup.state_path` if it may, and takes the requests to add torrents that arrive
-/// on `startup.adds`. Call [`init`] first.
+/// that could not start, no server set and a config problem are shown in the status bar. The
+/// window saves its UI state to `startup.state_path` if it may, takes the requests to add torrents
+/// that arrive on `startup.adds`, and reaches other servers as `startup.connection` says. Call
+/// [`init`] first.
 ///
 /// # Errors
 ///
@@ -359,29 +391,36 @@ pub fn launch(
     let state_file = startup.state_file();
     let Startup {
         service,
+        connection,
         ui,
         state_writable: _,
         state_path: _,
         config_problem,
         adds,
     } = startup;
-    let (events, commands, service) = match service {
-        Ok(service) => (service.events().clone(), service.commands(), Some(service)),
-        Err(error) => {
+    let (channels, failed, not_configured) = match service {
+        ServiceStart::Started(service) => (ServiceChannels::from(service), false, false),
+        ServiceStart::Failed(error) => {
             tracing::error!(%error, "the service could not start; the window has no data to show");
-            // Channels with nobody at the other end: the events are closed at once and the
-            // commands go nowhere.
-            let (_, events) = async_channel::unbounded();
-            let (commands, _) = crossbeam_channel::unbounded();
-            (events, commands, None)
+            (ServiceChannels::disconnected(), true, false)
         }
+        // Said in the log when it was decided; it is no error.
+        ServiceStart::NotConfigured => (ServiceChannels::disconnected(), false, true),
     };
-    let failed = service.is_none();
-    let (window, view) = open_window(events, commands, service, &ui, state_file, cx)?;
+    let ServiceChannels {
+        events,
+        commands,
+        handle,
+    } = channels;
+    let (window, view) = open_window(events, commands, handle, &ui, state_file, cx)?;
     window.update(cx, |_, window, cx| {
         view.update(cx, |view, cx| {
+            view.set_connection(connection, cx);
             if failed {
                 view.service_failed(cx);
+            }
+            if not_configured {
+                view.show_not_configured(cx);
             }
             if let Some(problem) = config_problem {
                 view.show_config_problem(problem, cx);
@@ -509,11 +548,13 @@ mod tests {
 
     use super::*;
     use crate::adding::AddRequest;
+    use crate::test_log::{Record, records_of};
 
     /// A start whose service could not be started, with `config_problem`.
     fn failed_start(config_problem: Option<ConfigProblem>) -> Startup {
         Startup {
-            service: Err(io::Error::other("no more threads")),
+            service: ServiceStart::Failed(io::Error::other("no more threads")),
+            connection: ConnectionSetup::default(),
             ui: UiState::default(),
             state_writable: false,
             state_path: None,
@@ -549,11 +590,146 @@ mod tests {
         problem
     }
 
+    /// The places of the app's files in `dir`, none of which exists yet.
+    fn paths_in(dir: &Path) -> AppPaths {
+        AppPaths {
+            config_file: dir.join("config").join("config.toml"),
+            state_file: dir.join("state").join("state.toml"),
+            log_dir: dir.join("logs"),
+        }
+    }
+
+    /// The start [`run`] makes from the files of `paths`, and what it logged.
+    fn start_from(paths: &AppPaths) -> (Startup, Vec<Record>) {
+        let mut startup = None;
+        let records = records_of(|| startup = Some(startup_from_files(Some(paths))));
+        (startup.expect("a start"), records)
+    }
+
+    /// Whether `records` hold an event at `level` or worse.
+    fn logs_at(level: tracing::Level, records: &[Record]) -> bool {
+        records.iter().any(|record| record.level <= level)
+    }
+
     #[test]
     fn no_server_set_starts_no_service() {
-        let error = start_service(None).expect_err("there is nothing to connect to");
+        assert!(matches!(start_service(None), ServiceStart::NotConfigured));
+    }
 
-        assert_eq!(error.to_string(), "no server set");
+    #[gpui_kit::test]
+    fn no_server_set_starts_no_service_and_says_so(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let paths = paths_in(dir.path());
+
+        let (startup, records) = start_from(&paths);
+
+        assert!(matches!(startup.service, ServiceStart::NotConfigured));
+        assert_eq!(startup.config_problem, None, "no file is no problem");
+        assert_eq!(startup.connection.settings, None);
+        assert!(startup.connection.connector.is_some(), "it can switch");
+        assert!(startup.connection.check.is_some(), "and test a server");
+        assert_eq!(
+            startup.connection.config_file.as_deref(),
+            Some(paths.config_file.as_path()),
+            "the dialog saves where the config is read"
+        );
+        assert!(
+            records
+                .iter()
+                .any(|record| record.message == "no server set; no service started"),
+            "{records:?}"
+        );
+        assert!(
+            !logs_at(tracing::Level::WARN, &records),
+            "a first run is no problem: {records:?}"
+        );
+
+        let mut opened = None;
+        let records = records_of(|| opened = Some(launched(startup, cx)));
+        let (window, view) = opened.expect("the window opens");
+
+        // The libraries may warn about the test machine's fonts; the window logs no error.
+        assert!(!logs_at(tracing::Level::ERROR, &records), "{records:?}");
+        let (text, service, stale, settings) = cx.update(|cx| {
+            let view = view.read(cx);
+            (
+                view.connection_text(),
+                view.status().service,
+                view.status().stale,
+                view.connection_settings().cloned(),
+            )
+        });
+        assert_eq!(text, "No server set");
+        assert_eq!(service, x4_core::ServiceStatus::NotConfigured);
+        assert!(!stale, "there is no data to be old");
+        assert_eq!(settings, None);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("connection").label(), Some("No server set"));
+            assert!(window.try_find("config-problem").is_none());
+        })
+        .expect("the window is open");
+    }
+
+    #[gpui_kit::test]
+    fn a_broken_config_sets_no_server_and_shows_its_notice(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let paths = paths_in(dir.path());
+        let text = "[connection]\nurl = 5\n";
+        fs::create_dir_all(paths.config_file.parent().expect("a folder")).expect("created");
+        fs::write(&paths.config_file, text).expect("written");
+
+        let (startup, _) = start_from(&paths);
+
+        assert!(matches!(startup.service, ServiceStart::NotConfigured));
+        assert_eq!(startup.connection.settings, None);
+        assert_eq!(
+            startup.config_problem,
+            Some(ConfigProblem::Invalid { line: 2, column: 7 })
+        );
+        let (window, _) = launched(startup, cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("connection").label(), Some("No server set"));
+            let notice = window.find("config-problem");
+            assert_eq!(notice.label(), Some("Config file not used"));
+            assert_eq!(
+                notice.description(),
+                Some("config.toml has an error at line 2, column 7, so no server is set")
+            );
+        })
+        .expect("the window is open");
+        assert_eq!(
+            fs::read_to_string(&paths.config_file).expect("still there"),
+            text,
+            "reading never changes the file"
+        );
+    }
+
+    #[test]
+    fn a_server_set_in_the_config_starts_its_service() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let paths = paths_in(dir.path());
+        fs::create_dir_all(paths.config_file.parent().expect("a folder")).expect("created");
+        // A closed port on this machine: the service only starts a thread, which gets nowhere.
+        fs::write(
+            &paths.config_file,
+            "[connection]\nurl = \"http://127.0.0.1:1/rpc\"\n",
+        )
+        .expect("written");
+
+        let (startup, records) = start_from(&paths);
+
+        assert!(matches!(startup.service, ServiceStart::Started(_)));
+        assert_eq!(
+            startup.connection.settings.map(|settings| settings.url()),
+            Some("http://127.0.0.1:1/rpc".to_owned())
+        );
+        let connecting = records
+            .iter()
+            .find(|record| record.message == "connecting")
+            .expect("the log says where it connects");
+        assert_eq!(connecting.field("server"), Some("127.0.0.1:1"));
     }
 
     #[test]
@@ -579,6 +755,11 @@ mod tests {
         assert_eq!(
             problem_with("[connection]\nurl = \"http://user:secret@pi/rpc\"\n"),
             Some(ConfigProblem::UnsupportedUrl)
+        );
+        assert_eq!(
+            problem_with("[connection]\nurl = \"http://pi/rpc\"\nusername = \"a:b\"\n"),
+            Some(ConfigProblem::UnsupportedUrl),
+            "a user name with a colon"
         );
 
         let dir = tempfile::tempdir().expect("a temporary directory");
@@ -656,7 +837,7 @@ mod tests {
             assert_eq!(notice.label(), Some("Config file not used"));
             assert_eq!(
                 notice.description(),
-                Some("config.toml has an error at line 2, column 7, so the defaults are used")
+                Some("config.toml has an error at line 2, column 7, so no server is set")
             );
         })
         .expect("the window is open");
@@ -763,7 +944,7 @@ mod tests {
     #[test]
     fn a_start_from_the_state_file_saves_only_where_it_may() {
         let dir = tempfile::tempdir().expect("a temporary directory");
-        let no_service = || Err(io::Error::other("no service in this test"));
+        let no_service = || ServiceStart::Failed(io::Error::other("no service in this test"));
 
         let nowhere = Startup::from_state_file(no_service(), None);
         assert_eq!(nowhere.ui, UiState::default());

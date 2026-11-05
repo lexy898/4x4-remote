@@ -279,6 +279,16 @@ impl DetailsPanel {
         self.stale
     }
 
+    /// Whether the panel is about no torrent and holds nothing of one: no row, no details and no
+    /// General tab. For the tests.
+    #[cfg(test)]
+    pub(crate) fn is_about_nothing(&self) -> bool {
+        self.target == DetailsTarget::None
+            && self.torrent.is_none()
+            && self.details.is_none()
+            && self.general.is_none()
+    }
+
     /// Whether the panel takes the window for one the user can see. For the tests.
     #[cfg(test)]
     pub(crate) fn window_shown(&self) -> bool {

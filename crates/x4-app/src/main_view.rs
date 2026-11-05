@@ -45,6 +45,11 @@
 //! The view also tells the service whether the user can see the window, so that it polls slowly
 //! while nobody looks, and it holds the theme choice of the toolbar's switch.
 //!
+//! The window can switch to another server without a restart (the `switching` module): it drops
+//! the service of the old one, forgets what the old daemon showed, and starts a service for the
+//! new one, which it tells what it tells a service at the start. A window with no server set says
+//! so in the status bar.
+//!
 //! What the user changes in the [`UiState`] (the columns, the sort order, the filter, the theme,
 //! the window size and the details panel) is saved a second after the last change, and when the
 //! window closes or the app quits (the `persistence` module).
@@ -58,6 +63,7 @@ mod menu;
 mod persistence;
 mod selection_keys;
 mod speed_controls;
+mod switching;
 mod torrent_actions;
 
 use std::cell::RefCell;
@@ -78,9 +84,9 @@ use gpui_kit::{
 };
 use x4_core::service::ServiceHandle;
 use x4_core::{
-    Availability, ColumnId, Command, DetailsTab, Event, Filter, ServiceStatus, Snapshot, SortState,
-    StatusModel, TableModel, UiState, ViewState, Visibility, shown_columns, status_model,
-    table_model, visibility,
+    Availability, ColumnId, Command, ConnectionSettings, DetailsTab, Event, Filter, ServiceStatus,
+    Snapshot, SortState, StatusModel, TableModel, UiState, ViewState, Visibility, shown_columns,
+    status_model, table_model, visibility,
 };
 use x4_rpc::HashString;
 
@@ -88,6 +94,7 @@ use crate::actions::PendingActions;
 use crate::adding::{AddRequests, drop_highlight_layer, hover_while_dragging};
 use crate::app::ConfigProblem;
 use crate::clipboard::MagnetCopy;
+use crate::connection::ConnectionSetup;
 use crate::details_panel::DetailsPanel;
 use crate::i18n::{connection_text, torrent_count_text};
 use crate::key_repeats::KeyRepeats;
@@ -178,10 +185,13 @@ pub struct MainView {
     fitted_split: Option<Pixels>,
     /// The torrents to add: the queue, the add dialog and the adds sent.
     adds: adding::Adds,
-    /// The event pump; dropping the view drops it, which cancels it.
-    _events: Task<()>,
-    /// Kept so that closing the window stops the service thread.
-    _service: Option<ServiceHandle>,
+    /// The server the window is set to, and how it switches to another one.
+    connection: ConnectionSetup,
+    /// The event pump of the service; dropping it, with the view or at a switch of servers,
+    /// cancels it.
+    pump: Task<()>,
+    /// Kept so that closing the window, or switching to another server, stops the service thread.
+    service: Option<ServiceHandle>,
     /// The table's, the search box's, the speed limits form's and the details panel's events, the
     /// table's and the split's changes, the focus coming back to the table, leaving the speed
     /// limits and getting lost, the window's activation, visibility, appearance and bounds
@@ -276,9 +286,7 @@ impl MainView {
             }
             true
         });
-        let pump = cx.spawn_in(window, async move |view, cx| {
-            events::pump(events, view, cx).await;
-        });
+        let pump = events::start_pump(events, window, cx);
         let saver = Saver::new(&ui, state_file);
         let mut view = Self {
             status: StatusModel::default(),
@@ -306,8 +314,9 @@ impl MainView {
             shown_tab: DetailsTab::default(),
             fitted_split: None,
             adds: adding::Adds::default(),
-            _events: pump,
-            _service: service,
+            connection: ConnectionSetup::default(),
+            pump,
+            service,
             _subscriptions: subscriptions,
         };
         // The service and the details panel start out assuming a visible window on the General
@@ -567,6 +576,15 @@ impl MainView {
         cx.notify();
     }
 
+    /// Shows that no server is set, so no service was started and no data will come until one is
+    /// set. For a window that has not shown a service yet: once one failed, that is what shows.
+    pub fn show_not_configured(&mut self, cx: &mut Context<'_, Self>) {
+        self.status.not_configured();
+        self.show_status(cx);
+        self.refresh_availability(cx);
+        cx.notify();
+    }
+
     /// Shows that `config.toml` is not used and why, until the user dismisses it.
     pub(crate) fn show_config_problem(
         &mut self,
@@ -734,8 +752,14 @@ impl Render for MainView {
             },
         );
         let on_dismiss = cx.listener(|view, _, _, cx| view.dismiss_config_problem(cx));
+        let server = self
+            .connection
+            .settings
+            .as_ref()
+            .map(ConnectionSettings::server_label);
         let status_bar = status_bar(
             &self.status,
+            server.as_deref(),
             self.config_problem,
             self.saver.failing(),
             &LimitsPopover {

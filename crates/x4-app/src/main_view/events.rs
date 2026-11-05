@@ -7,7 +7,7 @@
 //! (`spawn_in`), because the answer to an action or to a read of magnet links may be a failure to
 //! show as a notification, which needs the window.
 
-use gpui_kit::{AsyncWindowContext, Context, WeakEntity, Window};
+use gpui_kit::{AsyncWindowContext, Context, Task, WeakEntity, Window};
 use x4_core::Event;
 
 use super::MainView;
@@ -40,8 +40,18 @@ impl MainView {
     }
 }
 
+/// Starts feeding the view of `cx` the events of `events`, in `window`, as [`pump`] does; dropping
+/// the task stops it, and lets go of the channel.
+pub(super) fn start_pump(
+    events: async_channel::Receiver<Event>,
+    window: &mut Window,
+    cx: &mut Context<'_, MainView>,
+) -> Task<()> {
+    cx.spawn_in(window, async move |view, cx| pump(events, view, cx).await)
+}
+
 /// Feeds the view the events of the service until the view is gone or the channel closes.
-pub(super) async fn pump(
+async fn pump(
     events: async_channel::Receiver<Event>,
     view: WeakEntity<MainView>,
     cx: &mut AsyncWindowContext,

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
-use x4_app::app::{self, DEVEL_APP_ID, Startup};
+use x4_app::app::{self, DEVEL_APP_ID, ServiceStart, Startup};
 use x4_app::instance::{Claim, Frame, Reply, Timeouts, claim_with};
 
 /// How long the binary may take to hand over and exit.
@@ -160,7 +160,10 @@ fn a_handed_off_magnet_opens_the_dialog_and_raises_the_window(cx: &mut TestAppCo
     let root = tempfile::tempdir().expect("a temporary directory");
     let runtime = private_dir(root.path(), "runtime");
     let primary = hold_primary(APP, &runtime);
-    let startup = Startup::from_state_file(Err(io::Error::other("no service in this test")), None);
+    let startup = Startup::from_state_file(
+        ServiceStart::Failed(io::Error::other("no service in this test")),
+        None,
+    );
     let adds = startup.adds.sender.clone();
     cx.update(|cx| cx.set_reduce_motion(true));
     let (handle, _view) = cx

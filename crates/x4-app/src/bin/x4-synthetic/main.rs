@@ -49,7 +49,8 @@ use gpui_kit::{
 };
 use x4_app::adding::{AddRequest, AddRequests, launch_requests};
 use x4_app::allocator::{log_pin, pin_mmap_threshold};
-use x4_app::app::{self, Startup};
+use x4_app::app::{self, ServiceStart, Startup};
+use x4_app::connection::ConnectionSetup;
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
@@ -93,8 +94,13 @@ fn main() -> anyhow::Result<()> {
         "synthetic daemon"
     );
     let client = Client::new(SyntheticDaemon::new(TORRENTS, options.activity));
+    let service = match service::spawn(client, EngineConfig::default(), Box::new(countries)) {
+        Ok(handle) => ServiceStart::Started(handle),
+        Err(error) => ServiceStart::Failed(error),
+    };
     let startup = Startup {
-        service: service::spawn(client, EngineConfig::default(), Box::new(countries)),
+        service,
+        connection: ConnectionSetup::default(),
         ui: UiState::default(),
         state_writable: false,
         state_path: None,

@@ -539,6 +539,12 @@ pub(crate) fn connection_text(indicator: &Indicator) -> SharedString {
     .into()
 }
 
+/// What the connection dot means while connected, with the server as people name it
+/// (`host:port`), such as "Connected to nas:9091".
+pub(crate) fn connected_to_text(server: &str) -> SharedString {
+    t!("connection-connected-to", server = server).into()
+}
+
 /// Why the connection failed, in a few words for the status bar, such as "timed out".
 pub(crate) fn connection_reason_text(error: &ConnectionError) -> SharedString {
     match error {

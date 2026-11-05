@@ -28,8 +28,8 @@ use x4_core::{Indicator, StatusModel};
 
 use crate::app::ConfigProblem;
 use crate::i18n::{
-    alt_speed_tooltip_text, config_problem_text, connection_reason_detail_text, connection_text,
-    download_rate_text, free_space_text, limits_button_text, t, upload_rate_text,
+    alt_speed_tooltip_text, config_problem_text, connected_to_text, connection_reason_detail_text,
+    connection_text, download_rate_text, free_space_text, limits_button_text, t, upload_rate_text,
 };
 use crate::keymap::{EditSpeedLimits, MAIN_CONTEXT, ToggleAltSpeed};
 use crate::main_view::MainView;
@@ -40,10 +40,13 @@ use crate::theme::{STALE_OPACITY, alt_speed_color, connection_color, tabular_dig
 const DOT_SIZE: f32 = 8.;
 
 /// The tooltip of the connection indicator, when there is more to say than its text: what the
-/// dot alone means, or why the last try to reconnect failed.
-fn connection_tooltip(indicator: &Indicator) -> Option<SharedString> {
+/// dot alone means, with the name of `server` (`host:port`) when the window knows it, or why the
+/// last try to reconnect failed.
+fn connection_tooltip(indicator: &Indicator, server: Option<&str>) -> Option<SharedString> {
     match indicator {
-        Indicator::Connected => Some(t!("connection-connected").into()),
+        Indicator::Connected => {
+            Some(server.map_or_else(|| t!("connection-connected").into(), connected_to_text))
+        }
         Indicator::Reconnecting { last_error, .. } => {
             Some(connection_reason_detail_text(last_error))
         }
@@ -63,11 +66,13 @@ pub(crate) struct LimitsPopover<'a> {
     pub(crate) open: bool,
 }
 
-/// The status bar for `status`, whose buttons act on the view of `cx`. `config_problem` adds a
-/// notice whose button calls `on_dismiss`, and `state_not_saved` one that the UI state cannot be
-/// saved. `limits` is the popover the limits button opens.
+/// The status bar for `status`, of the window set to `server` (`host:port`, if one is set), whose
+/// buttons act on the view of `cx`. `config_problem` adds a notice whose button calls
+/// `on_dismiss`, and `state_not_saved` one that the UI state cannot be saved. `limits` is the
+/// popover the limits button opens.
 pub(crate) fn status_bar(
     status: &StatusModel,
+    server: Option<&str>,
     config_problem: Option<ConfigProblem>,
     state_not_saved: bool,
     limits: &LimitsPopover<'_>,
@@ -75,7 +80,7 @@ pub(crate) fn status_bar(
     cx: &Context<'_, MainView>,
 ) -> StatusBar {
     let theme = cx.theme();
-    let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), theme));
+    let mut bar = StatusBar::new().left(connection_indicator(&status.indicator(), server, theme));
     if let Some(problem) = config_problem {
         bar = bar.left(config_notice(problem, on_dismiss));
     }
@@ -179,10 +184,14 @@ fn limits_button(
         .content(move |_, _, _| form.clone())
 }
 
-/// The dot and the text that tell how the connection is doing.
-fn connection_indicator(indicator: &Indicator, theme: &Theme) -> impl IntoElement {
+/// The dot and the text that tell how the connection to `server` is doing.
+fn connection_indicator(
+    indicator: &Indicator,
+    server: Option<&str>,
+    theme: &Theme,
+) -> impl IntoElement {
     let label = connection_text(indicator);
-    let tooltip = connection_tooltip(indicator);
+    let tooltip = connection_tooltip(indicator, server);
     // The dot alone says nothing to a screen reader, so the indicator is named either way.
     let name = if label.is_empty() {
         tooltip.clone().unwrap_or_default()
@@ -277,14 +286,22 @@ mod tests {
     #[test]
     fn the_tooltip_explains_the_dot_and_the_reconnect_reason() {
         assert_eq!(
-            connection_tooltip(&Indicator::Connected),
-            Some("Connected".into())
+            connection_tooltip(&Indicator::Connected, None),
+            Some("Connected".into()),
+            "a window that knows no server"
         );
         assert_eq!(
-            connection_tooltip(&Indicator::Reconnecting {
-                attempt: 1,
-                last_error: ConnectionError::Unauthorized,
-            }),
+            connection_tooltip(&Indicator::Connected, Some("nas:9091")),
+            Some("Connected to nas:9091".into())
+        );
+        assert_eq!(
+            connection_tooltip(
+                &Indicator::Reconnecting {
+                    attempt: 1,
+                    last_error: ConnectionError::Unauthorized,
+                },
+                Some("nas:9091")
+            ),
             Some("The server rejected the credentials".into())
         );
         for indicator in [
@@ -294,7 +311,7 @@ mod tests {
             Indicator::Unsupported(UnsupportedReason::Legacy),
         ] {
             assert_eq!(
-                connection_tooltip(&indicator),
+                connection_tooltip(&indicator, Some("nas:9091")),
                 None,
                 "the text says it all: {indicator:?}"
             );
@@ -304,7 +321,7 @@ mod tests {
     #[test]
     fn the_tooltip_without_a_server_says_where_to_set_one() {
         assert_eq!(
-            connection_tooltip(&Indicator::NotConfigured),
+            connection_tooltip(&Indicator::NotConfigured, None),
             Some("Set the server in Connection (Ctrl+,)".into())
         );
     }

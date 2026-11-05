@@ -74,6 +74,12 @@ struct PendingRead {
 }
 
 impl MagnetCopy {
+    /// Whether a read waits for its answer. For the tests.
+    #[cfg(test)]
+    pub(crate) fn is_waiting(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Starts a read of the magnet links of `hashes` under the id that `new_id` gives, and returns
     /// the id. The read that waited, if any, is forgotten: its answer will be ignored. Returns
     /// `None`, and takes no id, when the read that waits is of the same torrents in the same

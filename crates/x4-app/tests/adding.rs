@@ -10,7 +10,7 @@
 //! the requests and the snapshots, reads the commands the window sends and answers them as a
 //! service would. The `.torrent` files are made by the tests, in a directory of their own.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -25,13 +25,14 @@ use gpui_kit::{
 };
 use x4_app::adding::{AddRequest, FilePicker, PickError, Picked};
 use x4_app::app;
+use x4_app::connection::{ConnectionSetup, Connector, ServiceChannels};
 use x4_app::main_view::MainView;
 use x4_core::launch::{RejectKind, RejectedArg};
 use x4_core::test_support::torrent;
 use x4_core::{
     Action, ActionId, AddError, AddItem, Added, ChosenFiles, Command, ConnectionError,
-    ConnectionState, DisplayState, Event, Filter, FreeSpaceAnswer, KbPerSecond, QUEUE_CAP,
-    SessionSummary, Snapshot, SpeedLimit, Torrent, UiState, ViewState, parse_torrent,
+    ConnectionSettings, ConnectionState, DisplayState, Event, Filter, FreeSpaceAnswer, KbPerSecond,
+    QUEUE_CAP, SessionSummary, Snapshot, SpeedLimit, Torrent, UiState, ViewState, parse_torrent,
 };
 use x4_rpc::{AddSource, DownloadDir, HashString, MagnetLink, TorrentAdd};
 
@@ -539,6 +540,45 @@ impl Window {
     fn stop_service(&mut self, cx: &mut TestAppContext) {
         self.events = async_channel::unbounded().0;
         cx.run_until_parked();
+    }
+
+    /// Switches the window to another server, whose service the test then stands in for, as for
+    /// the first one.
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: an address that does not parse fails the test"
+    )]
+    fn switch_server(&mut self, cx: &mut TestAppContext) {
+        let (events, events_rx) = async_channel::unbounded();
+        let (commands_tx, commands) = crossbeam_channel::unbounded();
+        let channels = RefCell::new(Some(ServiceChannels {
+            events: events_rx,
+            commands: commands_tx,
+            handle: None,
+        }));
+        let connector: Connector = Rc::new(move |_| {
+            channels
+                .borrow_mut()
+                .take()
+                .ok_or_else(|| std::io::Error::other("one switch only"))
+        });
+        let settings = ConnectionSettings::from_url("http://nas:9091/transmission/rpc", None)
+            .expect("a plain http address");
+        let view = self.view.clone();
+        self.act(cx, |window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_connection(
+                    ConnectionSetup {
+                        connector: Some(connector),
+                        ..ConnectionSetup::default()
+                    },
+                    cx,
+                );
+                view.switch_to(settings, window, cx);
+            });
+        });
+        self.events = events;
+        self.commands = commands;
     }
 
     /// Lets `millis` milliseconds pass.
@@ -1685,6 +1725,50 @@ fn adds_still_out_when_the_service_stops_are_not_confirmed(cx: &mut TestAppConte
         Some("The service stopped before the server confirmed Show; it may have been added")
     );
     assert!(!window.dialog_open(cx), "it moved on from the torrent sent");
+}
+
+#[gpui_kit::test]
+fn a_switch_forgets_the_adds_sent_and_keeps_the_torrent_offered(cx: &mut TestAppContext) {
+    let mut window = Window::open(cx);
+    let content = show();
+    let hash = hash_of(&content);
+    window.request_torrent("show.torrent", &content, cx);
+    window.click(CONFIRM, cx);
+    let (sent, _) = window.sent_add();
+    assert_eq!(window.label(CONFIRM, cx).as_deref(), Some("Adding…"));
+    let old = window.events.clone();
+
+    window.switch_server(cx);
+
+    assert!(window.dialog_open(cx), "the torrent is still offered");
+    assert_eq!(
+        window.label(CONFIRM, cx).as_deref(),
+        Some("Add"),
+        "the form is the user's again, for the new server"
+    );
+    assert!(
+        old.send_blocking(Event::AddFinished {
+            id: sent,
+            result: Ok(added(&hash, "Show", false)),
+        })
+        .is_err(),
+        "the old service no longer reaches the window"
+    );
+
+    // The new server is connected; the torrent goes there.
+    window.send(Vec::new(), cx);
+    window.click(CONFIRM, cx);
+    let (again, _) = window.sent_add();
+    assert_ne!(again, sent, "an id never given before");
+    window.finish(again, Ok(added(&hash, "Show", false)), cx);
+    assert!(!window.dialog_open(cx));
+    window.send(vec![listed("Show", &hash)], cx);
+    assert_eq!(window.selected(cx), [hash]);
+
+    // The add sent to the old server is not waited for: a stop of the new service says nothing of
+    // it.
+    window.stop_service(cx);
+    assert_eq!(window.last_notice(cx), None);
 }
 
 #[gpui_kit::test]
