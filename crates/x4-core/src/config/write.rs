@@ -34,7 +34,7 @@ pub fn config_with_connection(
     } else {
         let mut table = Table::new();
         // The comment lines above the old `connection = "x"` (a header comment of the file, say)
-        // are not the old value's to take along.
+        // belong to the file, so they go onto the new table.
         if let Some(prefix) = root
             .key("connection")
             .and_then(|key| key.leaf_decor().prefix().cloned())

@@ -97,17 +97,6 @@ impl Field {
         }
     }
 
-    /// The element id of the line under the field that says what is wrong with it.
-    const fn problem_id(self) -> &'static str {
-        match self {
-            Self::Host => "connection-host-problem",
-            Self::Port => "connection-port-problem",
-            Self::Path => "connection-path-problem",
-            Self::Username => "connection-username-problem",
-            Self::Password => "connection-password-problem",
-        }
-    }
-
     /// The name of the field, over it and for screen readers.
     fn name(self) -> SharedString {
         match self {
@@ -400,17 +389,29 @@ impl ConnectionDialog {
         cx.notify();
     }
 
-    /// What is wrong with `field`, once Save or Test was tried.
-    fn problem(&self, field: Field) -> Option<SharedString> {
+    /// The element id and the text of the line that says what is wrong with `field`, once Save or
+    /// Test was tried. The password has no rule to break, so no line.
+    fn problem(&self, field: Field) -> Option<(&'static str, SharedString)> {
         if !self.attempted {
             return None;
         }
         let problems = self.checked.as_ref().err()?;
         match field {
-            Field::Host => problems.host.map(host_problem_text),
-            Field::Port => problems.port.map(port_problem_text),
-            Field::Path => problems.path.map(path_problem_text),
-            Field::Username => problems.username.map(username_problem_text),
+            Field::Host => problems
+                .host
+                .map(|problem| ("connection-host-problem", host_problem_text(problem))),
+            Field::Port => problems
+                .port
+                .map(|problem| ("connection-port-problem", port_problem_text(problem))),
+            Field::Path => problems
+                .path
+                .map(|problem| ("connection-path-problem", path_problem_text(problem))),
+            Field::Username => problems.username.map(|problem| {
+                (
+                    "connection-username-problem",
+                    username_problem_text(problem),
+                )
+            }),
             Field::Password => None,
         }
     }
@@ -427,8 +428,8 @@ impl ConnectionDialog {
                 input.on_paste(move |item, window, cx| pasted_into_host(&dialog, item, window, cx))
             })
             .when(field == Field::Password, Input::mask_toggle);
-        let problem = self.problem(field).map(|text| {
-            text_line(field.problem_id(), &text)
+        let problem = self.problem(field).map(|(id, text)| {
+            text_line(id, &text)
                 .text_xs()
                 .text_color(cx.theme().danger)
                 .test_support()
@@ -497,6 +498,7 @@ impl ConnectionDialog {
                 }
             };
             text_line("connection-test-result", &connection_test_text(outcome))
+                .truncate()
                 .text_color(color)
                 .test_support()
         });

@@ -8,27 +8,27 @@ in Rust.
 Early development — stage 8, the connection. The window connects to the Transmission daemon set in
 its Connection dialog, with a user name and password when the daemon asks for them, and switches to
 another daemon without a restart; with none set, it says so and opens the dialog. It shows every
-torrent in a table, with its state, progress and speeds; a sidebar filters them by state, with
-live counts, and a search box finds them by name. The status bar shows the total download and
-upload speeds, the free space and the state of the connection; it switches the
-alternative speed limits and sets the global download and upload limits. The window remembers its
-columns, sorting, filter, theme and size between runs. Several torrents can be selected, and
-started, paused, started ahead of the queue, verified, reannounced and removed, from the keyboard,
-the toolbar and a context menu; removing asks first, and deleting the files too only after an
-explicit confirmation. A panel under the table shows the selected torrent in four tabs. General gives
-where its data is, its size, hash, dates, share ratio and metainfo, and how its trackers are doing,
-with the worst problem in plain words. Files shows its files as a tree, with each one's progress and
-how much of it already plays from the start; each file or folder can be skipped or given a Low,
-Normal or High priority, and the torrent can be downloaded in order. Peers lists who the torrent is
-connected to, with their countries, and Trackers lists each tracker with its state, its last and
-next announce and the counts it knows, to see why a torrent has few peers or is stuck. Whether the
-panel is shown, its height and its tab are remembered too. Torrents are added from `.torrent` files, chosen in the
-desktop's file dialog or dropped on the window, and from magnet links on the clipboard, in a dialog
-that picks the folder on the server (with its free space and the folders used lately), the files to
-download and whether to start at once. One 4x4 runs for each user: starting it again, as with a
-file or a link, hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built
-from this checkout and shows in the application menu with its icon; one command makes it the
-default app for `.torrent` files and magnet links, and undoes that again (see [Install](#install)).
+torrent in a table, with its state, progress and speeds; a sidebar filters them by state, with live
+counts, and a search box finds them by name. The status bar shows the total download and upload
+speeds, the free space and the state of the connection; it switches the alternative speed limits and
+sets the global download and upload limits. The window remembers its columns, sorting, filter, theme
+and size between runs. Several torrents can be selected, and started, paused, started ahead of the
+queue, verified, reannounced and removed, from the keyboard, the toolbar and a context menu;
+removing asks first, and deleting the files too only after an explicit confirmation. A panel under
+the table shows the selected torrent in four tabs. General gives where its data is, its size, hash,
+dates, share ratio and metainfo, and how its trackers are doing, with the worst problem in plain
+words. Files shows its files as a tree, with each one's progress and how much of it already plays
+from the start; each file or folder can be skipped or given a Low, Normal or High priority, and the
+torrent can be downloaded in order. Peers lists who the torrent is connected to, with their
+countries, and Trackers lists each tracker with its state, its last and next announce and the counts
+it knows, to see why a torrent has few peers or is stuck. Whether the panel is shown, its height and
+its tab are remembered too. Torrents are added from `.torrent` files, chosen in the desktop's file
+dialog or dropped on the window, and from magnet links on the clipboard, in a dialog that picks the
+folder on the server (with its free space and the folders used lately), the files to download and
+whether to start at once. One 4x4 runs for each user: starting it again, as with a file or a link,
+hands them to the 4x4 that runs. On Arch Linux, 4x4 installs as a package built from this checkout
+and shows in the application menu with its icon; one command makes it the default app for `.torrent`
+files and magnet links, and undoes that again (see [Install](#install)).
 
 ## What it will do
 
@@ -1366,25 +1366,22 @@ torrent that has not run since the made-up daemon started were never contacted. 
 0016" (`--select 15`; with `--static`, "Synthetic torrent 0011", `--select 10`) is busy: it
 downloads from 150 peers and has a tracker of every status, so that `just virtual just
 demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4` the Trackers
-tab with each kind of row. `--press KEY`,
-which can be given several times, presses each key in turn once the list is there and selected,
-one every three seconds, as on the keyboard: for example `just virtual just
-demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth torrent and starts
-it again, `--press shift-delete` opens the dialog that would delete its files, and `--press ctrl-o`
-opens the desktop's file dialog, with its filter for torrent files. `--add
+tab with each kind of row. `--press KEY`, which can be given several times, presses each key in turn
+once the list is there and selected, one every three seconds, as on the keyboard: for example `just
+virtual just demo-synthetic --static --select 5 --press ctrl-p --press space` pauses the sixth
+torrent and starts it again, `--press shift-delete` opens the dialog that would delete its files,
+and `--press ctrl-o` opens the desktop's file dialog, with its filter for torrent files. `--add
 PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent` file or magnet
 link at the start, as if 4x4 had been opened with them, which opens the add dialog; what it does not
 open makes its notification. The window is set to a made-up server, `synthetic.invalid:9091`, and
 `--connection` opens the Connection dialog after the first frame, as `Ctrl+,` would. Its Test
 answers for any server with the made-up daemon's version ("Connected: Transmission 4.1.3
-(synthetic)"), and its Save switches to a new made-up daemon, whatever server the fields name, as a
-switch in 4x4 does; it writes no `config.toml`. `just virtual just demo-synthetic --scroll` runs it
-off screen. With
-`RUST_LOG=x4_synthetic=debug` the made-up daemon logs each request it answers with the bytes of the
-request and of the answer, which is how the requests and the bytes the app asks of a daemon are
-counted (see [Performance](#performance)).
-The demo is the `x4-synthetic` binary of the `synthetic` feature, so the `4x4` build does not
-contain it.
+(synthetic)"), and its Save switches to a new made-up daemon, whatever other server the fields name,
+as a switch in 4x4 does; it writes no `config.toml`. `just virtual just demo-synthetic --scroll`
+runs it off screen. With `RUST_LOG=x4_synthetic=debug` the made-up daemon logs each request it
+answers with the bytes of the request and of the answer, which is how the requests and the bytes the
+app asks of a daemon are counted (see [Performance](#performance)). The demo is the `x4-synthetic`
+binary of the `synthetic` feature, so the `4x4` build does not contain it.
 
 ### Live tests
 

@@ -395,9 +395,9 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(ANY_MENU),
     },
     // The popover of the speed limits keeps the keys of the details panel, of adding torrents and
-    // of the Connection dialog too, as a menu does. Ctrl+T and Ctrl+L belong to the status bar beside it, and Ctrl+F and `/`
-    // take the focus out, which closes the popover; those stay. A test holds every other window key
-    // to this.
+    // of the Connection dialog too, as a menu does. Ctrl+T and Ctrl+L belong to the status bar
+    // beside it, and Ctrl+F and `/` take the focus out, which closes the popover; those stay. A
+    // test holds every other window key to this.
     Binding {
         keys: "alt-enter",
         action: || Box::new(NoAction),
