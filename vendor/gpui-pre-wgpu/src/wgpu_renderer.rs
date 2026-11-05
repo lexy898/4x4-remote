@@ -1,4 +1,4 @@
-// Modified for gpui-pre (snapshot of zed@08cbb88): adapt device queues and sRGB detection to wgpu 30.0.1.
+// Modified for gpui-pre (snapshot of zed@f816e1f): adapt device queues and sRGB detection to wgpu 30.0.1.
 // Modified for 4x4: create the GPU context Vulkan-first, see PATCHED.md.
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
@@ -301,6 +301,7 @@ impl WgpuRenderer {
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
         let mut ctx_ref = gpu_context.borrow_mut();
+        let surface_configured = ctx_ref.is_none();
         let (context, surface) = match ctx_ref.as_mut() {
             Some(context) => {
                 let window_handle = window
@@ -313,7 +314,7 @@ impl WgpuRenderer {
             }
             None => {
                 let (surface, new_context) =
-                    create_context_vulkan_first(window, compositor_gpu, false)?;
+                    create_context_vulkan_first(window, &config, compositor_gpu, false)?;
                 (ctx_ref.insert(new_context), surface)
             }
         };
@@ -325,6 +326,7 @@ impl WgpuRenderer {
             context,
             surface,
             config,
+            surface_configured,
             compositor_gpu,
             atlas,
         )
@@ -351,18 +353,22 @@ impl WgpuRenderer {
         config: WgpuSurfaceConfig,
     ) -> anyhow::Result<Self> {
         let atlas = Arc::new(WgpuAtlas::from_context(context));
-        Self::new_internal(None, context, surface, config, None, atlas)
+        Self::new_internal(None, context, surface, config, false, None, atlas)
     }
 
-    fn new_internal(
-        gpu_context: Option<GpuContext>,
-        context: &WgpuContext,
-        surface: wgpu::Surface<'static>,
-        config: WgpuSurfaceConfig,
-        compositor_gpu: Option<CompositorGpuHint>,
-        atlas: Arc<WgpuAtlas>,
-    ) -> anyhow::Result<Self> {
-        let surface_caps = surface.get_capabilities(&context.adapter);
+    /// Returns the surface configuration for `config`, along with the transparent and
+    /// opaque alpha modes that the surface supports.
+    pub(crate) fn surface_configuration(
+        surface: &wgpu::Surface<'_>,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        config: &WgpuSurfaceConfig,
+    ) -> anyhow::Result<(
+        wgpu::SurfaceConfiguration,
+        wgpu::CompositeAlphaMode,
+        wgpu::CompositeAlphaMode,
+    )> {
+        let surface_caps = surface.get_capabilities(adapter);
         let preferred_formats = [
             wgpu::TextureFormat::Bgra8Unorm,
             wgpu::TextureFormat::Rgba8Unorm,
@@ -382,7 +388,7 @@ impl WgpuRenderer {
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Surface reports no supported texture formats for adapter {:?}",
-                    context.adapter.get_info().name
+                    adapter.get_info().name
                 )
             })?;
 
@@ -396,7 +402,7 @@ impl WgpuRenderer {
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Surface reports no supported alpha modes for adapter {:?}",
-                            context.adapter.get_info().name
+                            adapter.get_info().name
                         )
                     })
             };
@@ -417,7 +423,6 @@ impl WgpuRenderer {
             opaque_alpha_mode
         };
 
-        let device = Arc::clone(&context.device);
         let max_texture_size = device.limits().max_texture_dimension_2d;
 
         let requested_width = config.size.width.0 as u32;
@@ -447,10 +452,30 @@ impl WgpuRenderer {
             alpha_mode,
             view_formats: vec![],
         };
-        // Configure the surface immediately. The adapter selection process already validated
-        // that this adapter can successfully configure this surface.
-        surface.configure(&context.device, &surface_config);
 
+        Ok((surface_config, transparent_alpha_mode, opaque_alpha_mode))
+    }
+
+    fn new_internal(
+        gpu_context: Option<GpuContext>,
+        context: &WgpuContext,
+        surface: wgpu::Surface<'static>,
+        config: WgpuSurfaceConfig,
+        surface_configured: bool,
+        compositor_gpu: Option<CompositorGpuHint>,
+        atlas: Arc<WgpuAtlas>,
+    ) -> anyhow::Result<Self> {
+        let (surface_config, transparent_alpha_mode, opaque_alpha_mode) =
+            Self::surface_configuration(&surface, &context.adapter, &context.device, &config)?;
+        // Adapter selection configures the surface with this same configuration when it
+        // creates the context, so only configure it here when that did not happen.
+        if !surface_configured {
+            surface.configure(&context.device, &surface_config);
+        }
+
+        let surface_format = surface_config.format;
+        let alpha_mode = surface_config.alpha_mode;
+        let max_texture_size = context.device.limits().max_texture_dimension_2d;
         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
 
         Ok(Self {
@@ -2201,6 +2226,15 @@ impl WgpuRenderer {
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
 
+        let config = WgpuSurfaceConfig {
+            size: gpui::Size {
+                width: gpui::DevicePixels(self.surface_config.width as i32),
+                height: gpui::DevicePixels(self.surface_config.height as i32),
+            },
+            transparent: self.surface_config.alpha_mode != wgpu::CompositeAlphaMode::Opaque,
+            preferred_present_mode: Some(self.surface_config.present_mode),
+        };
+
         let surface = if needs_new_context {
             log::warn!("GPU device lost, recreating context...");
 
@@ -2215,7 +2249,7 @@ impl WgpuRenderer {
             std::thread::sleep(std::time::Duration::from_millis(350));
 
             let (surface, new_context) =
-                create_context_vulkan_first(window, self.compositor_gpu, true)?;
+                create_context_vulkan_first(window, &config, self.compositor_gpu, true)?;
             *gpu_context.borrow_mut() = Some(new_context);
             surface
         } else {
@@ -2224,14 +2258,6 @@ impl WgpuRenderer {
             create_surface(instance, window_handle.as_raw())?
         };
 
-        let config = WgpuSurfaceConfig {
-            size: gpui::Size {
-                width: gpui::DevicePixels(self.surface_config.width as i32),
-                height: gpui::DevicePixels(self.surface_config.height as i32),
-            },
-            transparent: self.surface_config.alpha_mode != wgpu::CompositeAlphaMode::Opaque,
-            preferred_present_mode: Some(self.surface_config.present_mode),
-        };
         let gpu_context = Rc::clone(gpu_context);
         let ctx_ref = gpu_context.borrow();
         let context = ctx_ref.as_ref().expect("context should exist");
@@ -2245,6 +2271,7 @@ impl WgpuRenderer {
             context,
             surface,
             config,
+            needs_new_context,
             self.compositor_gpu,
             self.atlas.clone(),
         )?;
@@ -2531,9 +2558,12 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
 /// OpenGL adapter (VMs and old GPUs without a Vulkan driver); and only then any adapter,
 /// software renderers included, unless the caller rejects them. This keeps the old preference
 /// of a hardware OpenGL adapter over a software Vulkan one (lavapipe).
+///
+/// Adapter selection configures the returned surface with `config`.
 #[cfg(not(target_family = "wasm"))]
 fn create_context_vulkan_first<W>(
     window: &W,
+    config: &WgpuSurfaceConfig,
     compositor_gpu: Option<CompositorGpuHint>,
     reject_software: bool,
 ) -> anyhow::Result<(wgpu::Surface<'static>, WgpuContext)>
@@ -2551,9 +2581,9 @@ where
         let surface = create_surface(&instance, raw_window_handle)
             .context("Failed to create surface")?;
         let context = if hardware_only {
-            WgpuContext::new_rejecting_software(instance, &surface, compositor_gpu)?
+            WgpuContext::new_rejecting_software(instance, &surface, config, compositor_gpu)?
         } else {
-            WgpuContext::new(instance, &surface, compositor_gpu)?
+            WgpuContext::new(instance, &surface, config, compositor_gpu)?
         };
         Ok((surface, context))
     };

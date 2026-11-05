@@ -256,7 +256,7 @@ fn send_reply(stream: &mut UnixStream, reply: Reply, wait: Duration) {
 
 /// Sends the requests of the frame `received` into `adds`: whether they all went.
 fn forward(received: wire::Received<'_>, adds: &async_channel::Sender<AddRequest>) -> bool {
-    // The tokens of the launch: gpui-pre 0.3.10 cannot raise an open window with a token from
+    // The tokens of the launch: gpui-pre 0.3.11 cannot raise an open window with a token from
     // another process, so they are only kept for a later version.
     tracing::debug!(
         activation_token = ?received.activation_token,
