@@ -45,8 +45,9 @@ pub(crate) use adding::{
     free_space_line_text, load_failure_text, no_choice_text, queue_full_text, rejected_text,
 };
 pub(crate) use connection::{
-    connection_address_text, connection_save_failed_text, connection_test_text, host_problem_text,
-    path_problem_text, port_problem_text, username_problem_text,
+    connection_address_text, connection_save_failed_text, connection_save_reason_text,
+    connection_test_text, host_problem_text, path_problem_text, port_problem_text,
+    username_problem_text,
 };
 pub(crate) use details::{
     created_text, details_placeholder_text, error_texts, pieces_text, size_with_wanted_text,

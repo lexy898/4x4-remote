@@ -151,8 +151,18 @@ connection-test-ok = Connected: Transmission { $version }
 connection-test-not-run = The test could not run
 connection-save = Save
 connection-cancel = Cancel
-# $reason: why the file could not be written, as the system says it.
+# $reason: why the file could not be written, one of the connection-save-* messages below.
 connection-save-failed = The settings could not be saved: { $reason }
+# The reasons. $path: the file or the folder, such as "/home/alex/.config/4x4/config.toml"; $to:
+# where the file was to be moved; $error: what the system said, in its own words, such as
+# "Permission denied (os error 13)".
+connection-save-read = { $path } cannot be read ({ $error })
+connection-save-create-dir = the folder { $path } cannot be created ({ $error })
+connection-save-move-aside = { $path } is not valid TOML and cannot be moved to { $to } ({ $error })
+connection-save-write = { $path } cannot be written ({ $error })
+connection-save-no-file-name = { $path } does not name a file
+# The settings themselves cannot be written into the file; the log says why.
+connection-save-invalid = these settings cannot be written to { $path }
 # Under a field, after Save or Test, when it is wrong.
 connection-host-empty = Enter the server's name or IP address
 connection-host-invalid = Not a valid name or IP address

@@ -238,8 +238,9 @@ impl ConnectionDialog {
         }
     }
 
-    /// Shows under the fields that the settings could not be saved, for `reason`, until the next
-    /// edit. The dialog stays open, with the fields as they are.
+    /// Shows under the fields that the settings could not be saved, for `reason` (a
+    /// `connection-save-*` message), until the next edit. The dialog stays open, with the fields as
+    /// they are.
     pub(crate) fn show_save_error(&mut self, reason: SharedString, cx: &mut Context<'_, Self>) {
         self.save_error = Some(reason);
         cx.notify();

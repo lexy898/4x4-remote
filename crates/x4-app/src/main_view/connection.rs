@@ -21,14 +21,14 @@ use std::rc::Rc;
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, Focusable as _, InteractiveElement as _, SharedString,
-    Window,
+    AppContext as _, Context, Div, Entity, Focusable as _, InteractiveElement as _, Window,
 };
 use x4_core::ConnectionSettings;
 
 use super::MainView;
 use crate::connection_dialog::{self, ConnectionDialog, ConnectionDialogEvent};
 use crate::files;
+use crate::i18n::connection_save_reason_text;
 use crate::key_repeats::{KeyRepeats, once_per_press_of};
 use crate::keymap::OpenConnection;
 
@@ -113,12 +113,10 @@ impl MainView {
                     self.dismiss_config_problem(cx);
                 }
                 Err(error) => {
-                    // The report names the file and the system's error, never a setting.
-                    let reason = error.report();
-                    tracing::error!(error = %reason, "the connection could not be saved; nothing changes");
-                    dialog.update(cx, |dialog, cx| {
-                        dialog.show_save_error(SharedString::from(reason), cx);
-                    });
+                    // Both name the file and what the system said, never a setting.
+                    tracing::error!(error = %error.report(), "the connection could not be saved; nothing changes");
+                    let reason = connection_save_reason_text(&error);
+                    dialog.update(cx, |dialog, cx| dialog.show_save_error(reason, cx));
                     return;
                 }
             }

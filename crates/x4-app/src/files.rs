@@ -71,6 +71,12 @@ pub(crate) enum FilesError {
         /// What the system said.
         source: io::Error,
     },
+    /// The path names no file, so that a file there cannot be moved aside next to itself.
+    #[error("{} names no file", path.display())]
+    NoFileName {
+        /// The path.
+        path: PathBuf,
+    },
 }
 
 impl FilesError {
@@ -191,10 +197,11 @@ pub(crate) fn read_ui_state(path: &Path) -> Result<LoadedState, FilesError> {
 ///
 /// [`FilesError::Read`] if the old file cannot be read, [`FilesError::CreateDir`] if the
 /// directory cannot be created, [`FilesError::MoveAside`] if a file that is not TOML cannot be
-/// moved aside, and [`FilesError::Write`] if the new file cannot be written. On any error the
-/// old file is left as it was and no temporary file stays behind; only if the new file cannot
-/// take a broken one's place once that was moved aside, and the broken one cannot be moved back
-/// either, does it stay as `config.toml.bad`, which the log says.
+/// moved aside ([`FilesError::NoFileName`] if `path` names no file to move), and
+/// [`FilesError::Write`] if the new file cannot be written. On any error the old file is left as
+/// it was and no temporary file stays behind; only if the new file cannot take a broken one's
+/// place once that was moved aside, and the broken one cannot be moved back either, does it stay
+/// as `config.toml.bad`, which the log says.
 pub(crate) fn save_connection(
     path: &Path,
     settings: &ConnectionSettings,
@@ -221,9 +228,8 @@ pub(crate) fn save_connection(
         Err(other @ ConfigError::InvalidUrl(_)) => return Err(config_error(other)),
     };
     let text = config_with_connection("", settings).map_err(config_error)?;
-    let bad = bad_path(path).ok_or_else(|| FilesError::Write {
+    let bad = bad_path(path).ok_or_else(|| FilesError::NoFileName {
         path: path.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::InvalidInput, "the path has no file name"),
     })?;
     // The new file is ready before the old one moves, so that a failed write leaves it in place.
     let staged = stage(path, &text)?;

@@ -561,12 +561,18 @@ fn a_failed_write_keeps_the_dialog_open(cx: &mut TestAppContext) {
     );
     assert!(main.connection_open(cx), "the dialog stays open");
     let error = main.label(SAVE_ERROR, cx).expect("the dialog says why");
+    // The messages of the language, with the path and the system's own words.
     assert!(
         error.starts_with(&format!(
-            "The settings could not be saved: cannot read {}: ",
+            "The settings could not be saved: {} cannot be read (",
             main.config.display()
         )),
         "{error}"
+    );
+    assert!(error.ends_with(')'), "{error}");
+    assert!(
+        !error.contains("cannot read"),
+        "not the log's report: {error}"
     );
     assert!(!error.contains(PASSWORD), "{error}");
     assert_eq!(main.switched_to(), [], "nothing switched");

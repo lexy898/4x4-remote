@@ -187,7 +187,8 @@ impl ConfigProblem {
             | FilesError::CreateDir { .. }
             | FilesError::Serialize { .. }
             | FilesError::MoveAside { .. }
-            | FilesError::Write { .. } => Self::Unreadable,
+            | FilesError::Write { .. }
+            | FilesError::NoFileName { .. } => Self::Unreadable,
         }
     }
 }
