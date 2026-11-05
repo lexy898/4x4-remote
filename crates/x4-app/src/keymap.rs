@@ -31,6 +31,9 @@
 //!   event, and a focused button is pressed by it. Alt+Down opens the history of the folder field
 //!   (`FolderField`). The dialog lies beside the main window's content, so none of the window's
 //!   keys reach behind it; the keys of its file list are those of the Files tab;
+//! - in the Connection dialog (`ConnectionDialog`), Enter is bound to nothing for the same reason:
+//!   a field saves on Enter through its own event, and a focused button is pressed by it. The
+//!   dialog lies beside the main window's content too, so the window's keys do not reach behind it;
 //! - only Ctrl+Q has no context. A binding without one also fires in a text field, before the
 //!   field's own binding of the same key, so it would take the key from the search box.
 //!
@@ -175,6 +178,8 @@ pub(crate) const FILE_LIST_CONTEXT: &str = "FileList";
 const FILES: &str = "FileList && !PopupMenu";
 /// The key context of the add dialog's content, inside gpui-component's `Dialog`.
 pub(crate) const ADD_DIALOG_CONTEXT: &str = "AddTorrent";
+/// The key context of the Connection dialog's content, inside gpui-component's `Dialog`.
+pub(crate) const CONNECTION_DIALOG_CONTEXT: &str = "ConnectionDialog";
 /// The key context of the folder field of the add dialog, around its text field and the button of
 /// its history.
 pub(crate) const FOLDER_FIELD_CONTEXT: &str = "FolderField";
@@ -627,6 +632,14 @@ pub const BINDINGS: &[Binding] = &[
         keys: "enter",
         action: || Box::new(NoAction),
         context: Some(ADD_DIALOG_CONTEXT),
+    },
+    // The same in the Connection dialog, where the dialog's own Enter would confirm it from any
+    // field: a field's Enter saves through the field's own event, and a focused button is pressed
+    // by it.
+    Binding {
+        keys: "enter",
+        action: || Box::new(NoAction),
+        context: Some(CONNECTION_DIALOG_CONTEXT),
     },
     // The text field binds Alt+Down to nothing of its own.
     Binding {

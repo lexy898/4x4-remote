@@ -3,7 +3,8 @@
 //! [`app`] starts the application: it reads the config and the saved state, starts the service of
 //! `x4-core` against the daemon set there, if any, and opens the main window, whose content is
 //! [`main_view::MainView`]. [`connection`] starts the service for a server, which the window can
-//! switch to another without a restart, and checks a server once. The view pumps the service's
+//! switch to another without a restart, and checks a server once; the `connection_dialog` module
+//! is the dialog where the user sets the server and tests it. The view pumps the service's
 //! events without blocking the UI thread, and lays out a toolbar (the `toolbar` module) with the
 //! search box (the `search` module), the filter sidebar (the `sidebar` module), the torrent table
 //! ([`torrent_table`]), the details panel under it (the `details_panel` module), whose Files tab
@@ -33,6 +34,14 @@ pub mod allocator;
 pub mod app;
 mod clipboard;
 pub mod connection;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the main view's ways to open the dialog are its users, and are not built yet"
+    )
+)]
+mod connection_dialog;
 mod context_menu;
 mod details_panel;
 mod file_list;

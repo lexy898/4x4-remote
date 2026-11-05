@@ -127,6 +127,42 @@ connection-service-failed = Service could not start
 connection-not-configured = No server set
 connection-not-configured-detail = Set the server in Connection (Ctrl+,)
 
+## The Connection dialog, where the server is set
+
+connection-title = Connection
+# The fields, and the hint the empty host field shows.
+connection-host = Host
+connection-host-placeholder = Name or IP address
+connection-port = Port
+connection-path = Path
+connection-username = User name
+connection-password = Password
+connection-credentials-hint = Leave empty if the server asks for no login
+# The address the fields make. $url: such as http://nas:9091/transmission/rpc; it never holds the
+# user name or the password.
+connection-address = Address: { $url }
+# The button that asks the server once whether 4x4 can use it, and what it says while it asks.
+connection-test = Test
+connection-testing = Testing…
+# What the test found. $version: the server's version as it reports it, such as "4.1.0 (abc123)".
+# A failure says one of the connection-reason-*-detail messages, a server too old one of the
+# connection-unsupported-* messages.
+connection-test-ok = Connected: Transmission { $version }
+connection-test-not-run = The test could not run
+connection-save = Save
+connection-cancel = Cancel
+# $reason: why the file could not be written, as the system says it.
+connection-save-failed = The settings could not be saved: { $reason }
+# Under a field, after Save or Test, when it is wrong.
+connection-host-empty = Enter the server's name or IP address
+connection-host-invalid = Not a valid name or IP address
+connection-host-https = HTTPS is not supported yet
+connection-port-empty = Enter the port
+connection-port-invalid = The port is a number from 1 to 65535
+connection-path-empty = Enter the path, usually /transmission/rpc
+connection-path-invalid = The path cannot hold ?, # or spaces
+connection-username-colon = A user name cannot contain a colon
+
 ## The status bar
 
 # $speed: the formatted total speed, such as "2.4 MiB/s".

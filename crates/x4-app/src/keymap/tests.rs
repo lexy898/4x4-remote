@@ -6,9 +6,10 @@ use std::collections::BTreeSet;
 use gpui_kit::{Action as _, KeyBindingContextPredicate, KeyContext, NoAction};
 
 use super::{
-    ADD_DIALOG_CONTEXT, ANY_MENU, BINDINGS, Binding, FILE_LIST_CONTEXT, FILES, FOLDER_FIELD,
-    FOLDER_FIELD_CONTEXT, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT,
-    SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS,
+    ADD_DIALOG_CONTEXT, ANY_MENU, BINDINGS, Binding, CONNECTION_DIALOG_CONTEXT, FILE_LIST_CONTEXT,
+    FILES, FOLDER_FIELD, FOLDER_FIELD_CONTEXT, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT,
+    SEARCH_CONTEXT, SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU,
+    TORRENT_LIST_CONTEXT, TORRENTS,
 };
 
 const README: &str = include_str!("../../../../README.md");
@@ -413,6 +414,31 @@ fn the_open_dialog_keeps_every_window_key() {
             && binding.context == Some(ADD_DIALOG_CONTEXT)
     });
     assert!(enter_kept, "Enter is bound to nothing in the add dialog");
+}
+
+/// The key contexts around the focus in the open Connection dialog, from the window down: on its
+/// buttons, and in one of its fields. The dialog lies beside the main window's content, under the
+/// root, so `MainWindow` is not among them.
+const OPEN_CONNECTION_DIALOG: &[&[&str]] = &[
+    &["Root", "Dialog", CONNECTION_DIALOG_CONTEXT],
+    &["Root", "Dialog", CONNECTION_DIALOG_CONTEXT, "Input"],
+];
+
+/// Only Ctrl+Q acts in the open Connection dialog, and its Enter is bound to nothing, so that the
+/// dialog's own Enter never confirms it: a field's Enter saves through the field's own event, and
+/// a focused button is pressed by it.
+#[test]
+fn the_open_connection_dialog_keeps_every_window_key() {
+    let acting: BTreeSet<&str> = keys_acting_in(OPEN_CONNECTION_DIALOG, &[], &[])
+        .into_iter()
+        .map(|(keys, _, _)| keys)
+        .collect();
+    assert_eq!(acting, BTreeSet::from(["ctrl-q"]));
+    assert_eq!(
+        actions_of("enter", CONNECTION_DIALOG_CONTEXT),
+        [NoAction.name()],
+        "Enter is bound to nothing in the Connection dialog"
+    );
 }
 
 /// The key contexts around the focus in the search box, from the window down.
