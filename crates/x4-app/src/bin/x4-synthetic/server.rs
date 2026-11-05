@@ -15,8 +15,8 @@ use x4_core::service::{self, ServiceHandle};
 use x4_core::{CheckOutcome, ConnectionSettings, EngineConfig};
 use x4_rpc::Client;
 
-use crate::daemon::{self, Activity, SyntheticDaemon};
-use crate::{TORRENTS, countries};
+use crate::countries;
+use crate::daemon::{self, Recipe};
 
 /// The server the window says it is set to: a name that never resolves (`.invalid` is reserved
 /// for that, RFC 2606), on Transmission's own port and path. Nothing is ever sent to it.
@@ -24,42 +24,43 @@ const SERVER: &str = "http://synthetic.invalid:9091/transmission/rpc";
 
 /// How the demo's window reaches daemons: set to [`SERVER`], switching to the synthetic daemon
 /// again whatever server is saved, testing a server with the synthetic daemon's answer, and saving
-/// nowhere. Its torrents behave as `activity` says.
+/// nowhere. The daemon is the one `recipe` makes, after a switch as well.
 ///
 /// # Errors
 ///
 /// None in practice: an error says that [`SERVER`] is not an address 4x4 takes.
-pub(crate) fn setup(activity: Activity) -> anyhow::Result<ConnectionSetup> {
+pub(crate) fn setup(recipe: Recipe) -> anyhow::Result<ConnectionSetup> {
     let settings =
         ConnectionSettings::from_url(SERVER, None).context("the demo's made-up server")?;
     Ok(ConnectionSetup {
         settings: Some(settings),
-        connector: Some(connector(activity)),
+        connector: Some(connector(recipe)),
         check: Some(check()),
         config_file: None,
     })
 }
 
-/// Starts the service over a new synthetic daemon of [`TORRENTS`] torrents that behave as
-/// `activity` says, with the demo's own country databases.
+/// Starts the service over a new synthetic daemon made by `recipe`, with the demo's own country
+/// databases.
 ///
 /// # Errors
 ///
 /// The system's error when no thread can be started.
-pub(crate) fn spawn(activity: Activity) -> io::Result<ServiceHandle> {
-    let client = Client::new(SyntheticDaemon::new(TORRENTS, activity));
+pub(crate) fn spawn(recipe: Recipe) -> io::Result<ServiceHandle> {
+    let client = Client::new(recipe.daemon());
     service::spawn(client, EngineConfig::default(), Box::new(countries))
 }
 
 /// Starts the service over a new synthetic daemon for any server, as `4x4` starts one for the
-/// server saved: a switch drops the old daemon with its service, and the new one starts afresh.
-fn connector(activity: Activity) -> Connector {
+/// server saved: a switch drops the old daemon with its service, and the new one starts afresh, made
+/// by the same `recipe`, so that a showcase stays one.
+fn connector(recipe: Recipe) -> Connector {
     Rc::new(move |settings| {
         tracing::info!(
             server = %settings.server_label(),
             "connecting; the synthetic daemon answers for any server"
         );
-        spawn(activity).map(ServiceChannels::from)
+        spawn(recipe).map(ServiceChannels::from)
     })
 }
 
@@ -87,9 +88,16 @@ mod tests {
     use x4_core::Event;
 
     use super::*;
+    use crate::daemon::{Activity, SHOWCASE_NAMES, TORRENTS};
 
     /// How long a test waits for the service's first list.
     const WAIT: Duration = Duration::from_secs(10);
+
+    /// The default demo, with idle torrents.
+    const STATIC: Recipe = Recipe {
+        activity: Activity::Static,
+        showcase: false,
+    };
 
     /// A server the dialog could save, other than the demo's own.
     fn elsewhere() -> ConnectionSettings {
@@ -98,7 +106,7 @@ mod tests {
 
     #[test]
     fn the_demo_saves_its_server_nowhere() {
-        let setup = setup(Activity::Static).expect("the made-up server is an address");
+        let setup = setup(STATIC).expect("the made-up server is an address");
 
         assert_eq!(setup.config_file, None, "the demo writes no config.toml");
         assert_eq!(
@@ -112,9 +120,10 @@ mod tests {
         assert!(setup.check.is_some(), "the demo tests");
     }
 
-    #[test]
-    fn the_connector_starts_the_synthetic_daemon_whatever_the_server() {
-        let setup = setup(Activity::Static).expect("the made-up server is an address");
+    /// How many torrents the first list of the service the connector of `recipe` starts holds, for
+    /// a server the dialog could save.
+    fn torrents_after_a_switch(recipe: Recipe) -> usize {
+        let setup = setup(recipe).expect("the made-up server is an address");
         let connector = setup.connector.expect("the demo switches");
 
         let channels = connector(&elsewhere()).expect("the service thread starts");
@@ -124,7 +133,7 @@ mod tests {
             "a thread runs behind the channels"
         );
         let deadline = Instant::now() + WAIT;
-        let listed = loop {
+        loop {
             match channels.events.try_recv() {
                 Ok(Event::Snapshot(snapshot)) if snapshot.listed => break snapshot.torrents.len(),
                 Ok(_) => {}
@@ -133,13 +142,32 @@ mod tests {
                 }
                 Err(error) => panic!("no list came: {error}"),
             }
-        };
+        }
+    }
+
+    #[test]
+    fn the_connector_starts_the_synthetic_daemon_whatever_the_server() {
+        let listed = torrents_after_a_switch(Recipe {
+            activity: Activity::Static,
+            showcase: false,
+        });
+
         assert_eq!(listed, usize::try_from(TORRENTS).expect("a count"));
+    }
+
+    #[test]
+    fn a_restarted_showcase_service_is_a_showcase_again() {
+        let listed = torrents_after_a_switch(Recipe {
+            activity: Activity::Static,
+            showcase: true,
+        });
+
+        assert_eq!(listed, SHOWCASE_NAMES.len());
     }
 
     #[gpui_kit::test]
     fn the_check_answers_with_the_synthetic_version(cx: &mut TestAppContext) {
-        let setup = setup(Activity::Static).expect("the made-up server is an address");
+        let setup = setup(STATIC).expect("the made-up server is an address");
         let check = setup.check.expect("the demo tests");
         let answer = Rc::new(RefCell::new(None));
         let slot = Rc::clone(&answer);

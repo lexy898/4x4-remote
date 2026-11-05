@@ -172,7 +172,12 @@ log goes to stderr only). The rates of the active torrents change on every poll.
 every rate at 0, an idle daemon; `--scroll` scrolls the table by one row per frame for 10 seconds,
 logs the intervals between the frames and quits; `--select N` selects the row at index `N` (from 0)
 once the list is there, and `--extend K` then extends the selection `K` rows down, as Shift+Down
-would. The made-up daemon carries out the actions on its own torrents: pausing, starting (a torrent
+would. `--showcase` makes 24 torrents instead, named like free software, films and texts that anyone
+may share (an Arch Linux ISO, "Big Buck Bunny (2008) 1080p"), in a mix of states: every main state
+is among them, and the first rows show several. `--theme system|light|dark` starts the window with
+that theme instead of following the desktop's, so that a shot of either theme changes nothing on the
+desktop. Both are for screenshots; the default demo is the same with and without them. The made-up
+daemon carries out the actions on its own torrents: pausing, starting (a torrent
 that lacks data downloads, a complete one seeds), starting ahead of the queue, verifying (the
 torrent checks for three updates, then goes back to what it was), removing, the speed settings, and
 what the Files tab changes: which files download, their priorities and downloading in order. It
