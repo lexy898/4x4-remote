@@ -1928,8 +1928,8 @@ commit_build_file() { # <text> <message>
 # `just package` in the checkout, with the stand-in makepkg first on PATH, the empty home and no
 # XDG_CACHE_HOME, so the cache is the home's ~/.cache/4x4-pkg.
 run_package() {
-    run_with_input '' env -u XDG_CACHE_HOME HOME="$package_dir/home" PATH="$package_dir/bin:$PATH" \
-        just --justfile "$package_repo/justfile" package
+    run_with_input '' env -u XDG_CACHE_HOME -u X4_REPO HOME="$package_dir/home" \
+        PATH="$package_dir/bin:$PATH" just --justfile "$package_repo/justfile" package
 }
 
 # The checkout has another branch checked out, with a commit and an uncommitted change of its own;
@@ -1990,6 +1990,25 @@ test_package_recipe_stops_when_master_has_no_build_file() {
         [[ -z $(ls -A "$package_dir/home") ]] ||
             fail "with $what, the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
     done
+}
+
+# makepkg reads the copy of the PKGBUILD as bash, with the checkout's path inside a double-quoted
+# string: a path with the characters bash treats specially there (and an & and a space, which a
+# substitution could misread) still names the checkout, character for character.
+test_package_recipe_names_a_checkout_whose_path_bash_would_misread() {
+    local odd sources
+    new_package_env
+    commit_build_file master "feat: the tip of master"
+    odd="$package_dir/a & b \$HOME \`x\` \"q\" back\\slash"
+    mv "$package_repo" "$odd"
+    package_repo=$odd
+    run_package
+    expect_status 0
+    sources=$(bash -c 'source "$1" && printf "%s\n" "${source[@]}"' _ \
+        "$package_dir/built-PKGBUILD" 2>&1) ||
+        fail "the copy of the PKGBUILD does not read as bash: $sources"
+    [[ $sources == "4x4-remote::git+file://$odd#branch=master" ]] ||
+        fail "the copy does not name the checkout; its source is: $sources"
 }
 
 # A PKGBUILD on master without the GitHub source (an older one, or one edited by hand) cannot be
@@ -3021,6 +3040,7 @@ cases=(
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
     package_recipe_stops_when_the_build_file_has_another_source
+    package_recipe_names_a_checkout_whose_path_bash_would_misread
     package_recipe_stops_outside_a_git_repository
     package_recipe_warns_when_master_is_behind_the_last_fetched_origin
     package_recipe_starts_over_from_a_source_mirror_of_another_checkout

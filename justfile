@@ -123,12 +123,14 @@ package:
     fi
     commit=$(git log -1 --format='%h %s' refs/heads/master)
     echo "building master: $commit"
-    repo="{{justfile_directory()}}"
+    repo={{quote(justfile_directory())}}
     cache="${XDG_CACHE_HOME:-$HOME/.cache}/4x4-pkg"
     mkdir -p "$cache/build" "$cache/sources" "$cache/packages"
     # makepkg rewrites pkgver= in the PKGBUILD it runs, so it runs a copy, and master's, as the
-    # sources it builds are.
-    printf '%s\n' "${pkgbuild/"$github"/"git+file://$repo#"}" >"$cache/PKGBUILD"
+    # sources it builds are. The path goes into a double-quoted string that makepkg reads as bash,
+    # so the characters bash treats specially there are escaped.
+    quoted=$(printf '%s' "$repo" | sed 's/[$`"\\]/\\&/g')
+    printf '%s\n' "${pkgbuild//"$github"/"git+file://$quoted#"}" >"$cache/PKGBUILD"
     # makepkg refuses a source mirror made from another checkout (this one moved, or a clone), and
     # the working copy made from that mirror cannot follow this checkout's commits: both go, and the
     # build starts over.

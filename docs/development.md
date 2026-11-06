@@ -59,8 +59,10 @@ from (see [Files and logs](user-guide.md#files-and-logs)), and installs, next to
 `/usr/share/licenses/4x4-remote-git`; see [License](../README.md#license)).
 
 To update, run the four commands of a checkout again; pacman replaces the installed version.
-Before 1.0 the package was called `4x4-git`: `pacman -U` of `4x4-remote-git` asks to remove it,
-and your settings stay.
+Before 1.0 the package was called `4x4-git`: `pacman -U` of `4x4-remote-git` asks whether to
+remove it (answer `y`; your settings stay). Its build files, `~/.cache/4x4-pkg/build/4x4-git` and
+`~/.cache/4x4-pkg/sources/4x4`, are no longer used and can be deleted, and the first build of
+`4x4-remote-git` takes the full four minutes.
 
 To uninstall, first run `just default-handler --undo` if you made 4x4 the default app for
 `.torrent` files and magnet links (described below), then `sudo pacman -R 4x4-remote-git`. Your
