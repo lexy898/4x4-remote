@@ -1,12 +1,10 @@
 # Maintainer: lexy898
 #
-# Builds 4x4 from the commit at the tip of the master branch, never from a working tree. On its own
-# (makepkg -si, in an empty directory with only this file) it clones GitHub's master. Through
-# `just package`, run in a checkout, X4_REPO names that checkout and its local master is built
-# instead; every build file then stays under ~/.cache/4x4-pkg, and the result is installed with
-# `sudo pacman -U <file>`.
+# 4x4 Remote from the commit at the tip of GitHub's master branch: the file the AUR has as
+# 4x4-remote-git. In a checkout of the repository, `just package` builds the checkout's own master
+# branch with a copy of this file whose source names the checkout.
 
-pkgname=4x4-git
+pkgname=4x4-remote-git
 # makepkg replaces this with what pkgver() prints, in the copy of this file that it runs.
 pkgver=1.0.0.r0.g0000000
 pkgrel=1
@@ -17,11 +15,14 @@ license=('MIT OR Apache-2.0')
 # geoip-database holds the country files in /usr/share/GeoIP that the Peers tab reads for its flags.
 # It is a dependency, not an optional one: 4x4 works without it, but pacman -Rs of the package that
 # first brought it in (deluge) would remove an optional one, and the flags would go silently.
+# libglvnd, vulkan-icd-loader and wayland are loaded while 4x4 runs, so the binary does not name
+# them: libglvnd's libEGL draws through OpenGL when there is no Vulkan driver.
 depends=(
   glibc
   libgcc
   geoip-database
   hicolor-icon-theme
+  libglvnd
   libxcb
   libxkbcommon
   libxkbcommon-x11
@@ -33,21 +34,21 @@ optdepends=(
   'vulkan-driver: draw through Vulkan; without one 4x4 falls back to OpenGL and uses more memory'
   'xdg-desktop-portal-impl: the file dialog for .torrent files'
 )
-provides=(4x4)
-conflicts=(4x4)
+provides=("4x4-remote=$pkgver")
+# 4x4-git is the name this package had before 1.0; pacman offers to remove it.
+conflicts=(4x4-remote 4x4-git)
 # !lto: makepkg's -flto would reach the C shim wayland-backend compiles, and rust-lld cannot link
 # GCC's LTO objects; Cargo's own LTO ([profile.release]) still applies. !debug: the release
 # profile strips the binary, so a -debug package would be empty.
 options=(!lto !debug)
-# X4_REPO, when set and not empty (just package does that), names a local checkout to clone instead.
-_repo=${X4_REPO:+file://$X4_REPO}
-source=("4x4::git+${_repo:-https://github.com/lexy898/4x4-remote.git}#branch=master")
+# `just package` finds this exact source in its copy and names the checkout instead.
+source=("4x4-remote::git+https://github.com/lexy898/4x4-remote.git#branch=master")
 b2sums=('SKIP')
 
 # The workspace version, then the number of commits and the commit: 1.0.0.r320.g1a2b3c4. The
 # count only grows while master is never rewritten, so every new build is an upgrade for pacman.
 pkgver() {
-  cd 4x4
+  cd 4x4-remote
   local version
   version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
   if [[ -z $version ]]; then
@@ -58,24 +59,24 @@ pkgver() {
 }
 
 prepare() {
-  cd 4x4
+  cd 4x4-remote
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target host-tuple
 }
 
 build() {
-  cd 4x4
+  cd 4x4-remote
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  # The panic locations in the binary would otherwise hold the build dir under ~/.cache/4x4-pkg
-  # and the path of cargo's registry in the builder's home.
+  # The panic locations in the binary would otherwise hold the build dir and the path of cargo's
+  # registry in the builder's home.
   export RUSTFLAGS+=" --remap-path-prefix=$srcdir=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/cargo"
   # Only the app: the `synthetic` feature and its x4-synthetic demo stay out.
   cargo build --frozen --release -p x4-app --bin 4x4
 }
 
 package() {
-  cd 4x4
+  cd 4x4-remote
   install -Dm755 target/release/4x4 "$pkgdir/usr/bin/4x4"
   # The .Devel file only lends the icon to the windows of debug builds (`just run`); it is hidden.
   install -Dm644 packaging/linux/io.github.lexy898.FourByFour.desktop \

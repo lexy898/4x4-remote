@@ -44,10 +44,10 @@ body:
     attributes:
       label: Package version
       description: >-
-        If you installed the package `4x4-git`, the output of `pacman -Q 4x4-git`. It includes the
-        commit, which `4x4 --version` does not: every build after a release prints the same
-        version.
-      placeholder: 4x4-git 1.0.0.r12.g1a2b3c4-1
+        If you installed the package `4x4-remote-git`, the output of `pacman -Q 4x4-remote-git`. It
+        includes the commit, which `4x4 --version` does not: every build after a release prints the
+        same version.
+      placeholder: 4x4-remote-git 1.0.0.r12.g1a2b3c4-1
     validations:
       required: false
   - type: input
