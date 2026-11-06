@@ -28,18 +28,19 @@ what you want is merged into `master`:
 git switch master
 git pull
 just package
-sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-git-<version>-1-x86_64.pkg.tar.zst
+sudo pacman -U ~/.cache/4x4-pkg/packages/4x4-remote-git-<version>-1-x86_64.pkg.tar.zst
 ```
 
-`just package` builds the package with `makepkg` (from `packaging/arch/PKGBUILD`) and prints the
-path of the file it made as its last line; that file is what `pacman -U` installs. The version
-names the commit it was built from, such as `1.0.0.r320.g1a2b3c4` (the workspace version, the
-number of commits and the commit). The build needs the tools and libraries of
-[Build from source](#build-from-source); makepkg names any package that is missing, and
-`just package` never installs anything itself. The first build takes about four minutes.
-Everything it makes stays in `~/.cache/4x4-pkg` (crates come from cargo's own cache, `~/.cargo`):
-the build dir keeps the compiled crates, about 2 GiB, so later builds are faster, and all of it is
-safe to delete.
+`just package` builds the package with `makepkg` and prints the path of the file it made as its
+last line; that file is what `pacman -U` installs. The version names the commit it was built from,
+such as `1.0.0.r320.g1a2b3c4` (the workspace version, the number of commits and the commit). The
+build needs the tools and libraries of [Build from source](#build-from-source); makepkg names any
+package that is missing, and `just package` never installs anything itself. The first build takes
+about four minutes. `packaging/arch/PKGBUILD` itself is the file for the AUR, which builds GitHub's
+`master`; makepkg runs a copy of it whose source is this checkout instead, and `just package` stops
+if the file has no such source to replace. Everything it makes stays in `~/.cache/4x4-pkg` (crates
+come from cargo's own cache, `~/.cargo`): the build dir keeps the compiled crates, about 2 GiB, so
+later builds are faster, and all of it is safe to delete.
 
 `just package` always builds the commits of the local `master` branch: not the working tree, so
 uncommitted changes are left out, and not the branch checked out; its first line names the commit it
@@ -55,12 +56,14 @@ without logging out. It also installs a second, hidden desktop file for debug bu
 below). It depends on `geoip-database`, which holds the country files that the peers' flags come
 from (see [Files and logs](user-guide.md#files-and-logs)), and installs, next to the licenses of
 4x4, the notice of the flag pictures it embeds (`LICENSE-country-flag-icons` in
-`/usr/share/licenses/4x4-git`; see [License](../README.md#license)).
+`/usr/share/licenses/4x4-remote-git`; see [License](../README.md#license)).
 
 To update, run the four commands of a checkout again; pacman replaces the installed version.
+Before 1.0 the package was called `4x4-git`: `pacman -U` of `4x4-remote-git` asks to remove it,
+and your settings stay.
 
 To uninstall, first run `just default-handler --undo` if you made 4x4 the default app for
-`.torrent` files and magnet links (described below), then `sudo pacman -R 4x4-git`. Your
+`.torrent` files and magnet links (described below), then `sudo pacman -R 4x4-remote-git`. Your
 `config.toml`, `state.toml` and logs stay (see [Files and logs](../README.md#files-and-logs)). The
 build files in `~/.cache/4x4-pkg`, about 2 GiB, can be deleted: `rm -rf ~/.cache/4x4-pkg`.
 

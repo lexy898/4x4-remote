@@ -100,6 +100,15 @@ package:
             "then just package" >&2
         exit 1
     fi
+    # The PKGBUILD takes its sources from GitHub, as the AUR has it; the copy that makepkg runs
+    # takes them from this checkout instead, so it needs that exact source to replace.
+    github='git+https://github.com/lexy898/4x4-remote.git#'
+    pkgbuild=$(git show refs/heads/master:packaging/arch/PKGBUILD)
+    if [[ $pkgbuild != *"$github"* ]]; then
+        echo "the packaging/arch/PKGBUILD of the local master branch does not take its sources from" \
+            "${github%#}, so just package cannot point it at this checkout" >&2
+        exit 1
+    fi
     # The local master may lag behind the origin/master that was last fetched. That is only a
     # warning (an older master may be wanted), and it compares with what is there: nothing is
     # fetched, so it is as old as the last fetch, and without that ref it says nothing.
@@ -119,18 +128,18 @@ package:
     mkdir -p "$cache/build" "$cache/sources" "$cache/packages"
     # makepkg rewrites pkgver= in the PKGBUILD it runs, so it runs a copy, and master's, as the
     # sources it builds are.
-    git show refs/heads/master:packaging/arch/PKGBUILD >"$cache/PKGBUILD"
+    printf '%s\n' "${pkgbuild/"$github"/"git+file://$repo#"}" >"$cache/PKGBUILD"
     # makepkg refuses a source mirror made from another checkout (this one moved, or a clone), and
     # the working copy made from that mirror cannot follow this checkout's commits: both go, and the
     # build starts over.
-    mirror=$cache/sources/4x4
+    mirror=$cache/sources/4x4-remote
     origin=$(git config --file "$mirror/config" --get remote.origin.url 2>/dev/null || true)
     if [[ -d $mirror && $origin != "file://$repo" ]]; then
         echo "the source mirror in $cache was made from another checkout; starting over"
-        rm -rf "$mirror" "$cache/build/4x4-git/src"
+        rm -rf "$mirror" "$cache/build/4x4-remote-git/src"
     fi
     cd "$cache"
-    export X4_REPO="$repo" BUILDDIR="$cache/build" SRCDEST="$cache/sources" PKGDEST="$cache/packages"
+    export BUILDDIR="$cache/build" SRCDEST="$cache/sources" PKGDEST="$cache/packages"
     makepkg --force
     makepkg --packagelist
 

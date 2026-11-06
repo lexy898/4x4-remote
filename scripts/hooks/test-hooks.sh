@@ -1744,9 +1744,11 @@ expect_srcinfo() { # <key> <value>...
         fail "expected $key to be '$*', got: '$(srcinfo_values "$key" | paste -sd '|')'"
 }
 
-# makepkg reads the PKGBUILD as `just package` gives it: a copy, with X4_REPO naming the checkout.
-# The owner's makepkg.conf stays out of it (makepkg reads one in XDG_CONFIG_HOME or in HOME).
-test_package_build_file_describes_4x4_git_built_from_the_local_master() {
+# makepkg reads the PKGBUILD as the AUR has it, run by hand in an empty directory: 4x4-remote-git,
+# built from GitHub's master. The owner's makepkg.conf stays out of it (makepkg reads one in
+# XDG_CONFIG_HOME or in HOME), and an X4_REPO left in the environment, which named a checkout
+# before `just package` pointed its own copy at one, changes nothing.
+test_package_build_file_describes_4x4_remote_git_built_from_github() {
     local dir
     if ! command -v makepkg >/dev/null 2>&1; then
         skip "makepkg not found; it exists only on Arch Linux"
@@ -1757,51 +1759,29 @@ test_package_build_file_describes_4x4_git_built_from_the_local_master() {
     run_with_input '' env -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" \
         X4_REPO="$dir/checkout" makepkg --printsrcinfo
     expect_status 0
-    expect_srcinfo pkgbase 4x4-git
-    expect_srcinfo pkgname 4x4-git
+    expect_srcinfo pkgbase 4x4-remote-git
+    expect_srcinfo pkgname 4x4-remote-git
     expect_srcinfo arch x86_64
     expect_srcinfo license 'MIT OR Apache-2.0'
-    expect_srcinfo depends glibc libgcc geoip-database hicolor-icon-theme libxcb libxkbcommon \
-        libxkbcommon-x11 vulkan-icd-loader wayland
+    expect_srcinfo depends glibc libgcc geoip-database hicolor-icon-theme libglvnd libxcb \
+        libxkbcommon libxkbcommon-x11 vulkan-icd-loader wayland
     expect_srcinfo makedepends cargo git fontconfig freetype2
     expect_srcinfo optdepends \
         'vulkan-driver: draw through Vulkan; without one 4x4 falls back to OpenGL and uses more memory' \
         'xdg-desktop-portal-impl: the file dialog for .torrent files'
-    expect_srcinfo provides 4x4
-    expect_srcinfo conflicts 4x4
+    expect_srcinfo provides "4x4-remote=$(srcinfo_values pkgver)"
+    expect_srcinfo conflicts 4x4-remote 4x4-git
     expect_srcinfo options '!lto' '!debug'
-    # The local master branch of the checkout: only what is committed there is built.
-    expect_srcinfo source "4x4::git+file://$dir/checkout#branch=master"
+    expect_srcinfo source "4x4-remote::git+https://github.com/lexy898/4x4-remote.git#branch=master"
     expect_srcinfo b2sums SKIP
 }
 
-# Run by hand, outside `just package`, in an empty directory, the PKGBUILD builds from GitHub. An
-# X4_REPO that is set but empty does not turn the source into a bare file:// either.
-test_package_build_file_takes_the_sources_from_github_by_default() {
-    local dir
-    if ! command -v makepkg >/dev/null 2>&1; then
-        skip "makepkg not found; it exists only on Arch Linux"
-        return
-    fi
-    dir=$(mktemp -d "$tmp_root/pkgbuild.XXXXXX")
-    cp "$pkgbuild" "$dir/PKGBUILD" 2>/dev/null || fail "no PKGBUILD at $pkgbuild"
-    run_with_input '' env -u X4_REPO -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" \
-        makepkg --printsrcinfo
-    expect_status 0
-    expect_srcinfo pkgname 4x4-git
-    expect_srcinfo source "4x4::git+https://github.com/lexy898/4x4-remote.git#branch=master"
-    run_with_input '' env -C "$dir" HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" X4_REPO= \
-        makepkg --printsrcinfo
-    expect_status 0
-    expect_srcinfo source "4x4::git+https://github.com/lexy898/4x4-remote.git#branch=master"
-}
-
-# pkgver() in a stand-in of makepkg's $srcdir, whose 4x4 is a clone with three commits and a
+# pkgver() in a stand-in of makepkg's $srcdir, whose 4x4-remote is a clone with three commits and a
 # version line outside [workspace.package] too.
 test_package_version_is_the_workspace_version_with_the_commit_count_and_hash() {
     local dir checkout hash
     dir=$(mktemp -d "$tmp_root/pkgver.XXXXXX")
-    checkout=$dir/src/4x4
+    checkout=$dir/src/4x4-remote
     mkdir -p "$checkout"
     git -C "$checkout" init -q
     printf '%s\n' '[workspace]' 'members = []' '' '[workspace.package]' 'version = "1.2.3"' \
@@ -1810,7 +1790,7 @@ test_package_version_is_the_workspace_version_with_the_commit_count_and_hash() {
     commit_all "$checkout" "second"
     commit_all "$checkout" "third"
     hash=$(git -C "$checkout" rev-parse --short=7 HEAD)
-    run_with_input '' env -C "$dir/src" X4_REPO="$dir" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
+    run_with_input '' env -C "$dir/src" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
     expect_status 0
     [[ $stdout == "1.2.3.r3.g$hash" ]] || fail "expected the version 1.2.3.r3.g$hash, got: '$stdout'"
 }
@@ -1820,12 +1800,12 @@ test_package_version_is_the_workspace_version_with_the_commit_count_and_hash() {
 test_package_version_stops_without_a_workspace_version() {
     local dir checkout
     dir=$(mktemp -d "$tmp_root/pkgver.XXXXXX")
-    checkout=$dir/src/4x4
+    checkout=$dir/src/4x4-remote
     mkdir -p "$checkout"
     git -C "$checkout" init -q
     printf '%s\n' '[workspace.package]' 'version = "1.2.3" # the next release' >"$checkout/Cargo.toml"
     commit_all "$checkout" "first"
-    run_with_input '' env -C "$dir/src" X4_REPO="$dir" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
+    run_with_input '' env -C "$dir/src" bash -e -c 'source "$1" && pkgver' _ "$pkgbuild"
     ((status != 0)) || fail "pkgver() made a version without one: '$stdout'"
     expect_contains "no version in [workspace.package] of Cargo.toml" "$stderr" stderr
     [[ -z $stdout ]] || fail "expected no version, got: '$stdout'"
@@ -1839,7 +1819,7 @@ test_package_version_stops_without_a_workspace_version() {
 test_package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped() {
     local dir name expected
     dir=$(mktemp -d "$tmp_root/package-build.XXXXXX")
-    mkdir -p "$dir/bin" "$dir/home" "$dir/src/4x4"
+    mkdir -p "$dir/bin" "$dir/home" "$dir/src/4x4-remote"
     cat >"$dir/bin/cargo" <<EOF
 #!/usr/bin/env bash
 {
@@ -1850,17 +1830,17 @@ test_package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped(
 EOF
     chmod +x "$dir/bin/cargo"
     run_with_input '' env -C "$dir/src" -u CARGO_HOME -u CARGO_TARGET_DIR -u RUSTUP_TOOLCHAIN \
-        PATH="$dir/bin:$PATH" HOME="$dir/home" X4_REPO="$dir" srcdir="$dir/src" \
+        PATH="$dir/bin:$PATH" HOME="$dir/home" srcdir="$dir/src" \
         RUSTFLAGS='-C force-frame-pointers=yes' \
         bash -e -c 'source "$1"; (prepare); (build)' _ "$pkgbuild"
     expect_status 0
     expected="args: fetch --locked --target host-tuple
-pwd: $dir/src/4x4
+pwd: $dir/src/4x4-remote
 RUSTFLAGS: -C force-frame-pointers=yes
 CARGO_TARGET_DIR: unset
 RUSTUP_TOOLCHAIN: stable
 args: build --frozen --release -p x4-app --bin 4x4
-pwd: $dir/src/4x4
+pwd: $dir/src/4x4-remote
 RUSTFLAGS: -C force-frame-pointers=yes --remap-path-prefix=$dir/src=/build --remap-path-prefix=$dir/home/.cargo/registry/src=/cargo
 CARGO_TARGET_DIR: target
 RUSTUP_TOOLCHAIN: stable"
@@ -1875,7 +1855,7 @@ RUSTUP_TOOLCHAIN: stable"
 test_package_installs_the_binary_desktop_files_icon_and_licenses() {
     local dir checkout listing expected
     dir=$(mktemp -d "$tmp_root/package-files.XXXXXX")
-    checkout=$dir/src/4x4
+    checkout=$dir/src/4x4-remote
     mkdir -p "$checkout/target/release" "$checkout/packaging/linux" "$dir/pkg"
     printf '#!/bin/sh\n' >"$checkout/target/release/4x4"
     cp "$root/packaging/linux/io.github.lexy898.FourByFour.desktop" "$checkout/packaging/linux/"
@@ -1886,16 +1866,16 @@ test_package_installs_the_binary_desktop_files_icon_and_licenses() {
     mkdir -p "$checkout/crates/x4-app/assets/flags"
     cp "$root/crates/x4-app/assets/flags/LICENSE" "$checkout/crates/x4-app/assets/flags/" 2>/dev/null ||
         fail "no notice of the flags at $root/crates/x4-app/assets/flags/LICENSE"
-    run_with_input '' env -C "$dir/src" X4_REPO="$dir" srcdir="$dir/src" pkgdir="$dir/pkg" \
+    run_with_input '' env -C "$dir/src" srcdir="$dir/src" pkgdir="$dir/pkg" \
         bash -e -c 'source "$1" && package' _ "$pkgbuild"
     expect_status 0
     listing=$(cd "$dir/pkg" && find . -type f -printf '%m %p\n' | LC_ALL=C sort)
     expected="644 ./usr/share/applications/io.github.lexy898.FourByFour.Devel.desktop
 644 ./usr/share/applications/io.github.lexy898.FourByFour.desktop
 644 ./usr/share/icons/hicolor/scalable/apps/io.github.lexy898.FourByFour.svg
-644 ./usr/share/licenses/4x4-git/LICENSE-APACHE
-644 ./usr/share/licenses/4x4-git/LICENSE-MIT
-644 ./usr/share/licenses/4x4-git/LICENSE-country-flag-icons
+644 ./usr/share/licenses/4x4-remote-git/LICENSE-APACHE
+644 ./usr/share/licenses/4x4-remote-git/LICENSE-MIT
+644 ./usr/share/licenses/4x4-remote-git/LICENSE-country-flag-icons
 755 ./usr/bin/4x4"
     [[ $listing == "$expected" ]] || fail "unexpected files in the package: $listing"
 }
@@ -1927,16 +1907,21 @@ if [[ \$* == --force ]]; then
     cp PKGBUILD "$package_dir/built-PKGBUILD"
     sed -i 's/^pkgver=.*/pkgver=0.1.0.r2.gbbbbbbb/' PKGBUILD
 elif [[ \$* == --packagelist ]]; then
-    echo "\$PKGDEST/4x4-git-\$(sed -n 's/^pkgver=//p' PKGBUILD)-1-x86_64.pkg.tar.zst"
+    echo "\$PKGDEST/4x4-remote-git-\$(sed -n 's/^pkgver=//p' PKGBUILD)-1-x86_64.pkg.tar.zst"
 fi
 EOF
     chmod +x "$package_dir/bin/makepkg"
 }
 
-# Commits a PKGBUILD with <text> after its pkgver= line to the branch checked out.
+# The source line of the PKGBUILD, as the AUR has it.
+github_source='source=("4x4-remote::git+https://github.com/lexy898/4x4-remote.git#branch=master")'
+
+# Commits a PKGBUILD with the GitHub source and <text> after its pkgver= line to the branch checked
+# out.
 commit_build_file() { # <text> <message>
     mkdir -p "$package_repo/packaging/arch"
-    printf 'pkgver=0.1.0.r1.gaaaaaaa\n# %s\n' "$1" >"$package_repo/packaging/arch/PKGBUILD"
+    printf 'pkgver=0.1.0.r1.gaaaaaaa\n%s\n# %s\n' "$github_source" "$1" \
+        >"$package_repo/packaging/arch/PKGBUILD"
     commit_all "$package_repo" "$2"
 }
 
@@ -1948,7 +1933,8 @@ run_package() {
 }
 
 # The checkout has another branch checked out, with a commit and an uncommitted change of its own;
-# only master is built.
+# only master is built, from a copy of its PKGBUILD whose source is the checkout instead of GitHub.
+# X4_REPO, which once named the checkout, is no longer set.
 test_package_recipe_builds_the_committed_master_under_the_cache_dir() {
     local master cache run
     new_package_env
@@ -1961,17 +1947,19 @@ test_package_recipe_builds_the_committed_master_under_the_cache_dir() {
     run_package
     expect_status 0
     expect_contains "building master: $master" "$stdout" stdout
-    [[ ${stdout##*$'\n'} == "$cache/packages/4x4-git-0.1.0.r2.gbbbbbbb-1-x86_64.pkg.tar.zst" ]] ||
+    [[ ${stdout##*$'\n'} == "$cache/packages/4x4-remote-git-0.1.0.r2.gbbbbbbb-1-x86_64.pkg.tar.zst" ]] ||
         fail "expected the package's path last, got: $stdout"
     run="pwd: $cache
-X4_REPO: $package_repo
+X4_REPO: unset
 BUILDDIR: $cache/build
 SRCDEST: $cache/sources
 PKGDEST: $cache/packages"
     [[ $(<"$package_dir/makepkg.log") == "args: --force"$'\n'"$run"$'\n'"args: --packagelist"$'\n'"$run" ]] ||
         fail "expected makepkg --force, then --packagelist, in the cache dir; got: $(<"$package_dir/makepkg.log")"
-    [[ $(<"$package_dir/built-PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# master' ]] ||
-        fail "makepkg was not given master's PKGBUILD: $(<"$package_dir/built-PKGBUILD")"
+    [[ $(<"$package_dir/built-PKGBUILD") == "pkgver=0.1.0.r1.gaaaaaaa
+source=(\"4x4-remote::git+file://$package_repo#branch=master\")
+# master" ]] ||
+        fail "makepkg was not given master's PKGBUILD pointed at the checkout: $(<"$package_dir/built-PKGBUILD")"
     [[ $(<"$package_repo/packaging/arch/PKGBUILD") == $'pkgver=0.1.0.r1.gaaaaaaa\n# uncommitted' ]] ||
         fail "the checkout's PKGBUILD changed: $(<"$package_repo/packaging/arch/PKGBUILD")"
     [[ -d $cache/build && -d $cache/sources && -d $cache/packages ]] ||
@@ -2002,6 +1990,26 @@ test_package_recipe_stops_when_master_has_no_build_file() {
         [[ -z $(ls -A "$package_dir/home") ]] ||
             fail "with $what, the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
     done
+}
+
+# A PKGBUILD on master without the GitHub source (an older one, or one edited by hand) cannot be
+# pointed at the checkout: the recipe stops before it writes anything rather than build GitHub's
+# master in place of the local one.
+test_package_recipe_stops_when_the_build_file_has_another_source() {
+    new_package_env
+    mkdir -p "$package_repo/packaging/arch"
+    printf '%s\n' 'pkgver=0.1.0.r1.gaaaaaaa' \
+        'source=("4x4-remote::git+${_repo:-https://github.com/lexy898/4x4-remote.git}#branch=master")' \
+        >"$package_repo/packaging/arch/PKGBUILD"
+    commit_all "$package_repo" "build: a source of another form"
+    run_package
+    expect_status 1
+    expect_contains "the packaging/arch/PKGBUILD of the local master branch does not take its sources from git+https://github.com/lexy898/4x4-remote.git, so just package cannot point it at this checkout" \
+        "$stderr" stderr
+    [[ $stdout != *"building master"* ]] || fail "the recipe went on: $stdout"
+    [[ ! -e $package_dir/makepkg.log ]] || fail "makepkg ran"
+    [[ -z $(ls -A "$package_dir/home") ]] ||
+        fail "the recipe wrote: $(cd "$package_dir/home" && find . | paste -sd ' ')"
 }
 
 # Outside a git repository (a copy made without .git, or a checkout git refuses to read), git's own
@@ -2091,27 +2099,29 @@ test_package_recipe_starts_over_from_a_source_mirror_of_another_checkout() {
     local mirror src
     new_package_env
     commit_build_file master "feat: the tip of master"
-    mirror=$package_cache/sources/4x4
-    src=$package_cache/build/4x4-git/src
+    mirror=$package_cache/sources/4x4-remote
+    src=$package_cache/build/4x4-remote-git/src
     git init -q --bare "$mirror"
     git --git-dir="$mirror" config remote.origin.url "file://$package_dir/elsewhere"
-    mkdir -p "$src/4x4/target" "$package_cache/packages"
-    touch "$package_cache/build/4x4-git/kept" "$package_cache/packages/4x4-git-old-1-x86_64.pkg.tar.zst"
+    mkdir -p "$src/4x4-remote/target" "$package_cache/packages"
+    touch "$package_cache/build/4x4-remote-git/kept" \
+        "$package_cache/packages/4x4-remote-git-old-1-x86_64.pkg.tar.zst"
     run_package
     expect_status 0
     expect_contains "the source mirror in $package_cache was made from another checkout; starting over" \
         "$stdout" stdout
-    [[ $(<"$package_dir/cache-seen") == "$package_cache/build/4x4-git"$'\n'"$package_cache/build/4x4-git/kept" ]] ||
+    [[ $(<"$package_dir/cache-seen") == "$package_cache/build/4x4-remote-git"$'\n'"$package_cache/build/4x4-remote-git/kept" ]] ||
         fail "expected only the rest of the build dir when makepkg ran, got: $(<"$package_dir/cache-seen")"
-    [[ -e $package_cache/packages/4x4-git-old-1-x86_64.pkg.tar.zst ]] || fail "an older package was removed"
+    [[ -e $package_cache/packages/4x4-remote-git-old-1-x86_64.pkg.tar.zst ]] ||
+        fail "an older package was removed"
 
     git init -q --bare "$mirror"
     git --git-dir="$mirror" config remote.origin.url "file://$package_repo"
-    mkdir -p "$src/4x4/target"
+    mkdir -p "$src/4x4-remote/target"
     run_package
     expect_status 0
     [[ $stdout != *"starting over"* ]] || fail "the recipe started over from this checkout's mirror: $stdout"
-    grep -qxF "$mirror" "$package_dir/cache-seen" && grep -qxF "$src/4x4/target" "$package_dir/cache-seen" ||
+    grep -qxF "$mirror" "$package_dir/cache-seen" && grep -qxF "$src/4x4-remote/target" "$package_dir/cache-seen" ||
         fail "this checkout's mirror and working copy went: $(<"$package_dir/cache-seen")"
 }
 
@@ -3003,14 +3013,14 @@ cases=(
     virtual_session_stops_what_the_session_left_running
     virtual_session_refuses_a_tmpdir_too_long_for_the_socket
     virtual_session_reports_a_session_that_never_ran
-    package_build_file_describes_4x4_git_built_from_the_local_master
-    package_build_file_takes_the_sources_from_github_by_default
+    package_build_file_describes_4x4_remote_git_built_from_github
     package_version_is_the_workspace_version_with_the_commit_count_and_hash
     package_version_stops_without_a_workspace_version
     package_build_runs_cargo_offline_for_the_app_alone_with_the_paths_remapped
     package_installs_the_binary_desktop_files_icon_and_licenses
     package_recipe_builds_the_committed_master_under_the_cache_dir
     package_recipe_stops_when_master_has_no_build_file
+    package_recipe_stops_when_the_build_file_has_another_source
     package_recipe_stops_outside_a_git_repository
     package_recipe_warns_when_master_is_behind_the_last_fetched_origin
     package_recipe_starts_over_from_a_source_mirror_of_another_checkout

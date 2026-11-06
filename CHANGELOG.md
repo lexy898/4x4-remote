@@ -45,5 +45,6 @@ First release.
 - `4x4 --version`.
 - A log on stderr and in a daily file (the last 7 daily files are kept); `config.toml` (readable by
   you only) and `state.toml` in the XDG directories.
-- An Arch Linux package built from GitHub (`packaging/arch/PKGBUILD`).
+- The Arch Linux package `4x4-remote-git`, built from GitHub's `master`
+  (`packaging/arch/PKGBUILD`).
 - The interface is in English and ready for translations (Fluent messages).
