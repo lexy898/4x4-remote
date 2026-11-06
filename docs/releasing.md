@@ -108,20 +108,23 @@ cd 4x4-remote-git
 git config user.name lexy898
 git config user.email "$(git -C "$checkout" config user.email)"
 cp "$checkout/packaging/arch/PKGBUILD" .
-makepkg --printsrcinfo >.SRCINFO
 ```
 
 For `4x4-remote`, its name and its PKGBUILD take the place of the `-git` ones. The clone of a
-package that does not exist yet is empty, and git warns so. The AUR shows the
-author of every commit, and without the two `git config` lines git would sign with the global name
-and address instead of the noreply one this checkout uses. Then:
+package that does not exist yet is empty, and git warns so. The AUR shows the author of every
+commit, and without the two `git config` lines git would sign with the global name and address
+instead of the noreply one this checkout uses. Then:
 
 1. Add `LICENSE`: the [0BSD](https://spdx.org/licenses/0BSD.html) text, which the AUR suggests for
    build files, with the copyright line of `LICENSE-MIT`.
 2. Build and install the package from that directory once with `makepkg -si`, and start 4x4.
-3. Commit and push: `git add PKGBUILD .SRCINFO LICENSE`, then
-   `git commit -m "Initial import of 4x4 Remote X.Y.Z"` and `git push`.
+   makepkg writes the version it built into `pkgver=` of the `-git` PKGBUILD there, and leaves its
+   build files next to it.
+3. Only now make `.SRCINFO`, so that it names the same version: `makepkg --printsrcinfo >.SRCINFO`.
+4. Commit only the three files and push: `git add PKGBUILD .SRCINFO LICENSE`, then
+   `git commit -m "Initial import"` and `git push`.
 
-Afterwards `4x4-remote` takes every release: copy the new release PKGBUILD, make `.SRCINFO` again,
-commit as `Update to X.Y.Z` and push. `4x4-remote-git` takes a commit only when its PKGBUILD
-changes; new commits on `master` alone need none, as the AUR asks of `-git` packages.
+Afterwards `4x4-remote` takes every release: copy the new release PKGBUILD, build it once, make
+`.SRCINFO` again, commit as `Update to X.Y.Z` and push. `4x4-remote-git` takes a commit only when
+its PKGBUILD changes; new commits on `master` alone need none, as the AUR asks of `-git`
+packages.
