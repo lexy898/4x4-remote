@@ -220,7 +220,7 @@ pub(crate) fn snake_name(legacy: &str) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::session::SESSION_FIELDS;
     use crate::session_methods::LEGACY_VERSION_FIELDS;
@@ -228,7 +228,7 @@ mod tests {
 
     /// Every [`TorrentField`]. The match has no wildcard, so a new variant does not compile until
     /// it is added to the match, and with it to the list.
-    fn every_torrent_field() -> Vec<TorrentField> {
+    pub(in crate::legacy) fn every_torrent_field() -> Vec<TorrentField> {
         use TorrentField as F;
         let every = vec![
             F::Id,
