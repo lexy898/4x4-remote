@@ -1588,6 +1588,45 @@ fn a_choice_made_before_the_session_stays_on_other_servers(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn a_choice_made_before_the_session_waits_for_it_once_connected(cx: &mut TestAppContext) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.request_torrent("empty.torrent", &content, cx);
+    window.click_wanted("Empty/b", cx);
+    window.retype(FOLDER, "/data/films", cx);
+
+    // The daemon answers, and its session has not come yet: the server could be 4.0.
+    window.send_event(
+        Event::Snapshot(Arc::new(Snapshot {
+            torrents: Vec::new(),
+            listed: false,
+            session: None,
+            free_space_bytes: None,
+            rate_down: 0,
+            rate_up: 0,
+            connection: ConnectionState::Connected,
+            stale: false,
+        })),
+        cx,
+    );
+
+    assert!(window.disabled(CONFIRM, cx));
+    assert_eq!(
+        window.label(REASON, cx).as_deref(),
+        Some("Not connected to the server")
+    );
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_adds(), []);
+
+    window.send(Vec::new(), cx);
+
+    assert!(!window.disabled(CONFIRM, cx));
+    assert_eq!(window.label(REASON, cx), None);
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.files_unwanted, [2]);
+}
+
+#[gpui_kit::test]
 fn a_torrent_with_an_empty_file_keeps_its_choice_elsewhere(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);

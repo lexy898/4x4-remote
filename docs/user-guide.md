@@ -478,9 +478,10 @@ so leaving one out could leave out another. So does one with too many files to c
 than 50 000, or files nested so deep that their tree would take too much memory. On Transmission
 4.0, a torrent with empty files is added with all its files, because 4.0 leaves empty files out and
 numbers the rest differently. A dialog that opens before 4x4 has reached the server offers the
-choice until it learns that the server is 4.0, and then drops it. A magnet link has no choice of
-files either, as its files are known only once its metadata has come. "Start immediately" starts as the daemon's setting for new
-torrents; without it, the torrent is added paused.
+choice until it learns that the server is 4.0, and then drops it; until 4x4 knows the server's
+version, Add stays disabled while a file of such a torrent is unchecked. A magnet link has no choice
+of files either, as its files are known only once its metadata has come. "Start immediately" starts
+as the daemon's setting for new torrents; without it, the torrent is added paused.
 
 Add stays disabled, with the reason beside the buttons, until a file is wanted, the folder is a
 full path on the server without `.` or `..`, the magnet link is valid and the daemon is connected;

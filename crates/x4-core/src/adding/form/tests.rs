@@ -529,7 +529,7 @@ fn daemon(lists_empty_files: bool) -> Snapshot {
 fn a_choice_made_is_dropped_once_the_daemon_turns_out_to_leave_empty_files_out() {
     let mut form = form_of(&WITH_AN_EMPTY_FILE);
     form.toggle_wanted(&key("T/b"));
-    assert_eq!(unwanted(&form), [2]);
+    assert_eq!(left_out(&form), [2]);
 
     assert!(form.follow_session(&daemon(false)), "the choice goes");
 
@@ -590,12 +590,63 @@ fn a_choice_waits_for_the_session_and_a_magnet_link_has_none_to_lose() {
         "the daemon is not known yet"
     );
     assert_eq!(form.choice_unavailable(), None);
-    assert_eq!(unwanted(&form), [2]);
+    assert_eq!(left_out(&form), [2]);
 
     let mut magnet = magnet_form(Some(link()));
     assert!(!magnet.follow_session(&daemon(false)));
     assert_eq!(magnet.choice_unavailable(), None);
     assert!(magnet.tree().is_none());
+}
+
+#[test]
+fn a_choice_that_leaves_out_a_file_beside_an_empty_one_waits_for_the_session() {
+    let mut form = form_of(&WITH_AN_EMPTY_FILE);
+    let unknown = Snapshot {
+        session: None,
+        ..snapshot(vec![torrent("other")])
+    };
+    // With every file wanted, the daemon's numbering does not matter.
+    assert!(matches!(form.check(&unknown, true), AddCheck::Ready(_)));
+    form.toggle_wanted(&key("T/b"));
+
+    // A Transmission 4.0 would read index 2 as another file; the session tells it apart.
+    assert_eq!(form.check(&unknown, true), AddCheck::NotConnected);
+    assert!(!form.follow_session(&unknown));
+    assert_eq!(form.check(&unknown, true), AddCheck::NotConnected);
+    // Nor does a snapshot with a session do, while the form has not followed it.
+    assert_eq!(check(&form), AddCheck::NotConnected);
+    // The problems of the form itself still come first. A click on a folder that is partly
+    // wanted wants it all; the next one wants none of it.
+    form.toggle_wanted(&key("T"));
+    form.toggle_wanted(&key("T"));
+    assert_eq!(form.check(&unknown, true), AddCheck::NothingWanted);
+    form.toggle_wanted(&key("T"));
+    form.toggle_wanted(&key("T/b"));
+    assert_eq!(left_out(&form), [2]);
+
+    assert!(!form.follow_session(&daemon(true)));
+
+    assert_eq!(unwanted(&form), [2]);
+    // Once known, the daemon stays known, as a session never goes away in the engine.
+    match form.check(&unknown, true) {
+        AddCheck::Ready(add) => assert_eq!(add.files_unwanted, [2]),
+        other => panic!("not ready: {other:?}"),
+    }
+}
+
+#[test]
+fn a_choice_of_a_torrent_without_empty_files_goes_before_the_session() {
+    let mut form = form_of(&[("T/a", 1), ("T/b", 1)]);
+    form.toggle_wanted(&key("T/b"));
+    let unknown = Snapshot {
+        session: None,
+        ..snapshot(Vec::new())
+    };
+
+    match form.check(&unknown, true) {
+        AddCheck::Ready(add) => assert_eq!(add.files_unwanted, [1]),
+        other => panic!("not ready: {other:?}"),
+    }
 }
 
 #[test]
