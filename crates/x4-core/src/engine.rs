@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use x4_rpc::{
-    AddOutcome, DownloadDir, FreeSpace, HashString, RpcError, ServerVersion, SessionInfo,
+    AddOutcome, DownloadDir, FreeSpace, HashString, Protocol, RpcError, ServerVersion, SessionInfo,
     SessionStats, TorrentField, TorrentGetResponse, TransportError, UnsupportedReason,
 };
 
@@ -165,6 +165,10 @@ pub enum Request {
     /// Read the recently active torrents with the list fields, and the ids of those removed
     /// recently; answered with [`Response::Torrents`].
     RecentlyActive,
+    /// Read one torrent with the list fields, by its hash; answered with
+    /// [`Response::Torrents`]. Sent once after a legacy daemon switched the torrent's download in
+    /// order, a change its recently active torrents do not report.
+    ListOne(HashString),
     /// Read the details of one torrent, whole, only their progress, or the peers or the trackers
     /// of a tab; answered with [`Response::Details`].
     Details {
@@ -230,7 +234,8 @@ pub enum Response {
     Stats(SessionStats),
     /// The free space, for [`Request::FreeSpace`] and [`Request::FolderFreeSpace`].
     FreeSpace(FreeSpace),
-    /// The torrents, for [`Request::FullList`] and [`Request::RecentlyActive`].
+    /// The torrents, for [`Request::FullList`], [`Request::RecentlyActive`] and
+    /// [`Request::ListOne`].
     Torrents(TorrentGetResponse),
     /// The torrent, for [`Request::Details`].
     Details(TorrentGetResponse),
@@ -312,6 +317,11 @@ pub enum Event {
 /// Each poll is next due one interval after it was handed out, or after its answer came if that
 /// is later, so a slow daemon rests a full interval between turns.
 ///
+/// A daemon of the legacy protocol leaves a torrent whose download in order it just switched
+/// out of its recently active torrents, so after such an action that torrent alone is read at
+/// once ([`Request::ListOne`]), and the switch follows within a moment; a JSON-RPC daemon gets no
+/// such read.
+///
 /// Actions and reads of magnet links are sent only while connected; otherwise they fail at once
 /// with [`ActionError::NotConnected`] (an add with [`AddError::NotConnected`]) instead of waiting.
 /// So are the questions about the free space of a folder, which are answered
@@ -353,9 +363,15 @@ pub struct Engine {
     /// store means nothing has arrived, not that the daemon has no torrents.
     listed: bool,
     session: Option<SessionSummary>,
+    /// The protocol the daemon speaks, as the last server check found it.
+    protocol: Protocol,
     /// Whether the daemon keeps a torrent's empty files, as the last server check found it
     /// ([`ServerVersion::lists_empty_files`]); it goes into each [`SessionSummary`].
     lists_empty_files: bool,
+    /// The torrents whose list fields are read once, by hash, as soon as they can be: those
+    /// whose download in order a legacy daemon just switched, which its recently active
+    /// torrents do not report.
+    list_reads: Vec<HashString>,
     /// The directory whose free space is read; known once this connection read the session.
     download_dir: Option<String>,
     free_space_bytes: Option<u64>,
@@ -401,7 +417,9 @@ impl Engine {
             store: Store::new(),
             listed: false,
             session: None,
+            protocol: Protocol::default(),
             lists_empty_files: true,
+            list_reads: Vec::new(),
             download_dir: None,
             free_space_bytes: None,
             rate_down: 0,
@@ -512,7 +530,8 @@ impl Engine {
             | Request::FreeSpace(_)
             | Request::FolderFreeSpace(_)
             | Request::FullList
-            | Request::RecentlyActive => connected,
+            | Request::RecentlyActive
+            | Request::ListOne(_) => connected,
         }
     }
 
@@ -695,7 +714,10 @@ impl Engine {
         );
         self.check_at = None;
         self.connected_since = Some(now);
+        self.protocol = version.protocol;
         self.set_lists_empty_files(version.lists_empty_files());
+        // The full list read at once brings every torrent anew.
+        self.list_reads.clear();
         // A timer never sent is due at once. The tick brings the statistics; its recently active
         // torrents come with the full list.
         self.session_timer = Timer::default();
@@ -767,6 +789,7 @@ impl Engine {
         let Err(error) = result else {
             tracing::info!(action = action.name(), "action done");
             self.pull_tick_forward(sent_in);
+            self.list_after_action(action);
             if action.changes_session() {
                 self.session_timer.force();
             }
@@ -781,6 +804,17 @@ impl Engine {
         }];
         events.extend(self.call_failed(now, request, &error));
         events
+    }
+
+    /// Reads the torrent of `action` once, by hash, when the daemon's recently active torrents
+    /// would not show its effect: a legacy daemon leaves out a torrent whose download in order
+    /// it switched. A JSON-RPC daemon needs no such read.
+    fn list_after_action(&mut self, action: &Action) {
+        if let (Protocol::Legacy, Action::SetSequential { hash, .. }) = (self.protocol, action)
+            && !self.list_reads.contains(hash)
+        {
+            self.list_reads.push(hash.clone());
+        }
     }
 
     /// Takes whether the daemon keeps a torrent's empty files into the session the UI reads.
@@ -906,6 +940,7 @@ enum PollKind {
     FreeSpace,
     FullList,
     RecentlyActive,
+    ListOne,
     Details,
     Peers,
     Trackers,
@@ -921,6 +956,7 @@ impl Request {
             Self::FreeSpace(_) => Some(PollKind::FreeSpace),
             Self::FullList => Some(PollKind::FullList),
             Self::RecentlyActive => Some(PollKind::RecentlyActive),
+            Self::ListOne(_) => Some(PollKind::ListOne),
             Self::Details {
                 kind: DetailsRead::Peers,
                 ..
@@ -951,6 +987,7 @@ impl Request {
             | Self::FolderFreeSpace(_)
             | Self::FullList
             | Self::RecentlyActive
+            | Self::ListOne(_)
             | Self::Details { .. }
             | Self::Action(..)
             | Self::MagnetLinks(..) => false,
@@ -966,6 +1003,7 @@ impl Request {
             Self::FreeSpace(_) => "free space",
             Self::FullList => "full list",
             Self::RecentlyActive => "recently active",
+            Self::ListOne(_) => "one torrent",
             Self::Details {
                 kind: DetailsRead::Full,
                 ..

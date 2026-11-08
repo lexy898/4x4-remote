@@ -119,6 +119,7 @@ impl Engine {
             self.tick_timer.sent(now);
             self.tick_batch = Some(self.batch);
         }
+        due.extend(self.list_reads.drain(..).map(Request::ListOne));
         if let Some(dir) = &self.download_dir
             && self
                 .free_space_timer
@@ -150,7 +151,8 @@ impl Engine {
             Request::CheckServer
             | Request::Action(..)
             | Request::MagnetLinks(..)
-            | Request::FolderFreeSpace(_) => return,
+            | Request::FolderFreeSpace(_)
+            | Request::ListOne(_) => return,
         };
         timer.answered(now);
     }
@@ -163,6 +165,7 @@ impl Engine {
         });
         let details = self.next_details(now);
         let tab = self.next_tab_read(now);
+        let list_reads = (!self.list_reads.is_empty()).then_some(now);
         [
             self.session_timer.due_at(now, self.config.session_interval),
             self.full_list_timer
@@ -171,6 +174,7 @@ impl Engine {
             free_space,
             details,
             tab,
+            list_reads,
         ]
         .into_iter()
         .flatten()

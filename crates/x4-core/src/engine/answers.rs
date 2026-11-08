@@ -36,7 +36,7 @@ impl Engine {
                 self.list_read(list, ListKind::Full);
                 Vec::new()
             }
-            (Request::RecentlyActive, Response::Torrents(list)) => {
+            (Request::RecentlyActive | Request::ListOne(_), Response::Torrents(list)) => {
                 self.list_read(list, ListKind::Recent);
                 Vec::new()
             }

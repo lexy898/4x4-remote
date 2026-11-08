@@ -108,6 +108,14 @@ fn answer(request: &Request) -> Response {
         Request::FolderFreeSpace(folder) => free_space(folder.as_str(), 1 << 30),
         Request::FullList => Response::Torrents(list()),
         Request::RecentlyActive => Response::Torrents(recent()),
+        Request::ListOne(hash) => Response::Torrents(TorrentGetResponse {
+            torrents: list()
+                .torrents
+                .into_iter()
+                .filter(|record| record.hash_string.as_deref() == Some(hash.as_str()))
+                .collect(),
+            removed: Vec::new(),
+        }),
         Request::Details {
             kind: DetailsRead::Full,
             ..
@@ -1118,6 +1126,100 @@ fn loaded_from(base: Instant, version: ServerVersion) -> Engine {
     );
     while !exchange(&mut engine, base).0.is_empty() {}
     engine
+}
+
+fn sequential_first(enabled: bool) -> Action {
+    Action::SetSequential {
+        hash: first(),
+        enabled,
+    }
+}
+
+/// Whether the first torrent downloads in order, as the engine's latest snapshot shows it.
+fn first_is_sequential(engine: &mut Engine) -> Option<bool> {
+    engine.take_snapshot().and_then(|snapshot| {
+        snapshot
+            .torrents
+            .iter()
+            .find(|torrent| torrent.hash == first())
+            .map(|torrent| torrent.sequential)
+    })
+}
+
+#[test]
+fn a_legacy_daemon_has_the_torrent_read_once_after_its_download_in_order_is_switched() {
+    let base = Instant::now();
+    let mut engine = loaded_from(base, legacy_version(18));
+    assert_eq!(first_is_sequential(&mut engine), Some(false));
+    let now = base + ms(500);
+    command(
+        &mut engine,
+        now,
+        Command::Run(ActionId(12), sequential_first(true)),
+    );
+    exchange(&mut engine, now);
+
+    // Its recently active torrents leave out a torrent whose download in order was switched.
+    assert_eq!(engine.next_wakeup(now), now);
+    let due = hand_out(&mut engine, now);
+    assert_eq!(
+        due,
+        [
+            Request::RecentlyActive,
+            Request::SessionStats,
+            Request::ListOne(first())
+        ]
+    );
+    respond(&mut engine, now, &due[0], Ok(answer(&due[0])));
+    respond(&mut engine, now, &due[1], Ok(answer(&due[1])));
+    let mut switched = answer(&due[2]);
+    if let Response::Torrents(list) = &mut switched {
+        for record in &mut list.torrents {
+            record.sequential_download = Some(true);
+        }
+    }
+    respond(&mut engine, now, &due[2], Ok(switched));
+
+    assert_eq!(first_is_sequential(&mut engine), Some(true));
+    let later = now + ms(10);
+    assert!(
+        !hand_out(&mut engine, later).contains(&Request::ListOne(first())),
+        "read once"
+    );
+}
+
+#[test]
+fn a_json_rpc_daemon_has_no_torrent_read_after_its_download_in_order_is_switched() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let now = base + ms(500);
+    command(
+        &mut engine,
+        now,
+        Command::Run(ActionId(13), sequential_first(true)),
+    );
+
+    exchange(&mut engine, now);
+
+    assert_eq!(
+        hand_out(&mut engine, now),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
+}
+
+#[test]
+fn a_legacy_daemon_has_no_torrent_read_after_other_actions() {
+    let base = Instant::now();
+    let mut engine = loaded_from(base, legacy_version(16));
+    let now = base + ms(500);
+    command(&mut engine, now, Command::Run(ActionId(14), stop_first()));
+
+    exchange(&mut engine, now);
+
+    assert_eq!(
+        hand_out(&mut engine, now),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
 }
 
 #[test]

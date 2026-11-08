@@ -173,7 +173,10 @@ impl Driven<'_> {
                     Response::Details(answer)
                 })
             }
-            Request::Action(..) | Request::MagnetLinks(..) | Request::FolderFreeSpace(_) => {
+            Request::Action(..)
+            | Request::ListOne(_)
+            | Request::MagnetLinks(..)
+            | Request::FolderFreeSpace(_) => {
                 panic!("this test runs no action and asks about no folder: {request:?}")
             }
         };
