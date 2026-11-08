@@ -281,37 +281,45 @@ around the window.
 
 ## Live tests
 
-`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs`, `crates/x4-core/tests/live.rs`
-and `crates/x4-app/tests/live.rs` against a real Transmission 4.1+ daemon; `just test` and
+`just test-live` runs the tests in `crates/x4-rpc/tests/live.rs`, `crates/x4-core/tests/live.rs` and
+`crates/x4-app/tests/live.rs` against a real Transmission daemon, 3.00 or newer; `just test` and
 `just check` skip them. They never touch existing torrents or the daemon's settings. Two tests only
 read the server version: x4-rpc's through the client, and x4-app's as the Connection dialog's Test
-does, with the one `session_get` that Test sends, whose answer must name a Transmission 4. Each of
-the others makes a torrent of its own, a random 3 MiB file or a folder of a few random files of a
-few KiB, adds it as a trackerless torrent into a test directory, works only on that torrent (stop,
-start, start now, verify, reannounce, sequential download on and off, which files are downloaded and
-their priorities, a file index past the last file, which the daemon refuses, adding it twice), and
-removes it together with its data. Most write the data into the test directory first. Some do not:
-they add their torrent paused, or by a magnet link of it, and the daemon then has none of its data.
-One removes its torrent from the list only, checks that the daemon kept the file, and then deletes
-the file itself. The tests of x4-core read the details of their torrent as the app does, in full and
-then only their progress, with and without the trackers, and check that the app understands every
-answer; and they add a torrent as the add dialog does, with a file unchecked that comes after a
-padding file and before an empty file, and check that the daemon numbers the files, those two
-included, in the order 4x4 read them from the `.torrent`, which is not the order of their names,
-with only that file left out. The tests of adding check that a torrent added paused stays
-stopped, though all its data is there; that adding it again, started, into another
-folder and with another file left out, is a duplicate that changes nothing; that a folder that does
-not exist yet, `4x4-live-new-<hex>` in the test directory, is kept as it was sent and made only
-when the torrent starts; and that a magnet link of a torrent of the test's own is added and listed,
-paused and without its metadata. One test of x4-core changes nothing at all: it reads the peers and
-the trackers of the daemon's torrent with the most peers as the Peers and the Trackers tab do, and
-checks what they become, printing only counts. Every other test checks that every other torrent
-kept its status, sequential mode, file priorities and wanted files, and prints how many torrents
-the daemon lists when it starts and once it has removed its own. The torrent and its data are removed even when a
-test fails, and only from the folder it was added to: the test directory, or the folder of its own
-that the daemon made directly in it. The folder the daemon reports must be that one once both are
-normalized, so a doubled or a trailing `/` makes no difference, and a folder with any control
-character in its name is never it.
+does, with the `session_get` that Test sends (and the second one, in the legacy protocol, to a
+daemon older than 4.1), whose answer must name a Transmission 3 or 4. Each of the others makes a
+torrent of its own, a random 3 MiB file or a folder of a few random files of a few KiB, adds it as a
+trackerless torrent into a test directory, works only on that torrent (stop, start, start now,
+verify, reannounce, sequential download on and off, which files are downloaded and their priorities,
+a file index past the last file, which the daemon refuses, adding it twice), and removes it together
+with its data. Most write the data into the test directory first. Some do not: they add their
+torrent paused, or by a magnet link of it, and the daemon then has none of its data. One removes its
+torrent from the list only, checks that the daemon kept the file, and then deletes the file itself.
+The tests of x4-core read the details of their torrent as the app does, in full and then only their
+progress, with and without the trackers, and check that the app understands every answer; and they
+add a torrent as the add dialog does, with a file unchecked that comes after a padding file and
+before an empty file, and check that the daemon numbers the files, those two included, in the order
+4x4 read them from the `.torrent`, which is not the order of their names, with only that file left
+out. The tests of adding check that a torrent added paused stays stopped, though all its data is
+there; that adding it again, started, into another folder and with another file left out, is a
+duplicate that changes nothing; that a folder that does not exist yet, `4x4-live-new-<hex>` in the
+test directory, is kept as it was sent and made only when the torrent starts; and that a magnet link
+of a torrent of the test's own is added and listed, paused and without its metadata. One test of
+x4-core changes nothing at all: it reads the peers and the trackers of the daemon's torrent with the
+most peers as the Peers and the Trackers tab do, and checks what they become, printing only counts.
+Every other test checks that every other torrent kept its status, sequential mode, file priorities
+and wanted files, and prints how many torrents the daemon lists when it starts and once it has
+removed its own. The torrent and its data are removed even when a test fails, and only from the
+folder it was added to: the test directory, or the folder of its own that the daemon made directly
+in it. The folder the daemon reports must be that one once both are normalized, so a doubled or a
+trailing `/` makes no difference, and a folder with any control character in its name is never it.
+
+On a daemon older than Transmission 4.1 the tests speak the legacy protocol, as the app does, and
+some of what they check is not there: sequential download before 4.1.0-beta.2, the peers' `peer_id`
+and `bytes_to_*` before 4.1, a tracker's `sitename` in 3.00, and the empty files and their folders
+that a torrent makes when it starts before 4.1.0-beta. Transmission 4.0 leaves a torrent's empty
+files out and numbers the rest differently, so there the add test cannot leave a file out. A test
+then says on stderr what it skips, and checks what holds instead: a field the daemon lacks reads
+none, and the add form offers no choice of files.
 
 An interrupted run (Ctrl-C, a killed process) cannot clean up, so each test prints the hash and the
 data of its torrent as soon as the daemon has added it (`live test: added torrent <hash> with its
@@ -345,6 +353,39 @@ addresses are each registered to one country, and that loopback addresses have n
 ```bash
 X4_LIVE_URL=http://my-daemon:9091/transmission/rpc \
 X4_LIVE_REMOTE_DIR=/srv/torrents/4x4-test X4_LIVE_LOCAL_DIR=/mnt/daemon/4x4-test just test-live
+```
+
+### Old daemons in Docker
+
+For the legacy protocol, `just legacy-daemons up` starts Transmission 3.00, 4.0.5 and 4.1.0-beta.2,
+each from the package of its distribution (Debian 12, Ubuntu 24.04, Debian 13), in Docker containers
+that run as you, with their RPC on 127.0.0.1 ports 19300, 19405 and 19412. A fourth daemon makes a
+test torrent of random files and seeds it to them over local peer discovery, slowly, so that each
+keeps a peer for the tests of the peers and the trackers. DHT and port forwarding are off and the
+torrent's tracker refuses at once, so nothing leaves the machine. `up` needs Docker, and the network
+the first time it builds the images; it waits up to three minutes for every daemon to have its peer.
+
+`just legacy-daemons status` gives each daemon's version and peers, and
+`just legacy-daemons env <name>` (`v3.00`, `v4.0.5` or `v4.1.0-beta.2`) the `X4_LIVE_URL`,
+`X4_LIVE_REMOTE_DIR` and `X4_LIVE_LOCAL_DIR` of one daemon, to `eval` before running a single test
+against it. `just test-live-legacy` runs the live tests, without `geoip_live`, against the three in
+turn, and fails at the end if any of them failed. `just record-fixtures-legacy` records the fixtures
+of `crates/x4-rpc/tests/fixtures/legacy/<name>/` from them, with read-only calls, as
+`just record-fixtures` records those of `crates/x4-rpc/tests/fixtures/` from the daemon at
+`X4_LIVE_URL`.
+
+`just legacy-daemons down` removes the containers, their network and the state directory, which
+holds each daemon's settings and downloads: `~/.cache/x4-scratch/legacy-daemons`, or the directory
+`X4_LEGACY_DIR` names. `up` leaves the file `.x4-legacy-daemons` in it and takes no directory that
+holds other files without that file, and `down` removes only a directory that has it; both refuse
+`/` and your home directory.
+
+```bash
+just legacy-daemons up
+just test-live-legacy
+eval "$(just legacy-daemons env v4.0.5)"
+cargo nextest run -p x4-core --test live --run-ignored only
+just legacy-daemons down
 ```
 
 ## Localization

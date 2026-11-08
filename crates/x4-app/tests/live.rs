@@ -1,8 +1,9 @@
 //! A live test of the Connection dialog's Test against a real Transmission daemon, run only by
 //! `just test-live` and `just test-live-legacy`.
 //!
-//! It makes the one call Test makes: `session_get` of the version fields, through a client of its
-//! own (two HTTP requests, as the daemon first hands out its session id). It only reads, and prints
+//! It makes the calls Test makes, through a client of its own: `session_get` of the version
+//! fields, and a second one, in the legacy protocol, to a daemon older than Transmission 4.1 (and
+//! one HTTP request more, as the daemon first hands out its session id). It only reads, and prints
 //! only the version.
 
 use x4_app::connection::check_now;

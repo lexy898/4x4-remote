@@ -261,13 +261,13 @@ particular order can be half done and still play only its first seconds. Above t
 that a file can be played while it downloads. It needs Transmission 4.1 or newer on the server: on
 an older one the switch is disabled and the line under it says why. A change shows once the
 daemon's next answer does, a moment later, not before. While the daemon is not connected, the
-checkboxes, the priorities and the switch are disabled. Until the details have come, the tab says "—" under the switch, and so it does
-while the files of a torrent of more than 1000 are sorted into their tree when the tab first shows
-them, which is done off the window's own thread, so that the window keeps answering meanwhile (some
-20 ms for 50 000 files). A magnet link has no files until its metadata has come; the tab says so,
-and the switch can be set already. A file list that would take too much memory to show, such as one
-of more than 50 000 files or of files nested hundreds of folders deep, is not drawn: the tab says
-the list is too large to show.
+checkboxes, the priorities and the switch are disabled. Until the details have come, the tab says
+"—" under the switch, and so it does while the files of a torrent of more than 1000 are sorted into
+their tree when the tab first shows them, which is done off the window's own thread, so that the
+window keeps answering meanwhile (some 20 ms for 50 000 files). A magnet link has no files until its
+metadata has come; the tab says so, and the switch can be set already. A file list that would take
+too much memory to show, such as one of more than 50 000 files or of files nested hundreds of
+folders deep, is not drawn: the tab says the list is too large to show.
 
 ## Keys of the file list
 

@@ -1,16 +1,16 @@
 //! Records scrubbed fixtures from a real Transmission daemon into `tests/fixtures/`.
 //!
 //! Run it with `just record-fixtures`; `X4_LIVE_URL` names the daemon's RPC endpoint. It makes
-//! nine calls, a second apart because the daemon may be a small machine, and only read-only ones
-//! (`session_get`, `session_stats`, `free_space`, `torrent_get`). The peers and the trackers are
-//! those of the torrent with the most connected peers in the list. Every response is scrubbed by
-//! [`Scrubber`] and nothing is written unless no original string survived and every peer address
-//! is a documentation address.
+//! ten calls, a second apart because the daemon may be a small machine, and only read-only ones
+//! (`session_get`, `session_stats`, `free_space`, `torrent_get`): the server check, then nine
+//! reads. The peers and the trackers are those of the torrent with the most connected peers in
+//! the list. Every response is scrubbed by [`Scrubber`] and nothing is written unless no original
+//! string survived and every peer address is a documentation address.
 //!
-//! Against a legacy daemon (Transmission 3.00 to 4.1.0-beta, found by `check_server`) it records
-//! eleven whole legacy answers instead, each to the request 4x4 itself sends, into
-//! `tests/fixtures/legacy/$X4_FIXTURES_NAME/`; `just record-fixtures-legacy` does it for the three
-//! daemons of `just legacy-daemons`.
+//! Against a legacy daemon (Transmission 3.00 to 4.1.0-beta, which the server check asks twice)
+//! it makes twelve reads and records eleven whole legacy answers instead, each to the request 4x4
+//! itself sends, into `tests/fixtures/legacy/$X4_FIXTURES_NAME/`; `just record-fixtures-legacy`
+//! does it for the three daemons of `just legacy-daemons`.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -110,8 +110,9 @@ fn run() -> Result<(), RecordError> {
 /// answer the check reads.
 const LEGACY_VERSION_FIELDS: [&str; 3] = ["version", "rpc_version", "rpc_version_semver"];
 
-/// Makes the eleven calls to a legacy daemon and returns the whole answers as the fixtures to
-/// write, the torrent ones first, in the order the scrubber numbers their torrents.
+/// Makes the twelve calls to a legacy daemon and returns eleven whole answers as the fixtures to
+/// write (the read that picks the details torrent is not one), the torrent ones first, in the
+/// order the scrubber numbers their torrents.
 fn read_legacy_fixtures(
     client: &mut Client<UreqTransport>,
 ) -> Result<Vec<(&'static str, Value)>, RecordError> {
