@@ -6,11 +6,22 @@
 use serde_json::{Map, Value};
 
 use super::Fill;
+use super::names::torrent_field_since;
 use crate::error::RpcError;
 
-/// `fields` (snake case) as a legacy daemon is to be asked for them, and what the answer needs
-/// filled in. Nothing is added that a field already asked for gives.
-pub(super) fn plan(fields: &mut Vec<String>) -> Fill {
+/// The per-file arrays of a torrent, in the order `file_count` is counted from them.
+const PER_FILE: [&str; 5] = [
+    "priorities",
+    "wanted",
+    "files",
+    "file_stats",
+    "bytes_completed",
+];
+
+/// `fields` (snake case) as a legacy daemon of the RPC version `rpc_version` is to be asked for
+/// them, and what the answer needs filled in. Nothing is added that a field already asked for
+/// gives.
+pub(super) fn plan(fields: &mut Vec<String>, rpc_version: u32) -> Fill {
     let has = |fields: &[String], name: &str| fields.iter().any(|field| field == name);
     let mut fill = Fill::default();
     if has(fields, "bytes_completed") {
@@ -31,6 +42,12 @@ pub(super) fn plan(fields: &mut Vec<String>) -> Fill {
         }
     }
     fill.file_count = has(fields, "file_count");
+    // A daemon without `file-count` (3.00) needs a per-file array to count: the most compact.
+    let served = torrent_field_since("file_count").is_none_or(|since| since <= rpc_version);
+    if fill.file_count && !served && !PER_FILE.iter().any(|name| has(fields, name)) {
+        fields.push("priorities".to_owned());
+        fill.added.push("priorities");
+    }
     fill
 }
 
@@ -67,16 +84,10 @@ fn fill_torrent(fill: &Fill, torrent: &mut Map<String, Value>) -> Result<(), Rpc
         add_piece_spans(torrent)?;
     }
     if fill.file_count && !torrent.contains_key("file_count") {
-        let count = [
-            "priorities",
-            "wanted",
-            "files",
-            "file_stats",
-            "bytes_completed",
-        ]
-        .iter()
-        .find_map(|name| torrent.get(*name).and_then(Value::as_array))
-        .map(Vec::len);
+        let count = PER_FILE
+            .iter()
+            .find_map(|name| torrent.get(*name).and_then(Value::as_array))
+            .map(Vec::len);
         if let Some(count) = count {
             torrent.insert("file_count".to_owned(), Value::from(count));
         }
@@ -250,7 +261,7 @@ mod tests {
             "bytes_completed".to_owned(),
             "files".to_owned(),
         ];
-        let fill = plan(&mut fields);
+        let fill = plan(&mut fields, 18);
         assert_eq!(
             fields,
             ["id", "files", "file_stats", "piece_size", "piece_count"]
@@ -261,8 +272,38 @@ mod tests {
         let mut fields: Vec<String> = ["file_stats", "bytes_completed", "files", "piece_size"]
             .map(str::to_owned)
             .to_vec();
-        let fill = plan(&mut fields);
+        let fill = plan(&mut fields, 18);
         assert_eq!(fill.added, ["piece_count"]);
+    }
+
+    #[test]
+    fn file_count_alone_is_counted_from_the_priorities_below_rpc_17() {
+        let planned = |fields: &[&str], rpc_version| {
+            let mut fields: Vec<String> = fields.iter().map(|&field| field.to_owned()).collect();
+            let fill = plan(&mut fields, rpc_version);
+            (fields, fill)
+        };
+
+        let (fields, fill) = planned(&["id", "file_count"], 16);
+        assert_eq!(fields, ["id", "file_count", "priorities"]);
+        assert_eq!(fill.added, ["priorities"]);
+        let mut answer = json!({ "torrents": [{ "id": 1, "priorities": [0, 0, 0] }] });
+        assert_eq!(apply(&fill, &mut answer), Ok(()));
+        assert_eq!(
+            answer,
+            json!({ "torrents": [{ "id": 1, "file_count": 3 }] })
+        );
+
+        // A daemon of rpc-version 17 sends file-count itself, and an array asked already counts.
+        assert_eq!(planned(&["id", "file_count"], 17).0, ["id", "file_count"]);
+        assert_eq!(
+            planned(&["file_count", "wanted"], 16).0,
+            ["file_count", "wanted"]
+        );
+        assert_eq!(
+            planned(&["file_count", "bytes_completed"], 16).0,
+            ["file_count", "file_stats"]
+        );
     }
 
     #[test]

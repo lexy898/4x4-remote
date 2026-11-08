@@ -94,7 +94,7 @@ fn fields(
         names.push(name.to_owned());
     }
     let fill = if context == NameContext::TorrentField {
-        fill::plan(&mut names)
+        fill::plan(&mut names, rpc_version)
     } else {
         Fill::default()
     };

@@ -39,8 +39,8 @@ pub(crate) struct Fill {
     bytes_from_file_stats: bool,
     /// `files` was asked: the files that lack their piece spans get them computed.
     piece_spans: bool,
-    /// The fields asked only to fill in others (`file_stats`, `piece_size`, `piece_count`),
-    /// dropped from the answer.
+    /// The fields asked only to fill in others (`file_stats`, `piece_size`, `piece_count`, and
+    /// `priorities` to count the files), dropped from the answer.
     added: Vec<&'static str>,
     /// `file_count` was asked, and is counted when the daemon does not send it.
     file_count: bool,
