@@ -615,12 +615,58 @@ test_legacy_daemons_refuse_an_unknown_command() {
 
 test_legacy_daemons_down_removes_only_its_own_state() {
     setup_fake_docker
-    mkdir -p "$legacy_dir/seeder/downloads" "$tmp_root/beside"
+    run_legacy_daemons up
+    expect_status 0
+    mkdir -p "$tmp_root/beside"
     touch "$legacy_dir/seeder/downloads/file" "$tmp_root/beside/file"
     run_legacy_daemons down
     expect_status 0
     [[ ! -e $legacy_dir ]] || fail "the state directory is still there"
     [[ -e $tmp_root/beside/file ]] || fail "a neighbouring directory was removed"
+}
+
+test_legacy_daemons_down_refuses_a_directory_up_did_not_make() {
+    setup_fake_docker
+    legacy_dir=$tmp_root/other-work
+    mkdir -p "$legacy_dir/notes"
+    touch "$legacy_dir/notes/file"
+    run_legacy_daemons down
+    [[ $status -ne 0 ]] || fail "down accepted a directory that up did not make"
+    expect_contains "refusing to remove $legacy_dir" "$stderr" stderr
+    [[ -e $legacy_dir/notes/file ]] || fail "the directory was emptied"
+    [[ ! -s $docker_log ]] || fail "docker was called: $(<"$docker_log")"
+}
+
+test_legacy_daemons_down_refuses_the_home_directory() {
+    setup_fake_docker
+    local home=$tmp_root/home dir
+    mkdir -p "$home/documents"
+    touch "$home/documents/file"
+    # Even with the marker that up leaves, which down otherwise trusts.
+    : >"$home/.x4-legacy-daemons"
+    for dir in "$home" "$home/" "$home/."; do
+        run_with_input '' env PATH="$fake_bin:$PATH" FAKE_DOCKER_LOG="$docker_log" HOME="$home" \
+            X4_LEGACY_DIR="$dir" bash "$legacy_daemons" down
+        [[ $status -ne 0 ]] || fail "down accepted HOME as $dir"
+        expect_contains "refusing" "$stderr" "stderr for $dir"
+        [[ -e $home/documents/file ]] || fail "HOME was emptied through $dir"
+    done
+    [[ ! -s $docker_log ]] || fail "docker was called: $(<"$docker_log")"
+}
+
+test_legacy_daemons_up_refuses_a_directory_that_holds_other_files() {
+    setup_fake_docker
+    legacy_dir=$tmp_root/scratch
+    mkdir -p "$legacy_dir/other-work"
+    touch "$legacy_dir/other-work/file"
+    run_legacy_daemons up
+    [[ $status -ne 0 ]] || fail "up took a directory that holds other files"
+    expect_contains "refusing" "$stderr" stderr
+    [[ ! -e $legacy_dir/.x4-legacy-daemons ]] || fail "up marked the directory as its own"
+    [[ ! -s $docker_log ]] || fail "docker was called: $(<"$docker_log")"
+    run_legacy_daemons down
+    [[ $status -ne 0 ]] || fail "down removed the directory up refused"
+    [[ -e $legacy_dir/other-work/file ]] || fail "the other files were removed"
 }
 
 test_check_tools_names_missing_tool() {
@@ -3151,6 +3197,9 @@ cases=(
     legacy_daemons_run_as_the_invoking_user
     legacy_daemons_refuse_an_unknown_command
     legacy_daemons_down_removes_only_its_own_state
+    legacy_daemons_down_refuses_a_directory_up_did_not_make
+    legacy_daemons_down_refuses_the_home_directory
+    legacy_daemons_up_refuses_a_directory_that_holds_other_files
     check_tools_names_missing_tool
     check_tools_passes_when_all_present
 )

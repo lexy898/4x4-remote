@@ -15,8 +15,10 @@
 #                X4_LIVE_LOCAL_DIR), to `eval`
 #   down         remove the containers, the network and the state directory
 #
-# Env: X4_LEGACY_DIR, the state directory (default ~/.cache/x4-scratch/legacy-daemons); `down`
-# removes it, so without X4_LEGACY_DIR it refuses any other path.
+# Env: X4_LEGACY_DIR, the state directory (default ~/.cache/x4-scratch/legacy-daemons). `up` leaves
+# the file .x4-legacy-daemons in it, and takes no directory that holds other files without that
+# file; `down` removes the directory only when it has the file. Both refuse /, $HOME and an empty
+# path.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -24,6 +26,8 @@ default_state=$HOME/.cache/x4-scratch/legacy-daemons
 state=${X4_LEGACY_DIR:-$default_state}
 network=x4-legacy
 peer_timeout=180
+# The file `up` leaves in the state directory, so that `down` removes only a directory of its own.
+marker=.x4-legacy-daemons
 
 # name:image tag:base image:loopback port (empty port: no RPC published)
 daemons=(
@@ -36,6 +40,20 @@ names=(v3.00 v4.0.5 v4.1.0-beta.2)
 usage() {
     echo "usage: legacy-daemons.sh up|down|status|env <name>" >&2
     exit 2
+}
+
+# Refuses a state directory that cannot be one of its own: an empty path, / or $HOME, however
+# written ($HOME/ or $HOME/. too).
+refuse_shared_state() {
+    local resolved=
+    if [[ -n $state ]]; then
+        resolved=$(realpath -m -- "$state")
+    fi
+    if [[ -z $state || $resolved == / || $resolved == "$(realpath -m -- "$HOME")" ]]; then
+        echo "refusing $state as the state directory: it must be a directory of its own" \
+            "(X4_LEGACY_DIR)" >&2
+        return 1
+    fi
 }
 
 port_of() { # <name>
@@ -127,6 +145,15 @@ peers_of() { # <name>: the number of connected peers, 0 when unknown
 
 up() {
     local entry name tag base port
+    refuse_shared_state
+    if [[ -d $state && ! -e $state/$marker ]] &&
+        [[ -n $(find "$state" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+        echo "refusing to use $state: it holds files that up did not make, and down would remove" \
+            "them; set X4_LEGACY_DIR to a new or an empty directory" >&2
+        return 1
+    fi
+    mkdir -p -- "$state"
+    : >"$state/$marker"
     for entry in "${daemons[@]}"; do
         name=${entry%%:*}
         base=$(base_of "$name")
@@ -199,8 +226,9 @@ env_lines() { # <name>
 }
 
 down() {
-    if [[ -z ${X4_LEGACY_DIR:-} && $state != "$HOME/.cache/x4-scratch/"* ]]; then
-        echo "refusing to remove $state: outside $HOME/.cache/x4-scratch" >&2
+    refuse_shared_state
+    if [[ -e $state && ! -e $state/$marker ]]; then
+        echo "refusing to remove $state: it has no $marker, so up did not make it" >&2
         return 1
     fi
     local name
