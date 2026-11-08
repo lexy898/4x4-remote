@@ -770,3 +770,97 @@ fn legacy_free_space_negative_size_is_a_missing_folder() {
         }
     );
 }
+
+/// A legacy `session-get` answer with every field the app reads, reporting the RPC version
+/// `rpc_version_semver`.
+fn legacy_session(rpc_version_semver: &str) -> HttpResponse {
+    testing::legacy_ok(json!({
+        "version": "4.1.3 (838877323f)",
+        "rpc-version-semver": rpc_version_semver,
+        "download-dir": "/downloads",
+        "alt-speed-enabled": false,
+        "alt-speed-down": 50,
+        "alt-speed-up": 50,
+        "speed-limit-down": 100,
+        "speed-limit-down-enabled": false,
+        "speed-limit-up": 100,
+        "speed-limit-up-enabled": false,
+        "start-added-torrents": true,
+    }))
+}
+
+#[test]
+fn a_legacy_session_of_rpc_6_is_an_invalid_response() {
+    // The daemon was upgraded to Transmission 4.1 between two polls: it still answers the legacy
+    // protocol, but the check would now find JSON-RPC, which is what 4x4 speaks to 4.1.
+    for semver in ["6.0.1", "7.0.0"] {
+        let (mut client, _) = legacy_client(move |_, _| legacy_session(semver));
+
+        let result = client.session_get();
+
+        assert!(
+            matches!(
+                &result,
+                Err(RpcError::InvalidResponse(message))
+                    if message.contains(semver) && message.contains("JSON-RPC")
+            ),
+            "{semver}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn a_legacy_session_of_rpc_5_is_read() {
+    for semver in ["5.3.0", "5.4.0", "not a version"] {
+        let (mut client, _) = legacy_client(move |_, _| legacy_session(semver));
+
+        let session = client.session_get();
+
+        assert_eq!(
+            session.map(|session| session.rpc_version_semver),
+            Ok(Some(semver.to_owned())),
+            "{semver}"
+        );
+    }
+}
+
+#[test]
+fn a_json_rpc_session_of_rpc_6_is_read() {
+    let (mut client, _) = client_answering(fixture_result(SESSION_GET));
+
+    let session = client.session_get();
+
+    assert_eq!(
+        session.map(|session| session.rpc_version_semver),
+        Ok(Some("6.0.1".to_owned()))
+    );
+}
+
+#[test]
+fn check_server_keeps_the_legacy_protocol_of_a_legacy_answer_whatever_semver_follows() {
+    // The protocol is the one the daemon answered the JSON-RPC request in. The version fields
+    // of the legacy request that follows only decide the torrent fields: a daemon that reaches
+    // it reports no 6.x, and if one did, the check would still not fail on it.
+    let transport = legacy_daemon(
+        json!({
+            "version": "4.1.0-beta.9 (0000000000)",
+            "rpc-version": 18,
+            "rpc-version-semver": "6.0.0",
+        }),
+        |_, _| testing::legacy_error("unexpected"),
+    );
+    let mut client = Client::new(transport);
+
+    let server = client.check_server();
+
+    assert_eq!(
+        server,
+        Ok(ServerVersion {
+            version: "4.1.0-beta.9 (0000000000)".to_owned(),
+            rpc_semver: "6.0.0".to_owned(),
+            rpc_version: Some(18),
+            protocol: Protocol::Legacy,
+        })
+    );
+    assert_eq!(client.protocol(), Protocol::Legacy);
+}

@@ -11,7 +11,8 @@ use crate::client::{Client, JsonRpcAnswer, Protocol};
 use crate::error::RpcError;
 use crate::legacy::OLDEST_RPC_VERSION;
 use crate::session::{
-    FreeSpace, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats,
+    FreeSpace, MIN_RPC_MAJOR, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats,
+    semver_major,
 };
 use crate::transport::Transport;
 
@@ -26,17 +27,35 @@ pub(crate) const LEGACY_VERSION_FIELDS: &[&str] = &["version", "rpc_version", "r
 impl<T: Transport> Client<T> {
     /// Reads the session settings the app uses (`session_get` with [`SESSION_FIELDS`]).
     ///
+    /// In the legacy protocol it also tells whether the daemon still is one of the legacy
+    /// protocol. Transmission 4.1 answers legacy requests too, so a daemon upgraded to it since
+    /// [`Client::check_server`] would go on being spoken to in the legacy protocol; its session
+    /// gives it away, as it reports an `rpc_version_semver` of JSON-RPC (major 6 or later), and
+    /// the session is read on every poll of the app.
+    ///
     /// # Errors
     ///
     /// Any [`RpcError`] of the call; [`RpcError::InvalidResponse`] when a requested field is
-    /// missing from the result or has the wrong type.
+    /// missing from the result or has the wrong type, and in the legacy protocol when the
+    /// session reports an RPC version of JSON-RPC: the caller checks the server again, and the
+    /// check finds JSON-RPC.
     pub fn session_get(&mut self) -> Result<SessionInfo, RpcError> {
-        self.call(
+        let session: SessionInfo = self.call(
             "session_get",
             Some(&GetParams {
                 fields: SESSION_FIELDS,
             }),
-        )
+        )?;
+        if self.protocol() == Protocol::Legacy
+            && let Some(semver) = &session.rpc_version_semver
+            && semver_major(semver).is_some_and(|major| major >= MIN_RPC_MAJOR)
+        {
+            return Err(RpcError::InvalidResponse(format!(
+                "session_get: the server reports RPC version {semver}, which is JSON-RPC, since \
+                 the check found the legacy protocol"
+            )));
+        }
+        Ok(session)
     }
 
     /// Changes the session settings that are `Some` in `set` (`session_set`).

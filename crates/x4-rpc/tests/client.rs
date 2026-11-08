@@ -674,3 +674,64 @@ fn every_check_starts_over_in_json_rpc() {
         "the next call goes as JSON-RPC"
     );
 }
+
+/// A legacy `session-get` answer with every field the app reads, from a daemon that reports the
+/// RPC version `rpc_version_semver`.
+fn legacy_session(rpc_version_semver: &str) -> HttpResponse {
+    testing::legacy_ok(json!({
+        "version": "4.1.3 (838877323f)",
+        "rpc-version-semver": rpc_version_semver,
+        "download-dir": "/downloads",
+        "alt-speed-enabled": false,
+        "alt-speed-down": 50,
+        "alt-speed-up": 50,
+        "speed-limit-down": 100,
+        "speed-limit-down-enabled": false,
+        "speed-limit-up": 100,
+        "speed-limit-up-enabled": false,
+        "start-added-torrents": true,
+    }))
+}
+
+#[test]
+fn an_upgrade_to_4_1_between_two_polls_is_found_by_the_next_session_read() {
+    // Transmission 4.1 still answers the legacy protocol, so nothing else would fail.
+    let upgraded = Arc::new(AtomicBool::new(false));
+    let fake = FakeTransport::routed({
+        let upgraded = Arc::clone(&upgraded);
+        move |method, arguments| {
+            let upgraded = upgraded.load(Ordering::SeqCst);
+            Ok(if method.contains('_') {
+                if upgraded {
+                    any_method(method)
+                } else {
+                    not_recognized()
+                }
+            } else if method == "session-get" && arguments["fields"] == legacy_version_fields() {
+                testing::legacy_ok(json!({ "version": "4.0.5 (a6fe2a64aa)", "rpc-version": 17 }))
+            } else if method == "session-get" {
+                legacy_session(if upgraded { "6.0.1" } else { "5.3.0" })
+            } else {
+                status_response(500)
+            })
+        }
+    });
+    let mut client = legacy_client(&fake);
+    assert!(client.session_get().is_ok(), "read while it is 4.0.5");
+    upgraded.store(true, Ordering::SeqCst);
+
+    let after_upgrade = client.session_get();
+
+    assert!(
+        matches!(&after_upgrade, Err(RpcError::InvalidResponse(_))),
+        "got {after_upgrade:?}"
+    );
+    // The app reconnects on that error, and the check finds JSON-RPC.
+    assert_eq!(
+        client.check_server().map(|server| server.protocol),
+        Ok(Protocol::JsonRpc)
+    );
+    client.session_get().unwrap();
+    let last = fake.requests().pop().unwrap();
+    assert_eq!(last.method, "session_get", "read in JSON-RPC");
+}

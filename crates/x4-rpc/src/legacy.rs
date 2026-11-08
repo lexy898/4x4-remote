@@ -72,7 +72,8 @@ pub(crate) fn encode(
 /// # Errors
 ///
 /// [`RpcError::InvalidResponse`] when `body` is no legacy answer or answers another request, or
-/// the files of a torrent have no piece spans and none can be computed; [`RpcError::Server`] when the daemon reports an error.
+/// the files of a torrent have no piece spans and none can be computed; [`RpcError::Server`]
+/// when the daemon reports an error.
 pub(crate) fn decode(method: &str, tag: u64, fill: &Fill, body: &[u8]) -> Result<Value, RpcError> {
     let mut arguments = response::arguments(method, tag, body)?;
     if method == "torrent_get" {

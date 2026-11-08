@@ -30,8 +30,8 @@ pub const SESSION_FIELDS: &[&str] = &[
 ];
 
 /// The oldest `rpc_version_semver` major 4x4 supports in JSON-RPC: 6 is JSON-RPC 2.0,
-/// Transmission 4.1.
-const MIN_RPC_MAJOR: u64 = 6;
+/// Transmission 4.1, and no daemon of the legacy protocol reports it.
+pub(crate) const MIN_RPC_MAJOR: u64 = 6;
 
 /// The oldest legacy `rpc-version` 4x4 supports: 16 is Transmission 3.00.
 const MIN_LEGACY_RPC_VERSION: u32 = crate::legacy::OLDEST_RPC_VERSION;
@@ -202,12 +202,7 @@ impl ServerVersion {
     /// with a number and a dot.
     #[must_use]
     pub fn rpc_major(&self) -> Option<u64> {
-        let (major, _) = self.rpc_semver.split_once('.')?;
-        // `u64::from_str` would also accept a leading `+`.
-        if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        major.parse().ok()
+        semver_major(&self.rpc_semver)
     }
 
     /// Why 4x4 cannot talk to this server, or `None` when it can: in JSON-RPC when its RPC major
@@ -246,6 +241,17 @@ impl ServerVersion {
     pub fn lists_empty_files(&self) -> bool {
         !(self.protocol == Protocol::Legacy && self.rpc_version == Some(RPC_VERSION_4_0))
     }
+}
+
+/// The major number of the RPC version `semver`, or `None` when it does not start with a number
+/// and a dot.
+pub(crate) fn semver_major(semver: &str) -> Option<u64> {
+    let (major, _) = semver.split_once('.')?;
+    // `u64::from_str` would also accept a leading `+`.
+    if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    major.parse().ok()
 }
 
 #[cfg(test)]

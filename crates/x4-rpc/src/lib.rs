@@ -12,9 +12,12 @@
 //! every connect: it asks in JSON-RPC, so a 4.1 daemon costs one request as ever, and only a
 //! daemon that answers in the legacy protocol is asked once more, in that one, for its legacy
 //! `rpc-version`, which decides the torrent fields asked of it from then on (Transmission 3.00
-//! answers a field it does not know with `0`). The calls go in JSON-RPC until a check finds a legacy daemon; an answer in the
-//! legacy protocol to any other JSON-RPC call is an [`RpcError::InvalidResponse`], so that a
-//! daemon replaced behind the same address is checked again rather than misread.
+//! answers a field it does not know with `0`). The calls go in JSON-RPC until a check finds a
+//! legacy daemon; an answer in the legacy protocol to any other JSON-RPC call is an
+//! [`RpcError::InvalidResponse`], so that a daemon replaced behind the same address is checked
+//! again rather than misread. Transmission 4.1 answers the legacy protocol too, so a daemon
+//! upgraded to it is found the other way: [`Client::session_get`] in the legacy protocol is an
+//! [`RpcError::InvalidResponse`] when the session reports an RPC version of JSON-RPC.
 //!
 //! The torrent methods ([`Client::torrent_get`], [`Client::torrent_action`],
 //! [`Client::torrent_set`], [`Client::torrent_remove`], [`Client::torrent_add`]) take typed
