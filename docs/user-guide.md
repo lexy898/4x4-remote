@@ -257,9 +257,10 @@ can already read; a long name is cut short before it is. It is counted in the pi
 from the file's first byte up to the first piece still missing, so a file that downloads in no
 particular order can be half done and still play only its first seconds. Above the list, the switch
 "Download in order (sequential)" has the daemon download the torrent's pieces from the start, so
-that a file can be played while it downloads. A change shows once the daemon's next answer does, a
-moment later, not before. While the daemon is not connected, the checkboxes, the priorities and the
-switch are disabled. Until the details have come, the tab says "—" under the switch, and so it does
+that a file can be played while it downloads. It needs Transmission 4.1 or newer on the server: on
+an older one the switch is disabled and the line under it says why. A change shows once the
+daemon's next answer does, a moment later, not before. While the daemon is not connected, the
+checkboxes, the priorities and the switch are disabled. Until the details have come, the tab says "—" under the switch, and so it does
 while the files of a torrent of more than 1000 are sorted into their tree when the tab first shows
 them, which is done off the window's own thread, so that the window keeps answering meanwhile (some
 20 ms for 50 000 files). A magnet link has no files until its metadata has come; the tab says so,

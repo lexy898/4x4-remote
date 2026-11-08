@@ -203,6 +203,7 @@ fn session() -> SessionSummary {
         alt_speed_down_kbps: KbPerSecond(0),
         alt_speed_up_kbps: KbPerSecond(0),
         start_added_torrents: true,
+        sequential_download_supported: true,
     }
 }
 
@@ -1676,6 +1677,7 @@ fn a_dialog_opened_before_the_session_takes_its_defaults_later(cx: &mut TestAppC
 
     let paused = SessionSummary {
         start_added_torrents: false,
+        sequential_download_supported: true,
         ..session()
     };
     window.send_session(Vec::new(), ConnectionState::Connected, paused.clone(), cx);
@@ -1789,6 +1791,7 @@ fn a_switch_offers_the_open_dialogs_torrent_again_for_the_new_server(cx: &mut Te
             session: Some(SessionSummary {
                 download_dir: NAS_DIR.to_owned(),
                 start_added_torrents: false,
+                sequential_download_supported: true,
                 ..session()
             }),
             free_space_bytes: Some(NAS_FREE),

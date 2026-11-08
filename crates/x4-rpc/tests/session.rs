@@ -45,10 +45,28 @@ fn parses_session_get_fixture() {
 
     let session = client.session_get().unwrap();
 
-    assert_eq!(session.rpc_version_semver, "6.0.1");
+    assert_eq!(session.rpc_version_semver.as_deref(), Some("6.0.1"));
     assert!(session.version.starts_with("4.1.3"), "{session:?}");
     assert_ne!(session.download_dir, "");
     assert!(session.start_added_torrents, "{session:?}");
+}
+
+#[test]
+fn session_get_without_sequential_download_reads_none() {
+    let mut result = fixture_result(SESSION_GET);
+    let recorded = result["sequential_download"].as_bool();
+    assert!(recorded.is_some(), "the fixture records the field");
+    let (mut client, _) = client_answering(result.clone());
+    assert_eq!(client.session_get().unwrap().sequential_download, recorded);
+
+    if let Some(object) = result.as_object_mut() {
+        object.remove("sequential_download");
+    }
+    let (mut client, _) = client_answering(result);
+
+    let session = client.session_get().unwrap();
+
+    assert_eq!(session.sequential_download, None);
 }
 
 #[test]
@@ -102,7 +120,7 @@ fn session_get_reads_each_field_from_its_wire_key() {
         session,
         SessionInfo {
             version: "4.1.3 (abc)".to_owned(),
-            rpc_version_semver: "6.0.1".to_owned(),
+            rpc_version_semver: Some("6.0.1".to_owned()),
             download_dir: "/downloads".to_owned(),
             alt_speed_enabled: true,
             alt_speed_down_kbps: 11,
@@ -111,7 +129,7 @@ fn session_get_reads_each_field_from_its_wire_key() {
             speed_limit_down_enabled: true,
             speed_limit_up_kbps: 44,
             speed_limit_up_enabled: false,
-            sequential_download: true,
+            sequential_download: Some(true),
             start_added_torrents: false,
         }
     );
@@ -314,11 +332,20 @@ fn parses_free_space_fixture() {
     let space = client.free_space("/data/torrents/video").unwrap();
 
     assert!(space.size_bytes > 0, "{space:?}");
-    assert!(space.total_size >= space.size_bytes, "{space:?}");
+    assert!(space.total_size >= Some(space.size_bytes), "{space:?}");
     assert_eq!(space.path, "/data/torrents/video");
     let request = only_request(&transport).unwrap();
     assert_eq!(request.method, "free_space");
     assert_eq!(request.params, json!({ "path": "/data/torrents/video" }));
+}
+
+#[test]
+fn free_space_without_total_size_reads_none() {
+    let (mut client, _) = client_answering(json!({ "path": "/data", "size_bytes": 1000 }));
+
+    let space = client.free_space("/data").unwrap();
+
+    assert_eq!((space.size_bytes, space.total_size), (1000, None));
 }
 
 #[test]
@@ -331,7 +358,7 @@ fn free_space_keeps_the_negative_sizes_the_server_reports_on_failure() {
 
     let space = client.free_space("/nowhere").unwrap();
 
-    assert_eq!((space.size_bytes, space.total_size), (-1, -1));
+    assert_eq!((space.size_bytes, space.total_size), (-1, Some(-1)));
 }
 
 #[test]

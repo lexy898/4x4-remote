@@ -37,14 +37,17 @@ use std::sync::Arc;
 
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, FocusHandle, IntoElement, ParentElement as _,
     Styled as _, Task, UniformListScrollHandle, Window,
 };
-use x4_core::{DetailsTab, FileRow, FileTree, FileTreeView, NodeKey, Torrent, TorrentDetails};
+use x4_core::{
+    DetailsTab, FileRow, FileTree, FileTreeView, NodeKey, SequentialSwitch, Torrent, TorrentDetails,
+};
 use x4_rpc::{FilePriority, HashString};
 
-use super::{DetailsPanel, DetailsPanelEvent, is_of, note};
+use super::{DetailsPanel, DetailsPanelEvent, control_note, is_of, note};
 use crate::actions::FileRequest;
 use crate::file_list::{self, Columns, Drawn, FileListHost, file_row};
 use crate::i18n::t;
@@ -395,12 +398,13 @@ impl DetailsPanel {
     fn sequential_switch(&self, torrent: &Torrent, cx: &Context<'_, Self>) -> impl IntoElement {
         let panel = cx.weak_entity();
         let hash = torrent.hash.clone();
-        h_flex().flex_none().px_3().py_1().child(
+        let needs_newer = self.sequential == SequentialSwitch::NeedsNewerServer;
+        let switch = h_flex().flex_none().px_3().py_1().child(
             Switch::new("file-sequential")
                 .small()
                 .checked(torrent.sequential)
                 .label(t!("files-sequential"))
-                .disabled(!self.connected)
+                .disabled(self.sequential != SequentialSwitch::Usable)
                 .on_change(move |enabled, window, cx| {
                     let request = FileRequest::sequential(hash.clone(), *enabled);
                     if let Err(error) = panel.update(cx, |panel, cx| {
@@ -410,7 +414,17 @@ impl DetailsPanel {
                         tracing::debug!(%error, "the switch was used after the panel closed");
                     }
                 }),
-        )
+        );
+        v_flex()
+            .flex_none()
+            .child(switch)
+            .when(needs_newer, |column| {
+                column.child(control_note(
+                    "file-sequential-needs-newer",
+                    t!("files-sequential-needs-newer"),
+                    cx,
+                ))
+            })
     }
 
     /// The list of files and folders, with its keys.

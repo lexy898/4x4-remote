@@ -23,8 +23,9 @@
 - Removes torrents safely: removing from the list and removing with the files are separate
   commands, and deleting files always asks for an explicit confirmation.
 - Shows the selected torrent in a details panel with four tabs: General; Files, a tree with each
-  file's progress, Low, Normal and High priority, skipping files, downloading in order and how much
-  of a file already plays from its start; Peers, with their country flags; and Trackers.
+  file's progress, Low, Normal and High priority, skipping files, downloading in order (needs
+  Transmission 4.1 or newer on the server) and how much of a file already plays from its start;
+  Peers, with their country flags; and Trackers.
 - Adds torrents from `.torrent` files (the desktop's file dialog, drag and drop, the command line)
   and from magnet links (the clipboard or a form), choosing the folder on the server, with its free
   space and the folders used lately, and the files to download.

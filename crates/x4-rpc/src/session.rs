@@ -38,8 +38,10 @@ const MIN_RPC_MAJOR: u64 = 6;
 pub struct SessionInfo {
     /// `version`: the daemon's long version string, `$version ($revision)`.
     pub version: String,
-    /// `rpc_version_semver`: the RPC API version.
-    pub rpc_version_semver: String,
+    /// `rpc_version_semver`: the RPC API version; `None` from a daemon that predates it
+    /// (Transmission 3.00).
+    #[serde(default)]
+    pub rpc_version_semver: Option<String>,
     /// `download_dir`: where new torrents download to by default.
     pub download_dir: String,
     /// `alt_speed_enabled`: whether the alternative speed limits apply.
@@ -60,8 +62,10 @@ pub struct SessionInfo {
     pub speed_limit_up_kbps: u32,
     /// `speed_limit_up_enabled`: whether the upload limit applies.
     pub speed_limit_up_enabled: bool,
-    /// `sequential_download`: whether added torrents download sequentially by default.
-    pub sequential_download: bool,
+    /// `sequential_download`: whether added torrents download sequentially by default; `None`
+    /// from a daemon that cannot download in order (before Transmission 4.1.0-beta.2).
+    #[serde(default)]
+    pub sequential_download: Option<bool>,
     /// `start_added_torrents`: whether an added torrent starts at once when the add leaves out
     /// `paused`.
     pub start_added_torrents: bool,
@@ -163,8 +167,10 @@ pub struct FreeSpace {
     pub path: String,
     /// `size_bytes`: free space in bytes.
     pub size_bytes: i64,
-    /// `total_size`: capacity in bytes.
-    pub total_size: i64,
+    /// `total_size`: capacity in bytes; `None` from a daemon that does not report it
+    /// (Transmission 3.00).
+    #[serde(default)]
+    pub total_size: Option<i64>,
 }
 
 /// What a server calls itself, as [`Client::check_server`](crate::Client::check_server) read it.

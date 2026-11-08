@@ -78,7 +78,7 @@ fn free_space(path: &str, size_bytes: i64) -> Response {
     Response::FreeSpace(FreeSpace {
         path: path.to_owned(),
         size_bytes,
-        total_size: 1 << 40,
+        total_size: Some(1 << 40),
     })
 }
 

@@ -203,6 +203,7 @@ fn session() -> SessionSummary {
         alt_speed_down_kbps: KbPerSecond(50),
         alt_speed_up_kbps: KbPerSecond(50),
         start_added_torrents: true,
+        sequential_download_supported: true,
     }
 }
 

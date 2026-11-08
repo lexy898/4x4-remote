@@ -116,6 +116,9 @@ pub struct SessionSummary {
     /// Whether the daemon starts an added torrent at once unless told otherwise; the default of
     /// starting it in the add dialog.
     pub start_added_torrents: bool,
+    /// Whether the daemon can download in order: it sends `sequential_download`, which
+    /// Transmission has from 4.1.0-beta.2.
+    pub sequential_download_supported: bool,
 }
 
 impl From<&SessionInfo> for SessionSummary {
@@ -137,6 +140,7 @@ impl From<&SessionInfo> for SessionSummary {
             alt_speed_down_kbps: KbPerSecond(info.alt_speed_down_kbps),
             alt_speed_up_kbps: KbPerSecond(info.alt_speed_up_kbps),
             start_added_torrents: info.start_added_torrents,
+            sequential_download_supported: info.sequential_download.is_some(),
         }
     }
 }
@@ -285,8 +289,22 @@ mod tests {
                 alt_speed_down_kbps: KbPerSecond(20),
                 alt_speed_up_kbps: KbPerSecond(10),
                 start_added_torrents: info.start_added_torrents,
+                sequential_download_supported: true,
             }
         );
+    }
+
+    #[test]
+    fn session_summary_says_whether_the_daemon_downloads_in_order() {
+        let info = session_info((0, false), (0, false), false);
+        assert!(info.sequential_download.is_some(), "the fixture has it");
+        assert!(SessionSummary::from(&info).sequential_download_supported);
+
+        let old = SessionInfo {
+            sequential_download: None,
+            ..info
+        };
+        assert!(!SessionSummary::from(&old).sequential_download_supported);
     }
 
     #[test]

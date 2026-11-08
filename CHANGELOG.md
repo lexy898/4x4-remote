@@ -25,9 +25,10 @@ First release.
   explicit confirmation. Copy magnet links and info hashes.
 - A details panel with four tabs. General: paths, size, hash, dates, share ratio, the torrent's
   creator, comment and pieces, and the worst tracker problem in plain words. Files: a tree with
-  per-file progress, Low, Normal and High priority, skipping files, sequential download and how
-  much of each file already plays from its start. Peers: who the torrent is connected to, with
-  country flags. Trackers: each tracker's state, last and next announce and counts.
+  per-file progress, Low, Normal and High priority, skipping files, sequential download (which
+  needs Transmission 4.1 or newer on the server; on an older one the switch is disabled and says
+  so) and how much of each file already plays from its start. Peers: who the torrent is connected
+  to, with country flags. Trackers: each tracker's state, last and next announce and counts.
 - Adding torrents from `.torrent` files (the desktop's file dialog, drag and drop, or launch
   arguments) and magnet links (from the clipboard or a form), choosing the folder on the server
   (with its free space and the folders used lately), the files to download and whether to start at

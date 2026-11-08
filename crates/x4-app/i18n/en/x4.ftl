@@ -712,6 +712,8 @@ tracker-problem-scrape-timed-out = Tracker { $host } sends no peer counts: conne
 # The switch that has the server download the torrent's pieces in order, from the start of each
 # file, so that a file can be played while it downloads.
 files-sequential = Download in order (sequential)
+# Under the switch above, when the server is too old to download in order; the switch is off then.
+files-sequential-needs-newer = Downloading in order needs Transmission 4.1 or newer on the server
 # What the tab says instead of the files of a magnet link, before its metadata has come.
 files-no-metadata = The file list arrives with the torrent's metadata
 # What the tab says instead of a file list that would take too much memory to show, such as one of

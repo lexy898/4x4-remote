@@ -234,12 +234,12 @@ pub use ui_state::{
 pub use view::{
     Availability, ColumnId, CompactDuration, DetailsTarget, Edge, EmptyTable, ErrorView, EtaView,
     GeneralModel, Indicator, PeerColumn, PeerRow, PeerSort, PeerSource, PeersEmpty, PeersSummary,
-    PiecesView, RelativeTime, RemovalSummary, Row, Selection, ServiceStatus, SpeedControls,
-    StatusModel, Subtitle, TableModel, TimeDirection, TimeUnit, ToggleKind, TrackerCount,
-    TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary, TrackersEmpty,
-    ViewState, availability, details_target, general_model, peer_rows, peers_empty, peers_summary,
-    relative_time, removal_summary, status_model, table_model, toggle_kind, tracker_rows,
-    tracker_status, tracker_summary, trackers_empty, visibility,
+    PiecesView, RelativeTime, RemovalSummary, Row, Selection, SequentialSwitch, ServiceStatus,
+    SpeedControls, StatusModel, Subtitle, TableModel, TimeDirection, TimeUnit, ToggleKind,
+    TrackerCount, TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary,
+    TrackersEmpty, ViewState, availability, details_target, general_model, peer_rows, peers_empty,
+    peers_summary, relative_time, removal_summary, status_model, table_model, toggle_kind,
+    tracker_rows, tracker_status, tracker_summary, trackers_empty, visibility,
 };
 // The reason inside `ConnectionState::Unsupported`, so that the UI can name it without depending on
 // x4-rpc.

@@ -628,6 +628,7 @@ impl MainView {
     fn show_status(&self, cx: &mut Context<'_, Self>) {
         let stale = self.status.stale;
         let connected = self.status.connected();
+        let sequential = self.status.sequential_switch();
         self.table.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
             delegate.set_connected(connected);
@@ -637,6 +638,7 @@ impl MainView {
         });
         self.details_panel.update(cx, |panel, cx| {
             panel.set_connected(connected, cx);
+            panel.set_sequential_switch(sequential, cx);
             panel.set_stale(stale, cx);
         });
         self.show_speed_status(cx);

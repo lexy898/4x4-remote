@@ -605,7 +605,7 @@ fn synthetic_free_space_errors_for_unknown_folders() {
     let known = client.free_space(DOWNLOAD_DIR).expect("a known folder");
     assert_eq!(
         (known.path.as_str(), known.size_bytes, known.total_size),
-        (DOWNLOAD_DIR, 800 << 30, 1 << 40)
+        (DOWNLOAD_DIR, 800 << 30, Some(1 << 40))
     );
     let slash = format!("{DOWNLOAD_DIR}/");
     assert_eq!(
@@ -653,7 +653,10 @@ fn synthetic_free_space_errors_for_unknown_folders() {
     let space = client
         .free_space("/data/new")
         .expect("a folder of a torrent");
-    assert_eq!((space.size_bytes, space.total_size), (800 << 30, 1 << 40));
+    assert_eq!(
+        (space.size_bytes, space.total_size),
+        (800 << 30, Some(1 << 40))
+    );
     client
         .torrent_remove(&selection(&[&added.hash]), RemoveData::Keep)
         .expect("removed");
@@ -710,7 +713,7 @@ fn synthetic_free_space_answers_for_the_parents_of_known_folders() {
             .expect("a parent of a known folder");
         assert_eq!(
             (space.path.as_str(), space.size_bytes, space.total_size),
-            (parent, 800 << 30, 1 << 40)
+            (parent, 800 << 30, Some(1 << 40))
         );
     }
     // Beside it and below it, nothing is.

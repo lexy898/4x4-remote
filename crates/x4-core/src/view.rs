@@ -49,7 +49,10 @@ pub use relative_time::{RelativeTime, TimeDirection, relative_time};
 pub use removal::{RemovalSummary, removal_summary};
 pub use row::Row;
 pub use selection::{Edge, Selection};
-pub use status::{Indicator, ServiceStatus, SpeedControls, StatusModel, status_model, visibility};
+pub use status::{
+    Indicator, SequentialSwitch, ServiceStatus, SpeedControls, StatusModel, status_model,
+    visibility,
+};
 pub use subtitle::Subtitle;
 pub use trackers::{
     TrackerCount, TrackerProblem, TrackerProblemKind, TrackerRow, TrackerStatus, TrackerSummary,

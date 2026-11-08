@@ -98,6 +98,7 @@ mod tests {
                 alt_speed_down_kbps: KbPerSecond(0),
                 alt_speed_up_kbps: KbPerSecond(0),
                 start_added_torrents,
+                sequential_download_supported: true,
             }),
             free_space_bytes: None,
             rate_down: 0,

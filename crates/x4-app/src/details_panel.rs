@@ -48,7 +48,10 @@ use gpui_kit::{
     ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, TestSupportExt as _, Window, div,
 };
-use x4_core::{DetailsTab, DetailsTarget, GeneralModel, Torrent, TorrentDetails, general_model};
+use x4_core::{
+    DetailsTab, DetailsTarget, GeneralModel, SequentialSwitch, Torrent, TorrentDetails,
+    general_model,
+};
 use x4_rpc::HashString;
 
 use crate::actions::FileRequest;
@@ -105,6 +108,9 @@ pub(crate) struct DetailsPanel {
     trackers: TrackersTab,
     /// Whether the daemon is connected, so that the Files tab's controls can act.
     connected: bool,
+    /// What the Files tab's switch of downloading in order does; `x4-core` decides it from the
+    /// connection and from whether the daemon can download in order.
+    sequential: SequentialSwitch,
     /// Whether what the panel shows is stale, as while the daemon does not answer: the rows of
     /// the Peers and the Trackers tab are dimmed then.
     stale: bool,
@@ -145,6 +151,7 @@ impl DetailsPanel {
             peers: PeersTab::new(),
             trackers: TrackersTab::new(),
             connected: false,
+            sequential: SequentialSwitch::Disabled,
             stale: false,
             window_shown: true,
             key_repeats,
@@ -246,6 +253,19 @@ impl DetailsPanel {
     pub(crate) fn set_connected(&mut self, connected: bool, cx: &mut Context<'_, Self>) {
         if connected != self.connected {
             self.connected = connected;
+            cx.notify();
+        }
+    }
+
+    /// Tells the panel what the Files tab's switch of downloading in order does; it says so when
+    /// the daemon is too old for it.
+    pub(crate) fn set_sequential_switch(
+        &mut self,
+        switch: SequentialSwitch,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if switch != self.sequential {
+            self.sequential = switch;
             cx.notify();
         }
     }
@@ -399,6 +419,21 @@ fn note(id: &'static str, text: impl Into<SharedString>, cx: &App) -> AnyElement
         .flex_1()
         .px_3()
         .py_2()
+        .text_color(cx.theme().muted_foreground)
+        .aria_label(text.clone())
+        .child(text)
+        .test_support()
+        .into_any_element()
+}
+
+/// A line of muted text `id` under a control, which takes only the room it needs.
+fn control_note(id: &'static str, text: impl Into<SharedString>, cx: &App) -> AnyElement {
+    let text = text.into();
+    div()
+        .id(id)
+        .flex_none()
+        .px_3()
+        .pb_1()
         .text_color(cx.theme().muted_foreground)
         .aria_label(text.clone())
         .child(text)

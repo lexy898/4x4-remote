@@ -79,6 +79,19 @@ impl From<&SessionSummary> for SpeedControls {
     }
 }
 
+/// Whether the "download in order" switch of the Files tab can be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequentialSwitch {
+    /// Actions can go to the daemon, and it can download in order (or the session is not known
+    /// yet).
+    Usable,
+    /// Actions cannot go to the daemon now.
+    Disabled,
+    /// The daemon cannot download in order: it is older than Transmission 4.1.0-beta.2, and the
+    /// UI says so, whether it is connected or not.
+    NeedsNewerServer,
+}
+
 /// What the status bar shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusModel {
@@ -95,6 +108,8 @@ pub struct StatusModel {
     /// The turtle and the speed limits; `None` while the session is not known, when neither
     /// can be shown or changed.
     pub speed: Option<SpeedControls>,
+    /// Whether the daemon can download in order; `None` while the session is not known.
+    pub sequential_supported: Option<bool>,
     /// Whether the service still runs.
     pub service: ServiceStatus,
 }
@@ -150,6 +165,19 @@ impl StatusModel {
         self.speed.filter(|_| self.connected())
     }
 
+    /// What the Files tab's "download in order" switch does. A daemon known to lack the feature
+    /// outranks the connection; before the session is known a connected switch stays usable.
+    #[must_use]
+    pub fn sequential_switch(&self) -> SequentialSwitch {
+        if self.sequential_supported == Some(false) {
+            SequentialSwitch::NeedsNewerServer
+        } else if self.connected() {
+            SequentialSwitch::Usable
+        } else {
+            SequentialSwitch::Disabled
+        }
+    }
+
     /// What the connection indicator shows (see [`Indicator`] for which state wins).
     #[must_use]
     pub fn indicator(&self) -> Indicator {
@@ -184,6 +212,7 @@ impl Default for StatusModel {
             connection: ConnectionState::Connecting,
             stale: false,
             speed: None,
+            sequential_supported: None,
             service: ServiceStatus::Running,
         }
     }
@@ -199,6 +228,10 @@ pub fn status_model(snapshot: &Snapshot) -> StatusModel {
         connection: snapshot.connection.clone(),
         stale: snapshot.stale,
         speed: snapshot.session.as_ref().map(SpeedControls::from),
+        sequential_supported: snapshot
+            .session
+            .as_ref()
+            .map(|session| session.sequential_download_supported),
         service: ServiceStatus::Running,
     }
 }
@@ -246,7 +279,57 @@ mod tests {
             alt_speed_down_kbps: KbPerSecond(0),
             alt_speed_up_kbps: KbPerSecond(0),
             start_added_torrents: true,
+            sequential_download_supported: true,
         }
+    }
+
+    fn sequential_switch_with(supported: Option<bool>, connection: ConnectionState) -> StatusModel {
+        status_model(&Snapshot {
+            session: supported.map(|supported| SessionSummary {
+                sequential_download_supported: supported,
+                ..session(false)
+            }),
+            connection,
+            ..snapshot()
+        })
+    }
+
+    #[test]
+    fn sequential_switch_needs_a_newer_server_when_the_session_lacks_it() {
+        for connection in [ConnectionState::Connected, reconnecting()] {
+            let status = sequential_switch_with(Some(false), connection.clone());
+            assert_eq!(
+                status.sequential_switch(),
+                SequentialSwitch::NeedsNewerServer,
+                "{connection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sequential_switch_is_usable_when_connected_and_supported() {
+        let status = sequential_switch_with(Some(true), ConnectionState::Connected);
+        assert_eq!(status.sequential_switch(), SequentialSwitch::Usable);
+    }
+
+    #[test]
+    fn sequential_switch_is_usable_when_connected_before_the_session_is_known() {
+        let status = sequential_switch_with(None, ConnectionState::Connected);
+        assert_eq!(status.sequential_supported, None);
+        assert_eq!(status.sequential_switch(), SequentialSwitch::Usable);
+    }
+
+    #[test]
+    fn sequential_switch_is_disabled_while_not_connected() {
+        let status = sequential_switch_with(Some(true), reconnecting());
+        assert_eq!(status.sequential_switch(), SequentialSwitch::Disabled);
+    }
+
+    #[test]
+    fn sequential_switch_is_disabled_once_the_service_stopped() {
+        let mut status = sequential_switch_with(Some(true), ConnectionState::Connected);
+        status.service_stopped();
+        assert_eq!(status.sequential_switch(), SequentialSwitch::Disabled);
     }
 
     #[test]
