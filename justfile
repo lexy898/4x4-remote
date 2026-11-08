@@ -165,6 +165,11 @@ measure *args:
 virtual +cmd:
     scripts/virtual-session.sh "$@"
 
+# Old Transmission daemons (3.00, 4.0.5, 4.1.0-beta.2) and a seeder in Docker, on 127.0.0.1 ports 19300, 19405, 19412, for tests of the legacy protocol: `up`, `status`, `down`, `env <name>`. Never part of `check`.
+[positional-arguments]
+legacy-daemons *args:
+    bash scripts/legacy-daemons.sh "$@"
+
 update:
     cargo update
     just check

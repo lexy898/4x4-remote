@@ -39,6 +39,10 @@ just package          # the Arch package of the committed master under ~/.cache/
                       # path (installing it is the owner's). Agents run it only from a scratch
                       # clone, with XDG_CACHE_HOME under ~/.cache/x4-scratch, never in the owner's
                       # cache
+just legacy-daemons up|status|down|env <name>
+                      # local old Transmission daemons (3.00, 4.0.5, 4.1.0-beta.2) in Docker on
+                      # 127.0.0.1, for tests of the legacy protocol; agents may run it; never part
+                      # of check
 just default-handler  # make the installed 4x4 the default app for .torrent files and magnet links
                       # (--undo gives them back); the owner's only: agents never run it
 just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
