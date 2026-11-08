@@ -940,18 +940,163 @@ fn legacy_torrent_set_and_actions_send_legacy_names() {
     assert_eq!(start.params, json!({ "ids": [3, HASH] }));
 }
 
-#[test]
-fn a_legacy_read_of_a_field_with_no_legacy_name_is_refused_before_sending() {
-    let (mut client, transport) = legacy_client(|_, _| testing::legacy_ok(json!({})));
-    let sent = transport.requests().len();
+/// The fields the last legacy `torrent-get` asked for.
+fn asked_fields(transport: &FakeTransport) -> Value {
+    last_request(transport).map_or(Value::Null, |request| {
+        request.params.get("fields").cloned().unwrap_or_default()
+    })
+}
 
-    let result = client.torrent_get(&GetIds::All, &[TorrentField::Id, TorrentField::Source]);
+#[expect(clippy::unwrap_used, reason = "built from constants that are valid")]
+fn one_torrent_selection() -> GetIds {
+    GetIds::Selection(TorrentSelection::new(vec![TorrentRef::Id(TorrentId(1))]).unwrap())
+}
+
+#[test]
+fn legacy_progress_read_takes_bytes_completed_from_file_stats() {
+    let (mut client, transport) = legacy_client_of(16, |_, _| {
+        testing::legacy_ok(json!({ "torrents": [{
+            "id": 1,
+            "hashString": HASH,
+            "fileStats": [
+                { "bytesCompleted": 6, "wanted": true, "priority": 0 },
+                { "bytesCompleted": 0, "wanted": false, "priority": 1 },
+            ],
+            "wanted": [1, 0],
+            "priorities": [0, 1],
+        }] }))
+    });
+
+    let response = client
+        .torrent_get(&one_torrent_selection(), TorrentField::DETAILS_PROGRESS)
+        .unwrap();
+
+    let fields = asked_fields(&transport);
+    assert!(fields.as_array().unwrap().contains(&json!("fileStats")));
+    assert!(!fields.to_string().contains("bytes_completed"));
+    assert!(!fields.to_string().contains("bytesCompleted"));
+    assert!(!fields.to_string().contains("file-count"));
+    let torrent = &response.torrents[0];
+    assert_eq!(torrent.bytes_completed, Some(vec![6, 0]));
+    assert_eq!(torrent.file_stats, None);
+    assert_eq!(torrent.wanted, Some(vec![true, false]));
+    assert_eq!(torrent.file_count, Some(2));
+}
+
+/// A legacy daemon's answer to `DETAILS_FULL` for a torrent of two files.
+fn legacy_details(files: &Value) -> Value {
+    json!({ "torrents": [{
+        "id": 1,
+        "hashString": HASH,
+        "pieceSize": 16384,
+        "pieceCount": 3,
+        "files": files,
+        "priorities": [0, 0],
+        "wanted": [1, 1],
+    }] })
+}
+
+#[test]
+fn legacy_details_read_computes_piece_spans() {
+    let (mut client, transport) = legacy_client_of(16, |_, _| {
+        testing::legacy_ok(legacy_details(&json!([
+            { "name": "a", "length": 16384, "bytesCompleted": 1 },
+            { "name": "b", "length": 20000, "bytesCompleted": 2 },
+        ])))
+    });
+
+    let response = client
+        .torrent_get(&one_torrent_selection(), TorrentField::DETAILS_FULL)
+        .unwrap();
+
+    let fields = asked_fields(&transport);
+    for name in ["files", "pieceSize", "pieceCount"] {
+        assert!(fields.as_array().unwrap().contains(&json!(name)), "{name}");
+    }
+    assert!(!fields.as_array().unwrap().contains(&json!("source")));
+    let files = response.torrents[0].files.as_ref().unwrap();
+    assert_eq!((files[0].begin_piece, files[0].end_piece), (0, 1));
+    assert_eq!((files[1].begin_piece, files[1].end_piece), (1, 3));
+    assert_eq!(response.torrents[0].file_count, Some(2));
+}
+
+#[test]
+fn legacy_details_ask_for_source_from_rpc_17() {
+    let sent = |rpc_version| {
+        let (mut client, transport) = legacy_client_of(rpc_version, |_, _| {
+            testing::legacy_ok(json!({ "torrents": [] }))
+        });
+        client
+            .torrent_get(&one_torrent_selection(), TorrentField::DETAILS_FULL)
+            .unwrap();
+        asked_fields(&transport)
+            .as_array()
+            .unwrap()
+            .contains(&json!("source"))
+    };
+
+    assert!(!sent(16));
+    assert!(sent(17));
+}
+
+#[test]
+fn legacy_details_keep_the_spans_a_beta_serves() {
+    let (mut client, _) = legacy_client_of(18, |_, _| {
+        testing::legacy_ok(legacy_details(&json!([
+            { "name": "a", "length": 16384, "bytesCompleted": 1, "begin_piece": 0, "end_piece": 1 },
+            { "name": "b", "length": 20000, "bytesCompleted": 2, "begin_piece": 5, "end_piece": 9 },
+        ])))
+    });
+
+    let response = client
+        .torrent_get(&one_torrent_selection(), TorrentField::DETAILS_FULL)
+        .unwrap();
+
+    let files = response.torrents[0].files.as_ref().unwrap();
+    assert_eq!((files[1].begin_piece, files[1].end_piece), (5, 9));
+}
+
+#[test]
+fn legacy_magnet_without_metadata_reads_empty_files() {
+    let (mut client, _) = legacy_client_of(16, |_, _| {
+        testing::legacy_ok(json!({ "torrents": [{
+            "id": 1,
+            "hashString": HASH,
+            "pieceSize": 0,
+            "pieceCount": 0,
+            "files": [],
+            "priorities": [],
+            "wanted": [],
+        }] }))
+    });
+
+    let response = client
+        .torrent_get(&one_torrent_selection(), TorrentField::DETAILS_FULL)
+        .unwrap();
+
+    let torrent = &response.torrents[0];
+    assert_eq!(torrent.files, Some(vec![]));
+    assert_eq!(torrent.file_count, Some(0));
+}
+
+#[test]
+fn legacy_files_without_a_piece_size_are_an_invalid_response() {
+    let (mut client, _) = legacy_client_of(16, |_, _| {
+        testing::legacy_ok(json!({ "torrents": [{
+            "id": 1,
+            "hashString": HASH,
+            "pieceSize": 0,
+            "pieceCount": 0,
+            "files": [{ "name": "a", "length": 5, "bytesCompleted": 0 }],
+        }] }))
+    });
+
+    let result = client.torrent_get(&one_torrent_selection(), TorrentField::DETAILS_FULL);
 
     assert_eq!(
         result,
-        Err(RpcError::InvalidRequest(
-            "legacy: no legacy name for source".to_owned()
+        Err(RpcError::InvalidResponse(
+            "torrent_get: files without a piece size".to_owned()
         ))
     );
-    assert_eq!(transport.requests().len(), sent, "nothing is sent");
 }

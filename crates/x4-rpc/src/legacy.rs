@@ -7,6 +7,7 @@
 //! renames what the typed calls build in JSON-RPC's names, and [`decode`] renames the answer back,
 //! so that the same records read it.
 
+mod fill;
 mod names;
 mod request;
 mod response;
@@ -28,9 +29,19 @@ pub(crate) struct LegacyRequest {
 
 /// What the answer to a legacy request must have filled in that the legacy daemons do not send.
 ///
-/// Nothing yet: every name the client asks for has a legacy counterpart.
+/// Only a `torrent_get` has any: see [`fill`].
 #[derive(Debug, Default)]
-pub(crate) struct Fill {}
+pub(crate) struct Fill {
+    /// `bytes_completed` was asked, and is read from the `bytes_completed` of each `file_stats`.
+    bytes_from_file_stats: bool,
+    /// `files` was asked: the files that lack their piece spans get them computed.
+    piece_spans: bool,
+    /// The fields asked only to fill in others (`file_stats`, `piece_size`, `piece_count`),
+    /// dropped from the answer.
+    added: Vec<&'static str>,
+    /// `file_count` was asked, and is counted when the daemon does not send it.
+    file_count: bool,
+}
 
 /// The legacy request for the JSON-RPC call `method` with `params` (no `arguments` when `None`),
 /// tagged `tag`, to a daemon of the legacy RPC version `rpc_version`.
@@ -48,19 +59,21 @@ pub(crate) fn encode(
     tag: u64,
     rpc_version: u32,
 ) -> Result<LegacyRequest, RpcError> {
-    Ok(LegacyRequest {
-        body: request::body(method, params, tag, rpc_version)?,
-        fill: Fill::default(),
-    })
+    let (body, fill) = request::body(method, params, tag, rpc_version)?;
+    Ok(LegacyRequest { body, fill })
 }
 
 /// The `arguments` of the answer `body` to the legacy request for `method` tagged `tag`, with
-/// JSON-RPC's names, and filled in as `_fill` says.
+/// JSON-RPC's names, and filled in as `fill` says.
 ///
 /// # Errors
 ///
-/// [`RpcError::InvalidResponse`] when `body` is no legacy answer or answers another request;
-/// [`RpcError::Server`] when the daemon reports an error.
-pub(crate) fn decode(method: &str, tag: u64, _fill: &Fill, body: &[u8]) -> Result<Value, RpcError> {
-    response::arguments(method, tag, body)
+/// [`RpcError::InvalidResponse`] when `body` is no legacy answer or answers another request, or
+/// the files of a torrent have no piece spans and none can be computed; [`RpcError::Server`] when the daemon reports an error.
+pub(crate) fn decode(method: &str, tag: u64, fill: &Fill, body: &[u8]) -> Result<Value, RpcError> {
+    let mut arguments = response::arguments(method, tag, body)?;
+    if method == "torrent_get" {
+        fill::apply(fill, &mut arguments)?;
+    }
+    Ok(arguments)
 }

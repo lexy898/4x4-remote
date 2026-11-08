@@ -66,6 +66,8 @@ const TORRENT_FIELDS: &[(&str, &str, u32)] = &[
     ("comment", "comment", RPC_3_00),
     ("creator", "creator", RPC_3_00),
     ("date_created", "dateCreated", RPC_3_00),
+    // Transmission 3.00 answers any field it does not know with 0, and 4.0 serves this one.
+    ("source", "source", RPC_4_0),
     ("magnet_link", "magnetLink", RPC_3_00),
     ("is_private", "isPrivate", RPC_3_00),
     ("piece_count", "pieceCount", RPC_3_00),
@@ -338,8 +340,8 @@ mod tests {
 
     #[test]
     fn every_torrent_field_has_a_legacy_name_or_is_filled() {
-        // Task 4 fills these in from what the legacy daemons do send.
-        let filled = [TorrentField::Source, TorrentField::BytesCompleted];
+        // No legacy daemon serves the per-torrent array; it is read from `file_stats`.
+        let filled = [TorrentField::BytesCompleted];
 
         for field in every_torrent_field() {
             let name = wire_name(field);
@@ -407,19 +409,23 @@ mod tests {
         assert_eq!(torrent_field_since("file_count"), Some(17));
         assert_eq!(torrent_field_since("sequential_download"), Some(18));
         assert_eq!(torrent_field_since("hash_string"), Some(16));
-        assert_eq!(torrent_field_since("source"), None);
+        assert_eq!(torrent_field_since("source"), Some(17));
+        assert_eq!(torrent_field_since("bytes_completed"), None);
         let newer: Vec<&str> = TORRENT_FIELDS
             .iter()
             .filter(|&&(_, _, since)| since > RPC_3_00)
             .map(|&(snake, _, _)| snake)
             .collect();
-        assert_eq!(newer, ["sequential_download", "file_count"]);
+        assert_eq!(newer, ["sequential_download", "source", "file_count"]);
     }
 
     #[test]
     fn an_unknown_name_has_no_counterpart() {
         assert_eq!(snake_name("begin_piece"), None);
-        assert_eq!(legacy_name("source", NameContext::TorrentField), None);
+        assert_eq!(
+            legacy_name("bytes_completed", NameContext::TorrentField),
+            None
+        );
         assert_eq!(legacy_name("hash_string", NameContext::Argument), None);
     }
 }

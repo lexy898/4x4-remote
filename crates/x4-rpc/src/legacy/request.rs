@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value};
 
+use super::Fill;
+use super::fill;
 use super::names::{NameContext, legacy_method, legacy_name, torrent_field_since};
 use crate::error::RpcError;
 
@@ -23,22 +25,23 @@ pub(super) fn body(
     params: Option<Value>,
     tag: u64,
     rpc_version: u32,
-) -> Result<Value, RpcError> {
+) -> Result<(Value, Fill), RpcError> {
     let mut envelope = Map::new();
+    let mut fill = Fill::default();
     envelope.insert("method".to_owned(), Value::from(legacy_method(method)));
     if let Some(params) = params {
-        envelope.insert(
-            "arguments".to_owned(),
-            arguments(method, params, rpc_version)?,
-        );
+        let (arguments, wanted) = arguments(method, params, rpc_version)?;
+        envelope.insert("arguments".to_owned(), arguments);
+        fill = wanted;
     }
     envelope.insert("tag".to_owned(), Value::from(tag));
-    Ok(Value::Object(envelope))
+    Ok((Value::Object(envelope), fill))
 }
 
 /// `params` with every key in its legacy name, and the values that are names too: the `fields`
-/// (a torrent's for `torrent_get`, else the session's) and the `ids` keyword.
-fn arguments(method: &str, params: Value, rpc_version: u32) -> Result<Value, RpcError> {
+/// (a torrent's for `torrent_get`, else the session's) and the `ids` keyword; and what the
+/// answer needs filled in for the fields that were changed.
+fn arguments(method: &str, params: Value, rpc_version: u32) -> Result<(Value, Fill), RpcError> {
     let Value::Object(params) = params else {
         return Err(RpcError::InvalidRequest(format!(
             "legacy: the arguments of {method} are not an object"
@@ -49,40 +52,61 @@ fn arguments(method: &str, params: Value, rpc_version: u32) -> Result<Value, Rpc
     } else {
         NameContext::Argument
     };
-    params
+    let mut fill = Fill::default();
+    let arguments = params
         .into_iter()
         .map(|(key, value)| {
             let value = match key.as_str() {
-                "fields" => fields(value, fields_context, rpc_version)?,
+                "fields" => {
+                    let (value, wanted) = fields(value, fields_context, rpc_version)?;
+                    fill = wanted;
+                    value
+                }
                 "ids" if value == RECENTLY_ACTIVE => Value::from(LEGACY_RECENTLY_ACTIVE),
                 _ => value,
             };
             Ok((renamed(&key, NameContext::Argument)?.to_owned(), value))
         })
-        .collect()
+        .collect::<Result<Map<_, _>, RpcError>>()?;
+    Ok((Value::Object(arguments), fill))
 }
 
 /// The list of field names `fields`, each in its legacy name in `context`; the torrent fields
 /// newer than `rpc_version` left out. A session field the daemon does not know needs no such
-/// care: it is left out of the answer.
-fn fields(fields: Value, context: NameContext, rpc_version: u32) -> Result<Value, RpcError> {
+/// care: it is left out of the answer. For the torrent fields, what the legacy daemons do not
+/// serve is asked for as what they do (see [`fill`]), and the returned [`Fill`] says how to
+/// undo that.
+fn fields(
+    fields: Value,
+    context: NameContext,
+    rpc_version: u32,
+) -> Result<(Value, Fill), RpcError> {
     let Value::Array(fields) = fields else {
         return Err(RpcError::InvalidRequest(
             "legacy: fields is not a list".to_owned(),
         ));
     };
-    let mut legacy = Vec::with_capacity(fields.len());
+    let mut names = Vec::with_capacity(fields.len());
     for field in &fields {
         let name = field.as_str().ok_or_else(|| {
             RpcError::InvalidRequest(format!("legacy: the field {field} is not a name"))
         })?;
+        names.push(name.to_owned());
+    }
+    let fill = if context == NameContext::TorrentField {
+        fill::plan(&mut names)
+    } else {
+        Fill::default()
+    };
+    let mut legacy = Vec::with_capacity(names.len());
+    for name in &names {
         let newer = context == NameContext::TorrentField
             && torrent_field_since(name).is_some_and(|since| since > rpc_version);
         if !newer {
             legacy.push(Value::from(renamed(name, context)?));
         }
     }
-    Ok(Value::Array(legacy))
+    Ok((Value::Array(legacy), fill))
 }
 
 fn renamed(name: &str, context: NameContext) -> Result<&'static str, RpcError> {
@@ -101,7 +125,7 @@ mod tests {
 
     /// The request to a daemon that has every field of the table.
     fn sent(method: &str, params: Option<Value>, tag: u64) -> Result<Value, RpcError> {
-        body(method, params, tag, NEWEST)
+        body(method, params, tag, NEWEST).map(|(body, _)| body)
     }
 
     #[test]
@@ -160,15 +184,49 @@ mod tests {
         let fields = |rpc_version| {
             body(
                 "torrent_get",
-                Some(json!({ "fields": ["id", "file_count", "files"] })),
+                Some(json!({ "fields": ["id", "file_count", "wanted"] })),
                 1,
                 rpc_version,
             )
-            .map(|body| body["arguments"]["fields"].clone())
+            .map(|(body, _)| body["arguments"]["fields"].clone())
         };
 
-        assert_eq!(fields(16), Ok(json!(["id", "files"])));
-        assert_eq!(fields(17), Ok(json!(["id", "file-count", "files"])));
+        assert_eq!(fields(16), Ok(json!(["id", "wanted"])));
+        assert_eq!(fields(17), Ok(json!(["id", "file-count", "wanted"])));
+    }
+
+    #[test]
+    fn source_is_asked_only_from_rpc_17() {
+        let fields = |rpc_version| {
+            body(
+                "torrent_get",
+                Some(json!({ "fields": ["id", "source"] })),
+                1,
+                rpc_version,
+            )
+            .map(|(body, _)| body["arguments"]["fields"].clone())
+        };
+
+        assert_eq!(fields(16), Ok(json!(["id"])));
+        assert_eq!(fields(17), Ok(json!(["id", "source"])));
+    }
+
+    #[test]
+    fn bytes_completed_is_asked_as_file_stats_and_files_bring_the_piece_size() {
+        assert_eq!(
+            sent(
+                "torrent_get",
+                Some(json!({ "fields": ["id", "bytes_completed", "files"] })),
+                1
+            ),
+            Ok(json!({
+                "method": "torrent-get",
+                "arguments": {
+                    "fields": ["id", "files", "fileStats", "pieceSize", "pieceCount"],
+                },
+                "tag": 1,
+            }))
+        );
     }
 
     #[test]
@@ -180,7 +238,8 @@ mod tests {
                 Some(json!({ "fields": ["sequential_download"] })),
                 1,
                 16
-            ),
+            )
+            .map(|(body, _)| body),
             Ok(json!({
                 "method": "session-get",
                 "arguments": { "fields": ["sequential_download"] },
@@ -210,11 +269,11 @@ mod tests {
         assert_eq!(
             sent(
                 "torrent_get",
-                Some(json!({ "fields": ["id", "bytes_completed"] })),
+                Some(json!({ "fields": ["id", "no_such_field"] })),
                 1
             ),
             Err(RpcError::InvalidRequest(
-                "legacy: no legacy name for bytes_completed".to_owned()
+                "legacy: no legacy name for no_such_field".to_owned()
             ))
         );
     }
