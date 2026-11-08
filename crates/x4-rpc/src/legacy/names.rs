@@ -19,53 +19,68 @@ pub(crate) enum NameContext {
     Argument,
 }
 
-/// The torrent fields, snake case to legacy.
-const TORRENT_FIELDS: &[(&str, &str)] = &[
-    ("id", "id"),
-    ("hash_string", "hashString"),
-    ("name", "name"),
-    ("status", "status"),
-    ("error", "error"),
-    ("error_string", "errorString"),
-    ("percent_done", "percentDone"),
-    ("metadata_percent_complete", "metadataPercentComplete"),
-    ("rate_download", "rateDownload"),
-    ("rate_upload", "rateUpload"),
-    ("eta", "eta"),
-    ("upload_ratio", "uploadRatio"),
-    ("total_size", "totalSize"),
-    ("size_when_done", "sizeWhenDone"),
-    ("left_until_done", "leftUntilDone"),
-    ("peers_connected", "peersConnected"),
-    ("peers_getting_from_us", "peersGettingFromUs"),
-    ("peers_sending_to_us", "peersSendingToUs"),
-    ("download_dir", "downloadDir"),
-    ("added_date", "addedDate"),
-    ("done_date", "doneDate"),
-    ("queue_position", "queuePosition"),
+/// The legacy RPC version of Transmission 3.00, which has every torrent field below unless one
+/// says otherwise.
+const RPC_3_00: u32 = super::OLDEST_RPC_VERSION;
+/// The legacy RPC version of Transmission 4.0.
+const RPC_4_0: u32 = 17;
+/// The legacy RPC version of Transmission 4.1.0-beta.
+const RPC_4_1_BETA: u32 = 18;
+
+/// The torrent fields: snake case, legacy, and the legacy RPC version that brought the field.
+///
+/// A daemon is never asked for a field newer than it: Transmission 3.00 answers a field it does
+/// not know with `0` rather than leaving it out, which would read as a value.
+const TORRENT_FIELDS: &[(&str, &str, u32)] = &[
+    ("id", "id", RPC_3_00),
+    ("hash_string", "hashString", RPC_3_00),
+    ("name", "name", RPC_3_00),
+    ("status", "status", RPC_3_00),
+    ("error", "error", RPC_3_00),
+    ("error_string", "errorString", RPC_3_00),
+    ("percent_done", "percentDone", RPC_3_00),
+    (
+        "metadata_percent_complete",
+        "metadataPercentComplete",
+        RPC_3_00,
+    ),
+    ("rate_download", "rateDownload", RPC_3_00),
+    ("rate_upload", "rateUpload", RPC_3_00),
+    ("eta", "eta", RPC_3_00),
+    ("upload_ratio", "uploadRatio", RPC_3_00),
+    ("total_size", "totalSize", RPC_3_00),
+    ("size_when_done", "sizeWhenDone", RPC_3_00),
+    ("left_until_done", "leftUntilDone", RPC_3_00),
+    ("peers_connected", "peersConnected", RPC_3_00),
+    ("peers_getting_from_us", "peersGettingFromUs", RPC_3_00),
+    ("peers_sending_to_us", "peersSendingToUs", RPC_3_00),
+    ("download_dir", "downloadDir", RPC_3_00),
+    ("added_date", "addedDate", RPC_3_00),
+    ("done_date", "doneDate", RPC_3_00),
+    ("queue_position", "queuePosition", RPC_3_00),
     // Transmission 4.1.0-beta serves it under its JSON-RPC name.
-    ("sequential_download", "sequential_download"),
-    ("recheck_progress", "recheckProgress"),
-    ("is_finished", "isFinished"),
-    ("labels", "labels"),
-    ("comment", "comment"),
-    ("creator", "creator"),
-    ("date_created", "dateCreated"),
-    ("magnet_link", "magnetLink"),
-    ("is_private", "isPrivate"),
-    ("piece_count", "pieceCount"),
-    ("piece_size", "pieceSize"),
-    ("pieces", "pieces"),
-    ("files", "files"),
-    ("file_stats", "fileStats"),
-    ("file_count", "file-count"),
-    ("priorities", "priorities"),
-    ("wanted", "wanted"),
-    ("downloaded_ever", "downloadedEver"),
-    ("uploaded_ever", "uploadedEver"),
-    ("tracker_stats", "trackerStats"),
-    ("peers", "peers"),
-    ("peers_from", "peersFrom"),
+    ("sequential_download", "sequential_download", RPC_4_1_BETA),
+    ("recheck_progress", "recheckProgress", RPC_3_00),
+    ("is_finished", "isFinished", RPC_3_00),
+    ("labels", "labels", RPC_3_00),
+    ("comment", "comment", RPC_3_00),
+    ("creator", "creator", RPC_3_00),
+    ("date_created", "dateCreated", RPC_3_00),
+    ("magnet_link", "magnetLink", RPC_3_00),
+    ("is_private", "isPrivate", RPC_3_00),
+    ("piece_count", "pieceCount", RPC_3_00),
+    ("piece_size", "pieceSize", RPC_3_00),
+    ("pieces", "pieces", RPC_3_00),
+    ("files", "files", RPC_3_00),
+    ("file_stats", "fileStats", RPC_3_00),
+    ("file_count", "file-count", RPC_4_0),
+    ("priorities", "priorities", RPC_3_00),
+    ("wanted", "wanted", RPC_3_00),
+    ("downloaded_ever", "downloadedEver", RPC_3_00),
+    ("uploaded_ever", "uploadedEver", RPC_3_00),
+    ("tracker_stats", "trackerStats", RPC_3_00),
+    ("peers", "peers", RPC_3_00),
+    ("peers_from", "peersFrom", RPC_3_00),
 ];
 
 /// The request arguments and session fields, snake case to legacy.
@@ -158,11 +173,14 @@ const ANSWER_ONLY: &[(&str, &str)] = &[
 /// Every legacy name an answer may carry, to its snake case name; built once, as an answer of
 /// thousands of torrents renames every key of each.
 static SNAKE_NAMES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
-    let pairs = TORRENT_FIELDS
+    let torrent_fields = TORRENT_FIELDS
         .iter()
-        .chain(ARGUMENTS)
-        .map(|&(snake, legacy)| (legacy, snake));
-    pairs.chain(ANSWER_ONLY.iter().copied()).collect()
+        .map(|&(snake, legacy, _)| (legacy, snake));
+    let arguments = ARGUMENTS.iter().map(|&(snake, legacy)| (legacy, snake));
+    torrent_fields
+        .chain(arguments)
+        .chain(ANSWER_ONLY.iter().copied())
+        .collect()
 });
 
 /// The legacy name of the method `method`: the same words joined by `-` (`torrent_start_now` is
@@ -174,14 +192,23 @@ pub(crate) fn legacy_method(method: &str) -> String {
 /// The legacy spelling of the snake case name `snake` in `context`; `None` when the legacy
 /// protocol has no such name.
 pub(crate) fn legacy_name(snake: &str, context: NameContext) -> Option<&'static str> {
-    let table = match context {
-        NameContext::TorrentField => TORRENT_FIELDS,
-        NameContext::Argument => ARGUMENTS,
-    };
-    table
-        .iter()
-        .find(|&&(name, _)| name == snake)
-        .map(|&(_, legacy)| legacy)
+    match context {
+        NameContext::TorrentField => torrent_field(snake).map(|&(_, legacy, _)| legacy),
+        NameContext::Argument => ARGUMENTS
+            .iter()
+            .find(|&&(name, _)| name == snake)
+            .map(|&(_, legacy)| legacy),
+    }
+}
+
+/// The legacy RPC version that brought the torrent field `snake`; `None` when the legacy
+/// protocol has no such field.
+pub(crate) fn torrent_field_since(snake: &str) -> Option<u32> {
+    torrent_field(snake).map(|&(_, _, since)| since)
+}
+
+fn torrent_field(snake: &str) -> Option<&'static (&'static str, &'static str, u32)> {
+    TORRENT_FIELDS.iter().find(|&&(name, _, _)| name == snake)
 }
 
 /// The snake case name of the legacy name `legacy` in an answer; `None` for a name 4x4 does not
@@ -349,7 +376,10 @@ mod tests {
 
     #[test]
     fn snake_name_reverses_every_pair() {
-        for &(snake, legacy) in TORRENT_FIELDS.iter().chain(ARGUMENTS) {
+        for &(snake, legacy, _) in TORRENT_FIELDS {
+            assert_eq!(snake_name(legacy), Some(snake), "{legacy}");
+        }
+        for &(snake, legacy) in ARGUMENTS {
             assert_eq!(snake_name(legacy), Some(snake), "{legacy}");
         }
         for &(legacy, snake) in ANSWER_ONLY {
@@ -370,6 +400,20 @@ mod tests {
         assert_eq!(snake_name("size-bytes"), Some("size_bytes"));
         assert_eq!(snake_name("torrent-duplicate"), Some("torrent_duplicate"));
         assert_eq!(snake_name("cumulative-stats"), Some("cumulative_stats"));
+    }
+
+    #[test]
+    fn the_fields_newer_than_transmission_3_00_carry_the_version_that_brought_them() {
+        assert_eq!(torrent_field_since("file_count"), Some(17));
+        assert_eq!(torrent_field_since("sequential_download"), Some(18));
+        assert_eq!(torrent_field_since("hash_string"), Some(16));
+        assert_eq!(torrent_field_since("source"), None);
+        let newer: Vec<&str> = TORRENT_FIELDS
+            .iter()
+            .filter(|&&(_, _, since)| since > RPC_3_00)
+            .map(|&(snake, _, _)| snake)
+            .collect();
+        assert_eq!(newer, ["sequential_download", "file_count"]);
     }
 
     #[test]

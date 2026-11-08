@@ -1,6 +1,7 @@
 //! The JSON-RPC client over a fake transport: the request envelope, the
 //! `X-Transmission-Session-Id` handshake, HTTP status and server error mapping, and the id types.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -638,5 +639,38 @@ fn legacy_session_id_handshake_still_retries() {
     assert_eq!(
         requests[3].params, requests[2].params,
         "the same request is resent"
+    );
+}
+
+#[test]
+fn every_check_starts_over_in_json_rpc() {
+    // The daemon behind the address is upgraded from 4.0.5 to 4.1 between two connects.
+    let upgraded = Arc::new(AtomicBool::new(false));
+    let fake = FakeTransport::routed({
+        let upgraded = Arc::clone(&upgraded);
+        move |method, arguments| {
+            Ok(if upgraded.load(Ordering::SeqCst) {
+                any_method(method)
+            } else if method.contains('_') {
+                not_recognized()
+            } else if method == "session-get" && arguments["fields"] == legacy_version_fields() {
+                testing::legacy_ok(json!({ "version": "4.0.5 (a6fe2a64aa)", "rpc-version": 17 }))
+            } else {
+                status_response(500)
+            })
+        }
+    });
+    let mut client = legacy_client(&fake);
+    upgraded.store(true, Ordering::SeqCst);
+
+    let server = client.check_server();
+
+    assert_eq!(server.map(|server| server.protocol), Ok(Protocol::JsonRpc));
+    assert_eq!(client.protocol(), Protocol::JsonRpc);
+    client.session_stats().unwrap();
+    let last = fake.requests().pop().unwrap();
+    assert_eq!(
+        last.method, "session_stats",
+        "the next call goes as JSON-RPC"
     );
 }

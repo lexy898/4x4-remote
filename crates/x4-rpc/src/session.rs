@@ -34,7 +34,7 @@ pub const SESSION_FIELDS: &[&str] = &[
 const MIN_RPC_MAJOR: u64 = 6;
 
 /// The oldest legacy `rpc-version` 4x4 supports: 16 is Transmission 3.00.
-const MIN_LEGACY_RPC_VERSION: u32 = 16;
+const MIN_LEGACY_RPC_VERSION: u32 = crate::legacy::OLDEST_RPC_VERSION;
 
 /// The session settings the app reads (`session_get` with [`SESSION_FIELDS`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

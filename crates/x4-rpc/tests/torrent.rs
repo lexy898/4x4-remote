@@ -699,10 +699,11 @@ fn pieces_bit_order_is_msb_first() {
     assert_eq!(pieces, Pieces::from_bytes(vec![0b1000_0000]));
 }
 
-/// A client that has found a Transmission 4.0.5, which answers every JSON-RPC request as one it
-/// does not know and every legacy request but `check_server`'s with `answer(method, arguments)`,
-/// and its transport.
-fn legacy_client(
+/// A client that has found a legacy daemon of the RPC version `rpc_version`, which answers
+/// every JSON-RPC request as one it does not know and every legacy request but `check_server`'s
+/// with `answer(method, arguments)`, and its transport.
+fn legacy_client_of(
+    rpc_version: u32,
     answer: impl Fn(&str, &Value) -> HttpResponse + Send + 'static,
 ) -> (Client<FakeTransport>, FakeTransport) {
     let version_fields = json!(["version", "rpc-version", "rpc-version-semver"]);
@@ -710,11 +711,9 @@ fn legacy_client(
         Ok(if method.contains('_') {
             testing::legacy_error("method name not recognized")
         } else if method == "session-get" && arguments["fields"] == version_fields {
-            testing::legacy_ok(json!({
-                "version": "4.0.5 (a6fe2a64aa)",
-                "rpc-version": 17,
-                "rpc-version-semver": "5.3.0",
-            }))
+            testing::legacy_ok(
+                json!({ "version": "4.0.5 (a6fe2a64aa)", "rpc-version": rpc_version }),
+            )
         } else {
             answer(method, arguments)
         })
@@ -727,6 +726,14 @@ fn legacy_client(
     (client, transport)
 }
 
+/// A client that has found a Transmission 4.0.5 (legacy RPC version 17) behind `answer`, and
+/// its transport.
+fn legacy_client(
+    answer: impl Fn(&str, &Value) -> HttpResponse + Send + 'static,
+) -> (Client<FakeTransport>, FakeTransport) {
+    legacy_client_of(17, answer)
+}
+
 /// The last request `transport` received.
 fn last_request(transport: &FakeTransport) -> Option<RecordedRequest> {
     transport.requests().pop()
@@ -734,7 +741,8 @@ fn last_request(transport: &FakeTransport) -> Option<RecordedRequest> {
 
 #[test]
 fn legacy_torrent_get_sends_legacy_names() {
-    let (mut client, transport) = legacy_client(|_, _| {
+    // Transmission 4.1.0-beta (legacy RPC version 18) has every field of the list.
+    let (mut client, transport) = legacy_client_of(18, |_, _| {
         testing::legacy_ok(json!({
             "torrents": [{
                 "id": 1,
@@ -800,6 +808,54 @@ fn legacy_torrent_get_sends_legacy_names() {
     assert_eq!(torrent.is_finished, Some(false));
     assert_eq!(torrent.sequential_download, Some(true));
     assert_eq!(response.removed, [TorrentId(4)]);
+}
+
+#[test]
+fn legacy_list_read_on_rpc_16_never_asks_for_newer_names() {
+    // Transmission 3.00 would answer `sequential_download` with 0, as any field it does not know.
+    let (mut client, transport) = legacy_client_of(16, |_, _| {
+        testing::legacy_ok(json!({
+            "torrents": [{ "id": 1, "hashString": HASH, "name": "x", "percentDone": 0.5 }],
+            "removed": [],
+        }))
+    });
+
+    let response = client.torrent_get(&GetIds::RecentlyActive, TorrentField::LIST);
+
+    let request = last_request(&transport).unwrap();
+    let fields = request.params["fields"].as_array().unwrap();
+    assert!(
+        !fields.contains(&json!("sequential_download")),
+        "{fields:?}"
+    );
+    assert_eq!(fields.len(), TorrentField::LIST.len() - 1);
+    let response = response.unwrap();
+    let [torrent] = response.torrents.as_slice() else {
+        panic!("one torrent: {response:?}");
+    };
+    assert_eq!(torrent.percent_done, Some(0.5));
+    assert_eq!(torrent.sequential_download, None);
+}
+
+#[test]
+fn legacy_list_read_asks_for_sequential_download_from_rpc_18() {
+    for (rpc_version, asked) in [(16, false), (17, false), (18, true), (19, true)] {
+        let (mut client, transport) = legacy_client_of(rpc_version, |_, _| {
+            testing::legacy_ok(json!({ "torrents": [] }))
+        });
+
+        client
+            .torrent_get(&GetIds::All, TorrentField::LIST)
+            .unwrap();
+
+        let request = last_request(&transport).unwrap();
+        let fields = request.params["fields"].as_array().unwrap();
+        assert_eq!(
+            fields.contains(&json!("sequential_download")),
+            asked,
+            "RPC {rpc_version}: {fields:?}"
+        );
+    }
 }
 
 #[test]

@@ -57,6 +57,9 @@ pub struct Client<T: Transport> {
     session_id: Option<String>,
     next_id: u64,
     protocol: Protocol,
+    /// The daemon's legacy RPC version, which decides the torrent fields a legacy request asks
+    /// for; the oldest 4x4 speaks to until a check reads it.
+    legacy_rpc_version: u32,
 }
 
 /// What a JSON-RPC call got back: its result, or an answer in the legacy protocol.
@@ -77,6 +80,7 @@ impl<T: Transport> Client<T> {
             session_id: None,
             next_id: 1,
             protocol: Protocol::JsonRpc,
+            legacy_rpc_version: legacy::OLDEST_RPC_VERSION,
         }
     }
 
@@ -90,6 +94,12 @@ impl<T: Transport> Client<T> {
     /// Makes the calls go in `protocol`, for [`Client::check_server`].
     pub(crate) fn set_protocol(&mut self, protocol: Protocol) {
         self.protocol = protocol;
+    }
+
+    /// Makes the legacy calls ask only for what a daemon of the legacy RPC version
+    /// `rpc_version` has, for [`Client::check_server`].
+    pub(crate) fn set_legacy_rpc_version(&mut self, rpc_version: u32) {
+        self.legacy_rpc_version = rpc_version;
     }
 
     /// Calls `method` with untyped `params` (omitted when `None`) and returns the untyped `result`
@@ -196,7 +206,7 @@ impl<T: Transport> Client<T> {
             .map(serde_json::to_value)
             .transpose()
             .map_err(unencodable)?;
-        let request = legacy::encode(method, params, tag)?;
+        let request = legacy::encode(method, params, tag, self.legacy_rpc_version)?;
         let body = serde_json::to_vec(&request.body).map_err(unencodable)?;
         let body = self.post_checked(&body, timeout)?;
         let arguments = legacy::decode(method, tag, &request.fill, &body)?;

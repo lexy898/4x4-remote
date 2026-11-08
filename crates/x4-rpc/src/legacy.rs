@@ -15,6 +15,9 @@ use serde_json::Value;
 
 use crate::error::RpcError;
 
+/// The legacy RPC version of Transmission 3.00, the oldest 4x4 speaks to.
+pub(crate) const OLDEST_RPC_VERSION: u32 = 16;
+
 /// A legacy request, ready to send, and what its answer needs to be read as the request asked.
 pub(crate) struct LegacyRequest {
     /// The whole request body.
@@ -30,7 +33,10 @@ pub(crate) struct LegacyRequest {
 pub(crate) struct Fill {}
 
 /// The legacy request for the JSON-RPC call `method` with `params` (no `arguments` when `None`),
-/// tagged `tag`.
+/// tagged `tag`, to a daemon of the legacy RPC version `rpc_version`.
+///
+/// A torrent field newer than `rpc_version` is left out of a `torrent_get`, and stays `None` in
+/// the records: Transmission 3.00 would answer it with `0` rather than leave it out.
 ///
 /// # Errors
 ///
@@ -40,9 +46,10 @@ pub(crate) fn encode(
     method: &str,
     params: Option<Value>,
     tag: u64,
+    rpc_version: u32,
 ) -> Result<LegacyRequest, RpcError> {
     Ok(LegacyRequest {
-        body: request::body(method, params, tag)?,
+        body: request::body(method, params, tag, rpc_version)?,
         fill: Fill::default(),
     })
 }

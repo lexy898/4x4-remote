@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::client::{Client, JsonRpcAnswer, Protocol};
 use crate::error::RpcError;
+use crate::legacy::OLDEST_RPC_VERSION;
 use crate::session::{
     FreeSpace, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats,
 };
@@ -71,7 +72,10 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// Any [`RpcError`] of the call. A directory the server cannot read is an
-    /// [`RpcError::Server`] with code 5 and the system's message as its detail.
+    /// [`RpcError::Server`] with code 5 and the system's message as its detail. Transmission
+    /// 4.1.0-beta reports such a directory as a success with a free space of `-1`; that answer
+    /// is the same error, without a detail, so that a missing folder reads alike from every
+    /// daemon.
     pub fn free_space(&mut self, path: &str) -> Result<FreeSpace, RpcError> {
         self.call("free_space", Some(&FreeSpaceParams { path }))
     }
@@ -92,6 +96,7 @@ impl<T: Transport> Client<T> {
     /// (before Transmission 3.00) or missing.
     pub fn check_server(&mut self) -> Result<ServerVersion, RpcError> {
         self.set_protocol(Protocol::JsonRpc);
+        self.set_legacy_rpc_version(OLDEST_RPC_VERSION);
         let answer = self.call_json_rpc(
             "session_get",
             Some(&GetParams {
@@ -117,6 +122,8 @@ impl<T: Transport> Client<T> {
                         fields: LEGACY_VERSION_FIELDS,
                     }),
                 )?;
+                // A daemon that reports none is unsupported; the oldest version asks for least.
+                self.set_legacy_rpc_version(result.rpc_version.unwrap_or(OLDEST_RPC_VERSION));
                 ServerVersion {
                     version: result.version,
                     rpc_semver: result.rpc_version_semver.unwrap_or_default(),

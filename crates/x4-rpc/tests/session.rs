@@ -750,3 +750,23 @@ fn legacy_free_space_error_is_a_system_error() {
     assert_eq!(request.method, "free-space");
     assert_eq!(request.params, json!({ "path": "/nowhere" }));
 }
+
+#[test]
+fn legacy_free_space_negative_size_is_a_missing_folder() {
+    // What Transmission 4.1.0-beta answers for a folder that is not there: a success, with -1.
+    let (mut client, _) = legacy_client(|_, _| {
+        testing::legacy_ok(json!({ "path": "/nowhere", "size-bytes": -1, "total_size": -1 }))
+    });
+
+    let error = client.free_space("/nowhere").unwrap_err();
+
+    // As a missing folder reads from every other daemon, so x4-core walks up to its parent.
+    assert_eq!(
+        error,
+        RpcError::Server {
+            code: 5,
+            message: "system error".to_owned(),
+            detail: None,
+        }
+    );
+}

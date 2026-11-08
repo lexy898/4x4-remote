@@ -11,6 +11,9 @@ use crate::error::{LEGACY_ERROR_CODE, RpcError};
 /// The `result` of a legacy answer that is no error.
 const SUCCESS: &str = "success";
 
+/// The method whose errors take the shape Transmission 4.1 gives them.
+const FREE_SPACE: &str = "free_space";
+
 /// The code and message of a failed `free_space` in JSON-RPC (Transmission 4.1), which also
 /// carries the system's text as its detail. A legacy daemon sends only that text; giving it the
 /// same shape lets a caller tell a folder that is not there the same way for both protocols.
@@ -24,7 +27,9 @@ const SYSTEM_ERROR_MESSAGE: &str = "system error";
 /// # Errors
 ///
 /// [`RpcError::InvalidResponse`] when `body` is not a JSON object with a string `result`, or
-/// carries another tag; [`RpcError::Server`] when `result` is not `"success"`.
+/// carries another tag; [`RpcError::Server`] when `result` is not `"success"`, and for a
+/// `free_space` whose free space is negative: Transmission 4.1.0-beta answers so for a folder
+/// it cannot read, where the others report an error.
 pub(super) fn arguments(method: &str, tag: u64, body: &[u8]) -> Result<Value, RpcError> {
     let Ok(Value::Object(mut envelope)) = serde_json::from_slice::<Value>(body) else {
         return Err(not_legacy(method));
@@ -43,26 +48,40 @@ pub(super) fn arguments(method: &str, tag: u64, body: &[u8]) -> Result<Value, Rp
     if result != SUCCESS {
         return Err(server_error(method, result));
     }
-    let arguments = envelope
-        .remove("arguments")
-        .unwrap_or_else(|| Value::Object(Map::new()));
-    Ok(snake_keys(arguments))
+    let arguments = snake_keys(
+        envelope
+            .remove("arguments")
+            .unwrap_or_else(|| Value::Object(Map::new())),
+    );
+    let no_free_space = arguments
+        .get("size_bytes")
+        .and_then(Value::as_i64)
+        .is_some_and(|size| size < 0);
+    if method == FREE_SPACE && no_free_space {
+        return Err(system_error(None));
+    }
+    Ok(arguments)
 }
 
 /// The error of a legacy answer whose `result` is `text`.
 fn server_error(method: &str, text: String) -> RpcError {
-    if method == "free_space" {
-        RpcError::Server {
-            code: SYSTEM_ERROR_CODE,
-            message: SYSTEM_ERROR_MESSAGE.to_owned(),
-            detail: Some(text),
-        }
+    if method == FREE_SPACE {
+        system_error(Some(text))
     } else {
         RpcError::Server {
             code: LEGACY_ERROR_CODE,
             message: text,
             detail: None,
         }
+    }
+}
+
+/// The error of a failed `free_space`, in the shape Transmission 4.1 gives it.
+fn system_error(detail: Option<String>) -> RpcError {
+    RpcError::Server {
+        code: SYSTEM_ERROR_CODE,
+        message: SYSTEM_ERROR_MESSAGE.to_owned(),
+        detail,
     }
 }
 
@@ -181,6 +200,34 @@ mod tests {
                 detail: None,
             })
         );
+    }
+
+    #[test]
+    fn a_free_space_without_room_is_read_and_a_negative_one_is_a_system_error() {
+        let answer = |size: i64| {
+            read(
+                "free_space",
+                &json!({ "result": "success", "arguments": { "path": "/p", "size-bytes": size } }),
+            )
+        };
+
+        assert_eq!(answer(0), Ok(json!({ "path": "/p", "size_bytes": 0 })));
+        // What Transmission 4.1.0-beta answers for a folder that is not there.
+        assert_eq!(
+            answer(-1),
+            Err(RpcError::Server {
+                code: SYSTEM_ERROR_CODE,
+                message: "system error".to_owned(),
+                detail: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_negative_size_bytes_means_nothing_to_another_method() {
+        let body = json!({ "result": "success", "arguments": { "size-bytes": -1 } });
+
+        assert_eq!(read("session_get", &body), Ok(json!({ "size_bytes": -1 })));
     }
 
     #[test]

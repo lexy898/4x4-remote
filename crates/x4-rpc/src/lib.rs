@@ -11,7 +11,8 @@
 //! whose errors are only text ([`LEGACY_ERROR_CODE`]). [`Client::check_server`] decides which, at
 //! every connect: it asks in JSON-RPC, so a 4.1 daemon costs one request as ever, and only a
 //! daemon that answers in the legacy protocol is asked once more, in that one, for its legacy
-//! `rpc-version`. The calls go in JSON-RPC until a check finds a legacy daemon; an answer in the
+//! `rpc-version`, which decides the torrent fields asked of it from then on (Transmission 3.00
+//! answers a field it does not know with `0`). The calls go in JSON-RPC until a check finds a legacy daemon; an answer in the
 //! legacy protocol to any other JSON-RPC call is an [`RpcError::InvalidResponse`], so that a
 //! daemon replaced behind the same address is checked again rather than misread.
 //!
