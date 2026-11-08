@@ -42,7 +42,7 @@
 
 ## Requirements
 
-- Transmission 4.1 or newer
+- Transmission 3.00 or newer
 - Linux (other platforms are not supported yet) with a Wayland or X11 session
 - A Vulkan driver (for example `vulkan-radeon`, `vulkan-intel` or `nvidia-utils`). Without one,
   4x4 draws through OpenGL, which uses more memory.

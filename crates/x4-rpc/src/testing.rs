@@ -1,8 +1,9 @@
 //! Test doubles for code that talks to Transmission (feature `test-support`).
 //!
-//! [`FakeTransport`] answers requests from a script or a handler and records every request;
-//! [`ok`] and [`conflict`] build the common responses. [`scrub`] removes private data from
-//! recorded responses and [`fixtures`] holds the scrubbed responses of a real daemon.
+//! [`FakeTransport`] answers requests from a script or a handler and records every request, in
+//! either protocol; [`ok`], [`conflict`], [`legacy_ok`] and [`legacy_error`] build the common
+//! responses. [`scrub`] removes private data from recorded responses and [`fixtures`] holds the
+//! scrubbed responses of a real daemon.
 
 pub mod scrub;
 
@@ -33,7 +34,8 @@ struct Shared {
 /// inspect [`FakeTransport::requests`].
 ///
 /// A response body that is a JSON object without an `id` (as built by [`ok`]) gets the id of the
-/// request it answers. Bodies with an explicit `id` pass through unchanged, so a test can answer
+/// request it answers; to a legacy request, one without a `tag` (as built by [`legacy_ok`]) gets
+/// its tag. Bodies with an explicit `id` or `tag` pass through unchanged, so a test can answer
 /// with a mismatched one.
 #[derive(Clone)]
 pub struct FakeTransport {
@@ -48,7 +50,9 @@ impl FakeTransport {
         Self::with(Responder::Scripted(responses.into()))
     }
 
-    /// Answers every request with `handler(method, params)`; `params` is null when omitted.
+    /// Answers every request with `handler(method, params)`, the two as
+    /// [`RecordedRequest::method`] and [`RecordedRequest::params`] hold them; `params` is null
+    /// when omitted.
     #[must_use]
     pub fn routed(
         handler: impl Fn(&str, &Value) -> Result<HttpResponse, TransportError> + Send + 'static,
@@ -82,7 +86,13 @@ impl Transport for FakeTransport {
                 "fake transport: the request has no method".to_owned(),
             ));
         };
-        let params = envelope.get("params").cloned().unwrap_or(Value::Null);
+        // A JSON-RPC request names its version; a legacy one has `arguments` and a `tag`.
+        let (params_key, correlator) = if envelope.get("jsonrpc").is_some() {
+            ("params", "id")
+        } else {
+            ("arguments", "tag")
+        };
+        let params = envelope.get(params_key).cloned().unwrap_or(Value::Null);
         lock(&self.shared.requests).push(RecordedRequest {
             method: method.to_owned(),
             params: params.clone(),
@@ -96,8 +106,8 @@ impl Transport for FakeTransport {
                 .unwrap_or_else(|| Err(TransportError::Io("script exhausted".to_owned()))),
             Responder::Routed(handler) => handler(method, &params),
         };
-        let id = envelope.get("id").cloned().unwrap_or(Value::Null);
-        response.map(|response| with_request_id(response, id))
+        let id = envelope.get(correlator).cloned().unwrap_or(Value::Null);
+        response.map(|response| with_request_id(response, correlator, id))
     }
 }
 
@@ -112,9 +122,11 @@ impl fmt::Debug for FakeTransport {
 /// A request as the [`FakeTransport`] received it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedRequest {
-    /// The JSON-RPC method.
+    /// The method as sent: snake case in JSON-RPC (`session_get`), kebab-case in the legacy
+    /// protocol (`session-get`).
     pub method: String,
-    /// The `params` object; null when the request had none.
+    /// The `params` object, or the `arguments` of a legacy request; null when the request had
+    /// none.
     pub params: Value,
     /// The `X-Transmission-Session-Id` the request carried.
     pub session_id: Option<String>,
@@ -137,6 +149,31 @@ pub fn ok(result: Value) -> HttpResponse {
     }
 }
 
+/// HTTP 200 with a legacy success answer carrying `arguments`; a [`FakeTransport`] fills in the
+/// request's tag.
+#[must_use]
+pub fn legacy_ok(arguments: Value) -> HttpResponse {
+    legacy_answer("success", arguments)
+}
+
+/// HTTP 200 with a legacy answer that reports the error `text`, as a legacy daemon reports every
+/// error; a [`FakeTransport`] fills in the request's tag.
+#[must_use]
+pub fn legacy_error(text: &str) -> HttpResponse {
+    legacy_answer(text, Value::Object(Map::new()))
+}
+
+fn legacy_answer(result: &str, arguments: Value) -> HttpResponse {
+    let mut body = Map::new();
+    body.insert("result".to_owned(), Value::from(result));
+    body.insert("arguments".to_owned(), arguments);
+    HttpResponse {
+        status: 200,
+        session_id: None,
+        body: Value::Object(body).to_string().into_bytes(),
+    }
+}
+
 /// HTTP 409 with a new `X-Transmission-Session-Id`, as the daemon answers a missing or stale one.
 #[must_use]
 pub fn conflict(session_id: &str) -> HttpResponse {
@@ -147,11 +184,12 @@ pub fn conflict(session_id: &str) -> HttpResponse {
     }
 }
 
-fn with_request_id(mut response: HttpResponse, id: Value) -> HttpResponse {
+/// `response` with `id` under `key` (`id` or `tag`) when its body is a JSON object without one.
+fn with_request_id(mut response: HttpResponse, key: &str, id: Value) -> HttpResponse {
     if let Ok(Value::Object(mut body)) = serde_json::from_slice::<Value>(&response.body)
-        && !body.contains_key("id")
+        && !body.contains_key(key)
     {
-        body.insert("id".to_owned(), id);
+        body.insert(key.to_owned(), id);
         response.body = Value::Object(body).to_string().into_bytes();
     }
     response

@@ -12,8 +12,8 @@ use x4_rpc::testing::fixtures::{
 use x4_rpc::testing::{self, FakeTransport, RecordedRequest};
 use x4_rpc::{
     AddOutcome, AddSource, AddedTorrent, Client, DownloadDir, ErrorKind, GetIds, HashString,
-    MagnetLink, Pieces, RemoveData, RpcError, Status, TorrentAction, TorrentAdd, TorrentField,
-    TorrentId, TorrentRef, TorrentSelection, TorrentSet,
+    HttpResponse, MagnetLink, Pieces, Protocol, RemoveData, RpcError, Status, TorrentAction,
+    TorrentAdd, TorrentField, TorrentId, TorrentRef, TorrentSelection, TorrentSet,
 };
 
 const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -697,4 +697,205 @@ fn pieces_bit_order_is_msb_first() {
     assert!(!pieces.has(7));
     assert!(!pieces.has(8), "out of range is absent");
     assert_eq!(pieces, Pieces::from_bytes(vec![0b1000_0000]));
+}
+
+/// A client that has found a Transmission 4.0.5, which answers every JSON-RPC request as one it
+/// does not know and every legacy request but `check_server`'s with `answer(method, arguments)`,
+/// and its transport.
+fn legacy_client(
+    answer: impl Fn(&str, &Value) -> HttpResponse + Send + 'static,
+) -> (Client<FakeTransport>, FakeTransport) {
+    let version_fields = json!(["version", "rpc-version", "rpc-version-semver"]);
+    let transport = FakeTransport::routed(move |method, arguments| {
+        Ok(if method.contains('_') {
+            testing::legacy_error("method name not recognized")
+        } else if method == "session-get" && arguments["fields"] == version_fields {
+            testing::legacy_ok(json!({
+                "version": "4.0.5 (a6fe2a64aa)",
+                "rpc-version": 17,
+                "rpc-version-semver": "5.3.0",
+            }))
+        } else {
+            answer(method, arguments)
+        })
+    });
+    let mut client = Client::new(transport.clone());
+    assert_eq!(
+        client.check_server().map(|server| server.protocol),
+        Ok(Protocol::Legacy)
+    );
+    (client, transport)
+}
+
+/// The last request `transport` received.
+fn last_request(transport: &FakeTransport) -> Option<RecordedRequest> {
+    transport.requests().pop()
+}
+
+#[test]
+fn legacy_torrent_get_sends_legacy_names() {
+    let (mut client, transport) = legacy_client(|_, _| {
+        testing::legacy_ok(json!({
+            "torrents": [{
+                "id": 1,
+                "hashString": HASH,
+                "downloadDir": "/downloads",
+                "percentDone": 0.5,
+                "rateDownload": 7,
+                "peersGettingFromUs": 2,
+                "isFinished": false,
+                "sequential_download": true,
+            }],
+            "removed": [4],
+        }))
+    });
+
+    let response = client
+        .torrent_get(&GetIds::RecentlyActive, TorrentField::LIST)
+        .unwrap();
+
+    let request = last_request(&transport).unwrap();
+    assert_eq!(request.method, "torrent-get");
+    assert_eq!(request.params["ids"], "recently-active");
+    assert_eq!(
+        request.params["fields"],
+        json!([
+            "id",
+            "hashString",
+            "name",
+            "status",
+            "error",
+            "errorString",
+            "percentDone",
+            "metadataPercentComplete",
+            "rateDownload",
+            "rateUpload",
+            "eta",
+            "uploadRatio",
+            "totalSize",
+            "sizeWhenDone",
+            "leftUntilDone",
+            "peersConnected",
+            "peersGettingFromUs",
+            "peersSendingToUs",
+            "downloadDir",
+            "addedDate",
+            "doneDate",
+            "queuePosition",
+            "sequential_download",
+            "recheckProgress",
+            "isFinished",
+            "labels",
+        ])
+    );
+    let [torrent] = response.torrents.as_slice() else {
+        panic!("one torrent: {response:?}");
+    };
+    assert_eq!(torrent.id, Some(TorrentId(1)));
+    assert_eq!(torrent.hash_string.as_deref(), Some(HASH));
+    assert_eq!(torrent.download_dir.as_deref(), Some("/downloads"));
+    assert_eq!(torrent.percent_done, Some(0.5));
+    assert_eq!(torrent.rate_download, Some(7));
+    assert_eq!(torrent.peers_getting_from_us, Some(2));
+    assert_eq!(torrent.is_finished, Some(false));
+    assert_eq!(torrent.sequential_download, Some(true));
+    assert_eq!(response.removed, [TorrentId(4)]);
+}
+
+#[test]
+fn legacy_torrent_add_sends_kebab_download_dir() {
+    let added = json!({ "hashString": HASH, "id": 1, "name": "x" });
+    let torrent = AddedTorrent {
+        id: TorrentId(1),
+        name: "x".to_owned(),
+        hash: HashString::parse(HASH).unwrap(),
+    };
+    let add = TorrentAdd {
+        source: AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..])),
+        download_dir: Some(DownloadDir::new("/data/new").unwrap()),
+        files_unwanted: vec![1],
+        ..magnet_add()
+    };
+    for (key, expected) in [
+        ("torrent-added", AddOutcome::Added(torrent.clone())),
+        ("torrent-duplicate", AddOutcome::Duplicate(torrent.clone())),
+    ] {
+        let answer = json!({ key: added.clone() });
+        let (mut client, transport) = legacy_client(move |_, _| testing::legacy_ok(answer.clone()));
+
+        let outcome = client.torrent_add(&add);
+
+        assert_eq!(outcome, Ok(expected), "{key}");
+        let request = last_request(&transport).unwrap();
+        assert_eq!(request.method, "torrent-add");
+        assert_eq!(
+            param_keys(&request.params),
+            ["download-dir", "files-unwanted", "metainfo", "paused"]
+        );
+        assert_eq!(request.params["download-dir"], "/data/new");
+        assert_eq!(request.params["files-unwanted"], json!([1]));
+    }
+}
+
+#[test]
+fn legacy_torrent_remove_sends_delete_local_data() {
+    let (mut client, transport) = legacy_client(|_, _| testing::legacy_ok(json!({})));
+
+    client
+        .torrent_remove(&selection(), RemoveData::Delete)
+        .unwrap();
+
+    let request = last_request(&transport).unwrap();
+    assert_eq!(request.method, "torrent-remove");
+    assert_eq!(
+        request.params,
+        json!({ "ids": [3, HASH], "delete-local-data": true })
+    );
+}
+
+#[test]
+fn legacy_torrent_set_and_actions_send_legacy_names() {
+    let (mut client, transport) = legacy_client(|_, _| testing::legacy_ok(json!({})));
+
+    client
+        .torrent_set(
+            &selection(),
+            &TorrentSet {
+                files_wanted: vec![0],
+                priority_normal: vec![1],
+                ..TorrentSet::default()
+            },
+        )
+        .unwrap();
+    client
+        .torrent_action(TorrentAction::StartNow, &selection())
+        .unwrap();
+
+    let requests = transport.requests();
+    let [.., set, start] = requests.as_slice() else {
+        panic!("two more requests: {requests:?}");
+    };
+    assert_eq!(set.method, "torrent-set");
+    assert_eq!(
+        set.params,
+        json!({ "ids": [3, HASH], "files-wanted": [0], "priority-normal": [1] })
+    );
+    assert_eq!(start.method, "torrent-start-now");
+    assert_eq!(start.params, json!({ "ids": [3, HASH] }));
+}
+
+#[test]
+fn a_legacy_read_of_a_field_with_no_legacy_name_is_refused_before_sending() {
+    let (mut client, transport) = legacy_client(|_, _| testing::legacy_ok(json!({})));
+    let sent = transport.requests().len();
+
+    let result = client.torrent_get(&GetIds::All, &[TorrentField::Id, TorrentField::Source]);
+
+    assert_eq!(
+        result,
+        Err(RpcError::InvalidRequest(
+            "legacy: no legacy name for source".to_owned()
+        ))
+    );
+    assert_eq!(transport.requests().len(), sent, "nothing is sent");
 }

@@ -13,8 +13,8 @@ use x4_rpc::testing::fixtures::{
     TORRENT_GET_PEERS, TORRENT_GET_RECENT, TORRENT_GET_TRACKERS,
 };
 use x4_rpc::{
-    AddOutcome, AddSource, AddedTorrent, FilePriority, IdError, MagnetLink, RemoveData, TorrentAdd,
-    TorrentId, TorrentRecord, TransportError,
+    AddOutcome, AddSource, AddedTorrent, FilePriority, IdError, MagnetLink, Protocol, RemoveData,
+    TorrentAdd, TorrentId, TorrentRecord, TransportError,
 };
 
 use super::*;
@@ -55,6 +55,18 @@ fn version(rpc_semver: &str) -> ServerVersion {
     ServerVersion {
         version: "4.1.3 (838877323f)".to_owned(),
         rpc_semver: rpc_semver.to_owned(),
+        rpc_version: None,
+        protocol: Protocol::JsonRpc,
+    }
+}
+
+/// A daemon of the legacy protocol that reports `rpc_version`, as Transmission 3.00 does (16).
+fn legacy_version(rpc_version: u32) -> ServerVersion {
+    ServerVersion {
+        version: "3.00 (bb6b5a062e)".to_owned(),
+        rpc_semver: String::new(),
+        rpc_version: Some(rpc_version),
+        protocol: Protocol::Legacy,
     }
 }
 
@@ -390,14 +402,14 @@ fn unsupported_server_error_stops_polling_too() {
         base,
         &Request::CheckServer,
         Err(RpcError::UnsupportedServer {
-            reason: UnsupportedReason::Legacy,
+            reason: UnsupportedReason::Version("15".to_owned()),
         }),
     );
 
     assert_eq!(
         engine.connection,
         ConnectionState::Unsupported {
-            reason: UnsupportedReason::Legacy
+            reason: UnsupportedReason::Version("15".to_owned())
         }
     );
     assert_eq!(engine.due_requests(base + secs(60)), []);
@@ -422,6 +434,44 @@ fn a_server_check_without_a_version_is_unsupported_for_that_reason() {
             reason: UnsupportedReason::NoVersion
         }
     );
+}
+
+#[test]
+fn a_legacy_server_connects() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    hand_out(&mut engine, base);
+
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(legacy_version(16))),
+    );
+
+    assert_eq!(engine.connection, ConnectionState::Connected);
+}
+
+#[test]
+fn an_rpc_15_server_is_unsupported() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    hand_out(&mut engine, base);
+
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(legacy_version(15))),
+    );
+
+    assert_eq!(
+        engine.connection,
+        ConnectionState::Unsupported {
+            reason: UnsupportedReason::Version("15".to_owned())
+        }
+    );
+    assert_eq!(engine.due_requests(base + secs(60)), []);
 }
 
 #[test]

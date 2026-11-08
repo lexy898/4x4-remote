@@ -5,6 +5,9 @@ use std::fmt;
 use crate::ids::IdError;
 use crate::transport::TransportError;
 
+/// The `code` of an [`RpcError::Server`] from a legacy daemon, whose errors carry only text.
+pub const LEGACY_ERROR_CODE: i64 = 0;
+
 /// Why an RPC call failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RpcError {
@@ -26,8 +29,9 @@ pub enum RpcError {
     /// HTTP 409 again right after retrying with the session id the server sent.
     #[error("the server rejected its own X-Transmission-Session-Id twice in a row")]
     SessionIdRejected,
-    /// The request could not be built: its params do not encode as JSON, or they name nothing
-    /// where the daemon would read nothing as everything (an empty file list).
+    /// The request could not be built: its params do not encode as JSON, they name nothing
+    /// where the daemon would read nothing as everything (an empty file list), or they name
+    /// something the legacy protocol has no name for.
     #[error("cannot encode the request: {0}")]
     InvalidRequest(String),
     /// A `torrent_add` of a magnet link with file choices (`files_unwanted`, `priority_high`,
@@ -39,22 +43,26 @@ pub enum RpcError {
          the metadata"
     )]
     MagnetWithFileChoices,
-    /// The body is not a JSON-RPC 2.0 response to the request: not JSON, a different id,
-    /// neither `result` nor `error`, or a `result` of the wrong shape.
+    /// The body is not a response to the request in the protocol the client speaks: not JSON, a
+    /// different id or tag, neither `result` nor `error`, a `result` of the wrong shape, or an
+    /// answer in the legacy protocol from a daemon the client found to speak JSON-RPC.
     #[error("invalid response: {0}")]
     InvalidResponse(String),
-    /// The server answered with a JSON-RPC error object.
+    /// The server answered with an error: a JSON-RPC error object, or a legacy `result` other
+    /// than `"success"`.
     #[error("server error {code}: {message}{}", detail_suffix(.detail.as_deref()))]
     Server {
-        /// The JSON-RPC error code.
+        /// The JSON-RPC error code; [`LEGACY_ERROR_CODE`] from a legacy daemon, except for a
+        /// failed `free_space`, which gets the code 4.1 gives it (5).
         code: i64,
-        /// The error message.
+        /// The error message; from a legacy daemon, its text.
         message: String,
-        /// `error.data.error_string`: what went wrong in more detail, if the server says.
+        /// `error.data.error_string`: what went wrong in more detail, if the server says; for a
+        /// failed `free_space` of a legacy daemon, its text.
         detail: Option<String>,
     },
-    /// The server speaks an RPC version 4x4 does not support (needs Transmission 4.1+).
-    #[error("unsupported server: {reason}; 4x4 needs Transmission 4.1 or later (RPC version 6.0)")]
+    /// The server speaks an RPC version 4x4 does not support (needs Transmission 3.00+).
+    #[error("unsupported server: {reason}; 4x4 needs Transmission 3.00 or later (RPC version 16)")]
     UnsupportedServer {
         /// What the server reported that makes it unsupported.
         reason: UnsupportedReason,
@@ -69,13 +77,13 @@ pub enum RpcError {
 /// A UI picks its text by variant, through its i18n layer; the `Display` text is for logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsupportedReason {
-    /// The server answers in the legacy (pre-JSON-RPC) protocol of Transmission 4.0 and older,
-    /// which has no `rpc_version_semver`.
-    Legacy,
-    /// The server reports no RPC version: its `rpc_version_semver` is empty.
+    /// The server reports no RPC version: its `rpc_version_semver` is empty, or a legacy daemon
+    /// sends no `rpc-version`.
     NoVersion,
-    /// The server reports an RPC version below 6 (before Transmission 4.1), or one that is not a
-    /// version; holds its `rpc_version_semver` as the server wrote it.
+    /// The server reports an RPC version 4x4 cannot use: a legacy daemon's `rpc-version` below 16
+    /// (before Transmission 3.00), held as its number in text (`"15"`); or from a JSON-RPC
+    /// daemon, an `rpc_version_semver` below 6 or one that is not a version, held as the server
+    /// wrote it.
     Version(String),
 }
 
@@ -96,9 +104,6 @@ impl UnsupportedReason {
 impl fmt::Display for UnsupportedReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Legacy => {
-                formatter.write_str("it speaks the legacy protocol (Transmission 4.0 or older)")
-            }
             Self::NoVersion => formatter.write_str("it reports no RPC version"),
             Self::Version(version) => write!(formatter, "its RPC version is {version:?}"),
         }
@@ -144,7 +149,7 @@ mod tests {
     fn unsupported_server_message_says_what_the_server_reported() {
         let message =
             |reason: UnsupportedReason| RpcError::UnsupportedServer { reason }.to_string();
-        let needs = "4x4 needs Transmission 4.1 or later (RPC version 6.0)";
+        let needs = "4x4 needs Transmission 3.00 or later (RPC version 16)";
 
         assert_eq!(
             message(UnsupportedReason::Version("5.4.0".to_owned())),
@@ -155,10 +160,8 @@ mod tests {
             format!("unsupported server: it reports no RPC version; {needs}")
         );
         assert_eq!(
-            message(UnsupportedReason::Legacy),
-            format!(
-                "unsupported server: it speaks the legacy protocol (Transmission 4.0 or older); {needs}"
-            )
+            message(UnsupportedReason::Version("15".to_owned())),
+            format!("unsupported server: its RPC version is \"15\"; {needs}")
         );
     }
 

@@ -329,7 +329,7 @@ mod tests {
             Indicator::Connecting,
             Indicator::ServiceStopped,
             Indicator::ServiceFailed,
-            Indicator::Unsupported(UnsupportedReason::Legacy),
+            Indicator::Unsupported(UnsupportedReason::NoVersion),
         ] {
             assert_eq!(
                 connection_tooltip(&indicator, Some("nas:9091")),

@@ -1,9 +1,19 @@
 //! Transmission RPC protocol and transport for 4x4, with no UI dependencies.
 //!
-//! [`Client`] speaks Transmission's JSON-RPC 2.0 API (Transmission 4.1+) over a [`Transport`],
-//! normally [`UreqTransport`], and handles the `X-Transmission-Session-Id` handshake. Torrents
-//! are named by [`TorrentId`] or, for anything long-lived, [`HashString`]; requests that change
-//! torrents take a [`TorrentSelection`], which cannot be empty. Every failure is an [`RpcError`].
+//! [`Client`] talks to a Transmission daemon (3.00 or newer) over a [`Transport`], normally
+//! [`UreqTransport`], and handles the `X-Transmission-Session-Id` handshake. Torrents are named
+//! by [`TorrentId`] or, for anything long-lived, [`HashString`]; requests that change torrents
+//! take a [`TorrentSelection`], which cannot be empty. Every failure is an [`RpcError`].
+//!
+//! It speaks two protocols behind the same typed calls ([`Protocol`]): JSON-RPC 2.0, of
+//! Transmission 4.1 and newer, and the legacy protocol of Transmission 3.00 to 4.1.0-beta, whose
+//! methods and fields have names of their own (`torrent-get`, `hashString`, `download-dir`) and
+//! whose errors are only text ([`LEGACY_ERROR_CODE`]). [`Client::check_server`] decides which, at
+//! every connect: it asks in JSON-RPC, so a 4.1 daemon costs one request as ever, and only a
+//! daemon that answers in the legacy protocol is asked once more, in that one, for its legacy
+//! `rpc-version`. The calls go in JSON-RPC until a check finds a legacy daemon; an answer in the
+//! legacy protocol to any other JSON-RPC call is an [`RpcError::InvalidResponse`], so that a
+//! daemon replaced behind the same address is checked again rather than misread.
 //!
 //! The torrent methods ([`Client::torrent_get`], [`Client::torrent_action`],
 //! [`Client::torrent_set`], [`Client::torrent_remove`], [`Client::torrent_add`]) take typed
@@ -25,7 +35,7 @@
 //! The session methods ([`Client::session_get`], [`Client::session_set`],
 //! [`Client::session_stats`], [`Client::free_space`]) read and change the daemon's settings and
 //! report its totals; [`Client::check_server`] tells whether the server's RPC version is one
-//! 4x4 supports (Transmission 4.1+).
+//! 4x4 supports ([`ServerVersion::unsupported_reason`]: Transmission 3.00 or newer).
 //!
 //! A daemon that asks for a user name and password gets them as HTTP basic authentication on
 //! every request, from [`UreqTransport::with_credentials`]; [`Credentials`] never shows the
@@ -39,6 +49,7 @@ mod credentials;
 mod download_dir;
 mod error;
 mod ids;
+mod legacy;
 mod lenient;
 mod magnet;
 mod peers;
@@ -50,10 +61,10 @@ mod torrent;
 mod torrent_methods;
 mod transport;
 
-pub use client::{ADD_TIMEOUT, Client, DEFAULT_TIMEOUT};
+pub use client::{ADD_TIMEOUT, Client, DEFAULT_TIMEOUT, Protocol};
 pub use credentials::Credentials;
 pub use download_dir::{DownloadDir, DownloadDirError, MAX_DOWNLOAD_DIR_BYTES};
-pub use error::{RpcError, UnsupportedReason};
+pub use error::{LEGACY_ERROR_CODE, RpcError, UnsupportedReason};
 pub use ids::{GetIds, HashString, IdError, TorrentId, TorrentRef, TorrentSelection};
 pub use magnet::{MAX_MAGNET_BYTES, MagnetError, MagnetLink};
 pub use peers::{PeerRecord, PeersFromRecord};

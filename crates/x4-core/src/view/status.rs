@@ -344,7 +344,7 @@ mod tests {
                 last_error: ConnectionError::Timeout,
             },
             ConnectionState::Unsupported {
-                reason: UnsupportedReason::Legacy,
+                reason: UnsupportedReason::NoVersion,
             },
         ] {
             let status = StatusModel {

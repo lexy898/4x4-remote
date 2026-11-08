@@ -26,14 +26,15 @@ with "HTTPS is not supported yet". The port is a number from 1 to 65535, the pat
 `#` or spaces, and a user name cannot hold a colon. The user name and the password are taken as
 typed, spaces included.
 
-Test asks the server for its version once (one `session_get`, given up after 5 seconds without an
+Test asks the server for its version once (one `session_get`, and a second one, in the older
+protocol, for a daemon older than Transmission 4.1; each given up after 5 seconds without an
 answer), off the window's thread, so that the window never waits. The button says "Testing…" until
 the answer comes; a line under the fields then says, in green, "Connected: Transmission 4.1.3
 (…)", or in red why not: "The server cannot be reached", "The server did not answer in time", "The
 server rejected the credentials", "The server does not accept requests from this computer" (the
-daemon's whitelist), "Transmission 4.1 or newer required", and the like. Any edit takes the line
-away, and drops the answer of a test still running, so that the line always speaks of the fields as
-they are. Save needs no test.
+daemon's whitelist), "Transmission 3.00 or newer required (server RPC 15)", and the like. Any edit
+takes the line away, and drops the answer of a test still running, so that the line always speaks
+of the fields as they are. Save needs no test.
 
 Save, or `Enter` in a field, checks the fields first: each problem is shown under its field, the
 focus goes to the first one, and nothing is saved. With the server the window has already, Save
@@ -378,7 +379,7 @@ table. The search is not remembered between runs.
 The status bar at the bottom shows:
 
 - a dot for the connection: green when connected, grey while connecting or when no server is set,
-  yellow while reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or
+  yellow while reconnecting and red when the daemon is too old (4x4 needs Transmission 3.00 or
   newer). Next to it, "Connecting…", "No server set" or "Reconnecting (attempt N)… timed out" and
   the like; the tooltip names the server once connected ("Connected to nas:9091") and says more
   about why the daemon could not be reached. A click on the dot or its text opens the Connection
@@ -446,7 +447,7 @@ The add dialog shows the torrents to add, one at a time; nothing is added until 
 `.torrent` file is read only when its turn comes, and one that cannot be offered is skipped with a
 notification that names it and says why, and is not counted among the torrents to add: it does not
 exist, 4x4 may not read it, it is not a regular file or is larger than 16 MiB, it is not a torrent
-file or holds no torrent, it is a BitTorrent v2 torrent only, which Transmission 4.1 cannot add, or
+file or holds no torrent, it is a BitTorrent v2 torrent only, which Transmission cannot add, or
 the daemon would refuse it as broken (as when it has no files, two files of the same path, or piece
 hashes that do not match its size). A file that takes longer than a moment to read, as on a network
 folder that hangs, opens the dialog with "Reading the file…" and Skip, which moves on to the next
@@ -456,7 +457,7 @@ and size, and for a magnet link its field, checked as you type, with the link's 
 magnet link must start with `magnet:?` and name one BitTorrent info hash (40 hexadecimal or 32
 base32 characters), without a control character such as a line break, and in at most 64 KiB; a
 bare hash, a link with several hashes and one with only a BitTorrent v2 hash, which Transmission
-4.1 cannot add, are refused with the reason under the form.
+cannot add, are refused with the reason under the form.
 
 The folder on the server starts as the daemon's download folder. The button beside it, or
 `Alt+Down`, offers that folder, the last 10 folders torrents were added to (remembered between runs;

@@ -225,18 +225,14 @@ mod tests {
             "as the status bar's tooltip, without the server's details"
         );
         assert_eq!(
-            connection_test_text(&CheckOutcome::Unsupported(UnsupportedReason::Legacy)),
-            "Transmission 4.1 or newer required"
-        );
-        assert_eq!(
             connection_test_text(&CheckOutcome::Unsupported(UnsupportedReason::NoVersion)),
-            "Transmission 4.1 or newer required (server did not report a version)"
+            "Transmission 3.00 or newer required (server did not report a version)"
         );
         assert_eq!(
             connection_test_text(&CheckOutcome::Unsupported(UnsupportedReason::Version(
-                "5.0.1".to_owned()
+                "15".to_owned()
             ))),
-            "Transmission 4.1 or newer required (server RPC 5.0.1)"
+            "Transmission 3.00 or newer required (server RPC 15)"
         );
         assert_eq!(
             connection_test_text(&CheckOutcome::NotRun),

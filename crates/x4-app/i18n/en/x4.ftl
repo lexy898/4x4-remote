@@ -117,10 +117,9 @@ connection-reason-forbidden-detail = The server does not accept requests from th
 connection-reason-unauthorized-detail = The server rejected the credentials
 connection-reason-protocol-detail = The server answered unexpectedly
 connection-reason-server-detail = The server reported an error
-connection-unsupported-legacy = Transmission 4.1 or newer required
-connection-unsupported-no-version = Transmission 4.1 or newer required (server did not report a version)
-# $version: the RPC version the server reports.
-connection-unsupported-version = Transmission 4.1 or newer required (server RPC { $version })
+connection-unsupported-no-version = Transmission 3.00 or newer required (server did not report a version)
+# $version: the RPC version the server reports, such as 15.
+connection-unsupported-version = Transmission 3.00 or newer required (server RPC { $version })
 connection-service-stopped = Service stopped
 connection-service-failed = Service could not start
 # No server has been set yet: the status bar's words and the tooltip that says what to do.

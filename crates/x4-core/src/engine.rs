@@ -306,7 +306,7 @@ pub enum Event {
 /// and checks the server again after each step of [`EngineConfig::backoff`]; the steps go on
 /// until the connection has stayed up for [`EngineConfig::stable_after`], so a daemon that passes
 /// the check but fails a poll every time is not asked every second. A server older than
-/// Transmission 4.1 (RPC version 6) makes it [`ConnectionState::Unsupported`] until
+/// Transmission 3.00 (RPC version 16) makes it [`ConnectionState::Unsupported`] until
 /// [`Command::Reconnect`].
 ///
 /// Each poll is next due one interval after it was handed out, or after its answer came if that
@@ -519,9 +519,9 @@ impl Engine {
     /// next turn of the poll is measured from it, so a slow daemon gets its rest.
     ///
     /// A failed poll that means the daemon cannot be used (no answer, an HTTP error, an answer
-    /// that is not JSON-RPC) starts reconnecting, and an unsupported server stops polling. A
-    /// poll the daemon refused is logged and tried again at its next interval. Answers to polls
-    /// that are no longer [current](Engine::is_current) are ignored.
+    /// not in the protocol the server check found) starts reconnecting, and an unsupported server
+    /// stops polling. A poll the daemon refused is logged and tried again at its next interval.
+    /// Answers to polls that are no longer [current](Engine::is_current) are ignored.
     #[must_use]
     pub fn handle_response(
         &mut self,
@@ -669,12 +669,10 @@ impl Engine {
             return Vec::new();
         }
         match result {
-            Ok(Response::Server(version)) if version.is_supported() => {
-                self.connected(now, &version)
-            }
-            Ok(Response::Server(version)) => {
-                self.unsupported(UnsupportedReason::from_rpc_semver(&version.rpc_semver))
-            }
+            Ok(Response::Server(version)) => match version.unsupported_reason() {
+                None => self.connected(now, &version),
+                Some(reason) => self.unsupported(reason),
+            },
             Ok(other) => self.connect_failed(now, &unexpected(&Request::CheckServer, &other)),
             Err(RpcError::UnsupportedServer { reason }) => self.unsupported(reason),
             // Even an error the daemon reports means there is nothing to poll yet.
@@ -686,7 +684,9 @@ impl Engine {
     fn connected(&mut self, now: Instant, version: &ServerVersion) -> Vec<Event> {
         tracing::info!(
             version = %version.version,
-            rpc_version = %version.rpc_semver,
+            rpc_semver = %version.rpc_semver,
+            rpc_version = ?version.rpc_version,
+            protocol = ?version.protocol,
             "connected to the daemon"
         );
         self.check_at = None;
@@ -707,7 +707,7 @@ impl Engine {
     fn unsupported(&mut self, reason: UnsupportedReason) -> Vec<Event> {
         tracing::error!(
             %reason,
-            "the daemon's RPC version is not supported; 4x4 needs Transmission 4.1 or later"
+            "the daemon's RPC version is not supported; 4x4 needs Transmission 3.00 or later"
         );
         self.check_at = None;
         self.set_connection(ConnectionState::Unsupported { reason })
@@ -1006,8 +1006,8 @@ fn unexpected(request: &Request, response: &Response) -> RpcError {
 /// What a failed call says about the daemon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure<'a> {
-    /// The daemon cannot be used: it does not answer, refuses this host or does not speak
-    /// JSON-RPC. Reconnect.
+    /// The daemon cannot be used: it does not answer, refuses this host or no longer speaks the
+    /// protocol the server check found. Reconnect, which checks the server again.
     Unusable,
     /// The daemon speaks an RPC version 4x4 does not support; holds why.
     Unsupported(&'a UnsupportedReason),

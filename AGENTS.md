@@ -188,8 +188,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Look up library APIs with the context7 MCP server before coding against them; do not rely on memory.
 - GPUI moves fast: check docs.rs/gpui-kit, gpui-kit.com and the sources of the pinned version in
   `~/.cargo/registry/src/`.
-- Transmission RPC: `docs/rpc-spec.md` in the Transmission repository, 4.1.x. When the docs and the
-  live server disagree, the server wins.
+- Transmission RPC: `docs/rpc-spec.md` in the Transmission repository, 4.1.x. The legacy protocol
+  that 4x4 speaks to Transmission 3.00 – 4.1.0-beta: `docs/rpc-spec.md` of tag 4.0.6 and
+  `extras/rpc-spec.txt` of tag 3.00. When the docs and the live server disagree, the server wins.
 
 ## Hard Rules
 

@@ -10,6 +10,9 @@ use std::fmt;
 use serde::de::{Unexpected, Visitor};
 use serde::{Deserialize, Deserializer};
 
+use crate::client::Protocol;
+use crate::error::UnsupportedReason;
+
 /// The `session_get` fields the app reads, in the order it requests them.
 pub const SESSION_FIELDS: &[&str] = &[
     "version",
@@ -26,8 +29,12 @@ pub const SESSION_FIELDS: &[&str] = &[
     "start_added_torrents",
 ];
 
-/// The oldest `rpc_version_semver` major 4x4 supports: 6 is JSON-RPC 2.0, Transmission 4.1.
+/// The oldest `rpc_version_semver` major 4x4 supports in JSON-RPC: 6 is JSON-RPC 2.0,
+/// Transmission 4.1.
 const MIN_RPC_MAJOR: u64 = 6;
+
+/// The oldest legacy `rpc-version` 4x4 supports: 16 is Transmission 3.00.
+const MIN_LEGACY_RPC_VERSION: u32 = 16;
 
 /// The session settings the app reads (`session_get` with [`SESSION_FIELDS`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -178,8 +185,14 @@ pub struct FreeSpace {
 pub struct ServerVersion {
     /// `version`: the daemon's long version string, `$version ($revision)`.
     pub version: String,
-    /// `rpc_version_semver`: the RPC API version, as the server wrote it.
+    /// `rpc_version_semver`: the RPC API version, as the server wrote it; empty when it sends
+    /// none (Transmission 3.00).
     pub rpc_semver: String,
+    /// `rpc-version`: the legacy RPC version, an integer; read only from a daemon of the legacy
+    /// protocol, `None` from any other.
+    pub rpc_version: Option<u32>,
+    /// The protocol the server speaks, which decides which of the versions above counts.
+    pub protocol: Protocol,
 }
 
 impl ServerVersion {
@@ -195,10 +208,32 @@ impl ServerVersion {
         major.parse().ok()
     }
 
-    /// Whether 4x4 can talk to this server: its RPC major is 6 (Transmission 4.1) or later.
+    /// Why 4x4 cannot talk to this server, or `None` when it can: in JSON-RPC when its RPC major
+    /// is 6 (Transmission 4.1) or later, in the legacy protocol when its `rpc-version` is 16
+    /// (Transmission 3.00) or later.
+    #[must_use]
+    pub fn unsupported_reason(&self) -> Option<UnsupportedReason> {
+        match self.protocol {
+            Protocol::JsonRpc => {
+                if self.rpc_major().is_some_and(|major| major >= MIN_RPC_MAJOR) {
+                    None
+                } else {
+                    Some(UnsupportedReason::from_rpc_semver(&self.rpc_semver))
+                }
+            }
+            Protocol::Legacy => match self.rpc_version {
+                Some(version) if version >= MIN_LEGACY_RPC_VERSION => None,
+                Some(version) => Some(UnsupportedReason::Version(version.to_string())),
+                None => Some(UnsupportedReason::NoVersion),
+            },
+        }
+    }
+
+    /// Whether 4x4 can talk to this server: it has no
+    /// [`unsupported_reason`](Self::unsupported_reason).
     #[must_use]
     pub fn is_supported(&self) -> bool {
-        self.rpc_major().is_some_and(|major| major >= MIN_RPC_MAJOR)
+        self.unsupported_reason().is_none()
     }
 }
 
@@ -210,6 +245,17 @@ mod tests {
         ServerVersion {
             version: "4.1.3 (838877323f)".to_owned(),
             rpc_semver: rpc_semver.to_owned(),
+            rpc_version: None,
+            protocol: Protocol::JsonRpc,
+        }
+    }
+
+    fn legacy(rpc_version: Option<u32>, rpc_semver: &str) -> ServerVersion {
+        ServerVersion {
+            version: "4.0.5 (a6fe2a64aa)".to_owned(),
+            rpc_semver: rpc_semver.to_owned(),
+            rpc_version,
+            protocol: Protocol::Legacy,
         }
     }
 
@@ -241,5 +287,38 @@ mod tests {
         assert!(version("6.0.0").is_supported());
         assert!(version("7.0.0").is_supported());
         assert!(!version("").is_supported());
+    }
+
+    #[test]
+    fn a_json_rpc_server_is_judged_by_its_semver_alone() {
+        assert_eq!(
+            version("5.4.0").unsupported_reason(),
+            Some(UnsupportedReason::Version("5.4.0".to_owned()))
+        );
+        assert_eq!(
+            version("").unsupported_reason(),
+            Some(UnsupportedReason::NoVersion)
+        );
+        let with_a_legacy_number = ServerVersion {
+            rpc_version: Some(18),
+            ..version("5.4.0")
+        };
+        assert!(!with_a_legacy_number.is_supported());
+    }
+
+    #[test]
+    fn legacy_support_starts_at_rpc_version_16() {
+        assert_eq!(legacy(Some(16), "").unsupported_reason(), None);
+        assert_eq!(legacy(Some(18), "5.4.0").unsupported_reason(), None);
+        assert_eq!(
+            legacy(Some(15), "").unsupported_reason(),
+            Some(UnsupportedReason::Version("15".to_owned()))
+        );
+        assert_eq!(
+            legacy(None, "5.3.0").unsupported_reason(),
+            Some(UnsupportedReason::NoVersion)
+        );
+        assert!(legacy(Some(17), "5.3.0").is_supported());
+        assert!(!legacy(Some(15), "").is_supported());
     }
 }

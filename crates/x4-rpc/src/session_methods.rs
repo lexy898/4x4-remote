@@ -7,8 +7,8 @@
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
-use crate::client::Client;
-use crate::error::{RpcError, UnsupportedReason};
+use crate::client::{Client, JsonRpcAnswer, Protocol};
+use crate::error::RpcError;
 use crate::session::{
     FreeSpace, SESSION_FIELDS, ServerVersion, SessionInfo, SessionSet, SessionStats,
 };
@@ -17,6 +17,10 @@ use crate::transport::Transport;
 /// The only fields `check_server` asks for: it must work on a server too new or too old to
 /// answer the rest.
 const VERSION_FIELDS: &[&str] = &["version", "rpc_version_semver"];
+
+/// The fields `check_server` asks a legacy daemon for: Transmission 3.00 has only the integer
+/// `rpc-version`, and ignores a field it does not know.
+pub(crate) const LEGACY_VERSION_FIELDS: &[&str] = &["version", "rpc_version", "rpc_version_semver"];
 
 impl<T: Transport> Client<T> {
     /// Reads the session settings the app uses (`session_get` with [`SESSION_FIELDS`]).
@@ -72,32 +76,58 @@ impl<T: Transport> Client<T> {
         self.call("free_space", Some(&FreeSpaceParams { path }))
     }
 
-    /// Reads the server's version and checks that 4x4 supports its RPC version.
+    /// Reads the server's version, decides the protocol the calls go in from then on (see
+    /// [`Client::protocol`]), and checks that 4x4 supports the server's RPC version.
+    ///
+    /// It asks in JSON-RPC first, so a Transmission 4.1 or newer costs one request, as ever. A
+    /// daemon that answers in the legacy protocol is asked once more, in that protocol, for its
+    /// `rpc-version`. Every check starts over in JSON-RPC, so a daemon upgraded or downgraded
+    /// behind the same address is found out at the next connect.
     ///
     /// # Errors
     ///
-    /// Any [`RpcError`] of the call; [`RpcError::UnsupportedServer`] when the server's
-    /// `rpc_version_semver` has a major below 6 (before Transmission 4.1) or is not a version
-    /// ([`UnsupportedReason::Version`], or [`UnsupportedReason::NoVersion`] when it is empty), or
-    /// when the server answers in the legacy protocol of Transmission 4.0 and older
-    /// ([`UnsupportedReason::Legacy`]).
+    /// Any [`RpcError`] of the calls; [`RpcError::UnsupportedServer`] with the
+    /// [`ServerVersion::unsupported_reason`]: a JSON-RPC daemon whose `rpc_version_semver` has a
+    /// major below 6 or is not a version, or a legacy daemon whose `rpc-version` is below 16
+    /// (before Transmission 3.00) or missing.
     pub fn check_server(&mut self) -> Result<ServerVersion, RpcError> {
-        let result: VersionResult = self.call(
+        self.set_protocol(Protocol::JsonRpc);
+        let answer = self.call_json_rpc(
             "session_get",
             Some(&GetParams {
                 fields: VERSION_FIELDS,
             }),
+            None,
         )?;
-        let version = ServerVersion {
-            version: result.version,
-            rpc_semver: result.rpc_version_semver,
+        let version = match answer {
+            JsonRpcAnswer::Result(VersionResult {
+                version,
+                rpc_version_semver,
+            }) => ServerVersion {
+                version,
+                rpc_semver: rpc_version_semver,
+                rpc_version: None,
+                protocol: Protocol::JsonRpc,
+            },
+            JsonRpcAnswer::Legacy => {
+                self.set_protocol(Protocol::Legacy);
+                let result: LegacyVersionResult = self.call(
+                    "session_get",
+                    Some(&GetParams {
+                        fields: LEGACY_VERSION_FIELDS,
+                    }),
+                )?;
+                ServerVersion {
+                    version: result.version,
+                    rpc_semver: result.rpc_version_semver.unwrap_or_default(),
+                    rpc_version: result.rpc_version,
+                    protocol: Protocol::Legacy,
+                }
+            }
         };
-        if version.is_supported() {
-            Ok(version)
-        } else {
-            Err(RpcError::UnsupportedServer {
-                reason: UnsupportedReason::from_rpc_semver(&version.rpc_semver),
-            })
+        match version.unsupported_reason() {
+            None => Ok(version),
+            Some(reason) => Err(RpcError::UnsupportedServer { reason }),
         }
     }
 }
@@ -131,4 +161,15 @@ struct FreeSpaceParams<'a> {
 struct VersionResult {
     version: String,
     rpc_version_semver: String,
+}
+
+/// The result of a legacy `session_get` for [`LEGACY_VERSION_FIELDS`]. Transmission 3.00 sends no
+/// `rpc_version_semver`; a daemon that sends no `rpc_version` either is unsupported for that.
+#[derive(Deserialize)]
+struct LegacyVersionResult {
+    version: String,
+    #[serde(default)]
+    rpc_version: Option<u32>,
+    #[serde(default)]
+    rpc_version_semver: Option<String>,
 }

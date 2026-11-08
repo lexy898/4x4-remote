@@ -11,7 +11,7 @@ First release.
 
 ### Added
 
-- A native desktop client for a remote Transmission daemon (4.1 or newer), written in Rust on GPUI,
+- A native desktop client for a remote Transmission daemon (3.00 or newer), written in Rust on GPUI,
   for Linux with Wayland or X11. It draws through Vulkan and falls back to OpenGL.
 - Connection to the daemon set in a Connection dialog (host, port, path, and a user name and
   password where the daemon asks for them), with a Test button; switching daemons without a

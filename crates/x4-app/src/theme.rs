@@ -431,7 +431,7 @@ mod tests {
                 color(Indicator::Connected),
                 color(Indicator::Connecting),
                 color(reconnecting),
-                color(Indicator::Unsupported(UnsupportedReason::Legacy)),
+                color(Indicator::Unsupported(UnsupportedReason::NoVersion)),
             ];
             for (index, first) in distinct.iter().enumerate() {
                 for second in &distinct[index + 1..] {

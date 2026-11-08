@@ -208,18 +208,14 @@ fn connection_texts() {
     assert_eq!(connected_to_text("nas:9091"), "Connected to nas:9091");
     assert_eq!(connected_to_text("[::1]:9091"), "Connected to [::1]:9091");
     assert_eq!(
-        text(Indicator::Unsupported(UnsupportedReason::Legacy)),
-        "Transmission 4.1 or newer required"
-    );
-    assert_eq!(
         text(Indicator::Unsupported(UnsupportedReason::NoVersion)),
-        "Transmission 4.1 or newer required (server did not report a version)"
+        "Transmission 3.00 or newer required (server did not report a version)"
     );
     assert_eq!(
         text(Indicator::Unsupported(UnsupportedReason::Version(
-            "5.0.1".to_owned()
+            "15".to_owned()
         ))),
-        "Transmission 4.1 or newer required (server RPC 5.0.1)"
+        "Transmission 3.00 or newer required (server RPC 15)"
     );
 }
 
