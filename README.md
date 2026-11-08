@@ -56,6 +56,8 @@
   Arch Linux package depends on; without them the peers show no country.
 - The password of the daemon is kept as plain text in `config.toml`, a file only you can read; 4x4
   uses no keyring.
+- On Transmission 4.0, a torrent with empty files is added with all its files: 4.0 leaves empty
+  files out and numbers the rest differently, so leaving one out could leave out another.
 
 ## Install
 

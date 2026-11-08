@@ -1105,6 +1105,66 @@ fn a_speed_action_reads_the_session_again() {
     }
 }
 
+/// An engine that connected at `base` to a daemon of `version` and read everything it reads on
+/// connecting.
+fn loaded_from(base: Instant, version: ServerVersion) -> Engine {
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    assert_eq!(engine.due_requests(base), [Request::CheckServer]);
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(version)),
+    );
+    while !exchange(&mut engine, base).0.is_empty() {}
+    engine
+}
+
+#[test]
+fn the_session_says_whether_the_daemon_keeps_empty_files() {
+    let base = Instant::now();
+    let lists = |version| {
+        loaded_from(base, version)
+            .take_snapshot()
+            .and_then(|snapshot| snapshot.session.clone())
+            .map(|session| session.lists_empty_files)
+    };
+
+    assert_eq!(lists(legacy_version(17)), Some(false), "Transmission 4.0");
+    assert_eq!(lists(legacy_version(16)), Some(true));
+    assert_eq!(lists(legacy_version(18)), Some(true));
+    assert_eq!(lists(version("6.0.1")), Some(true));
+}
+
+#[test]
+fn a_reconnect_to_another_daemon_corrects_the_known_session_at_once() {
+    let base = Instant::now();
+    let mut engine = loaded_from(base, legacy_version(17));
+    let session = engine
+        .take_snapshot()
+        .and_then(|snapshot| snapshot.session.clone());
+    assert_eq!(
+        session.map(|session| session.lists_empty_files),
+        Some(false)
+    );
+    let at = base + secs(1);
+    respond(&mut engine, at, &Request::RecentlyActive, Err(timeout()));
+    let check_at = at + secs(60);
+    assert!(hand_out(&mut engine, check_at).contains(&Request::CheckServer));
+
+    respond(
+        &mut engine,
+        check_at,
+        &Request::CheckServer,
+        Ok(Response::Server(legacy_version(18))),
+    );
+
+    let session = engine
+        .take_snapshot()
+        .and_then(|snapshot| snapshot.session.clone());
+    assert_eq!(session.map(|session| session.lists_empty_files), Some(true));
+}
+
 #[test]
 fn a_refused_action_reports_why_and_keeps_the_connection() {
     let base = Instant::now();

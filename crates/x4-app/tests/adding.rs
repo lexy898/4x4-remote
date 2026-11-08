@@ -204,6 +204,7 @@ fn session() -> SessionSummary {
         alt_speed_up_kbps: KbPerSecond(0),
         start_added_torrents: true,
         sequential_download_supported: true,
+        lists_empty_files: true,
     }
 }
 
@@ -1500,6 +1501,42 @@ fn a_torrent_without_a_choice_says_why(cx: &mut TestAppContext) {
     assert!(!window.disabled(CONFIRM, cx));
     window.click(CONFIRM, cx);
     assert_eq!(window.sent_add().1.files_unwanted, [] as [usize; 0]);
+}
+
+#[gpui_kit::test]
+fn a_torrent_with_an_empty_file_has_no_choice_on_transmission_4_0(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    let drops_empty_files = SessionSummary {
+        lists_empty_files: false,
+        ..session()
+    };
+    window.send_session(
+        Vec::new(),
+        ConnectionState::Connected,
+        drops_empty_files,
+        cx,
+    );
+    window.request_torrent("empty.torrent", &content, cx);
+
+    assert!(!window.shown(FILES, cx));
+    assert_eq!(
+        window.label(NO_CHOICE, cx).as_deref(),
+        Some("All files are added: the list of files could be read in more than one way")
+    );
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.files_unwanted, [] as [usize; 0]);
+}
+
+#[gpui_kit::test]
+fn a_torrent_with_an_empty_file_keeps_its_choice_elsewhere(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.send(Vec::new(), cx);
+    window.request_torrent("empty.torrent", &content, cx);
+
+    assert!(window.shown(FILES, cx));
+    assert!(!window.shown(NO_CHOICE, cx));
 }
 
 #[gpui_kit::test]

@@ -43,8 +43,8 @@ use support::{
 };
 use x4_core::{
     AddCheck, AddForm, Command, ConnectionState, DetailsRead, DetailsTab, Engine, EngineConfig,
-    Event, LoadedItem, NodeKey, PeerList, Request, Response, Snapshot, TorrentDetails, Visibility,
-    parse_torrent,
+    Event, LoadedItem, NoChoiceReason, NodeKey, PeerList, Request, Response, Snapshot,
+    TorrentDetails, Visibility, parse_torrent,
 };
 use x4_rpc::{
     Client, FilePriority, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse,
@@ -662,7 +662,7 @@ fn without_session() -> Snapshot {
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
 fn adding_with_unwanted_files_matches_the_daemons_file_order() {
     let env = LiveEnv::from_env();
-    let mut client = env.client();
+    let (mut client, server) = env.checked_client();
     let before = others_fingerprint(&mut client, None);
     let own = OwnTorrent::unwritten(
         &mut client,
@@ -697,7 +697,21 @@ fn adding_with_unwanted_files_matches_the_daemons_file_order() {
         Arc::from(own.bytes()),
     )
     .expect("the add form cannot read the test torrent");
-    let mut form = AddForm::new(loaded, env.remote_dir.as_str().to_owned(), false);
+    let lists_empty_files = server.lists_empty_files();
+    let mut form = AddForm::new(
+        loaded,
+        env.remote_dir.as_str().to_owned(),
+        false,
+        lists_empty_files,
+    );
+    if !lists_empty_files {
+        // Transmission 4.0 leaves the empty file out and numbers the others without it, so the
+        // form offers no choice, and the torrent would be added with all its files.
+        eprintln!("file order: skipped: the daemon leaves empty files out");
+        assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
+        assert!(form.tree().is_none(), "no choice of files");
+        return;
+    }
     form.toggle_wanted(&NodeKey::new(&format!("{name}/alpha.bin")));
     let request = match form.check(&without_session(), true) {
         AddCheck::Ready(request) => request,

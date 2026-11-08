@@ -17,6 +17,8 @@ const SESSION_DIR: &str = "/data/torrents/";
 /// The same folder as the form normalizes it.
 const DEFAULT_DIR: &str = "/data/torrents";
 const PATH: &str = "/home/user/Downloads/t.torrent";
+/// The daemon keeps a torrent's empty files, as all but Transmission 4.0 do.
+const LISTS_EMPTY_FILES: bool = true;
 
 fn hash() -> HashString {
     HashString::parse(&"ab".repeat(20)).unwrap()
@@ -63,11 +65,21 @@ fn loaded(files: Option<&[(&str, u64)]>) -> LoadedItem {
 }
 
 fn form_of(files: &[(&str, u64)]) -> AddForm {
-    AddForm::new(loaded(Some(files)), DEFAULT_DIR.to_owned(), true)
+    AddForm::new(
+        loaded(Some(files)),
+        DEFAULT_DIR.to_owned(),
+        true,
+        LISTS_EMPTY_FILES,
+    )
 }
 
 fn magnet_form(link: Option<MagnetLink>) -> AddForm {
-    AddForm::new(LoadedItem::Magnet(link), DEFAULT_DIR.to_owned(), true)
+    AddForm::new(
+        LoadedItem::Magnet(link),
+        DEFAULT_DIR.to_owned(),
+        true,
+        LISTS_EMPTY_FILES,
+    )
 }
 
 fn session() -> SessionSummary {
@@ -85,6 +97,7 @@ fn session() -> SessionSummary {
         alt_speed_up_kbps: KbPerSecond(0),
         start_added_torrents: true,
         sequential_download_supported: true,
+        lists_empty_files: true,
     }
 }
 
@@ -389,6 +402,7 @@ fn a_click_on_names_crafted_to_compare_slowly_is_quick() {
         LoadedItem::torrent(PathBuf::from(PATH), names_crafted_to_compare_slowly()).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
     let file = key(&format!("T/{}7", "a1".repeat(300)));
     // As in the dialog, which keeps the tree it drew.
@@ -497,7 +511,12 @@ fn every_choice_sends_sorted_indices_of_its_own_files_and_never_all_of_them() {
 
 #[test]
 fn an_ambiguous_torrent_offers_all_files_only() {
-    let mut form = AddForm::new(loaded(None), DEFAULT_DIR.to_owned(), true);
+    let mut form = AddForm::new(
+        loaded(None),
+        DEFAULT_DIR.to_owned(),
+        true,
+        LISTS_EMPTY_FILES,
+    );
 
     assert!(form.tree().is_none(), "no choice of files");
     assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
@@ -508,6 +527,52 @@ fn an_ambiguous_torrent_offers_all_files_only() {
     assert_eq!(add.files_unwanted, Vec::<usize>::new());
     assert_eq!(add.source, AddSource::Metainfo(content()));
     assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
+}
+
+/// The form of a `.torrent` with these files for a daemon that keeps empty files, or not.
+fn form_for(files: &[(&str, u64)], lists_empty_files: bool) -> AddForm {
+    AddForm::new(
+        loaded(Some(files)),
+        DEFAULT_DIR.to_owned(),
+        true,
+        lists_empty_files,
+    )
+}
+
+#[test]
+fn a_torrent_with_an_empty_file_has_no_choice_where_the_daemon_leaves_empty_files_out() {
+    let mut form = form_for(&[("T/a", 1), ("T/empty", 0), ("T/b", 1)], false);
+
+    assert!(form.tree().is_none(), "no choice of files");
+    assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
+    form.toggle_wanted(&key("T/b"));
+    let add = ready(&form);
+    assert_eq!(
+        add.files_unwanted,
+        Vec::<usize>::new(),
+        "added with all files"
+    );
+    assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
+}
+
+#[test]
+fn a_torrent_with_an_empty_file_keeps_its_choice_where_the_daemon_keeps_empty_files() {
+    let mut form = form_for(&[("T/a", 1), ("T/empty", 0), ("T/b", 1)], true);
+
+    assert_eq!(form.choice_unavailable(), None);
+    form.toggle_wanted(&key("T/b"));
+    assert_eq!(ready(&form).files_unwanted, [2]);
+}
+
+#[test]
+fn a_torrent_without_empty_files_keeps_its_choice_either_way() {
+    for lists_empty_files in [true, false] {
+        let mut form = form_for(&[("T/a", 1), ("T/b", 1)], lists_empty_files);
+
+        assert_eq!(form.choice_unavailable(), None, "{lists_empty_files}");
+        form.toggle_wanted(&key("T/b"));
+        assert_eq!(ready(&form).files_unwanted, [1], "{lists_empty_files}");
+    }
 }
 
 #[test]
@@ -525,6 +590,7 @@ fn a_loaded_torrent_the_daemon_could_number_otherwise_has_no_choice() {
         LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(&bytes)).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
 
     assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
@@ -596,7 +662,7 @@ fn named_form(path: &str, name: &str) -> AddForm {
         bytes: content(),
         tree: Err(NoChoiceReason::Ambiguous),
     });
-    AddForm::new(item, DEFAULT_DIR.to_owned(), true)
+    AddForm::new(item, DEFAULT_DIR.to_owned(), true, LISTS_EMPTY_FILES)
 }
 
 #[test]
@@ -678,7 +744,12 @@ fn a_torrent_already_in_the_list_is_named_not_sent() {
     form.toggle_wanted(&key("T"));
     form.set_folder("relative".to_owned());
     assert_eq!(form.check(&listed, true), AddCheck::AlreadyInList(hash()));
-    let ambiguous = AddForm::new(loaded(None), DEFAULT_DIR.to_owned(), true);
+    let ambiguous = AddForm::new(
+        loaded(None),
+        DEFAULT_DIR.to_owned(),
+        true,
+        LISTS_EMPTY_FILES,
+    );
     assert_eq!(
         ambiguous.check(&listed, true),
         AddCheck::AlreadyInList(hash())
@@ -816,7 +887,12 @@ fn the_request_names_a_folder_only_when_it_is_not_the_default() {
 
 #[test]
 fn start_immediately_decides_whether_the_torrent_is_added_paused() {
-    let mut form = AddForm::new(loaded(Some(&[("T/a", 1)])), DEFAULT_DIR.to_owned(), false);
+    let mut form = AddForm::new(
+        loaded(Some(&[("T/a", 1)])),
+        DEFAULT_DIR.to_owned(),
+        false,
+        LISTS_EMPTY_FILES,
+    );
     assert!(!form.start());
     assert!(ready(&form).paused);
 
@@ -828,6 +904,7 @@ fn start_immediately_decides_whether_the_torrent_is_added_paused() {
         LoadedItem::Magnet(Some(link())),
         DEFAULT_DIR.to_owned(),
         false,
+        LISTS_EMPTY_FILES,
     );
     assert!(ready(&magnet).paused);
     magnet.set_start(true);
@@ -858,7 +935,7 @@ fn a_loaded_torrent_holds_the_parse_of_its_own_bytes() {
     assert_eq!(*torrent.parsed(), parse_torrent(&bytes).unwrap());
     assert_eq!(torrent.bytes(), &*bytes);
     assert_eq!(torrent.path(), Path::new(PATH));
-    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
+    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true, LISTS_EMPTY_FILES);
     assert_eq!(ready(&form).source, AddSource::Metainfo(Arc::clone(&bytes)));
     assert_eq!(form.name(), Some("a.bin"));
     assert_eq!(wanted_rows(&form), [("a.bin".to_owned(), WantedState::All)]);
@@ -873,7 +950,7 @@ fn a_loaded_torrent_holds_the_parse_of_its_own_bytes() {
 fn the_request_shares_the_bytes_that_were_parsed() {
     let bytes = single_file_torrent("http://t.test/announce");
     let item = LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(&bytes)).unwrap();
-    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
+    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true, LISTS_EMPTY_FILES);
 
     // The very bytes, not a copy, however often the form is checked.
     for _ in 0..3 {
@@ -935,7 +1012,7 @@ fn assert_offered_with_all_files(bytes: &Arc<[u8]>) {
     let start = std::time::Instant::now();
 
     let item = LoadedItem::torrent(PathBuf::from(PATH), Arc::clone(bytes)).unwrap();
-    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true);
+    let form = AddForm::new(item, DEFAULT_DIR.to_owned(), true, LISTS_EMPTY_FILES);
     let add = ready(&form);
 
     let elapsed = start.elapsed();
@@ -1009,6 +1086,7 @@ fn a_torrent_of_many_deep_chains_is_offered_with_all_files() {
         LoadedItem::torrent(PathBuf::from(PATH), fewer).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
     assert!(!form.tree().unwrap().is_too_large());
     assert_eq!(form.choice_unavailable(), None);
@@ -1055,6 +1133,7 @@ fn up_to_50_000_files_can_be_chosen_from() {
         LoadedItem::torrent(PathBuf::from(PATH), most).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
     assert_eq!(form.choice_unavailable(), None);
     assert!(!form.tree().unwrap().is_too_large());
@@ -1120,6 +1199,7 @@ fn a_torrent_of_50_000_paths_the_tree_shows_alike_loads_in_bounded_time() {
         LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
 
     let loaded = start.elapsed();
@@ -1168,6 +1248,7 @@ fn a_torrent_of_names_crafted_to_compare_slowly_loads_in_bounded_time() {
         LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
 
     let loaded = start.elapsed();
@@ -1201,6 +1282,7 @@ fn a_real_shaped_torrent_loads_with_its_tree() {
         LoadedItem::torrent(PathBuf::from(PATH), bytes).unwrap(),
         DEFAULT_DIR.to_owned(),
         true,
+        LISTS_EMPTY_FILES,
     );
 
     let tree = form.tree().unwrap();
@@ -1228,7 +1310,12 @@ fn debug_shows_neither_the_content_nor_the_link() {
         format!("{item:?}"),
         format!(
             "{:?}",
-            AddForm::new(item.clone(), DEFAULT_DIR.to_owned(), true)
+            AddForm::new(
+                item.clone(),
+                DEFAULT_DIR.to_owned(),
+                true,
+                LISTS_EMPTY_FILES
+            )
         ),
         format!("{:?}", LoadedItem::Magnet(Some(secret_link.clone()))),
         format!("{:?}", magnet_form(Some(secret_link))),

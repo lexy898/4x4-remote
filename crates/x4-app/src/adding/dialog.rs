@@ -214,10 +214,17 @@ impl AddDialog {
             self.link
                 .update(cx, |input, cx| input.set_value(text, window, cx));
         }
+        // A daemon not known yet is taken to keep empty files, as all but Transmission 4.0 do.
+        let lists_empty_files = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session.as_ref())
+            .is_none_or(|session| session.lists_empty_files);
         let form = AddForm::new(
             loaded,
             self.defaults.folder().to_owned(),
             self.defaults.start(),
+            lists_empty_files,
         );
         let link_wanted = form.is_magnet() && form.hash().is_none();
         self.files.show(form.tree());

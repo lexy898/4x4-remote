@@ -353,6 +353,9 @@ pub struct Engine {
     /// store means nothing has arrived, not that the daemon has no torrents.
     listed: bool,
     session: Option<SessionSummary>,
+    /// Whether the daemon keeps a torrent's empty files, as the last server check found it
+    /// ([`ServerVersion::lists_empty_files`]); it goes into each [`SessionSummary`].
+    lists_empty_files: bool,
     /// The directory whose free space is read; known once this connection read the session.
     download_dir: Option<String>,
     free_space_bytes: Option<u64>,
@@ -398,6 +401,7 @@ impl Engine {
             store: Store::new(),
             listed: false,
             session: None,
+            lists_empty_files: true,
             download_dir: None,
             free_space_bytes: None,
             rate_down: 0,
@@ -691,6 +695,7 @@ impl Engine {
         );
         self.check_at = None;
         self.connected_since = Some(now);
+        self.set_lists_empty_files(version.lists_empty_files());
         // A timer never sent is due at once. The tick brings the statistics; its recently active
         // torrents come with the full list.
         self.session_timer = Timer::default();
@@ -776,6 +781,17 @@ impl Engine {
         }];
         events.extend(self.call_failed(now, request, &error));
         events
+    }
+
+    /// Takes whether the daemon keeps a torrent's empty files into the session the UI reads.
+    fn set_lists_empty_files(&mut self, lists: bool) {
+        self.lists_empty_files = lists;
+        if let Some(session) = &mut self.session
+            && session.lists_empty_files != lists
+        {
+            session.lists_empty_files = lists;
+            self.snapshot_changed = true;
+        }
     }
 
     /// The effect of an action sent in batch `sent_in` shows in the next tick: brings that tick

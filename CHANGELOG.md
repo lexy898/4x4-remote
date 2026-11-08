@@ -32,7 +32,8 @@ First release.
 - Adding torrents from `.torrent` files (the desktop's file dialog, drag and drop, or launch
   arguments) and magnet links (from the clipboard or a form), choosing the folder on the server
   (with its free space and the folders used lately), the files to download and whether to start at
-  once.
+  once. On Transmission 4.0, which leaves empty files out and numbers the rest differently, a
+  torrent with empty files is added with all its files.
 - One 4x4 per user: starting it again, as a file manager or a browser does, hands its files and
   links to the one that runs. It offers itself as an app for `.torrent` files and `magnet:` links,
   and never makes itself their default.

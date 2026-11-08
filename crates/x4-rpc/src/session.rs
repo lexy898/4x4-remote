@@ -35,6 +35,8 @@ const MIN_RPC_MAJOR: u64 = 6;
 
 /// The oldest legacy `rpc-version` 4x4 supports: 16 is Transmission 3.00.
 const MIN_LEGACY_RPC_VERSION: u32 = crate::legacy::OLDEST_RPC_VERSION;
+/// The legacy RPC version of Transmission 4.0.
+const RPC_VERSION_4_0: u32 = 17;
 
 /// The session settings the app reads (`session_get` with [`SESSION_FIELDS`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -235,6 +237,15 @@ impl ServerVersion {
     pub fn is_supported(&self) -> bool {
         self.unsupported_reason().is_none()
     }
+
+    /// Whether the daemon keeps a torrent's empty files among its files, numbered as the
+    /// metainfo lists them. Transmission 4.0 (legacy `rpc-version` 17) leaves every file of no
+    /// bytes out of the torrent and numbers the others without them, so a file index taken from
+    /// the metainfo names another file there; 3.00, 4.1.0-beta and 4.1 keep them.
+    #[must_use]
+    pub fn lists_empty_files(&self) -> bool {
+        !(self.protocol == Protocol::Legacy && self.rpc_version == Some(RPC_VERSION_4_0))
+    }
 }
 
 #[cfg(test)]
@@ -257,6 +268,18 @@ mod tests {
             rpc_version,
             protocol: Protocol::Legacy,
         }
+    }
+
+    #[test]
+    fn only_transmission_4_0_leaves_empty_files_out() {
+        assert!(legacy(Some(16), "").lists_empty_files());
+        assert!(!legacy(Some(17), "5.3.0").lists_empty_files());
+        assert!(legacy(Some(18), "5.4.0").lists_empty_files());
+        assert!(version("6.0.1").lists_empty_files());
+        // A JSON-RPC daemon is judged by its protocol, whatever it calls its legacy version.
+        let mut json_rpc = version("6.0.1");
+        json_rpc.rpc_version = Some(17);
+        assert!(json_rpc.lists_empty_files());
     }
 
     #[test]

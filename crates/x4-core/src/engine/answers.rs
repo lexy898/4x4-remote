@@ -61,7 +61,10 @@ impl Engine {
             self.free_space_bytes = None;
             self.snapshot_changed = true;
         }
-        let session = Some(SessionSummary::from(info));
+        let session = Some(SessionSummary {
+            lists_empty_files: self.lists_empty_files,
+            ..SessionSummary::from(info)
+        });
         if session != self.session {
             self.session = session;
             self.snapshot_changed = true;

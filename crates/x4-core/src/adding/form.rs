@@ -126,7 +126,8 @@ impl fmt::Debug for LoadedTorrent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoChoiceReason {
     /// The daemon could number the files otherwise than the strict reader, so leaving some out
-    /// could leave out the wrong ones ([`ParsedTorrent::files`] is `None`).
+    /// could leave out the wrong ones: [`ParsedTorrent::files`] is `None`, or the torrent has an
+    /// empty file and the daemon leaves those out (Transmission 4.0).
     Ambiguous,
     /// The list of files is too large to choose from: more than
     /// [`MAX_CHOOSABLE_FILES`](crate::MAX_CHOOSABLE_FILES) files, or a tree that would take
@@ -192,8 +193,14 @@ impl AddForm {
     /// otherwise, or whose list is too large to choose from, has no choice of files and is added
     /// with all of them ([`choice_unavailable`](Self::choice_unavailable) says why). The magnet
     /// form of `LoadedItem::Magnet(None)` starts with an empty link.
+    ///
+    /// `lists_empty_files` is whether the daemon keeps a torrent's empty files
+    /// ([`SessionSummary::lists_empty_files`](crate::SessionSummary::lists_empty_files)). One
+    /// that leaves them out, Transmission 4.0, numbers the other files without them, so a file
+    /// index taken from the metainfo would name another file there: a `.torrent` with an empty
+    /// file then has no choice of files. Pass `true` while the daemon is not known.
     #[must_use]
-    pub fn new(item: LoadedItem, folder: String, start: bool) -> Self {
+    pub fn new(item: LoadedItem, folder: String, start: bool, lists_empty_files: bool) -> Self {
         let source = match item {
             LoadedItem::Torrent(LoadedTorrent {
                 path,
@@ -204,6 +211,11 @@ impl AddForm {
                 path,
                 name: parsed.name,
                 choice: match (tree, parsed.files) {
+                    (Ok(_), Some(files))
+                        if !lists_empty_files && files.iter().any(|file| file.length == 0) =>
+                    {
+                        Err(NoChoiceReason::Ambiguous)
+                    }
                     (Ok(tree), Some(files)) => Ok(FileChoice::new(files.len(), tree)),
                     // A tree is made only of files, so this does not happen.
                     (Ok(_), None) => Err(NoChoiceReason::Ambiguous),

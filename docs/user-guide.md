@@ -475,10 +475,11 @@ why. A `.torrent` whose list of files could be read in more than one way offers 
 dictionary keys are out of order or given twice, it has two `info` dictionaries, or an entry of its
 file list is not a plain one. The daemon could then number the files otherwise than 4x4 reads them,
 so leaving one out could leave out another. So does one with too many files to choose from: more
-than 50 000, or files nested so deep that their tree would take too much memory. A magnet link has
-no choice of files either, as its files are known only once its metadata has come. "Start
-immediately" starts as the daemon's setting for new torrents; without it, the torrent is added
-paused.
+than 50 000, or files nested so deep that their tree would take too much memory. On Transmission
+4.0, a torrent with empty files is added with all its files, because 4.0 leaves empty files out and
+numbers the rest differently. A magnet link has no choice of files either, as its files are known
+only once its metadata has come. "Start immediately" starts as the daemon's setting for new
+torrents; without it, the torrent is added paused.
 
 Add stays disabled, with the reason beside the buttons, until a file is wanted, the folder is a
 full path on the server without `.` or `..`, the magnet link is valid and the daemon is connected;

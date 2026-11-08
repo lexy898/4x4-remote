@@ -280,6 +280,7 @@ mod tests {
             alt_speed_up_kbps: KbPerSecond(0),
             start_added_torrents: true,
             sequential_download_supported: true,
+            lists_empty_files: true,
         }
     }
 
