@@ -1,0 +1,16 @@
+{
+  "arguments": {
+    "alt-speed-down": 50,
+    "alt-speed-enabled": false,
+    "alt-speed-up": 50,
+    "download-dir": "/data/torrents/video",
+    "speed-limit-down": 100,
+    "speed-limit-down-enabled": false,
+    "speed-limit-up": 100,
+    "speed-limit-up-enabled": false,
+    "start-added-torrents": true,
+    "version": "3.00 (bb6b5a062e)"
+  },
+  "result": "success",
+  "tag": 4
+}

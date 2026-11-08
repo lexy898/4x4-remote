@@ -23,8 +23,14 @@ mod network;
 
 pub use network::stray_addresses;
 
+use crate::legacy::snake_name;
+
 /// Keys whose string values are kept verbatim: protocol constants and the piece bitfield.
 const KEEP_KEYS: [&str; 4] = ["jsonrpc", "version", "rpc_version_semver", "pieces"];
+
+/// The `result` texts of a legacy answer that are no secret: success, and the system's text for a
+/// folder that is not there (a `free_space` of a missing folder).
+const LEGACY_RESULTS: [&str; 2] = ["success", "No such file or directory"];
 
 const FAKE_DIR: &str = "/data/torrents/video";
 const REDACTED: &str = "redacted";
@@ -79,7 +85,30 @@ impl Scrubber {
 
     /// Scrubs `value` in place.
     pub fn scrub(&mut self, value: &mut Value) {
-        self.walk(None, value);
+        match value {
+            Value::Object(answer)
+                if !answer.contains_key("jsonrpc")
+                    && answer.get("result").is_some_and(Value::is_string) =>
+            {
+                self.scrub_legacy_answer(answer);
+            }
+            _ => self.walk(None, value),
+        }
+    }
+
+    /// Scrubs a legacy answer: its `arguments` by the usual rules, its `result` by
+    /// [`LEGACY_RESULTS`]; the tag is a number and stays.
+    fn scrub_legacy_answer(&mut self, answer: &mut Map<String, Value>) {
+        for (key, item) in answer {
+            match (key.as_str(), item) {
+                ("result", Value::String(text)) => {
+                    if !LEGACY_RESULTS.contains(&text.as_str()) {
+                        self.replace(text, REDACTED.to_owned());
+                    }
+                }
+                (key, item) => self.walk(Some(key), item),
+            }
+        }
     }
 
     /// The original sensitive strings that are still present in `scrubbed`, as a whole value or,
@@ -115,12 +144,12 @@ impl Scrubber {
                     }
                 }
             }
-            Value::Object(object) if object.get("hash_string").is_some_and(Value::is_string) => {
+            Value::Object(object) if string_field(object, "hash_string").is_some() => {
                 self.scrub_torrent(object);
             }
             Value::Object(object) => {
                 for (key, item) in object {
-                    self.walk(Some(key), item);
+                    self.walk(Some(snake_key(key)), item);
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) => {}
@@ -160,7 +189,7 @@ impl Scrubber {
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
         for (key, value) in torrent {
-            match (key.as_str(), value) {
+            match (snake_key(key), value) {
                 ("hash_string", Value::String(text)) => self.replace(text, fake_hash(number)),
                 ("name", Value::String(text)) => self.replace(text, format!("Torrent {number}")),
                 ("magnet_link", Value::String(text)) => {
@@ -191,7 +220,7 @@ impl Scrubber {
             return;
         };
         for (key, value) in file {
-            match (key.as_str(), value) {
+            match (snake_key(key), value) {
                 ("name", Value::String(text)) => {
                     let name = if file_count == 1 {
                         format!("Torrent {number}.bin")
@@ -265,8 +294,19 @@ fn btih(magnet: &str) -> Option<String> {
     (!hash.is_empty()).then(|| hash.to_owned())
 }
 
+/// The string under the key that is `key` in snake case, whichever way the object spells it.
 fn string_field(object: &Map<String, Value>, key: &str) -> Option<String> {
-    object.get(key).and_then(Value::as_str).map(str::to_owned)
+    object
+        .iter()
+        .find(|(name, _)| snake_key(name) == key)
+        .and_then(|(_, value)| value.as_str())
+        .map(str::to_owned)
+}
+
+/// The snake case name of an object key: a legacy daemon's spelling is mapped back, anything
+/// else is as it is.
+fn snake_key(key: &str) -> &str {
+    snake_name(key).unwrap_or(key)
 }
 
 /// Every string below `value`: values and object keys.
@@ -399,6 +439,94 @@ mod tests {
         assert_eq!(scrubbed["result"]["version"], "4.1.3 (abcdef0123)");
         assert_eq!(scrubbed["result"]["rpc_version_semver"], "6.0.0");
         assert_eq!(torrent["pieces"], "AAEC/w==");
+    }
+
+    #[test]
+    fn a_legacy_answer_is_scrubbed_like_a_json_rpc_one() {
+        let mut snake = response(&[multi_file_torrent()]);
+        snake["result"]["torrents"][0]["peers"] =
+            json!([{ "address": "203.0.113.77", "client_name": "RealClient 2.0", "port": 51413 }]);
+        let mut legacy = json!({
+            "result": "success",
+            "tag": 7,
+            "arguments": { "torrents": [{
+                "id": 7,
+                "hashString": HASH,
+                "name": "Real.Show.S01.1080p",
+                "magnetLink": format!(
+                    "magnet:?xt=urn:btih:{HASH}&dn=Real.Show.S01.1080p&tr=https%3A%2F%2Ftracker.example%2Fannounce"
+                ),
+                "comment": "great release, see https://real.example",
+                "creator": "RealCreator 1.0",
+                "labels": ["tv-archive", "private-label"],
+                "downloadDir": "/mnt/real/disk/video",
+                "errorString": "Tracker gave an error: real.example",
+                "unknown_key": "mystery value",
+                "trackerStats": [{ "announce": "https://tracker.example/announce", "tier": 0 }],
+                "peers": [{ "address": "203.0.113.77", "clientName": "RealClient 2.0", "port": 51413 }],
+                "files": [
+                    { "name": "Real.Show.S01.1080p/e01.mkv", "length": 100, "bytesCompleted": 40 },
+                    { "name": "Real.Show.S01.1080p/sub/e02.mkv", "length": 200, "bytesCompleted": 0 }
+                ],
+                "totalSize": 300,
+                "pieces": "AAEC/w==",
+            }] }
+        });
+        let mut scrubber = Scrubber::new();
+
+        scrubber.scrub(&mut snake);
+        let mut again = Scrubber::new();
+        again.scrub(&mut legacy);
+
+        let torrent = &legacy["arguments"]["torrents"][0];
+        let expected = &snake["result"]["torrents"][0];
+        for (legacy_key, snake_key) in [
+            ("hashString", "hash_string"),
+            ("name", "name"),
+            ("magnetLink", "magnet_link"),
+            ("comment", "comment"),
+            ("creator", "creator"),
+            ("labels", "labels"),
+            ("downloadDir", "download_dir"),
+            ("errorString", "error_string"),
+            ("unknown_key", "unknown_key"),
+            ("pieces", "pieces"),
+        ] {
+            assert_eq!(torrent[legacy_key], expected[snake_key], "{legacy_key}");
+        }
+        assert_eq!(
+            torrent["trackerStats"][0]["announce"],
+            expected["trackers"][0]["announce"]
+        );
+        assert_eq!(torrent["files"][1]["name"], "Torrent 1/file 2.bin");
+        assert_eq!(torrent["files"][1]["length"], 200);
+        assert_eq!(
+            torrent["peers"][0]["address"],
+            expected["peers"][0]["address"]
+        );
+        assert_eq!(torrent["peers"][0]["clientName"], "Client 1");
+        assert_eq!(legacy["result"], "success");
+        assert_eq!(legacy["tag"], 7);
+        assert_eq!(again.leaked(&legacy), Vec::<String>::new());
+        let text = legacy.to_string();
+        for original in SENSITIVE {
+            assert!(!text.contains(original), "{original:?} survived in {text}");
+        }
+        assert!(!text.contains("RealClient"));
+    }
+
+    #[test]
+    fn a_legacy_result_is_kept_only_when_it_holds_no_secret() {
+        let mut missing =
+            json!({ "result": "No such file or directory", "arguments": {}, "tag": 1 });
+        let mut odd = json!({ "result": "cannot open /mnt/real/disk", "arguments": {}, "tag": 2 });
+        let mut scrubber = Scrubber::new();
+
+        scrubber.scrub(&mut missing);
+        scrubber.scrub(&mut odd);
+
+        assert_eq!(missing["result"], "No such file or directory");
+        assert_eq!(odd["result"], "redacted");
     }
 
     #[test]

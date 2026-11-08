@@ -14,6 +14,9 @@ mod response;
 
 use serde_json::Value;
 
+#[cfg(feature = "test-support")]
+pub(crate) use names::snake_name;
+
 use crate::error::RpcError;
 
 /// The legacy RPC version of Transmission 3.00, the oldest 4x4 speaks to.

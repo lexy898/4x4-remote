@@ -1,0 +1,9 @@
+{
+  "arguments": {
+    "rpc-version": 17,
+    "rpc-version-semver": "5.3.0",
+    "version": "4.0.5 (a6fe2a64aa)"
+  },
+  "result": "success",
+  "tag": 3
+}

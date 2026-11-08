@@ -122,6 +122,40 @@ impl<T: Transport> Client<T> {
         self.call(method, params.as_ref())
     }
 
+    /// Sends `method` with snake case `params` as the client's protocol encodes them and returns
+    /// the whole answer as the daemon sent it (feature `test-support`).
+    ///
+    /// The answer is not decoded: an error the daemon reports is part of it, not an
+    /// [`RpcError`], so that a recorder can keep it. A legacy request asks only for the fields
+    /// the daemon's version has, as every call of the client does.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] when `params` cannot be encoded, the transport fails, the HTTP status is not
+    /// 200 or the body is not JSON.
+    #[cfg(feature = "test-support")]
+    pub fn call_wire(&mut self, method: &str, params: Option<Value>) -> Result<Value, RpcError> {
+        let unencodable =
+            |error: serde_json::Error| RpcError::InvalidRequest(format!("{method}: {error}"));
+        let id = self.take_id();
+        let request = match self.protocol {
+            Protocol::JsonRpc => serde_json::to_vec(&RequestEnvelope {
+                jsonrpc: JSONRPC_VERSION,
+                method,
+                params: params.as_ref(),
+                id,
+            }),
+            Protocol::Legacy => {
+                let request = legacy::encode(method, params, id, self.legacy_rpc_version)?;
+                serde_json::to_vec(&request.body)
+            }
+        }
+        .map_err(unencodable)?;
+        let body = self.post_checked(&request, None)?;
+        serde_json::from_slice(&body)
+            .map_err(|error| invalid(method, format_args!("not JSON: {error}")))
+    }
+
     /// Calls `method` with `params` (omitted when `None`) and decodes the `result` as `R`.
     ///
     /// # Errors

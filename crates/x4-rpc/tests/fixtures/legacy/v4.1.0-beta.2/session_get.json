@@ -1,0 +1,18 @@
+{
+  "arguments": {
+    "alt-speed-down": 50,
+    "alt-speed-enabled": false,
+    "alt-speed-up": 50,
+    "download-dir": "/data/torrents/video",
+    "rpc-version-semver": "5.4.0",
+    "sequential_download": false,
+    "speed-limit-down": 100.0,
+    "speed-limit-down-enabled": false,
+    "speed-limit-up": 100.0,
+    "speed-limit-up-enabled": false,
+    "start-added-torrents": true,
+    "version": "4.1.0-beta.2 (ac5c9e082d)"
+  },
+  "result": "success",
+  "tag": 4
+}

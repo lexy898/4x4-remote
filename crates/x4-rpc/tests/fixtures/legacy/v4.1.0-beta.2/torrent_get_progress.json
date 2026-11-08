@@ -1,0 +1,81 @@
+{
+  "arguments": {
+    "torrents": [
+      {
+        "downloadedEver": 44056576,
+        "file-count": 4,
+        "fileStats": [
+          {
+            "bytesCompleted": 11141120,
+            "priority": 0,
+            "wanted": true
+          },
+          {
+            "bytesCompleted": 10502144,
+            "priority": 0,
+            "wanted": true
+          },
+          {
+            "bytesCompleted": 11010048,
+            "priority": 0,
+            "wanted": true
+          },
+          {
+            "bytesCompleted": 11403264,
+            "priority": 0,
+            "wanted": true
+          }
+        ],
+        "hashString": "0000000000000000000000000000000000000001",
+        "id": 1,
+        "pieces": "92Q36TCx/9vbe9tig/3o4K5Pq6bzWet/jwf/7b3//+ftbwVxN/1ijfp9Avi7/d+n3P+vVlwnBnmvHsf7cvXxeYbd3b9+z7vbzKavVX6ftfGrMq57E/vuS+578OXsu2df133iXL9/f2rbx9tb95461y8u+/f93TXI3+I38rfTtsc=",
+        "priorities": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "trackerStats": [
+          {
+            "announce": "https://tracker1.example.org/announce",
+            "announceState": 1,
+            "downloadCount": -1,
+            "hasAnnounced": true,
+            "hasScraped": true,
+            "host": "tracker1.example.org:1",
+            "id": 0,
+            "isBackup": false,
+            "lastAnnouncePeerCount": 0,
+            "lastAnnounceResult": "Could not connect to tracker",
+            "lastAnnounceStartTime": 0,
+            "lastAnnounceSucceeded": false,
+            "lastAnnounceTime": 1794161551,
+            "lastAnnounceTimedOut": false,
+            "lastScrapeResult": "Could not connect to tracker",
+            "lastScrapeStartTime": 0,
+            "lastScrapeSucceeded": false,
+            "lastScrapeTime": 1794162760,
+            "lastScrapeTimedOut": false,
+            "leecherCount": -1,
+            "nextAnnounceTime": 1794165166,
+            "nextScrapeTime": 1794170010,
+            "scrape": "https://tracker1.example.org/scrape",
+            "scrapeState": 1,
+            "seederCount": -1,
+            "sitename": "example",
+            "tier": 0
+          }
+        ],
+        "uploadedEver": 44435870,
+        "wanted": [
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    ]
+  },
+  "result": "success",
+  "tag": 12
+}

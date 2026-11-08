@@ -55,6 +55,15 @@ machete:
 record-fixtures:
     X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" cargo run -p x4-rpc --example record_fixtures --features test-support --locked
 
+# Records scrubbed fixtures from the three Docker daemons of `just legacy-daemons` (start them with `up`) into crates/x4-rpc/tests/fixtures/legacy/<name>/.
+record-fixtures-legacy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for name in v3.00 v4.0.5 v4.1.0-beta.2; do
+        eval "$(just legacy-daemons env "$name")"
+        X4_FIXTURES_NAME="$name" cargo run -p x4-rpc --example record_fixtures --features test-support --locked
+    done
+
 # --no-capture runs the tests one at a time and streams their output, so the hash each test
 # prints for its torrent stays visible even if the run is interrupted (nextest drops the captured
 # output of a cancelled test).

@@ -23,6 +23,8 @@ just test-hooks       # tests for the hook and helper scripts in scripts/
 just test-live        # live tests against the owner's daemon, and geoip_live, which reads the
                       # installed GeoIP files and needs no daemon; never part of check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
+just record-fixtures-legacy  # the same from the three Docker daemons (3.00, 4.0.5, 4.1.0-beta.2) of
+                      # `just legacy-daemons`, into crates/x4-rpc/tests/fixtures/legacy/
 just lint-policy      # lint exceptions, workspace lints, the one unsafe call, dependency
                       # direction, the vendored gpui-pre-wgpu patch, Markdown links
                       # (scripts/lint-policy.sh)

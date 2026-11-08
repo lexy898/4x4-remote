@@ -222,6 +222,139 @@ pub mod fixtures {
     /// tracker, as the daemon sends them.
     pub const TORRENT_GET_TRACKERS: &str =
         include_str!("../tests/fixtures/torrent_get_trackers.json");
+
+    /// Responses of the legacy daemons, scrubbed (see [`legacy::Recording`]).
+    pub mod legacy {
+        /// What one legacy daemon answered, as the whole legacy answers `{"arguments":…,"result":…,
+        /// "tag":…}` of the requests 4x4 sends it, scrubbed. `just record-fixtures-legacy` records
+        /// them again.
+        #[derive(Debug, Clone, Copy)]
+        pub struct Recording {
+            /// The daemon's release, which names its directory: `v3.00`, `v4.0.5`, `v4.1.0-beta.2`.
+            pub name: &'static str,
+            /// `session_get` of the fields `check_server` asks a legacy daemon for.
+            pub session_get_version: &'static str,
+            /// `session_get` with `SESSION_FIELDS`.
+            pub session_get: &'static str,
+            /// `session_stats`.
+            pub session_stats: &'static str,
+            /// `free_space` of the download folder.
+            pub free_space: &'static str,
+            /// `free_space` of a folder that is not there: an error result on 3.00 and 4.0.5, a
+            /// success with a free space of `-1` on 4.1.0-beta.2.
+            pub free_space_missing: &'static str,
+            /// `torrent_get` with `TorrentField::LIST` and no `ids`.
+            pub torrent_get_list: &'static str,
+            /// `torrent_get` with `TorrentField::LIST` and `ids: "recently-active"`.
+            pub torrent_get_recent: &'static str,
+            /// `torrent_get` with `TorrentField::DETAILS_FULL` of the multi-file torrent.
+            pub torrent_get_details: &'static str,
+            /// `torrent_get` with `TorrentField::DETAILS_PROGRESS_TRACKERS` of the same torrent.
+            pub torrent_get_progress: &'static str,
+            /// `torrent_get` with `TorrentField::PEERS` of the torrent with most peers.
+            pub torrent_get_peers: &'static str,
+            /// `torrent_get` with `TorrentField::TRACKERS` of the same torrent.
+            pub torrent_get_trackers: &'static str,
+        }
+
+        /// The recordings of Transmission 3.00, 4.0.5 and 4.1.0-beta.2.
+        pub const RECORDINGS: [Recording; 3] = [
+            Recording {
+                name: "v3.00",
+                session_get_version: include_str!(
+                    "../tests/fixtures/legacy/v3.00/session_get_version.json"
+                ),
+                session_get: include_str!("../tests/fixtures/legacy/v3.00/session_get.json"),
+                session_stats: include_str!("../tests/fixtures/legacy/v3.00/session_stats.json"),
+                free_space: include_str!("../tests/fixtures/legacy/v3.00/free_space.json"),
+                free_space_missing: include_str!(
+                    "../tests/fixtures/legacy/v3.00/free_space_missing.json"
+                ),
+                torrent_get_list: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_list.json"
+                ),
+                torrent_get_recent: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_recent.json"
+                ),
+                torrent_get_details: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_details.json"
+                ),
+                torrent_get_progress: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_progress.json"
+                ),
+                torrent_get_peers: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_peers.json"
+                ),
+                torrent_get_trackers: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_trackers.json"
+                ),
+            },
+            Recording {
+                name: "v4.0.5",
+                session_get_version: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/session_get_version.json"
+                ),
+                session_get: include_str!("../tests/fixtures/legacy/v4.0.5/session_get.json"),
+                session_stats: include_str!("../tests/fixtures/legacy/v4.0.5/session_stats.json"),
+                free_space: include_str!("../tests/fixtures/legacy/v4.0.5/free_space.json"),
+                free_space_missing: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/free_space_missing.json"
+                ),
+                torrent_get_list: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_list.json"
+                ),
+                torrent_get_recent: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_recent.json"
+                ),
+                torrent_get_details: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_details.json"
+                ),
+                torrent_get_progress: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_progress.json"
+                ),
+                torrent_get_peers: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_peers.json"
+                ),
+                torrent_get_trackers: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_trackers.json"
+                ),
+            },
+            Recording {
+                name: "v4.1.0-beta.2",
+                session_get_version: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/session_get_version.json"
+                ),
+                session_get: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/session_get.json"
+                ),
+                session_stats: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/session_stats.json"
+                ),
+                free_space: include_str!("../tests/fixtures/legacy/v4.1.0-beta.2/free_space.json"),
+                free_space_missing: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/free_space_missing.json"
+                ),
+                torrent_get_list: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_list.json"
+                ),
+                torrent_get_recent: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_recent.json"
+                ),
+                torrent_get_details: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_details.json"
+                ),
+                torrent_get_progress: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_progress.json"
+                ),
+                torrent_get_peers: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_peers.json"
+                ),
+                torrent_get_trackers: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_trackers.json"
+                ),
+            },
+        ];
+    }
 }
 
 /// A poisoned lock only means a handler panicked in another test thread; the data is still usable.

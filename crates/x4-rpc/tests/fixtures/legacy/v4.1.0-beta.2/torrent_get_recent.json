@@ -1,0 +1,37 @@
+{
+  "arguments": {
+    "removed": [],
+    "torrents": [
+      {
+        "addedDate": 1794160595,
+        "doneDate": 0,
+        "downloadDir": "/data/torrents/video",
+        "error": 0,
+        "errorString": "",
+        "eta": 1173,
+        "hashString": "0000000000000000000000000000000000000001",
+        "id": 1,
+        "isFinished": false,
+        "labels": [],
+        "leftUntilDone": 23068672,
+        "metadataPercentComplete": 1.0,
+        "name": "Torrent 1",
+        "peersConnected": 3,
+        "peersGettingFromUs": 1,
+        "peersSendingToUs": 3,
+        "percentDone": 0.65625,
+        "queuePosition": 0,
+        "rateDownload": 65536,
+        "rateUpload": 32794,
+        "recheckProgress": 0.0,
+        "sequential_download": false,
+        "sizeWhenDone": 67108864,
+        "status": 4,
+        "totalSize": 67108864,
+        "uploadRatio": 0.6611686944961548
+      }
+    ]
+  },
+  "result": "success",
+  "tag": 9
+}
