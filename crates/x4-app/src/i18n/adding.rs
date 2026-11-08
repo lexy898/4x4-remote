@@ -58,6 +58,7 @@ pub(crate) fn no_choice_text(reason: NoChoiceReason) -> SharedString {
     match reason {
         NoChoiceReason::Ambiguous => t!("add-no-choice-ambiguous"),
         NoChoiceReason::TooLarge => t!("add-no-choice-too-large"),
+        NoChoiceReason::EmptyFilesLeftOut => t!("add-no-choice-empty-files"),
     }
     .into()
 }
@@ -242,6 +243,11 @@ mod tests {
         assert_eq!(
             no_choice_text(NoChoiceReason::TooLarge),
             "All files are added: there are too many to choose from"
+        );
+        assert_eq!(
+            no_choice_text(NoChoiceReason::EmptyFilesLeftOut),
+            "All files are added: Transmission 4.0 on the server numbers the files of this \
+             torrent differently"
         );
     }
 

@@ -126,14 +126,18 @@ impl fmt::Debug for LoadedTorrent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoChoiceReason {
     /// The daemon could number the files otherwise than the strict reader, so leaving some out
-    /// could leave out the wrong ones: [`ParsedTorrent::files`] is `None`, or the torrent has an
-    /// empty file and the daemon leaves those out (Transmission 4.0).
+    /// could leave out the wrong ones ([`ParsedTorrent::files`] is `None`).
     Ambiguous,
     /// The list of files is too large to choose from: more than
     /// [`MAX_CHOOSABLE_FILES`](crate::MAX_CHOOSABLE_FILES) files, or a tree that would take
     /// more than [`TREE_BUDGET`](crate::TREE_BUDGET) with the copy of the files it is made from,
     /// as for files nested hundreds of folders deep ([`FileTree::is_too_large`]).
     TooLarge,
+    /// The torrent has an empty file, and the daemon leaves empty files out of a torrent and
+    /// numbers the other files without them (Transmission 4.0), so a file left out by the
+    /// metainfo's numbering would be another file there
+    /// ([`SessionSummary::lists_empty_files`](crate::SessionSummary::lists_empty_files)).
+    EmptyFilesLeftOut,
 }
 
 /// Whether the form can be sent, and what is sent; the app enables Add only for
@@ -180,6 +184,8 @@ enum Source {
         /// The size of all files; `None` when the parse could not tell.
         total_size: Option<u64>,
         bytes: Arc<[u8]>,
+        /// Whether the parse lists a file of length zero, which Transmission 4.0 leaves out.
+        has_empty_file: bool,
         /// Or why the torrent can be added only with all its files.
         choice: Result<FileChoice, NoChoiceReason>,
     },
@@ -194,13 +200,9 @@ impl AddForm {
     /// with all of them ([`choice_unavailable`](Self::choice_unavailable) says why). The magnet
     /// form of `LoadedItem::Magnet(None)` starts with an empty link.
     ///
-    /// `lists_empty_files` is whether the daemon keeps a torrent's empty files
-    /// ([`SessionSummary::lists_empty_files`](crate::SessionSummary::lists_empty_files)). One
-    /// that leaves them out, Transmission 4.0, numbers the other files without them, so a file
-    /// index taken from the metainfo would name another file there: a `.torrent` with an empty
-    /// file then has no choice of files. Pass `true` while the daemon is not known.
+    /// The form does not know the daemon yet: [`follow_session`](Self::follow_session) tells it.
     #[must_use]
-    pub fn new(item: LoadedItem, folder: String, start: bool, lists_empty_files: bool) -> Self {
+    pub fn new(item: LoadedItem, folder: String, start: bool) -> Self {
         let source = match item {
             LoadedItem::Torrent(LoadedTorrent {
                 path,
@@ -210,12 +212,11 @@ impl AddForm {
             }) => Source::Torrent {
                 path,
                 name: parsed.name,
+                has_empty_file: parsed
+                    .files
+                    .as_ref()
+                    .is_some_and(|files| files.iter().any(|file| file.length == 0)),
                 choice: match (tree, parsed.files) {
-                    (Ok(_), Some(files))
-                        if !lists_empty_files && files.iter().any(|file| file.length == 0) =>
-                    {
-                        Err(NoChoiceReason::Ambiguous)
-                    }
                     (Ok(tree), Some(files)) => Ok(FileChoice::new(files.len(), tree)),
                     // A tree is made only of files, so this does not happen.
                     (Ok(_), None) => Err(NoChoiceReason::Ambiguous),
@@ -250,6 +251,34 @@ impl AddForm {
             } => Some(choice.tree()),
             Source::Torrent { choice: Err(_), .. } | Source::Magnet(_) => None,
         }
+    }
+
+    /// Takes what the session of `snapshot` says about the daemon, as soon as it is known; the
+    /// dialog passes every snapshot. On a daemon that leaves empty files out (Transmission 4.0),
+    /// a `.torrent` with an empty file loses its choice of files
+    /// ([`NoChoiceReason::EmptyFilesLeftOut`]): the files left out so far are wanted again, and
+    /// the torrent is added with all its files. The choice does not come back.
+    ///
+    /// Nothing changes while the session is not known, on a daemon that keeps empty files, for a
+    /// torrent without an empty file, or for a magnet link. Returns whether the choice was taken
+    /// away, so that the tree drawn goes too.
+    pub fn follow_session(&mut self, snapshot: &Snapshot) -> bool {
+        let leaves_empty_files_out = snapshot
+            .session
+            .as_ref()
+            .is_some_and(|session| !session.lists_empty_files);
+        if let Source::Torrent {
+            has_empty_file: true,
+            choice,
+            ..
+        } = &mut self.source
+            && choice.is_ok()
+            && leaves_empty_files_out
+        {
+            *choice = Err(NoChoiceReason::EmptyFilesLeftOut);
+            return true;
+        }
+        false
     }
 
     /// Applies a click on the checkbox of the node `key` of the [`tree`](Self::tree): its files

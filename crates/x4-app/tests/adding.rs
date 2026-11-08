@@ -46,6 +46,9 @@ const FOLDER: &str = "add-folder";
 const FREE_SPACE: &str = "add-free-space";
 const FILES: &str = "add-file-list";
 const NO_CHOICE: &str = "add-no-choice";
+/// What the dialog says instead of the files of a torrent with an empty file on Transmission 4.0.
+const EMPTY_FILES_LEFT_OUT: &str = "All files are added: Transmission 4.0 on the server \
+                                    numbers the files of this torrent differently";
 const START: &str = "add-start";
 const REASON: &str = "add-reason";
 const SHOW: &str = "add-show";
@@ -1522,10 +1525,66 @@ fn a_torrent_with_an_empty_file_has_no_choice_on_transmission_4_0(cx: &mut TestA
     assert!(!window.shown(FILES, cx));
     assert_eq!(
         window.label(NO_CHOICE, cx).as_deref(),
-        Some("All files are added: the list of files could be read in more than one way")
+        Some(EMPTY_FILES_LEFT_OUT)
     );
     window.click(CONFIRM, cx);
     assert_eq!(window.sent_add().1.files_unwanted, [] as [usize; 0]);
+}
+
+#[gpui_kit::test]
+fn a_choice_made_before_the_session_goes_when_the_server_is_transmission_4_0(
+    cx: &mut TestAppContext,
+) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.request_torrent("empty.torrent", &content, cx);
+    assert!(
+        window.shown(FILES, cx),
+        "a choice while the server is not known"
+    );
+    window.click_wanted("Empty/b", cx);
+    assert!(window.focused(FILES, cx));
+
+    let drops_empty_files = SessionSummary {
+        lists_empty_files: false,
+        ..session()
+    };
+    window.send_session(
+        Vec::new(),
+        ConnectionState::Connected,
+        drops_empty_files,
+        cx,
+    );
+
+    assert!(!window.shown(FILES, cx));
+    assert_eq!(
+        window.label(NO_CHOICE, cx).as_deref(),
+        Some(EMPTY_FILES_LEFT_OUT)
+    );
+    assert!(
+        window.focused(CONFIRM, cx),
+        "the focus left the list with it"
+    );
+    window.click(CONFIRM, cx);
+    let add = window.sent_add().1;
+    assert_eq!(add.files_unwanted, [] as [usize; 0], "all files");
+    assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
+}
+
+#[gpui_kit::test]
+fn a_choice_made_before_the_session_stays_on_other_servers(cx: &mut TestAppContext) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.request_torrent("empty.torrent", &content, cx);
+    window.click_wanted("Empty/b", cx);
+
+    window.send(Vec::new(), cx);
+
+    assert!(window.shown(FILES, cx));
+    assert!(!window.shown(NO_CHOICE, cx));
+    assert_eq!(window.wanted("Empty/b", cx), (Some(false), Some(false)));
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.files_unwanted, [2]);
 }
 
 #[gpui_kit::test]

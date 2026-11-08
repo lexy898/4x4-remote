@@ -884,9 +884,11 @@ add-free-space-unknown = Free space unknown
 # The name of the list of the torrent's files, for screen readers.
 add-files-list = Files
 # Instead of the list, when the files cannot be chosen: the server could number them otherwise
-# than 4x4 reads them, so leaving one out could leave out another; or there are too many.
+# than 4x4 reads them, so leaving one out could leave out another; or there are too many; or the
+# torrent has an empty file, which Transmission 4.0 leaves out, numbering the other files without it.
 add-no-choice-ambiguous = All files are added: the list of files could be read in more than one way
 add-no-choice-too-large = All files are added: there are too many to choose from
+add-no-choice-empty-files = All files are added: Transmission 4.0 on the server numbers the files of this torrent differently
 add-start = Start immediately
 add-confirm = Add
 # On the Add button while the server adds the torrent.

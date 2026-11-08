@@ -214,18 +214,14 @@ impl AddDialog {
             self.link
                 .update(cx, |input, cx| input.set_value(text, window, cx));
         }
-        // A daemon not known yet is taken to keep empty files, as all but Transmission 4.0 do.
-        let lists_empty_files = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.session.as_ref())
-            .is_none_or(|session| session.lists_empty_files);
-        let form = AddForm::new(
+        let mut form = AddForm::new(
             loaded,
             self.defaults.folder().to_owned(),
             self.defaults.start(),
-            lists_empty_files,
         );
+        if let Some(snapshot) = &self.snapshot {
+            form.follow_session(snapshot);
+        }
         let link_wanted = form.is_magnet() && form.hash().is_none();
         self.files.show(form.tree());
         self.shown = Some(Shown { item, form });
@@ -291,9 +287,10 @@ impl AddDialog {
     }
 
     /// Takes the newest `snapshot`, with the daemon `connected` or not. The first session that is
-    /// known gives the folder and "Start immediately" the user has not set yet; when the daemon is
-    /// back, the free space that was not known is asked for again at once. Draws again only if
-    /// what the dialog shows changed.
+    /// known gives the folder and "Start immediately" the user has not set yet, and the form of a
+    /// `.torrent` learns from each session whether it keeps its choice of files
+    /// ([`AddForm::follow_session`]); when the daemon is back, the free space that was not known
+    /// is asked for again at once. Draws again only if what the dialog shows changed.
     pub(crate) fn follow(
         &mut self,
         snapshot: Option<Arc<Snapshot>>,
@@ -317,6 +314,16 @@ impl AddDialog {
                 if let Some(shown) = &mut self.shown {
                     shown.form.set_start(taken.start);
                 }
+                changed = true;
+            }
+            if let Some(shown) = &mut self.shown
+                && shown.form.follow_session(&snapshot)
+            {
+                // The list goes; a focus left in it would be nowhere, and the keys with it.
+                if self.files.has_focus(window) {
+                    self.pending_focus = Some(self.confirm_focus.clone());
+                }
+                self.files.show(shown.form.tree());
                 changed = true;
             }
             let space = self.space.follow(&snapshot, connected);

@@ -43,8 +43,8 @@ use support::{
 };
 use x4_core::{
     AddCheck, AddForm, Command, ConnectionState, DetailsRead, DetailsTab, Engine, EngineConfig,
-    Event, LoadedItem, NoChoiceReason, NodeKey, PeerList, Request, Response, Snapshot,
-    TorrentDetails, Visibility, parse_torrent,
+    Event, LoadedItem, NoChoiceReason, NodeKey, PeerList, Request, Response, SessionSummary,
+    Snapshot, TorrentDetails, Visibility, parse_torrent,
 };
 use x4_rpc::{
     Client, FilePriority, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse,
@@ -700,22 +700,35 @@ fn adding_with_unwanted_files_matches_the_daemons_file_order() {
         Arc::from(own.bytes()),
     )
     .expect("the add form cannot read the test torrent");
-    let lists_empty_files = server.lists_empty_files();
-    let mut form = AddForm::new(
-        loaded,
-        env.remote_dir.as_str().to_owned(),
-        false,
-        lists_empty_files,
-    );
-    if !lists_empty_files {
+    let mut form = AddForm::new(loaded, env.remote_dir.as_str().to_owned(), false);
+    form.toggle_wanted(&NodeKey::new(&format!("{name}/alpha.bin")));
+    // As in the dialog, the choice is made before the session is known, and the session comes.
+    let info = client
+        .session_get()
+        .expect("the daemon does not answer session_get");
+    let with_session = Snapshot {
+        session: Some(SessionSummary {
+            lists_empty_files: server.lists_empty_files(),
+            ..SessionSummary::from(&info)
+        }),
+        ..without_session()
+    };
+    if form.follow_session(&with_session) {
         // Transmission 4.0 leaves the empty file out and numbers the others without it, so the
-        // form offers no choice, and the torrent would be added with all its files.
+        // form drops the choice, and the torrent would be added with all its files.
         eprintln!("file order: skipped: the daemon leaves empty files out");
-        assert_eq!(form.choice_unavailable(), Some(NoChoiceReason::Ambiguous));
+        assert_eq!(
+            form.choice_unavailable(),
+            Some(NoChoiceReason::EmptyFilesLeftOut)
+        );
         assert!(form.tree().is_none(), "no choice of files");
+        match form.check(&without_session(), true) {
+            AddCheck::Ready(request) => assert_eq!(request.files_unwanted, [] as [usize; 0]),
+            other => panic!("the add form would send nothing: {other:?}"),
+        }
         return;
     }
-    form.toggle_wanted(&NodeKey::new(&format!("{name}/alpha.bin")));
+    assert!(server.lists_empty_files(), "the form follows the session");
     let request = match form.check(&without_session(), true) {
         AddCheck::Ready(request) => request,
         other => panic!("the add form would send nothing: {other:?}"),
