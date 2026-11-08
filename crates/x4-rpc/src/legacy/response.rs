@@ -20,6 +20,12 @@ const FREE_SPACE: &str = "free_space";
 const SYSTEM_ERROR_CODE: i64 = 5;
 const SYSTEM_ERROR_MESSAGE: &str = "system error";
 
+/// The text of a file index past a torrent's last file, the same in the legacy daemons and in
+/// Transmission 4.1, and the code 4.1 gives it (`FILE_IDX_OOR`), so that a caller tells it the
+/// same way for both protocols.
+const FILE_INDEX_OUT_OF_RANGE: &str = "file index out of range";
+const FILE_INDEX_OUT_OF_RANGE_CODE: i64 = 6;
+
 /// The `arguments` of the answer `body` to the legacy request for `method` tagged `tag`, with
 /// every key renamed to its JSON-RPC name (a key 4x4 does not know stays as it is); an answer
 /// with no `arguments` has an empty object.
@@ -66,13 +72,17 @@ pub(super) fn arguments(method: &str, tag: u64, body: &[u8]) -> Result<Value, Rp
 /// The error of a legacy answer whose `result` is `text`.
 fn server_error(method: &str, text: String) -> RpcError {
     if method == FREE_SPACE {
-        system_error(Some(text))
+        return system_error(Some(text));
+    }
+    let code = if text == FILE_INDEX_OUT_OF_RANGE {
+        FILE_INDEX_OUT_OF_RANGE_CODE
     } else {
-        RpcError::Server {
-            code: LEGACY_ERROR_CODE,
-            message: text,
-            detail: None,
-        }
+        LEGACY_ERROR_CODE
+    };
+    RpcError::Server {
+        code,
+        message: text,
+        detail: None,
     }
 }
 
@@ -197,6 +207,21 @@ mod tests {
             Err(RpcError::Server {
                 code: LEGACY_ERROR_CODE,
                 message: "invalid or corrupt torrent file".to_owned(),
+                detail: None,
+            })
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_file_index_gets_the_code_4_1_gives_it() {
+        // What Transmission 3.00 to 4.1.0-beta answer for a file index past the last file.
+        let body = json!({ "result": "file index out of range", "arguments": {}, "tag": 7 });
+
+        assert_eq!(
+            read("torrent_set", &body),
+            Err(RpcError::Server {
+                code: 6,
+                message: "file index out of range".to_owned(),
                 detail: None,
             })
         );

@@ -5,7 +5,8 @@ use std::fmt;
 use crate::ids::IdError;
 use crate::transport::TransportError;
 
-/// The `code` of an [`RpcError::Server`] from a legacy daemon, whose errors carry only text.
+/// The `code` of an [`RpcError::Server`] from a legacy daemon, whose errors carry only text; the
+/// few that 4x4 tells apart get the codes Transmission 4.1 gives them (see [`RpcError::Server`]).
 pub const LEGACY_ERROR_CODE: i64 = 0;
 
 /// Why an RPC call failed.
@@ -53,7 +54,8 @@ pub enum RpcError {
     #[error("server error {code}: {message}{}", detail_suffix(.detail.as_deref()))]
     Server {
         /// The JSON-RPC error code; [`LEGACY_ERROR_CODE`] from a legacy daemon, except for a
-        /// failed `free_space`, which gets the code 4.1 gives it (5).
+        /// failed `free_space` and a file index out of range, which get the codes 4.1 gives
+        /// them (5 and 6).
         code: i64,
         /// The error message; from a legacy daemon, its text.
         message: String,
