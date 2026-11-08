@@ -74,6 +74,23 @@ test-live:
     X4_LIVE_LOCAL_DIR="${X4_LIVE_LOCAL_DIR:-/mnt/pi-hdd/torrents/4x4-test}" \
     cargo nextest run -p x4-rpc -p x4-core -p x4-app --test live --test geoip_live --run-ignored only --locked --no-capture
 
+# The live tests of `test-live` (without geoip_live) against each Docker daemon of `just legacy-daemons` (start them with `up`), on torrents they create in its test directory; a daemon that fails does not stop the others, and the run fails at the end.
+test-live-legacy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    failed=()
+    for name in v3.00 v4.0.5 v4.1.0-beta.2; do
+        eval "$(just legacy-daemons env "$name")"
+        echo "live tests against $name at $X4_LIVE_URL" >&2
+        if ! cargo nextest run -p x4-rpc -p x4-core -p x4-app --test live --run-ignored only --locked --no-capture; then
+            failed+=("$name")
+        fi
+    done
+    if ((${#failed[@]} > 0)); then
+        echo "live tests failed against: ${failed[*]}" >&2
+        exit 1
+    fi
+
 # Enable the git hooks and verify the required tools are installed.
 setup:
     git config core.hooksPath .githooks

@@ -1,4 +1,5 @@
-//! Live tests of x4-core against a real Transmission daemon, run only by `just test-live`.
+//! Live tests of x4-core against a real Transmission daemon, run only by `just test-live` and
+//! `just test-live-legacy`.
 //!
 //! They use the live test support of x4-rpc (`crates/x4-rpc/tests/live/`) and keep its rules:
 //! they act on nothing but a torrent they create in the test directory, change it only through a

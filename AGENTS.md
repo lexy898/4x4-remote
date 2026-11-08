@@ -22,6 +22,9 @@ just test             # tests via nextest
 just test-hooks       # tests for the hook and helper scripts in scripts/
 just test-live        # live tests against the owner's daemon, and geoip_live, which reads the
                       # installed GeoIP files and needs no daemon; never part of check
+just test-live-legacy # the same live tests (without geoip_live) against each of the three Docker
+                      # daemons of `just legacy-daemons` (start them with `up`); never part of
+                      # check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
 just record-fixtures-legacy  # the same from the three Docker daemons (3.00, 4.0.5, 4.1.0-beta.2) of
                       # `just legacy-daemons`, into crates/x4-rpc/tests/fixtures/legacy/
@@ -141,7 +144,10 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Default tests never touch the network. Server responses come from `tests/fixtures/`, recorded
   from a real daemon and scrubbed (no real names, paths, hashes, trackers or magnet links).
 - Live tests against a real daemon are `#[ignore]`, take the URL from `X4_LIVE_URL` and run only
-  via `just test-live`.
+  via `just test-live`, and against the Docker legacy daemons via `just test-live-legacy`. A test
+  of something an older daemon lacks (a field, such as sequential download before 4.1.0-beta.2, or
+  a behavior, such as making empty files at start) asks the daemon's session or version, says on
+  stderr what it skips, and checks what holds there instead (a missing field reads none).
 
 ### UI text and localization
 - The UI is English and localization-ready: every user-visible string goes through the i18n layer
