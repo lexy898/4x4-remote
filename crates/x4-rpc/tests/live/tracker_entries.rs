@@ -20,8 +20,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 use x4_rpc::{
-    Client, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse, TorrentRecord,
-    TorrentSelection, TrackerStatRecord, TrackerState, UreqTransport,
+    Client, GetIds, HashString, RpcError, ServerVersion, TorrentField, TorrentGetResponse,
+    TorrentRecord, TorrentSelection, TrackerStatRecord, TrackerState, UreqTransport,
 };
 
 /// How many of the daemon's torrents with trackers the test reads the details of, at most.
@@ -116,6 +116,22 @@ const TRACKER_KEYS: [(&str, Kind); 21] = [
     ("seeder_count", Kind::Integer),
     ("leecher_count", Kind::Integer),
 ];
+
+/// The legacy RPC version of Transmission 4.0, the first to send a tracker's `sitename`.
+const SITENAME_SINCE: u32 = 17;
+
+/// The keys of [`TRACKER_KEYS`] that the daemon `server` does not send: Transmission 3.00 has no
+/// `sitename`.
+pub(crate) fn keys_not_sent(server: &ServerVersion) -> &'static [&'static str] {
+    if server
+        .rpc_version
+        .is_some_and(|version| version < SITENAME_SINCE)
+    {
+        &["sitename"]
+    } else {
+        &[]
+    }
+}
 
 /// The daemon's answer to a `torrent_get`: as sent, and as the client parses it.
 pub(crate) struct Answer {
@@ -213,12 +229,14 @@ pub(crate) fn with_trackers(
 /// Reads `fields` of the torrents `hashes`, as `what` in failures, and checks the answer: it
 /// names those torrents and no others, each torrent's per-file arrays have one value per file,
 /// and every tracker entry has the keys [`TrackerStatRecord`] reads, of their kinds, parsed to
-/// the values sent, with a host.
+/// the values sent, with a host. The keys `not_sent` ([`keys_not_sent`]) must be missing, and
+/// parse to their defaults.
 pub(crate) fn read_and_check(
     client: &mut Client<UreqTransport>,
     hashes: &[HashString],
     fields: &[TorrentField],
     what: &str,
+    not_sent: &[&str],
 ) -> Tally {
     let answer = read(client, &selection_of(hashes), fields, what);
     let asked: BTreeSet<&str> = hashes.iter().map(HashString::as_str).collect();
@@ -244,7 +262,7 @@ pub(crate) fn read_and_check(
     for (raw, record) in raw_records.iter().zip(&answer.parsed.torrents) {
         tally.torrents += 1;
         check_files(record, fields, what, &mut tally);
-        check_trackers(raw, record, what, &mut tally);
+        check_trackers(raw, record, what, not_sent, &mut tally);
     }
     tally
 }
@@ -274,8 +292,15 @@ fn check_files(record: &TorrentRecord, fields: &[TorrentField], what: &str, tall
     }
 }
 
-/// Checks each tracker entry of `record` against `raw`, the record as the daemon sent it.
-fn check_trackers(raw: &Value, record: &TorrentRecord, what: &str, tally: &mut Tally) {
+/// Checks each tracker entry of `record` against `raw`, the record as the daemon sent it; the
+/// keys `not_sent` must be missing.
+fn check_trackers(
+    raw: &Value,
+    record: &TorrentRecord,
+    what: &str,
+    not_sent: &[&str],
+    tally: &mut Tally,
+) {
     let sent = raw
         .get("tracker_stats")
         .and_then(Value::as_array)
@@ -299,6 +324,11 @@ fn check_trackers(raw: &Value, record: &TorrentRecord, what: &str, tally: &mut T
         for (key, expected) in TRACKER_KEYS {
             let kind = Kind::of(sent.get(key));
             tally.kinds.entry(key).or_default().insert(kind);
+            let expected = if not_sent.contains(&key) {
+                Kind::Missing
+            } else {
+                expected
+            };
             if kind != expected {
                 wrong.entry(key).or_default().insert(kind);
             }
@@ -402,9 +432,10 @@ fn keys_parsed_otherwise(sent: &Value, parsed: &TrackerStatRecord) -> Vec<&'stat
         ("tier", count("tier") == Some(i64::from(parsed.tier))),
         ("is_backup", flag("is_backup") == Some(parsed.is_backup)),
         ("host", text("host") == Some(parsed.host.as_str())),
+        // Not sent, it parses to its default; the kinds say whether it had to be sent.
         (
             "sitename",
-            text("sitename") == Some(parsed.sitename.as_str()),
+            text("sitename").unwrap_or_default() == parsed.sitename,
         ),
         (
             "announce_state",

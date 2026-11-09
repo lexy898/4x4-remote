@@ -184,6 +184,12 @@ pub(crate) fn execute<T: Transport>(
         Request::RecentlyActive => client
             .torrent_get(&GetIds::RecentlyActive, TorrentField::LIST)
             .map(Response::Torrents),
+        Request::ListOne(hash) => client
+            .torrent_get(
+                &GetIds::Selection(selection(slice::from_ref(hash))?),
+                TorrentField::LIST,
+            )
+            .map(Response::Torrents),
         Request::Details { hash, kind } => {
             // Always one named torrent: omitted ids would read every torrent's files.
             let ids = GetIds::Selection(selection(slice::from_ref(hash))?);
@@ -659,6 +665,21 @@ mod tests {
     }
 
     #[test]
+    fn the_read_of_one_torrent_names_it_by_hash_with_the_list_fields() {
+        let one = hash("a");
+
+        let (result, sent) = execute_one(&Request::ListOne(one.clone()));
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].method, "torrent_get");
+        assert_eq!(
+            sent[0].params,
+            json!({ "ids": [one.as_str()], "fields": fields(TorrentField::LIST) })
+        );
+    }
+
+    #[test]
     fn each_poll_is_answered_with_its_response() {
         let answer = |request| execute_one(&request).0.unwrap();
 
@@ -678,6 +699,10 @@ mod tests {
         assert!(matches!(answer(Request::FullList), Response::Torrents(_)));
         assert!(matches!(
             answer(Request::RecentlyActive),
+            Response::Torrents(_)
+        ));
+        assert!(matches!(
+            answer(Request::ListOne(hash("a"))),
             Response::Torrents(_)
         ));
         for kind in [

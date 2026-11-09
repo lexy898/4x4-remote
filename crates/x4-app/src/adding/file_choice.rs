@@ -76,6 +76,11 @@ impl FileChoiceList {
         }
     }
 
+    /// Whether the keyboard focus is in the list.
+    pub(super) fn has_focus(&self, window: &Window) -> bool {
+        self.focus.is_focused(window)
+    }
+
     /// The tree on screen and the row of it the cursor is on, if any.
     fn at_cursor(&self) -> Option<(Arc<FileTree>, NodeKey)> {
         let tree = self.tree.clone()?;

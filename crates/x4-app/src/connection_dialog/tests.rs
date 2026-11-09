@@ -670,8 +670,8 @@ fn test_shows_testing_then_the_outcome(cx: &mut TestAppContext) {
             "The server rejected the credentials",
         ),
         (
-            CheckOutcome::Unsupported(UnsupportedReason::Legacy),
-            "Transmission 4.1 or newer required",
+            CheckOutcome::Unsupported(UnsupportedReason::Version("15".to_owned())),
+            "Transmission 3.00 or newer required (server RPC 15)",
         ),
         (CheckOutcome::NotRun, "The test could not run"),
     ] {

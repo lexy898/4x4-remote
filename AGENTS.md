@@ -22,7 +22,12 @@ just test             # tests via nextest
 just test-hooks       # tests for the hook and helper scripts in scripts/
 just test-live        # live tests against the owner's daemon, and geoip_live, which reads the
                       # installed GeoIP files and needs no daemon; never part of check
+just test-live-legacy # the same live tests (without geoip_live) against each of the three Docker
+                      # daemons of `just legacy-daemons` (start them with `up`); never part of
+                      # check
 just record-fixtures  # record and scrub test fixtures from the daemon (read-only calls)
+just record-fixtures-legacy  # the same from the three Docker daemons (3.00, 4.0.5, 4.1.0-beta.2) of
+                      # `just legacy-daemons`, into crates/x4-rpc/tests/fixtures/legacy/
 just lint-policy      # lint exceptions, workspace lints, the one unsafe call, dependency
                       # direction, the vendored gpui-pre-wgpu patch, Markdown links
                       # (scripts/lint-policy.sh)
@@ -39,6 +44,10 @@ just package          # the Arch package of the committed master under ~/.cache/
                       # path (installing it is the owner's). Agents run it only from a scratch
                       # clone, with XDG_CACHE_HOME under ~/.cache/x4-scratch, never in the owner's
                       # cache
+just legacy-daemons up|status|down|env <name>
+                      # local old Transmission daemons (3.00, 4.0.5, 4.1.0-beta.2) in Docker on
+                      # 127.0.0.1, for tests of the legacy protocol; agents may run it; never part
+                      # of check
 just default-handler  # make the installed 4x4 the default app for .torrent files and magnet links
                       # (--undo gives them back); the owner's only: agents never run it
 just virtual <cmd>    # run a command in a headless KWin with its own D-Bus, XDG and runtime dirs
@@ -135,7 +144,10 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Default tests never touch the network. Server responses come from `tests/fixtures/`, recorded
   from a real daemon and scrubbed (no real names, paths, hashes, trackers or magnet links).
 - Live tests against a real daemon are `#[ignore]`, take the URL from `X4_LIVE_URL` and run only
-  via `just test-live`.
+  via `just test-live`, and against the Docker legacy daemons via `just test-live-legacy`. A test
+  of something an older daemon lacks (a field, such as sequential download before 4.1.0-beta.2, or
+  a behavior, such as making empty files at start) asks the daemon's session or version, says on
+  stderr what it skips, and checks what holds there instead (a missing field reads none).
 
 ### UI text and localization
 - The UI is English and localization-ready: every user-visible string goes through the i18n layer
@@ -184,8 +196,9 @@ The lints in `[workspace.lints]` are the baseline. This section covers what they
 - Look up library APIs with the context7 MCP server before coding against them; do not rely on memory.
 - GPUI moves fast: check docs.rs/gpui-kit, gpui-kit.com and the sources of the pinned version in
   `~/.cargo/registry/src/`.
-- Transmission RPC: `docs/rpc-spec.md` in the Transmission repository, 4.1.x. When the docs and the
-  live server disagree, the server wins.
+- Transmission RPC: `docs/rpc-spec.md` in the Transmission repository, 4.1.x. The legacy protocol
+  that 4x4 speaks to Transmission 3.00 – 4.1.0-beta: `docs/rpc-spec.md` of tag 4.0.6 and
+  `extras/rpc-spec.txt` of tag 3.00. When the docs and the live server disagree, the server wins.
 
 ## Hard Rules
 

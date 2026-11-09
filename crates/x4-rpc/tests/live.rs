@@ -1,4 +1,5 @@
-//! Live tests against a real Transmission daemon, run only by `just test-live`.
+//! Live tests against a real Transmission daemon, run only by `just test-live` and
+//! `just test-live-legacy`.
 //!
 //! They act on nothing but a torrent they create themselves: a random file, or a folder of a few
 //! small random files, written into a dedicated test directory (`X4_LIVE_LOCAL_DIR`, the same
@@ -19,6 +20,11 @@
 //! module), the other for a few that have peers and reads them as the Peers tab does (the
 //! `peer_entries` module), so that real tracker and peer entries are parsed. They change nothing,
 //! read a second apart, and report counts and kinds of values only.
+//!
+//! Older daemons lack some of what the tests check: sequential download before Transmission
+//! 4.1.0-beta.2, the peers' `peer_id` and `bytes_to_*` before 4.1, a tracker's `sitename` in 3.00,
+//! and the empty files a torrent makes at start before 4.1.0-beta. There the tests say on stderr
+//! what they skip, and check what holds instead: a field the daemon lacks reads none.
 //!
 //! The offline tests of the support code (bencode, piece hashes, accepting the added torrent,
 //! the local data) run in `just test` too. They are in files of their own that only this crate
@@ -50,8 +56,8 @@ use support::{
 };
 use tracker_entries::{WITH_TRACKERS, listed_hashes, read_and_check, with_trackers};
 use x4_rpc::{
-    AddOutcome, AddSource, Client, FilePriority, GetIds, RpcError, Status, TorrentAction,
-    TorrentAdd, TorrentField, TorrentSelection, TorrentSet, UreqTransport,
+    AddOutcome, AddSource, Client, ErrorKind, FilePriority, GetIds, RpcError, Status,
+    TorrentAction, TorrentAdd, TorrentField, TorrentSelection, TorrentSet, UreqTransport,
 };
 
 const STOPPED_AFTER_STOP: Duration = Duration::from_secs(10);
@@ -77,6 +83,9 @@ const CHECKED_AFTER_ADD: Duration = Duration::from_secs(60);
 const STAYS_STOPPED_FOR: Duration = Duration::from_secs(3);
 /// How long the daemon may take to make the folder of a torrent that starts.
 const FOLDER_AFTER_START: Duration = Duration::from_secs(30);
+/// The legacy RPC version of Transmission 4.1.0-beta, the first to make a torrent's empty files,
+/// and the folders they are in, as soon as it starts.
+const MAKES_EMPTY_FILES_SINCE: u32 = 18;
 /// How long a file the daemon made may take to show on this machine's mount.
 const SHOWS_HERE: Duration = Duration::from_secs(10);
 /// The files of the torrent that downloads into a new folder: an empty one, which the daemon
@@ -105,6 +114,20 @@ fn files_of(
         record.wanted.unwrap_or_default(),
         record.priorities.unwrap_or_default(),
     )
+}
+
+/// Whether the daemon downloads in order, as its session says: Transmission 4.1.0-beta.2 and newer
+/// do; an older daemon has no such setting, and the client never asks it for the field.
+#[expect(
+    clippy::expect_used,
+    reason = "a live test stops at the first failure; the guard cleans up"
+)]
+fn has_sequential_download(client: &mut Client<UreqTransport>) -> bool {
+    client
+        .session_get()
+        .expect("session_get failed")
+        .sequential_download
+        .is_some()
 }
 
 /// Sends `set` for the test torrent `selection` names, which must succeed.
@@ -158,14 +181,19 @@ fn live_lifecycle_on_own_torrent() {
     torrent.wait_for(&mut client, Status::Seeding, SEEDING_AFTER_START);
     assert_others_unchanged(&mut client, own, &before);
 
-    let sequential = TorrentSet {
-        sequential_download: Some(true),
-        ..TorrentSet::default()
-    };
-    client
-        .torrent_set(&selection, &sequential)
-        .expect("torrent_set sequential_download failed");
-    assert_eq!(torrent.record(&mut client).sequential_download, Some(true));
+    if has_sequential_download(&mut client) {
+        let sequential = TorrentSet {
+            sequential_download: Some(true),
+            ..TorrentSet::default()
+        };
+        client
+            .torrent_set(&selection, &sequential)
+            .expect("torrent_set sequential_download failed");
+        assert_eq!(torrent.record(&mut client).sequential_download, Some(true));
+    } else {
+        eprintln!("lifecycle: sequential download skipped: the daemon has no sequential download");
+        assert_eq!(torrent.record(&mut client).sequential_download, None);
+    }
 
     let high = TorrentSet {
         priority_high: vec![0],
@@ -425,10 +453,20 @@ fn sequential_on_and_off_on_an_own_torrent() {
     let env = LiveEnv::from_env();
     let mut client = env.client();
     let before = others_fingerprint(&mut client, None);
+    let has_sequential = has_sequential_download(&mut client);
     let torrent = TestTorrent::create_multi_file(&mut client, &env);
     let hash = torrent.hash().clone();
     let own = Some(&hash);
     let selection = torrent.selection();
+    if !has_sequential {
+        eprintln!("sequential: skipped: the daemon has no sequential download");
+        assert_eq!(torrent.record(&mut client).sequential_download, None);
+        assert_others_unchanged(&mut client, own, &before);
+        torrent.remove_with_data(&mut client);
+        assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+        assert_others_unchanged(&mut client, None, &before);
+        return;
+    }
     assert_eq!(torrent.record(&mut client).sequential_download, Some(false));
 
     for on in [true, false] {
@@ -454,7 +492,11 @@ fn sequential_on_and_off_on_an_own_torrent() {
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
 fn real_tracker_entries_parse_on_the_daemons_torrents() {
     let env = LiveEnv::from_env();
-    let mut client = env.client();
+    let (mut client, server) = env.checked_client();
+    let not_sent = tracker_entries::keys_not_sent(&server);
+    if !not_sent.is_empty() {
+        eprintln!("tracker entries: {not_sent:?} skipped: the daemon has none");
+    }
     let hashes = listed_hashes(&mut client);
     let (tracked, looked_at) = with_trackers(&mut client, &hashes);
     eprintln!(
@@ -478,7 +520,7 @@ fn real_tracker_entries_parse_on_the_daemons_torrents() {
         ("full", TorrentField::DETAILS_FULL),
         ("trackers tab", TorrentField::TRACKERS),
     ] {
-        let tally = read_and_check(&mut client, &tracked, fields, what);
+        let tally = read_and_check(&mut client, &tracked, fields, what, not_sent);
         eprintln!("{what}: {tally}");
         assert!(tally.entries > 0, "{what}: no tracker entry was parsed");
     }
@@ -488,7 +530,11 @@ fn real_tracker_entries_parse_on_the_daemons_torrents() {
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
 fn real_peer_entries_parse_on_the_daemons_torrents() {
     let env = LiveEnv::from_env();
-    let mut client = env.client();
+    let (mut client, server) = env.checked_client();
+    let not_sent = peer_entries::keys_not_sent(&server);
+    if !not_sent.is_empty() {
+        eprintln!("peer entries: {not_sent:?} skipped: the daemon has none");
+    }
     let hashes = listed_hashes(&mut client);
     let (with_peers, looked_at) = peer_entries::with_peers(&mut client, &hashes);
     eprintln!(
@@ -503,7 +549,7 @@ fn real_peer_entries_parse_on_the_daemons_torrents() {
         return;
     }
 
-    let tally = peer_entries::read_and_check(&mut client, &with_peers, "peers tab");
+    let tally = peer_entries::read_and_check(&mut client, &with_peers, "peers tab", not_sent);
     eprintln!("peers tab: {tally}");
 }
 
@@ -609,7 +655,7 @@ fn adding_the_same_torrent_again_is_a_duplicate_and_changes_nothing() {
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
 fn a_missing_subfolder_of_the_test_dir_is_accepted_and_created_on_start() {
     let env = LiveEnv::from_env();
-    let mut client = env.client();
+    let (mut client, server) = env.checked_client();
     let before = others_fingerprint(&mut client, None);
     let folder = TestFolder::new_subfolder(&env.remote_dir, random_seed());
     // `unwritten` asks the daemon first that the folder is not there.
@@ -637,6 +683,21 @@ fn a_missing_subfolder_of_the_test_dir_is_accepted_and_created_on_start() {
     client
         .torrent_action(TorrentAction::StartNow, &torrent.selection())
         .expect("torrent_start_now failed");
+    if server
+        .rpc_version
+        .is_some_and(|version| version < MAKES_EMPTY_FILES_SINCE)
+    {
+        // Transmission 3.00 makes a torrent's files only once it writes data, and 4.0 leaves the
+        // empty file out: neither makes the folder of a torrent of data that nobody has.
+        torrent.statuses_for(&mut client, STAYS_STOPPED_FOR);
+        let started = torrent.record(&mut client);
+        assert_eq!(started.error, Some(ErrorKind::None), "{started:?}");
+        eprintln!("new folder: skipped: the daemon makes the folder only once it writes data");
+        torrent.remove_with_data(&mut client);
+        assert_eq!(torrent_by_hash(&mut client, &hash), Ok(None));
+        assert_others_unchanged(&mut client, None, &before);
+        return;
+    }
 
     // A torrent that starts makes its wanted empty files, and the folders they are in.
     let mut last = None;

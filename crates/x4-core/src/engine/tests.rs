@@ -13,8 +13,8 @@ use x4_rpc::testing::fixtures::{
     TORRENT_GET_PEERS, TORRENT_GET_RECENT, TORRENT_GET_TRACKERS,
 };
 use x4_rpc::{
-    AddOutcome, AddSource, AddedTorrent, FilePriority, IdError, MagnetLink, RemoveData, TorrentAdd,
-    TorrentId, TorrentRecord, TransportError,
+    AddOutcome, AddSource, AddedTorrent, FilePriority, IdError, MagnetLink, Protocol, RemoveData,
+    TorrentAdd, TorrentId, TorrentRecord, TransportError,
 };
 
 use super::*;
@@ -55,6 +55,18 @@ fn version(rpc_semver: &str) -> ServerVersion {
     ServerVersion {
         version: "4.1.3 (838877323f)".to_owned(),
         rpc_semver: rpc_semver.to_owned(),
+        rpc_version: None,
+        protocol: Protocol::JsonRpc,
+    }
+}
+
+/// A daemon of the legacy protocol that reports `rpc_version`, as Transmission 3.00 does (16).
+fn legacy_version(rpc_version: u32) -> ServerVersion {
+    ServerVersion {
+        version: "3.00 (bb6b5a062e)".to_owned(),
+        rpc_semver: String::new(),
+        rpc_version: Some(rpc_version),
+        protocol: Protocol::Legacy,
     }
 }
 
@@ -78,7 +90,7 @@ fn free_space(path: &str, size_bytes: i64) -> Response {
     Response::FreeSpace(FreeSpace {
         path: path.to_owned(),
         size_bytes,
-        total_size: 1 << 40,
+        total_size: Some(1 << 40),
     })
 }
 
@@ -96,6 +108,14 @@ fn answer(request: &Request) -> Response {
         Request::FolderFreeSpace(folder) => free_space(folder.as_str(), 1 << 30),
         Request::FullList => Response::Torrents(list()),
         Request::RecentlyActive => Response::Torrents(recent()),
+        Request::ListOne(hash) => Response::Torrents(TorrentGetResponse {
+            torrents: list()
+                .torrents
+                .into_iter()
+                .filter(|record| record.hash_string.as_deref() == Some(hash.as_str()))
+                .collect(),
+            removed: Vec::new(),
+        }),
         Request::Details {
             kind: DetailsRead::Full,
             ..
@@ -390,14 +410,14 @@ fn unsupported_server_error_stops_polling_too() {
         base,
         &Request::CheckServer,
         Err(RpcError::UnsupportedServer {
-            reason: UnsupportedReason::Legacy,
+            reason: UnsupportedReason::Version("15".to_owned()),
         }),
     );
 
     assert_eq!(
         engine.connection,
         ConnectionState::Unsupported {
-            reason: UnsupportedReason::Legacy
+            reason: UnsupportedReason::Version("15".to_owned())
         }
     );
     assert_eq!(engine.due_requests(base + secs(60)), []);
@@ -422,6 +442,44 @@ fn a_server_check_without_a_version_is_unsupported_for_that_reason() {
             reason: UnsupportedReason::NoVersion
         }
     );
+}
+
+#[test]
+fn a_legacy_server_connects() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    hand_out(&mut engine, base);
+
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(legacy_version(16))),
+    );
+
+    assert_eq!(engine.connection, ConnectionState::Connected);
+}
+
+#[test]
+fn an_rpc_15_server_is_unsupported() {
+    let base = Instant::now();
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    hand_out(&mut engine, base);
+
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(legacy_version(15))),
+    );
+
+    assert_eq!(
+        engine.connection,
+        ConnectionState::Unsupported {
+            reason: UnsupportedReason::Version("15".to_owned())
+        }
+    );
+    assert_eq!(engine.due_requests(base + secs(60)), []);
 }
 
 #[test]
@@ -1053,6 +1111,160 @@ fn a_speed_action_reads_the_session_again() {
             "{action:?}"
         );
     }
+}
+
+/// An engine that connected at `base` to a daemon of `version` and read everything it reads on
+/// connecting.
+fn loaded_from(base: Instant, version: ServerVersion) -> Engine {
+    let mut engine = Engine::new(EngineConfig::default(), base);
+    assert_eq!(engine.due_requests(base), [Request::CheckServer]);
+    respond(
+        &mut engine,
+        base,
+        &Request::CheckServer,
+        Ok(Response::Server(version)),
+    );
+    while !exchange(&mut engine, base).0.is_empty() {}
+    engine
+}
+
+fn sequential_first(enabled: bool) -> Action {
+    Action::SetSequential {
+        hash: first(),
+        enabled,
+    }
+}
+
+/// Whether the first torrent downloads in order, as the engine's latest snapshot shows it.
+fn first_is_sequential(engine: &mut Engine) -> Option<bool> {
+    engine.take_snapshot().and_then(|snapshot| {
+        snapshot
+            .torrents
+            .iter()
+            .find(|torrent| torrent.hash == first())
+            .map(|torrent| torrent.sequential)
+    })
+}
+
+#[test]
+fn a_legacy_daemon_has_the_torrent_read_once_after_its_download_in_order_is_switched() {
+    let base = Instant::now();
+    let mut engine = loaded_from(base, legacy_version(18));
+    assert_eq!(first_is_sequential(&mut engine), Some(false));
+    let now = base + ms(500);
+    command(
+        &mut engine,
+        now,
+        Command::Run(ActionId(12), sequential_first(true)),
+    );
+    exchange(&mut engine, now);
+
+    // Its recently active torrents leave out a torrent whose download in order was switched.
+    assert_eq!(engine.next_wakeup(now), now);
+    let due = hand_out(&mut engine, now);
+    assert_eq!(
+        due,
+        [
+            Request::RecentlyActive,
+            Request::SessionStats,
+            Request::ListOne(first())
+        ]
+    );
+    respond(&mut engine, now, &due[0], Ok(answer(&due[0])));
+    respond(&mut engine, now, &due[1], Ok(answer(&due[1])));
+    let mut switched = answer(&due[2]);
+    if let Response::Torrents(list) = &mut switched {
+        for record in &mut list.torrents {
+            record.sequential_download = Some(true);
+        }
+    }
+    respond(&mut engine, now, &due[2], Ok(switched));
+
+    assert_eq!(first_is_sequential(&mut engine), Some(true));
+    let later = now + ms(10);
+    assert!(
+        !hand_out(&mut engine, later).contains(&Request::ListOne(first())),
+        "read once"
+    );
+}
+
+#[test]
+fn a_json_rpc_daemon_has_no_torrent_read_after_its_download_in_order_is_switched() {
+    let base = Instant::now();
+    let mut engine = loaded(base);
+    let now = base + ms(500);
+    command(
+        &mut engine,
+        now,
+        Command::Run(ActionId(13), sequential_first(true)),
+    );
+
+    exchange(&mut engine, now);
+
+    assert_eq!(
+        hand_out(&mut engine, now),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
+}
+
+#[test]
+fn a_legacy_daemon_has_no_torrent_read_after_other_actions() {
+    let base = Instant::now();
+    let mut engine = loaded_from(base, legacy_version(16));
+    let now = base + ms(500);
+    command(&mut engine, now, Command::Run(ActionId(14), stop_first()));
+
+    exchange(&mut engine, now);
+
+    assert_eq!(
+        hand_out(&mut engine, now),
+        [Request::RecentlyActive, Request::SessionStats]
+    );
+}
+
+#[test]
+fn the_session_says_whether_the_daemon_keeps_empty_files() {
+    let base = Instant::now();
+    let lists = |version| {
+        loaded_from(base, version)
+            .take_snapshot()
+            .and_then(|snapshot| snapshot.session.clone())
+            .map(|session| session.lists_empty_files)
+    };
+
+    assert_eq!(lists(legacy_version(17)), Some(false), "Transmission 4.0");
+    assert_eq!(lists(legacy_version(16)), Some(true));
+    assert_eq!(lists(legacy_version(18)), Some(true));
+    assert_eq!(lists(version("6.0.1")), Some(true));
+}
+
+#[test]
+fn a_reconnect_to_another_daemon_corrects_the_known_session_at_once() {
+    let base = Instant::now();
+    let mut engine = loaded_from(base, legacy_version(17));
+    let session = engine
+        .take_snapshot()
+        .and_then(|snapshot| snapshot.session.clone());
+    assert_eq!(
+        session.map(|session| session.lists_empty_files),
+        Some(false)
+    );
+    let at = base + secs(1);
+    respond(&mut engine, at, &Request::RecentlyActive, Err(timeout()));
+    let check_at = at + secs(60);
+    assert!(hand_out(&mut engine, check_at).contains(&Request::CheckServer));
+
+    respond(
+        &mut engine,
+        check_at,
+        &Request::CheckServer,
+        Ok(Response::Server(legacy_version(18))),
+    );
+
+    let session = engine
+        .take_snapshot()
+        .and_then(|snapshot| snapshot.session.clone());
+    assert_eq!(session.map(|session| session.lists_empty_files), Some(true));
 }
 
 #[test]

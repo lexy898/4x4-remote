@@ -1,8 +1,9 @@
 //! Test doubles for code that talks to Transmission (feature `test-support`).
 //!
-//! [`FakeTransport`] answers requests from a script or a handler and records every request;
-//! [`ok`] and [`conflict`] build the common responses. [`scrub`] removes private data from
-//! recorded responses and [`fixtures`] holds the scrubbed responses of a real daemon.
+//! [`FakeTransport`] answers requests from a script or a handler and records every request, in
+//! either protocol; [`ok`], [`conflict`], [`legacy_ok`] and [`legacy_error`] build the common
+//! responses. [`scrub`] removes private data from recorded responses and [`fixtures`] holds the
+//! scrubbed responses of a real daemon.
 
 pub mod scrub;
 
@@ -33,7 +34,8 @@ struct Shared {
 /// inspect [`FakeTransport::requests`].
 ///
 /// A response body that is a JSON object without an `id` (as built by [`ok`]) gets the id of the
-/// request it answers. Bodies with an explicit `id` pass through unchanged, so a test can answer
+/// request it answers; to a legacy request, one without a `tag` (as built by [`legacy_ok`]) gets
+/// its tag. Bodies with an explicit `id` or `tag` pass through unchanged, so a test can answer
 /// with a mismatched one.
 #[derive(Clone)]
 pub struct FakeTransport {
@@ -48,7 +50,9 @@ impl FakeTransport {
         Self::with(Responder::Scripted(responses.into()))
     }
 
-    /// Answers every request with `handler(method, params)`; `params` is null when omitted.
+    /// Answers every request with `handler(method, params)`, the two as
+    /// [`RecordedRequest::method`] and [`RecordedRequest::params`] hold them; `params` is null
+    /// when omitted.
     #[must_use]
     pub fn routed(
         handler: impl Fn(&str, &Value) -> Result<HttpResponse, TransportError> + Send + 'static,
@@ -82,7 +86,13 @@ impl Transport for FakeTransport {
                 "fake transport: the request has no method".to_owned(),
             ));
         };
-        let params = envelope.get("params").cloned().unwrap_or(Value::Null);
+        // A JSON-RPC request names its version; a legacy one has `arguments` and a `tag`.
+        let (params_key, correlator) = if envelope.get("jsonrpc").is_some() {
+            ("params", "id")
+        } else {
+            ("arguments", "tag")
+        };
+        let params = envelope.get(params_key).cloned().unwrap_or(Value::Null);
         lock(&self.shared.requests).push(RecordedRequest {
             method: method.to_owned(),
             params: params.clone(),
@@ -96,8 +106,8 @@ impl Transport for FakeTransport {
                 .unwrap_or_else(|| Err(TransportError::Io("script exhausted".to_owned()))),
             Responder::Routed(handler) => handler(method, &params),
         };
-        let id = envelope.get("id").cloned().unwrap_or(Value::Null);
-        response.map(|response| with_request_id(response, id))
+        let id = envelope.get(correlator).cloned().unwrap_or(Value::Null);
+        response.map(|response| with_request_id(response, correlator, id))
     }
 }
 
@@ -112,9 +122,11 @@ impl fmt::Debug for FakeTransport {
 /// A request as the [`FakeTransport`] received it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedRequest {
-    /// The JSON-RPC method.
+    /// The method as sent: snake case in JSON-RPC (`session_get`), kebab-case in the legacy
+    /// protocol (`session-get`).
     pub method: String,
-    /// The `params` object; null when the request had none.
+    /// The `params` object, or the `arguments` of a legacy request; null when the request had
+    /// none.
     pub params: Value,
     /// The `X-Transmission-Session-Id` the request carried.
     pub session_id: Option<String>,
@@ -137,6 +149,31 @@ pub fn ok(result: Value) -> HttpResponse {
     }
 }
 
+/// HTTP 200 with a legacy success answer carrying `arguments`; a [`FakeTransport`] fills in the
+/// request's tag.
+#[must_use]
+pub fn legacy_ok(arguments: Value) -> HttpResponse {
+    legacy_answer("success", arguments)
+}
+
+/// HTTP 200 with a legacy answer that reports the error `text`, as a legacy daemon reports every
+/// error; a [`FakeTransport`] fills in the request's tag.
+#[must_use]
+pub fn legacy_error(text: &str) -> HttpResponse {
+    legacy_answer(text, Value::Object(Map::new()))
+}
+
+fn legacy_answer(result: &str, arguments: Value) -> HttpResponse {
+    let mut body = Map::new();
+    body.insert("result".to_owned(), Value::from(result));
+    body.insert("arguments".to_owned(), arguments);
+    HttpResponse {
+        status: 200,
+        session_id: None,
+        body: Value::Object(body).to_string().into_bytes(),
+    }
+}
+
 /// HTTP 409 with a new `X-Transmission-Session-Id`, as the daemon answers a missing or stale one.
 #[must_use]
 pub fn conflict(session_id: &str) -> HttpResponse {
@@ -147,11 +184,12 @@ pub fn conflict(session_id: &str) -> HttpResponse {
     }
 }
 
-fn with_request_id(mut response: HttpResponse, id: Value) -> HttpResponse {
+/// `response` with `id` under `key` (`id` or `tag`) when its body is a JSON object without one.
+fn with_request_id(mut response: HttpResponse, key: &str, id: Value) -> HttpResponse {
     if let Ok(Value::Object(mut body)) = serde_json::from_slice::<Value>(&response.body)
-        && !body.contains_key("id")
+        && !body.contains_key(key)
     {
-        body.insert("id".to_owned(), id);
+        body.insert(key.to_owned(), id);
         response.body = Value::Object(body).to_string().into_bytes();
     }
     response
@@ -184,6 +222,139 @@ pub mod fixtures {
     /// tracker, as the daemon sends them.
     pub const TORRENT_GET_TRACKERS: &str =
         include_str!("../tests/fixtures/torrent_get_trackers.json");
+
+    /// Responses of the legacy daemons, scrubbed (see [`legacy::Recording`]).
+    pub mod legacy {
+        /// What one legacy daemon answered, as the whole legacy answers `{"arguments":…,"result":…,
+        /// "tag":…}` of the requests 4x4 sends it, scrubbed. `just record-fixtures-legacy` records
+        /// them again.
+        #[derive(Debug, Clone, Copy)]
+        pub struct Recording {
+            /// The daemon's release, which names its directory: `v3.00`, `v4.0.5`, `v4.1.0-beta.2`.
+            pub name: &'static str,
+            /// `session_get` of the fields `check_server` asks a legacy daemon for.
+            pub session_get_version: &'static str,
+            /// `session_get` with `SESSION_FIELDS`.
+            pub session_get: &'static str,
+            /// `session_stats`.
+            pub session_stats: &'static str,
+            /// `free_space` of the download folder.
+            pub free_space: &'static str,
+            /// `free_space` of a folder that is not there: an error result on 3.00 and 4.0.5, a
+            /// success with a free space of `-1` on 4.1.0-beta.2.
+            pub free_space_missing: &'static str,
+            /// `torrent_get` with `TorrentField::LIST` and no `ids`.
+            pub torrent_get_list: &'static str,
+            /// `torrent_get` with `TorrentField::LIST` and `ids: "recently-active"`.
+            pub torrent_get_recent: &'static str,
+            /// `torrent_get` with `TorrentField::DETAILS_FULL` of the multi-file torrent.
+            pub torrent_get_details: &'static str,
+            /// `torrent_get` with `TorrentField::DETAILS_PROGRESS_TRACKERS` of the same torrent.
+            pub torrent_get_progress: &'static str,
+            /// `torrent_get` with `TorrentField::PEERS` of the torrent with most peers.
+            pub torrent_get_peers: &'static str,
+            /// `torrent_get` with `TorrentField::TRACKERS` of the same torrent.
+            pub torrent_get_trackers: &'static str,
+        }
+
+        /// The recordings of Transmission 3.00, 4.0.5 and 4.1.0-beta.2.
+        pub const RECORDINGS: [Recording; 3] = [
+            Recording {
+                name: "v3.00",
+                session_get_version: include_str!(
+                    "../tests/fixtures/legacy/v3.00/session_get_version.json"
+                ),
+                session_get: include_str!("../tests/fixtures/legacy/v3.00/session_get.json"),
+                session_stats: include_str!("../tests/fixtures/legacy/v3.00/session_stats.json"),
+                free_space: include_str!("../tests/fixtures/legacy/v3.00/free_space.json"),
+                free_space_missing: include_str!(
+                    "../tests/fixtures/legacy/v3.00/free_space_missing.json"
+                ),
+                torrent_get_list: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_list.json"
+                ),
+                torrent_get_recent: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_recent.json"
+                ),
+                torrent_get_details: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_details.json"
+                ),
+                torrent_get_progress: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_progress.json"
+                ),
+                torrent_get_peers: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_peers.json"
+                ),
+                torrent_get_trackers: include_str!(
+                    "../tests/fixtures/legacy/v3.00/torrent_get_trackers.json"
+                ),
+            },
+            Recording {
+                name: "v4.0.5",
+                session_get_version: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/session_get_version.json"
+                ),
+                session_get: include_str!("../tests/fixtures/legacy/v4.0.5/session_get.json"),
+                session_stats: include_str!("../tests/fixtures/legacy/v4.0.5/session_stats.json"),
+                free_space: include_str!("../tests/fixtures/legacy/v4.0.5/free_space.json"),
+                free_space_missing: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/free_space_missing.json"
+                ),
+                torrent_get_list: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_list.json"
+                ),
+                torrent_get_recent: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_recent.json"
+                ),
+                torrent_get_details: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_details.json"
+                ),
+                torrent_get_progress: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_progress.json"
+                ),
+                torrent_get_peers: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_peers.json"
+                ),
+                torrent_get_trackers: include_str!(
+                    "../tests/fixtures/legacy/v4.0.5/torrent_get_trackers.json"
+                ),
+            },
+            Recording {
+                name: "v4.1.0-beta.2",
+                session_get_version: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/session_get_version.json"
+                ),
+                session_get: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/session_get.json"
+                ),
+                session_stats: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/session_stats.json"
+                ),
+                free_space: include_str!("../tests/fixtures/legacy/v4.1.0-beta.2/free_space.json"),
+                free_space_missing: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/free_space_missing.json"
+                ),
+                torrent_get_list: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_list.json"
+                ),
+                torrent_get_recent: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_recent.json"
+                ),
+                torrent_get_details: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_details.json"
+                ),
+                torrent_get_progress: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_progress.json"
+                ),
+                torrent_get_peers: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_peers.json"
+                ),
+                torrent_get_trackers: include_str!(
+                    "../tests/fixtures/legacy/v4.1.0-beta.2/torrent_get_trackers.json"
+                ),
+            },
+        ];
+    }
 }
 
 /// A poisoned lock only means a handler panicked in another test thread; the data is still usable.

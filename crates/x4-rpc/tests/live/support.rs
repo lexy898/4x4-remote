@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 
 use x4_rpc::{
     AddOutcome, AddSource, Client, DEFAULT_TIMEOUT, DownloadDir, FilePriority, GetIds, HashString,
-    MagnetLink, RemoveData, RpcError, Status, TorrentAdd, TorrentField, TorrentId, TorrentRecord,
-    TorrentSelection, UreqTransport,
+    MagnetLink, RemoveData, RpcError, ServerVersion, Status, TorrentAdd, TorrentField, TorrentId,
+    TorrentRecord, TorrentSelection, UreqTransport,
 };
 
 #[path = "support/folder.rs"]
@@ -137,9 +137,22 @@ impl LiveEnv {
         env
     }
 
-    /// A client connected directly to the daemon.
+    /// A client connected directly to the daemon, checked as the app checks a server when it
+    /// connects.
     pub(crate) fn client(&self) -> Client<UreqTransport> {
-        live_client(&self.url)
+        self.checked_client().0
+    }
+
+    /// [`LiveEnv::client`], with what its check found: the daemon's version and protocol, which
+    /// say what an older daemon does not send.
+    #[expect(
+        clippy::panic,
+        reason = "a live test cannot run without a daemon it can use"
+    )]
+    pub(crate) fn checked_client(&self) -> (Client<UreqTransport>, ServerVersion) {
+        checked_client(&self.url).unwrap_or_else(|error| {
+            panic!("the check of the daemon at X4_LIVE_URL failed: {error}")
+        })
     }
 }
 
@@ -154,8 +167,24 @@ fn required_var(name: &str) -> String {
     }
 }
 
-fn live_client(url: &str) -> Client<UreqTransport> {
+/// A client of the daemon at `url` that has not checked it, so it speaks JSON-RPC.
+fn unchecked_client(url: &str) -> Client<UreqTransport> {
     Client::new(UreqTransport::new(url, DEFAULT_TIMEOUT))
+}
+
+/// A client of the daemon at `url` after `check_server`, as the app's engine makes before any
+/// other call: the check picks the protocol the daemon speaks, JSON-RPC or the legacy one of
+/// Transmission 3.00 to 4.1.0-beta, and the client then makes every call in it.
+///
+/// Returns the client with the version the check read.
+///
+/// # Errors
+///
+/// The error of `check_server`.
+fn checked_client(url: &str) -> Result<(Client<UreqTransport>, ServerVersion), RpcError> {
+    let mut client = unchecked_client(url);
+    let server = client.check_server()?;
+    Ok((client, server))
 }
 
 /// A torrent this run made, not added yet: its metainfo, the folder it is to download into, and
@@ -687,7 +716,15 @@ impl Drop for TestTorrent {
         if self.removed && self.data.is_clean() {
             return;
         }
-        let problems = self.clean_up(&mut live_client(&self.url));
+        let (mut client, mut problems) = match checked_client(&self.url) {
+            Ok((client, _)) => (client, Vec::new()),
+            // The cleanup is tried all the same: a daemon of JSON-RPC takes it unchecked.
+            Err(error) => (
+                unchecked_client(&self.url),
+                vec![format!("the check of the daemon failed: {error}")],
+            ),
+        };
+        problems.extend(self.clean_up(&mut client));
         if !problems.is_empty() {
             // A failed write to stderr leaves nowhere else to report to.
             drop(writeln!(
@@ -832,10 +869,11 @@ pub(crate) fn is_in_test_dir(download_dir: &str, test_dir: &DownloadDir) -> bool
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
-/// What the tests must leave untouched on every other torrent: status, sequential download, and
-/// the priority and wanted flag of every file (`None` while a magnet link has no metadata).
+/// What the tests must leave untouched on every other torrent: status, sequential download
+/// (`None` on a daemon that has none, older than Transmission 4.1.0-beta.2), and the priority and
+/// wanted flag of every file (`None` while a magnet link has no metadata).
 pub(crate) type Fingerprint =
-    BTreeMap<HashString, (Status, bool, Option<Vec<(FilePriority, bool)>>)>;
+    BTreeMap<HashString, (Status, Option<bool>, Option<Vec<(FilePriority, bool)>>)>;
 
 /// Reads the [`Fingerprint`] of every torrent on the daemon except `own`, the test's torrent.
 ///
@@ -873,9 +911,7 @@ pub(crate) fn others_fingerprint(
                 .expect("a torrent with an invalid hash_string");
             let fingerprint = (
                 record.status.expect("a torrent without status"),
-                record
-                    .sequential_download
-                    .expect("a torrent without sequential_download"),
+                record.sequential_download,
                 record.file_stats.map(|stats| {
                     stats
                         .iter()

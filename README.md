@@ -23,8 +23,9 @@
 - Removes torrents safely: removing from the list and removing with the files are separate
   commands, and deleting files always asks for an explicit confirmation.
 - Shows the selected torrent in a details panel with four tabs: General; Files, a tree with each
-  file's progress, Low, Normal and High priority, skipping files, downloading in order and how much
-  of a file already plays from its start; Peers, with their country flags; and Trackers.
+  file's progress, Low, Normal and High priority, skipping files, downloading in order (needs
+  Transmission 4.1 or newer on the server) and how much of a file already plays from its start;
+  Peers, with their country flags; and Trackers.
 - Adds torrents from `.torrent` files (the desktop's file dialog, drag and drop, the command line)
   and from magnet links (the clipboard or a form), choosing the folder on the server, with its free
   space and the folders used lately, and the files to download.
@@ -41,7 +42,7 @@
 
 ## Requirements
 
-- Transmission 4.1 or newer
+- Transmission 3.00 or newer
 - Linux (other platforms are not supported yet) with a Wayland or X11 session
 - A Vulkan driver (for example `vulkan-radeon`, `vulkan-intel` or `nvidia-utils`). Without one,
   4x4 draws through OpenGL, which uses more memory.
@@ -55,6 +56,8 @@
   Arch Linux package depends on; without them the peers show no country.
 - The password of the daemon is kept as plain text in `config.toml`, a file only you can read; 4x4
   uses no keyring.
+- On Transmission 4.0, a torrent with empty files is added with all its files: 4.0 leaves empty
+  files out and numbers the rest differently, so leaving one out could leave out another.
 
 ## Install
 

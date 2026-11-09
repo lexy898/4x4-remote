@@ -1,0 +1,8 @@
+{
+  "arguments": {
+    "path": "/data/torrents/video",
+    "size-bytes": -1
+  },
+  "result": "No such file or directory",
+  "tag": 7
+}

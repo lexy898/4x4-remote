@@ -98,6 +98,10 @@ pub struct SpeedLimit {
 
 /// The daemon's settings the main window shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches and capabilities of the daemon, each a yes or no of its own"
+)]
 pub struct SessionSummary {
     /// The daemon's version string.
     pub version: String,
@@ -116,11 +120,20 @@ pub struct SessionSummary {
     /// Whether the daemon starts an added torrent at once unless told otherwise; the default of
     /// starting it in the add dialog.
     pub start_added_torrents: bool,
+    /// Whether the daemon can download in order: it sends `sequential_download`, which
+    /// Transmission has from 4.1.0-beta.2.
+    pub sequential_download_supported: bool,
+    /// Whether the daemon keeps a torrent's empty files and numbers its files as the metainfo
+    /// does ([`ServerVersion::lists_empty_files`](x4_rpc::ServerVersion::lists_empty_files)):
+    /// all but Transmission 4.0 do. The session does not say, so the engine sets it from its
+    /// server check; the summary made from a session alone takes `true`.
+    pub lists_empty_files: bool,
 }
 
 impl From<&SessionInfo> for SessionSummary {
     /// Takes the normal limits with their switches, so a limit that is off keeps its value, and
-    /// the alternative limits with the switch that turns them on.
+    /// the alternative limits with the switch that turns them on. `lists_empty_files` is `true`,
+    /// as for every daemon but Transmission 4.0, which the session alone does not tell apart.
     fn from(info: &SessionInfo) -> Self {
         Self {
             version: info.version.clone(),
@@ -137,6 +150,8 @@ impl From<&SessionInfo> for SessionSummary {
             alt_speed_down_kbps: KbPerSecond(info.alt_speed_down_kbps),
             alt_speed_up_kbps: KbPerSecond(info.alt_speed_up_kbps),
             start_added_torrents: info.start_added_torrents,
+            sequential_download_supported: info.sequential_download.is_some(),
+            lists_empty_files: true,
         }
     }
 }
@@ -285,8 +300,23 @@ mod tests {
                 alt_speed_down_kbps: KbPerSecond(20),
                 alt_speed_up_kbps: KbPerSecond(10),
                 start_added_torrents: info.start_added_torrents,
+                sequential_download_supported: true,
+                lists_empty_files: true,
             }
         );
+    }
+
+    #[test]
+    fn session_summary_says_whether_the_daemon_downloads_in_order() {
+        let info = session_info((0, false), (0, false), false);
+        assert!(info.sequential_download.is_some(), "the fixture has it");
+        assert!(SessionSummary::from(&info).sequential_download_supported);
+
+        let old = SessionInfo {
+            sequential_download: None,
+            ..info
+        };
+        assert!(!SessionSummary::from(&old).sequential_download_supported);
     }
 
     #[test]

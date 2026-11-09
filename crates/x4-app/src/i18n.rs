@@ -539,11 +539,10 @@ pub(crate) fn connection_text(indicator: &Indicator) -> SharedString {
     .into()
 }
 
-/// Why 4x4 cannot use a daemon that answered, such as "Transmission 4.1 or newer required (server
-/// RPC 5.0.1)": the status bar and the Connection dialog's Test say it alike.
+/// Why 4x4 cannot use a daemon that answered, such as "Transmission 3.00 or newer required (server
+/// RPC 15)": the status bar and the Connection dialog's Test say it alike.
 fn unsupported_string(reason: &UnsupportedReason) -> String {
     match reason {
-        UnsupportedReason::Legacy => t!("connection-unsupported-legacy"),
         UnsupportedReason::NoVersion => t!("connection-unsupported-no-version"),
         UnsupportedReason::Version(version) => {
             t!("connection-unsupported-version", version = version.as_str())

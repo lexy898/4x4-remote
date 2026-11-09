@@ -42,7 +42,7 @@ impl From<Result<ServerVersion, RpcError>> for CheckOutcome {
 
 #[cfg(test)]
 mod tests {
-    use x4_rpc::{RpcError, ServerVersion, TransportError, UnsupportedReason};
+    use x4_rpc::{Protocol, RpcError, ServerVersion, TransportError, UnsupportedReason};
 
     use super::*;
     use crate::snapshot::ConnectionError;
@@ -55,6 +55,8 @@ mod tests {
             CheckOutcome::from(Ok(ServerVersion {
                 version: "4.1.0 (abcdef0123)".to_owned(),
                 rpc_semver: "6.0.0".to_owned(),
+                rpc_version: None,
+                protocol: Protocol::JsonRpc,
             })),
             CheckOutcome::Connected {
                 version: "4.1.0 (abcdef0123)".to_owned()

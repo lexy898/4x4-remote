@@ -117,10 +117,9 @@ connection-reason-forbidden-detail = The server does not accept requests from th
 connection-reason-unauthorized-detail = The server rejected the credentials
 connection-reason-protocol-detail = The server answered unexpectedly
 connection-reason-server-detail = The server reported an error
-connection-unsupported-legacy = Transmission 4.1 or newer required
-connection-unsupported-no-version = Transmission 4.1 or newer required (server did not report a version)
-# $version: the RPC version the server reports.
-connection-unsupported-version = Transmission 4.1 or newer required (server RPC { $version })
+connection-unsupported-no-version = Transmission 3.00 or newer required (server did not report a version)
+# $version: the RPC version the server reports, such as 15.
+connection-unsupported-version = Transmission 3.00 or newer required (server RPC { $version })
 connection-service-stopped = Service stopped
 connection-service-failed = Service could not start
 # No server has been set yet: the status bar's words and the tooltip that says what to do.
@@ -712,6 +711,8 @@ tracker-problem-scrape-timed-out = Tracker { $host } sends no peer counts: conne
 # The switch that has the server download the torrent's pieces in order, from the start of each
 # file, so that a file can be played while it downloads.
 files-sequential = Download in order (sequential)
+# Under the switch above, when the server is too old to download in order; the switch is off then.
+files-sequential-needs-newer = Downloading in order needs Transmission 4.1 or newer on the server
 # What the tab says instead of the files of a magnet link, before its metadata has come.
 files-no-metadata = The file list arrives with the torrent's metadata
 # What the tab says instead of a file list that would take too much memory to show, such as one of
@@ -883,9 +884,11 @@ add-free-space-unknown = Free space unknown
 # The name of the list of the torrent's files, for screen readers.
 add-files-list = Files
 # Instead of the list, when the files cannot be chosen: the server could number them otherwise
-# than 4x4 reads them, so leaving one out could leave out another; or there are too many.
+# than 4x4 reads them, so leaving one out could leave out another; or there are too many; or the
+# torrent has an empty file, which Transmission 4.0 leaves out, numbering the other files without it.
 add-no-choice-ambiguous = All files are added: the list of files could be read in more than one way
 add-no-choice-too-large = All files are added: there are too many to choose from
+add-no-choice-empty-files = All files are added: Transmission 4.0 on the server numbers the files of this torrent differently
 add-start = Start immediately
 add-confirm = Add
 # On the Add button while the server adds the torrent.

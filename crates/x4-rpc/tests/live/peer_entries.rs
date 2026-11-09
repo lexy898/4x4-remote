@@ -14,7 +14,10 @@ use std::fmt;
 use std::net::IpAddr;
 
 use serde_json::Value;
-use x4_rpc::{Client, HashString, PeerRecord, TorrentField, TorrentRecord, UreqTransport};
+use x4_rpc::{
+    Client, HashString, PeerRecord, Protocol, ServerVersion, TorrentField, TorrentRecord,
+    UreqTransport,
+};
 
 use crate::tracker_entries::{Kind, hash_of, read, selection_of};
 
@@ -57,6 +60,16 @@ const PEER_KEYS: [(&str, &[Kind]); 19] = [
     ("peer_is_choked", &[Kind::Bool]),
     ("peer_is_interested", &[Kind::Bool]),
 ];
+
+/// The keys of [`PEER_KEYS`] that the daemon `server` does not send: `peer_id` and `bytes_to_*`
+/// came with the JSON-RPC of Transmission 4.1, after every daemon of the legacy protocol.
+pub(crate) fn keys_not_sent(server: &ServerVersion) -> &'static [&'static str] {
+    if server.protocol == Protocol::Legacy {
+        &["peer_id", "bytes_to_client", "bytes_to_peer"]
+    } else {
+        &[]
+    }
+}
 
 /// The keys of the `peers_from` object.
 const FROM_KEYS: [&str; 7] = [
@@ -140,11 +153,12 @@ pub(crate) fn with_peers(
 /// others; each torrent has as many peers as `peers_connected` says and its `peers_from` adds up
 /// to the same; every key of every entry is sent, of its kind, and parsed to the value sent;
 /// every address is an IP address, every `flag_str` holds the daemon's letters and every
-/// `progress` is between 0 and 1.
+/// `progress` is between 0 and 1. The keys `not_sent` ([`keys_not_sent`]) must be missing.
 pub(crate) fn read_and_check(
     client: &mut Client<UreqTransport>,
     hashes: &[HashString],
     what: &str,
+    not_sent: &[&str],
 ) -> Tally {
     let fields: Vec<TorrentField> = TorrentField::PEERS
         .iter()
@@ -174,13 +188,20 @@ pub(crate) fn read_and_check(
     let mut tally = Tally::default();
     for (raw, record) in raw_records.iter().zip(&answer.parsed.torrents) {
         tally.torrents += 1;
-        check_torrent(raw, record, what, &mut tally);
+        check_torrent(raw, record, what, not_sent, &mut tally);
     }
     tally
 }
 
-/// Checks the peers of one torrent: `raw` is the record as the daemon sent it.
-fn check_torrent(raw: &Value, record: &TorrentRecord, what: &str, tally: &mut Tally) {
+/// Checks the peers of one torrent: `raw` is the record as the daemon sent it; the keys
+/// `not_sent` must be missing.
+fn check_torrent(
+    raw: &Value,
+    record: &TorrentRecord,
+    what: &str,
+    not_sent: &[&str],
+    tally: &mut Tally,
+) {
     let sent = raw
         .get("peers")
         .and_then(Value::as_array)
@@ -217,6 +238,11 @@ fn check_torrent(raw: &Value, record: &TorrentRecord, what: &str, tally: &mut Ta
         for (key, allowed) in PEER_KEYS {
             let kind = Kind::of(sent.get(key));
             tally.kinds.entry(key).or_default().insert(kind);
+            let allowed = if not_sent.contains(&key) {
+                &[Kind::Missing]
+            } else {
+                allowed
+            };
             if !allowed.contains(&kind) {
                 wrong.entry(key).or_default().insert(kind);
             }

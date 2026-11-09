@@ -26,14 +26,15 @@ with "HTTPS is not supported yet". The port is a number from 1 to 65535, the pat
 `#` or spaces, and a user name cannot hold a colon. The user name and the password are taken as
 typed, spaces included.
 
-Test asks the server for its version once (one `session_get`, given up after 5 seconds without an
+Test asks the server for its version once (one `session_get`, and a second one, in the older
+protocol, for a daemon older than Transmission 4.1; each given up after 5 seconds without an
 answer), off the window's thread, so that the window never waits. The button says "Testing…" until
 the answer comes; a line under the fields then says, in green, "Connected: Transmission 4.1.3
 (…)", or in red why not: "The server cannot be reached", "The server did not answer in time", "The
 server rejected the credentials", "The server does not accept requests from this computer" (the
-daemon's whitelist), "Transmission 4.1 or newer required", and the like. Any edit takes the line
-away, and drops the answer of a test still running, so that the line always speaks of the fields as
-they are. Save needs no test.
+daemon's whitelist), "Transmission 3.00 or newer required (server RPC 15)", and the like. Any edit
+takes the line away, and drops the answer of a test still running, so that the line always speaks
+of the fields as they are. Save needs no test.
 
 Save, or `Enter` in a field, checks the fields first: each problem is shown under its field, the
 focus goes to the first one, and nothing is saved. With the server the window has already, Save
@@ -257,15 +258,16 @@ can already read; a long name is cut short before it is. It is counted in the pi
 from the file's first byte up to the first piece still missing, so a file that downloads in no
 particular order can be half done and still play only its first seconds. Above the list, the switch
 "Download in order (sequential)" has the daemon download the torrent's pieces from the start, so
-that a file can be played while it downloads. A change shows once the daemon's next answer does, a
-moment later, not before. While the daemon is not connected, the checkboxes, the priorities and the
-switch are disabled. Until the details have come, the tab says "—" under the switch, and so it does
-while the files of a torrent of more than 1000 are sorted into their tree when the tab first shows
-them, which is done off the window's own thread, so that the window keeps answering meanwhile (some
-20 ms for 50 000 files). A magnet link has no files until its metadata has come; the tab says so,
-and the switch can be set already. A file list that would take too much memory to show, such as one
-of more than 50 000 files or of files nested hundreds of folders deep, is not drawn: the tab says
-the list is too large to show.
+that a file can be played while it downloads. It needs Transmission 4.1 or newer on the server: on
+an older one the switch is disabled and the line under it says why. A change shows once the
+daemon's next answer does, a moment later, not before. While the daemon is not connected, the
+checkboxes, the priorities and the switch are disabled. Until the details have come, the tab says
+"—" under the switch, and so it does while the files of a torrent of more than 1000 are sorted into
+their tree when the tab first shows them, which is done off the window's own thread, so that the
+window keeps answering meanwhile (some 20 ms for 50 000 files). A magnet link has no files until its
+metadata has come; the tab says so, and the switch can be set already. A file list that would take
+too much memory to show, such as one of more than 50 000 files or of files nested hundreds of
+folders deep, is not drawn: the tab says the list is too large to show.
 
 ## Keys of the file list
 
@@ -377,7 +379,7 @@ table. The search is not remembered between runs.
 The status bar at the bottom shows:
 
 - a dot for the connection: green when connected, grey while connecting or when no server is set,
-  yellow while reconnecting and red when the daemon is too old (4x4 needs Transmission 4.1 or
+  yellow while reconnecting and red when the daemon is too old (4x4 needs Transmission 3.00 or
   newer). Next to it, "Connecting…", "No server set" or "Reconnecting (attempt N)… timed out" and
   the like; the tooltip names the server once connected ("Connected to nas:9091") and says more
   about why the daemon could not be reached. A click on the dot or its text opens the Connection
@@ -445,7 +447,7 @@ The add dialog shows the torrents to add, one at a time; nothing is added until 
 `.torrent` file is read only when its turn comes, and one that cannot be offered is skipped with a
 notification that names it and says why, and is not counted among the torrents to add: it does not
 exist, 4x4 may not read it, it is not a regular file or is larger than 16 MiB, it is not a torrent
-file or holds no torrent, it is a BitTorrent v2 torrent only, which Transmission 4.1 cannot add, or
+file or holds no torrent, it is a BitTorrent v2 torrent only, which Transmission cannot add, or
 the daemon would refuse it as broken (as when it has no files, two files of the same path, or piece
 hashes that do not match its size). A file that takes longer than a moment to read, as on a network
 folder that hangs, opens the dialog with "Reading the file…" and Skip, which moves on to the next
@@ -455,7 +457,7 @@ and size, and for a magnet link its field, checked as you type, with the link's 
 magnet link must start with `magnet:?` and name one BitTorrent info hash (40 hexadecimal or 32
 base32 characters), without a control character such as a line break, and in at most 64 KiB; a
 bare hash, a link with several hashes and one with only a BitTorrent v2 hash, which Transmission
-4.1 cannot add, are refused with the reason under the form.
+cannot add, are refused with the reason under the form.
 
 The folder on the server starts as the daemon's download folder. The button beside it, or
 `Alt+Down`, offers that folder, the last 10 folders torrents were added to (remembered between runs;
@@ -473,10 +475,13 @@ why. A `.torrent` whose list of files could be read in more than one way offers 
 dictionary keys are out of order or given twice, it has two `info` dictionaries, or an entry of its
 file list is not a plain one. The daemon could then number the files otherwise than 4x4 reads them,
 so leaving one out could leave out another. So does one with too many files to choose from: more
-than 50 000, or files nested so deep that their tree would take too much memory. A magnet link has
-no choice of files either, as its files are known only once its metadata has come. "Start
-immediately" starts as the daemon's setting for new torrents; without it, the torrent is added
-paused.
+than 50 000, or files nested so deep that their tree would take too much memory. On Transmission
+4.0, a torrent with empty files is added with all its files, because 4.0 leaves empty files out and
+numbers the rest differently. A dialog that opens before 4x4 has reached the server offers the
+choice until it learns that the server is 4.0, and then drops it; until 4x4 knows the server's
+version, Add stays disabled while a file of such a torrent is unchecked. A magnet link has no choice
+of files either, as its files are known only once its metadata has come. "Start immediately" starts
+as the daemon's setting for new torrents; without it, the torrent is added paused.
 
 Add stays disabled, with the reason beside the buttons, until a file is wanted, the folder is a
 full path on the server without `.` or `..`, the magnet link is valid and the daemon is connected;

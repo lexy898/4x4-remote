@@ -1,4 +1,5 @@
-//! Live tests of x4-core against a real Transmission daemon, run only by `just test-live`.
+//! Live tests of x4-core against a real Transmission daemon, run only by `just test-live` and
+//! `just test-live-legacy`.
 //!
 //! They use the live test support of x4-rpc (`crates/x4-rpc/tests/live/`) and keep its rules:
 //! they act on nothing but a torrent they create in the test directory, change it only through a
@@ -42,8 +43,8 @@ use support::{
 };
 use x4_core::{
     AddCheck, AddForm, Command, ConnectionState, DetailsRead, DetailsTab, Engine, EngineConfig,
-    Event, LoadedItem, NodeKey, PeerList, Request, Response, Snapshot, TorrentDetails, Visibility,
-    parse_torrent,
+    Event, LoadedItem, NoChoiceReason, NodeKey, PeerList, Request, Response, SessionSummary,
+    Snapshot, TorrentDetails, Visibility, parse_torrent,
 };
 use x4_rpc::{
     Client, FilePriority, GetIds, HashString, RpcError, TorrentField, TorrentGetResponse,
@@ -172,7 +173,10 @@ impl Driven<'_> {
                     Response::Details(answer)
                 })
             }
-            Request::Action(..) | Request::MagnetLinks(..) | Request::FolderFreeSpace(_) => {
+            Request::Action(..)
+            | Request::ListOne(_)
+            | Request::MagnetLinks(..)
+            | Request::FolderFreeSpace(_) => {
                 panic!("this test runs no action and asks about no folder: {request:?}")
             }
         };
@@ -661,7 +665,7 @@ fn without_session() -> Snapshot {
 #[ignore = "live: needs a Transmission daemon, run with just test-live"]
 fn adding_with_unwanted_files_matches_the_daemons_file_order() {
     let env = LiveEnv::from_env();
-    let mut client = env.client();
+    let (mut client, server) = env.checked_client();
     let before = others_fingerprint(&mut client, None);
     let own = OwnTorrent::unwritten(
         &mut client,
@@ -698,6 +702,33 @@ fn adding_with_unwanted_files_matches_the_daemons_file_order() {
     .expect("the add form cannot read the test torrent");
     let mut form = AddForm::new(loaded, env.remote_dir.as_str().to_owned(), false);
     form.toggle_wanted(&NodeKey::new(&format!("{name}/alpha.bin")));
+    // As in the dialog, the choice is made before the session is known, and the session comes.
+    let info = client
+        .session_get()
+        .expect("the daemon does not answer session_get");
+    let with_session = Snapshot {
+        session: Some(SessionSummary {
+            lists_empty_files: server.lists_empty_files(),
+            ..SessionSummary::from(&info)
+        }),
+        ..without_session()
+    };
+    if form.follow_session(&with_session) {
+        // Transmission 4.0 leaves the empty file out and numbers the others without it, so the
+        // form drops the choice, and the torrent would be added with all its files.
+        eprintln!("file order: skipped: the daemon leaves empty files out");
+        assert_eq!(
+            form.choice_unavailable(),
+            Some(NoChoiceReason::EmptyFilesLeftOut)
+        );
+        assert!(form.tree().is_none(), "no choice of files");
+        match form.check(&without_session(), true) {
+            AddCheck::Ready(request) => assert_eq!(request.files_unwanted, [] as [usize; 0]),
+            other => panic!("the add form would send nothing: {other:?}"),
+        }
+        return;
+    }
+    assert!(server.lists_empty_files(), "the form follows the session");
     let request = match form.check(&without_session(), true) {
         AddCheck::Ready(request) => request,
         other => panic!("the add form would send nothing: {other:?}"),

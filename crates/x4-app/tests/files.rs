@@ -22,7 +22,7 @@ use x4_app::torrent_table::TorrentTable;
 use x4_core::test_support::{details, torrent};
 use x4_core::{
     Action, ActionError, ActionId, Command, ConnectionError, ConnectionState, DisplayState, Event,
-    Snapshot, Torrent, TorrentDetails, UiState,
+    KbPerSecond, SessionSummary, Snapshot, SpeedLimit, Torrent, TorrentDetails, UiState,
 };
 use x4_rpc::{FilePriority, HashString};
 
@@ -37,6 +37,8 @@ const NAME: &str = "file-name";
 const PLAYABLE: &str = "file-playable";
 /// The switch of downloading in order.
 const SEQUENTIAL: &str = "file-sequential";
+/// What the Files tab says under the switch when the server cannot download in order.
+const NEEDS_NEWER: &str = "file-sequential-needs-newer";
 /// What the Files tab says while a torrent has no metadata.
 const NO_METADATA: &str = "files-no-metadata";
 /// What the Files tab says instead of a file list too large to show.
@@ -113,6 +115,41 @@ impl Window {
     /// Sends a snapshot of `torrents` with the daemon connected.
     fn send(&self, torrents: Vec<Torrent>, cx: &mut TestAppContext) {
         self.send_with(torrents, ConnectionState::Connected, cx);
+    }
+
+    /// Sends a connected snapshot of `torrents` whose daemon's session says whether it can
+    /// download in order.
+    fn send_session(&self, torrents: Vec<Torrent>, supported: bool, cx: &mut TestAppContext) {
+        self.send_event(
+            Event::Snapshot(Arc::new(Snapshot {
+                torrents,
+                listed: true,
+                session: Some(SessionSummary {
+                    version: "4.0.5".to_owned(),
+                    download_dir: "/downloads".to_owned(),
+                    alt_speed_enabled: false,
+                    speed_limit_down: SpeedLimit {
+                        kbps: KbPerSecond(0),
+                        enabled: false,
+                    },
+                    speed_limit_up: SpeedLimit {
+                        kbps: KbPerSecond(0),
+                        enabled: false,
+                    },
+                    alt_speed_down_kbps: KbPerSecond(0),
+                    alt_speed_up_kbps: KbPerSecond(0),
+                    start_added_torrents: true,
+                    sequential_download_supported: supported,
+                    lists_empty_files: true,
+                }),
+                free_space_bytes: None,
+                rate_down: 0,
+                rate_up: 0,
+                connection: ConnectionState::Connected,
+                stale: false,
+            })),
+            cx,
+        );
     }
 
     /// Sends a snapshot of `torrents` with the connection in `connection`.
@@ -1006,6 +1043,35 @@ fn the_sequential_switch_sends_set_sequential(cx: &mut TestAppContext) {
             enabled: false
         }
     );
+}
+
+#[gpui_kit::test]
+fn the_sequential_switch_says_the_server_needs_4_1(cx: &mut TestAppContext) {
+    let (window, show) = window_with_show(cx);
+    window.send_session(vec![show.clone()], false, cx);
+
+    assert!(window.shown(SEQUENTIAL, cx), "the switch is still drawn");
+    window.act(cx, |window, cx| window.click(SEQUENTIAL, cx));
+    assert!(
+        window
+            .commands
+            .try_iter()
+            .all(|command| !matches!(command, Command::Run(..))),
+        "a click sends no action"
+    );
+    assert!(window.shown(NEEDS_NEWER, cx));
+    assert_eq!(
+        window.label(NEEDS_NEWER, cx).as_deref(),
+        Some("Downloading in order needs Transmission 4.1 or newer on the server")
+    );
+
+    window.send_session(vec![show], true, cx);
+    assert!(!window.shown(NEEDS_NEWER, cx));
+    window.act(cx, |window, cx| window.click(SEQUENTIAL, cx));
+    assert!(matches!(
+        window.sent_action().1,
+        Action::SetSequential { enabled: true, .. }
+    ));
 }
 
 #[gpui_kit::test]

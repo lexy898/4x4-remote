@@ -11,7 +11,7 @@ First release.
 
 ### Added
 
-- A native desktop client for a remote Transmission daemon (4.1 or newer), written in Rust on GPUI,
+- A native desktop client for a remote Transmission daemon (3.00 or newer), written in Rust on GPUI,
   for Linux with Wayland or X11. It draws through Vulkan and falls back to OpenGL.
 - Connection to the daemon set in a Connection dialog (host, port, path, and a user name and
   password where the daemon asks for them), with a Test button; switching daemons without a
@@ -25,13 +25,15 @@ First release.
   explicit confirmation. Copy magnet links and info hashes.
 - A details panel with four tabs. General: paths, size, hash, dates, share ratio, the torrent's
   creator, comment and pieces, and the worst tracker problem in plain words. Files: a tree with
-  per-file progress, Low, Normal and High priority, skipping files, sequential download and how
-  much of each file already plays from its start. Peers: who the torrent is connected to, with
-  country flags. Trackers: each tracker's state, last and next announce and counts.
+  per-file progress, Low, Normal and High priority, skipping files, sequential download (which
+  needs Transmission 4.1 or newer on the server; on an older one the switch is disabled and says
+  so) and how much of each file already plays from its start. Peers: who the torrent is connected
+  to, with country flags. Trackers: each tracker's state, last and next announce and counts.
 - Adding torrents from `.torrent` files (the desktop's file dialog, drag and drop, or launch
   arguments) and magnet links (from the clipboard or a form), choosing the folder on the server
   (with its free space and the folders used lately), the files to download and whether to start at
-  once.
+  once. On Transmission 4.0, which leaves empty files out and numbers the rest differently, a
+  torrent with empty files is added with all its files.
 - One 4x4 per user: starting it again, as a file manager or a browser does, hands its files and
   links to the one that runs. It offers itself as an app for `.torrent` files and `magnet:` links,
   and never makes itself their default.

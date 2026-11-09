@@ -1,0 +1,77 @@
+{
+  "arguments": {
+    "torrents": [
+      {
+        "hashString": "0000000000000000000000000000000000000001",
+        "id": 1,
+        "peers": [
+          {
+            "address": "192.0.2.1",
+            "clientIsChoked": false,
+            "clientIsInterested": true,
+            "clientName": "Client 1",
+            "flagStr": "TDUE",
+            "isDownloadingFrom": true,
+            "isEncrypted": true,
+            "isIncoming": false,
+            "isUTP": true,
+            "isUploadingTo": true,
+            "peerIsChoked": false,
+            "peerIsInterested": true,
+            "port": 51413,
+            "progress": 0.6552734375,
+            "rateToClient": 0,
+            "rateToPeer": 0
+          },
+          {
+            "address": "192.0.2.2",
+            "clientIsChoked": false,
+            "clientIsInterested": true,
+            "clientName": "Client 2",
+            "flagStr": "TDEX",
+            "isDownloadingFrom": true,
+            "isEncrypted": true,
+            "isIncoming": false,
+            "isUTP": true,
+            "isUploadingTo": false,
+            "peerIsChoked": true,
+            "peerIsInterested": false,
+            "port": 51413,
+            "progress": 1.0,
+            "rateToClient": 0,
+            "rateToPeer": 0
+          },
+          {
+            "address": "192.0.2.3",
+            "clientIsChoked": false,
+            "clientIsInterested": true,
+            "clientName": "Client 3",
+            "flagStr": "TD?EI",
+            "isDownloadingFrom": true,
+            "isEncrypted": true,
+            "isIncoming": true,
+            "isUTP": true,
+            "isUploadingTo": false,
+            "peerIsChoked": false,
+            "peerIsInterested": false,
+            "port": 51413,
+            "progress": 0.65625,
+            "rateToClient": 0,
+            "rateToPeer": 0
+          }
+        ],
+        "peersFrom": {
+          "fromCache": 0,
+          "fromDht": 0,
+          "fromIncoming": 1,
+          "fromLpd": 1,
+          "fromLtep": 0,
+          "fromPex": 1,
+          "fromTracker": 0
+        }
+      }
+    ]
+  },
+  "result": "success",
+  "tag": 13
+}

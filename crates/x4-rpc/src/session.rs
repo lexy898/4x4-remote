@@ -10,6 +10,9 @@ use std::fmt;
 use serde::de::{Unexpected, Visitor};
 use serde::{Deserialize, Deserializer};
 
+use crate::client::Protocol;
+use crate::error::UnsupportedReason;
+
 /// The `session_get` fields the app reads, in the order it requests them.
 pub const SESSION_FIELDS: &[&str] = &[
     "version",
@@ -26,8 +29,14 @@ pub const SESSION_FIELDS: &[&str] = &[
     "start_added_torrents",
 ];
 
-/// The oldest `rpc_version_semver` major 4x4 supports: 6 is JSON-RPC 2.0, Transmission 4.1.
-const MIN_RPC_MAJOR: u64 = 6;
+/// The oldest `rpc_version_semver` major 4x4 supports in JSON-RPC: 6 is JSON-RPC 2.0,
+/// Transmission 4.1, and no daemon of the legacy protocol reports it.
+pub(crate) const MIN_RPC_MAJOR: u64 = 6;
+
+/// The oldest legacy `rpc-version` 4x4 supports: 16 is Transmission 3.00.
+const MIN_LEGACY_RPC_VERSION: u32 = crate::legacy::OLDEST_RPC_VERSION;
+/// The legacy RPC version of Transmission 4.0.
+const RPC_VERSION_4_0: u32 = 17;
 
 /// The session settings the app reads (`session_get` with [`SESSION_FIELDS`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -38,8 +47,10 @@ const MIN_RPC_MAJOR: u64 = 6;
 pub struct SessionInfo {
     /// `version`: the daemon's long version string, `$version ($revision)`.
     pub version: String,
-    /// `rpc_version_semver`: the RPC API version.
-    pub rpc_version_semver: String,
+    /// `rpc_version_semver`: the RPC API version; `None` from a daemon that predates it
+    /// (Transmission 3.00).
+    #[serde(default)]
+    pub rpc_version_semver: Option<String>,
     /// `download_dir`: where new torrents download to by default.
     pub download_dir: String,
     /// `alt_speed_enabled`: whether the alternative speed limits apply.
@@ -60,8 +71,10 @@ pub struct SessionInfo {
     pub speed_limit_up_kbps: u32,
     /// `speed_limit_up_enabled`: whether the upload limit applies.
     pub speed_limit_up_enabled: bool,
-    /// `sequential_download`: whether added torrents download sequentially by default.
-    pub sequential_download: bool,
+    /// `sequential_download`: whether added torrents download sequentially by default; `None`
+    /// from a daemon that cannot download in order (before Transmission 4.1.0-beta.2).
+    #[serde(default)]
+    pub sequential_download: Option<bool>,
     /// `start_added_torrents`: whether an added torrent starts at once when the add leaves out
     /// `paused`.
     pub start_added_torrents: bool,
@@ -163,8 +176,10 @@ pub struct FreeSpace {
     pub path: String,
     /// `size_bytes`: free space in bytes.
     pub size_bytes: i64,
-    /// `total_size`: capacity in bytes.
-    pub total_size: i64,
+    /// `total_size`: capacity in bytes; `None` from a daemon that does not report it
+    /// (Transmission 3.00).
+    #[serde(default)]
+    pub total_size: Option<i64>,
 }
 
 /// What a server calls itself, as [`Client::check_server`](crate::Client::check_server) read it.
@@ -172,8 +187,14 @@ pub struct FreeSpace {
 pub struct ServerVersion {
     /// `version`: the daemon's long version string, `$version ($revision)`.
     pub version: String,
-    /// `rpc_version_semver`: the RPC API version, as the server wrote it.
+    /// `rpc_version_semver`: the RPC API version, as the server wrote it; empty when it sends
+    /// none (Transmission 3.00).
     pub rpc_semver: String,
+    /// `rpc-version`: the legacy RPC version, an integer; read only from a daemon of the legacy
+    /// protocol, `None` from any other.
+    pub rpc_version: Option<u32>,
+    /// The protocol the server speaks, which decides which of the versions above counts.
+    pub protocol: Protocol,
 }
 
 impl ServerVersion {
@@ -181,19 +202,56 @@ impl ServerVersion {
     /// with a number and a dot.
     #[must_use]
     pub fn rpc_major(&self) -> Option<u64> {
-        let (major, _) = self.rpc_semver.split_once('.')?;
-        // `u64::from_str` would also accept a leading `+`.
-        if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        major.parse().ok()
+        semver_major(&self.rpc_semver)
     }
 
-    /// Whether 4x4 can talk to this server: its RPC major is 6 (Transmission 4.1) or later.
+    /// Why 4x4 cannot talk to this server, or `None` when it can: in JSON-RPC when its RPC major
+    /// is 6 (Transmission 4.1) or later, in the legacy protocol when its `rpc-version` is 16
+    /// (Transmission 3.00) or later.
+    #[must_use]
+    pub fn unsupported_reason(&self) -> Option<UnsupportedReason> {
+        match self.protocol {
+            Protocol::JsonRpc => {
+                if self.rpc_major().is_some_and(|major| major >= MIN_RPC_MAJOR) {
+                    None
+                } else {
+                    Some(UnsupportedReason::from_rpc_semver(&self.rpc_semver))
+                }
+            }
+            Protocol::Legacy => match self.rpc_version {
+                Some(version) if version >= MIN_LEGACY_RPC_VERSION => None,
+                Some(version) => Some(UnsupportedReason::Version(version.to_string())),
+                None => Some(UnsupportedReason::NoVersion),
+            },
+        }
+    }
+
+    /// Whether 4x4 can talk to this server: it has no
+    /// [`unsupported_reason`](Self::unsupported_reason).
     #[must_use]
     pub fn is_supported(&self) -> bool {
-        self.rpc_major().is_some_and(|major| major >= MIN_RPC_MAJOR)
+        self.unsupported_reason().is_none()
     }
+
+    /// Whether the daemon keeps a torrent's empty files among its files, numbered as the
+    /// metainfo lists them. Transmission 4.0 (legacy `rpc-version` 17) leaves every file of no
+    /// bytes out of the torrent and numbers the others without them, so a file index taken from
+    /// the metainfo names another file there; 3.00, 4.1.0-beta and 4.1 keep them.
+    #[must_use]
+    pub fn lists_empty_files(&self) -> bool {
+        !(self.protocol == Protocol::Legacy && self.rpc_version == Some(RPC_VERSION_4_0))
+    }
+}
+
+/// The major number of the RPC version `semver`, or `None` when it does not start with a number
+/// and a dot.
+pub(crate) fn semver_major(semver: &str) -> Option<u64> {
+    let (major, _) = semver.split_once('.')?;
+    // `u64::from_str` would also accept a leading `+`.
+    if major.is_empty() || !major.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    major.parse().ok()
 }
 
 #[cfg(test)]
@@ -204,7 +262,30 @@ mod tests {
         ServerVersion {
             version: "4.1.3 (838877323f)".to_owned(),
             rpc_semver: rpc_semver.to_owned(),
+            rpc_version: None,
+            protocol: Protocol::JsonRpc,
         }
+    }
+
+    fn legacy(rpc_version: Option<u32>, rpc_semver: &str) -> ServerVersion {
+        ServerVersion {
+            version: "4.0.5 (a6fe2a64aa)".to_owned(),
+            rpc_semver: rpc_semver.to_owned(),
+            rpc_version,
+            protocol: Protocol::Legacy,
+        }
+    }
+
+    #[test]
+    fn only_transmission_4_0_leaves_empty_files_out() {
+        assert!(legacy(Some(16), "").lists_empty_files());
+        assert!(!legacy(Some(17), "5.3.0").lists_empty_files());
+        assert!(legacy(Some(18), "5.4.0").lists_empty_files());
+        assert!(version("6.0.1").lists_empty_files());
+        // A JSON-RPC daemon is judged by its protocol, whatever it calls its legacy version.
+        let mut json_rpc = version("6.0.1");
+        json_rpc.rpc_version = Some(17);
+        assert!(json_rpc.lists_empty_files());
     }
 
     #[test]
@@ -235,5 +316,38 @@ mod tests {
         assert!(version("6.0.0").is_supported());
         assert!(version("7.0.0").is_supported());
         assert!(!version("").is_supported());
+    }
+
+    #[test]
+    fn a_json_rpc_server_is_judged_by_its_semver_alone() {
+        assert_eq!(
+            version("5.4.0").unsupported_reason(),
+            Some(UnsupportedReason::Version("5.4.0".to_owned()))
+        );
+        assert_eq!(
+            version("").unsupported_reason(),
+            Some(UnsupportedReason::NoVersion)
+        );
+        let with_a_legacy_number = ServerVersion {
+            rpc_version: Some(18),
+            ..version("5.4.0")
+        };
+        assert!(!with_a_legacy_number.is_supported());
+    }
+
+    #[test]
+    fn legacy_support_starts_at_rpc_version_16() {
+        assert_eq!(legacy(Some(16), "").unsupported_reason(), None);
+        assert_eq!(legacy(Some(18), "5.4.0").unsupported_reason(), None);
+        assert_eq!(
+            legacy(Some(15), "").unsupported_reason(),
+            Some(UnsupportedReason::Version("15".to_owned()))
+        );
+        assert_eq!(
+            legacy(None, "5.3.0").unsupported_reason(),
+            Some(UnsupportedReason::NoVersion)
+        );
+        assert!(legacy(Some(17), "5.3.0").is_supported());
+        assert!(!legacy(Some(15), "").is_supported());
     }
 }

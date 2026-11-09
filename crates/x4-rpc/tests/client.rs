@@ -1,6 +1,7 @@
 //! The JSON-RPC client over a fake transport: the request envelope, the
 //! `X-Transmission-Session-Id` handshake, HTTP status and server error mapping, and the id types.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -9,8 +10,9 @@ use x4_rpc::testing::fixtures::{FREE_SPACE, SESSION_GET, SESSION_STATS};
 use x4_rpc::testing::{self, FakeTransport};
 use x4_rpc::{
     ADD_TIMEOUT, AddSource, Client, GetIds, HashString, HttpRequest, HttpResponse, IdError,
-    MagnetLink, RemoveData, RpcError, SessionSet, TorrentAction, TorrentAdd, TorrentField,
-    TorrentSelection, TorrentSet, Transport, TransportError, UnsupportedReason,
+    LEGACY_ERROR_CODE, MagnetLink, Protocol, RemoveData, RpcError, ServerVersion, SessionSet,
+    TorrentAction, TorrentAdd, TorrentField, TorrentSelection, TorrentSet, Transport,
+    TransportError,
 };
 
 /// A scripted fake that also keeps the raw request bodies, to inspect the envelope itself.
@@ -272,21 +274,26 @@ fn rejects_malformed_responses() {
 }
 
 #[test]
-fn legacy_protocol_reply_is_an_unsupported_server() {
-    // What Transmission 4.0 and older answer to a JSON-RPC 2.0 method name.
+fn a_legacy_answer_in_json_rpc_mode_is_an_invalid_response() {
+    // What Transmission 4.0 and older answer to a JSON-RPC 2.0 method name, and a legacy success.
+    // Outside `check_server` it means the daemon behind the address changed: the call fails as
+    // one that cannot be read, so that the caller reconnects and detects the protocol again.
     let unknown_method =
         json_response(&json!({ "arguments": {}, "result": "method name not recognized" }));
     let with_tag = json_response(&json!({ "arguments": {}, "result": "success", "tag": 7 }));
-    let mut client = scripted_client(vec![Ok(unknown_method), Ok(with_tag)]);
+    let fake = FakeTransport::scripted(vec![Ok(unknown_method), Ok(with_tag)]);
+    let mut client = Client::new(fake.clone());
 
     for _ in 0..2 {
         assert_eq!(
-            client.call_raw("session_stats", None),
-            Err(RpcError::UnsupportedServer {
-                reason: UnsupportedReason::Legacy
-            })
+            client.session_stats(),
+            Err(RpcError::InvalidResponse(
+                "session_stats: the server answered in the legacy protocol".to_owned()
+            ))
         );
     }
+    assert_eq!(client.protocol(), Protocol::JsonRpc);
+    assert_eq!(fake.requests().len(), 2, "nothing is asked again");
 }
 
 #[test]
@@ -486,4 +493,245 @@ fn hash_string_validates() {
             "{bad:?} must be rejected"
         );
     }
+}
+
+/// What Transmission 4.0 and older answer to a JSON-RPC 2.0 request.
+fn not_recognized() -> HttpResponse {
+    testing::legacy_error("method name not recognized")
+}
+
+/// The version fields of a legacy `session-get`, as `check_server` asks for them.
+fn legacy_version_fields() -> Value {
+    json!(["version", "rpc-version", "rpc-version-semver"])
+}
+
+/// A Transmission 4.0.5: it answers JSON-RPC requests as it does not know them, the version
+/// fields of a legacy `session-get` with its own, and every other legacy request with
+/// `answer(method, arguments)`.
+fn legacy_daemon(answer: impl Fn(&str, &Value) -> HttpResponse + Send + 'static) -> FakeTransport {
+    FakeTransport::routed(move |method, arguments| {
+        Ok(if method.contains('_') {
+            not_recognized()
+        } else if method == "session-get" && arguments["fields"] == legacy_version_fields() {
+            testing::legacy_ok(json!({
+                "version": "4.0.5 (a6fe2a64aa)",
+                "rpc-version": 17,
+                "rpc-version-semver": "5.3.0",
+            }))
+        } else {
+            answer(method, arguments)
+        })
+    })
+}
+
+/// A client that has found `transport` to speak the legacy protocol.
+fn legacy_client(transport: &FakeTransport) -> Client<FakeTransport> {
+    let mut client = Client::new(transport.clone());
+    assert_eq!(
+        client.check_server().map(|server| server.protocol),
+        Ok(Protocol::Legacy)
+    );
+    client
+}
+
+#[test]
+fn check_server_switches_to_legacy_for_a_legacy_answer() {
+    let capture = BodyCapture {
+        fake: legacy_daemon(|_, _| status_response(500)),
+        bodies: Arc::default(),
+    };
+    let mut client = Client::new(capture.clone());
+
+    let server = client.check_server();
+
+    assert_eq!(
+        server,
+        Ok(ServerVersion {
+            version: "4.0.5 (a6fe2a64aa)".to_owned(),
+            rpc_semver: "5.3.0".to_owned(),
+            rpc_version: Some(17),
+            protocol: Protocol::Legacy,
+        })
+    );
+    assert_eq!(client.protocol(), Protocol::Legacy);
+    let requests = capture.fake.requests();
+    assert_eq!(requests.len(), 2, "one more request, and only at connect");
+    assert_eq!(requests[0].method, "session_get");
+    assert_eq!(requests[1].method, "session-get");
+    assert_eq!(
+        requests[1].params,
+        json!({ "fields": legacy_version_fields() })
+    );
+    let bodies = capture.bodies.lock().unwrap();
+    let legacy: Value = serde_json::from_slice(&bodies[1]).unwrap();
+    assert!(
+        legacy["tag"].is_u64(),
+        "a legacy request has a tag: {legacy}"
+    );
+    assert!(
+        legacy.get("jsonrpc").is_none() && legacy.get("id").is_none(),
+        "and nothing of JSON-RPC: {legacy}"
+    );
+}
+
+#[test]
+fn legacy_error_text_reaches_the_user() {
+    let transport = legacy_daemon(|_, _| testing::legacy_error("invalid or corrupt torrent file"));
+    let mut client = legacy_client(&transport);
+    let add = TorrentAdd {
+        source: AddSource::Metainfo(Arc::from(&b"d4:infod4:name1:xee"[..])),
+        download_dir: None,
+        paused: false,
+        files_unwanted: Vec::new(),
+        priority_high: Vec::new(),
+        priority_low: Vec::new(),
+        sequential_download: None,
+    };
+
+    assert_eq!(
+        client.torrent_add(&add),
+        Err(RpcError::Server {
+            code: LEGACY_ERROR_CODE,
+            message: "invalid or corrupt torrent file".to_owned(),
+            detail: None,
+        })
+    );
+}
+
+#[test]
+fn legacy_tag_mismatch_is_invalid() {
+    let transport = legacy_daemon(|_, _| {
+        json_response(&json!({ "arguments": {}, "result": "success", "tag": 424_242 }))
+    });
+    let mut client = legacy_client(&transport);
+
+    let result = client.session_stats();
+
+    assert!(
+        matches!(&result, Err(RpcError::InvalidResponse(message)) if message.contains("tag")),
+        "got {result:?}"
+    );
+}
+
+#[test]
+fn legacy_session_id_handshake_still_retries() {
+    let fake = FakeTransport::scripted(vec![
+        Ok(not_recognized()),
+        Ok(testing::legacy_ok(
+            json!({ "version": "3.00 (bb6b5a062e)", "rpc-version": 16 }),
+        )),
+        Ok(testing::conflict("rotated")),
+        Ok(testing::legacy_ok(
+            json!({ "path": "/data", "size-bytes": 7 }),
+        )),
+    ]);
+    let mut client = Client::new(fake.clone());
+    client.check_server().unwrap();
+
+    let space = client.free_space("/data").unwrap();
+
+    assert_eq!((space.path.as_str(), space.size_bytes), ("/data", 7));
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[2].method, "free-space");
+    assert_eq!(requests[3].method, "free-space");
+    assert_eq!(requests[3].session_id.as_deref(), Some("rotated"));
+    assert_eq!(
+        requests[3].params, requests[2].params,
+        "the same request is resent"
+    );
+}
+
+#[test]
+fn every_check_starts_over_in_json_rpc() {
+    // The daemon behind the address is upgraded from 4.0.5 to 4.1 between two connects.
+    let upgraded = Arc::new(AtomicBool::new(false));
+    let fake = FakeTransport::routed({
+        let upgraded = Arc::clone(&upgraded);
+        move |method, arguments| {
+            Ok(if upgraded.load(Ordering::SeqCst) {
+                any_method(method)
+            } else if method.contains('_') {
+                not_recognized()
+            } else if method == "session-get" && arguments["fields"] == legacy_version_fields() {
+                testing::legacy_ok(json!({ "version": "4.0.5 (a6fe2a64aa)", "rpc-version": 17 }))
+            } else {
+                status_response(500)
+            })
+        }
+    });
+    let mut client = legacy_client(&fake);
+    upgraded.store(true, Ordering::SeqCst);
+
+    let server = client.check_server();
+
+    assert_eq!(server.map(|server| server.protocol), Ok(Protocol::JsonRpc));
+    assert_eq!(client.protocol(), Protocol::JsonRpc);
+    client.session_stats().unwrap();
+    let last = fake.requests().pop().unwrap();
+    assert_eq!(
+        last.method, "session_stats",
+        "the next call goes as JSON-RPC"
+    );
+}
+
+/// A legacy `session-get` answer with every field the app reads, from a daemon that reports the
+/// RPC version `rpc_version_semver`.
+fn legacy_session(rpc_version_semver: &str) -> HttpResponse {
+    testing::legacy_ok(json!({
+        "version": "4.1.3 (838877323f)",
+        "rpc-version-semver": rpc_version_semver,
+        "download-dir": "/downloads",
+        "alt-speed-enabled": false,
+        "alt-speed-down": 50,
+        "alt-speed-up": 50,
+        "speed-limit-down": 100,
+        "speed-limit-down-enabled": false,
+        "speed-limit-up": 100,
+        "speed-limit-up-enabled": false,
+        "start-added-torrents": true,
+    }))
+}
+
+#[test]
+fn an_upgrade_to_4_1_between_two_polls_is_found_by_the_next_session_read() {
+    // Transmission 4.1 still answers the legacy protocol, so nothing else would fail.
+    let upgraded = Arc::new(AtomicBool::new(false));
+    let fake = FakeTransport::routed({
+        let upgraded = Arc::clone(&upgraded);
+        move |method, arguments| {
+            let upgraded = upgraded.load(Ordering::SeqCst);
+            Ok(if method.contains('_') {
+                if upgraded {
+                    any_method(method)
+                } else {
+                    not_recognized()
+                }
+            } else if method == "session-get" && arguments["fields"] == legacy_version_fields() {
+                testing::legacy_ok(json!({ "version": "4.0.5 (a6fe2a64aa)", "rpc-version": 17 }))
+            } else if method == "session-get" {
+                legacy_session(if upgraded { "6.0.1" } else { "5.3.0" })
+            } else {
+                status_response(500)
+            })
+        }
+    });
+    let mut client = legacy_client(&fake);
+    assert!(client.session_get().is_ok(), "read while it is 4.0.5");
+    upgraded.store(true, Ordering::SeqCst);
+
+    let after_upgrade = client.session_get();
+
+    assert!(
+        matches!(&after_upgrade, Err(RpcError::InvalidResponse(_))),
+        "got {after_upgrade:?}"
+    );
+    // The app reconnects on that error, and the check finds JSON-RPC.
+    assert_eq!(
+        client.check_server().map(|server| server.protocol),
+        Ok(Protocol::JsonRpc)
+    );
+    client.session_get().unwrap();
+    let last = fake.requests().pop().unwrap();
+    assert_eq!(last.method, "session_get", "read in JSON-RPC");
 }

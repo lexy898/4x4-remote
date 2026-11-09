@@ -1,0 +1,43 @@
+{
+  "arguments": {
+    "torrents": [
+      {
+        "hashString": "0000000000000000000000000000000000000001",
+        "id": 1,
+        "trackerStats": [
+          {
+            "announce": "https://tracker1.example.org/announce",
+            "announceState": 1,
+            "downloadCount": -1,
+            "hasAnnounced": true,
+            "hasScraped": true,
+            "host": "tracker1.example.org:1",
+            "id": 0,
+            "isBackup": false,
+            "lastAnnouncePeerCount": 0,
+            "lastAnnounceResult": "Could not connect to tracker",
+            "lastAnnounceStartTime": 0,
+            "lastAnnounceSucceeded": false,
+            "lastAnnounceTime": 1794161562,
+            "lastAnnounceTimedOut": false,
+            "lastScrapeResult": "Could not connect to tracker",
+            "lastScrapeStartTime": 0,
+            "lastScrapeSucceeded": false,
+            "lastScrapeTime": 1794162740,
+            "lastScrapeTimedOut": false,
+            "leecherCount": -1,
+            "nextAnnounceTime": 1794165188,
+            "nextScrapeTime": 1794169950,
+            "scrape": "https://tracker1.example.org/scrape",
+            "scrapeState": 1,
+            "seederCount": -1,
+            "sitename": "example",
+            "tier": 0
+          }
+        ]
+      }
+    ]
+  },
+  "result": "success",
+  "tag": 14
+}

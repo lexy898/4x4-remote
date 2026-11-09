@@ -133,6 +133,11 @@ pub enum NoChoiceReason {
     /// more than [`TREE_BUDGET`](crate::TREE_BUDGET) with the copy of the files it is made from,
     /// as for files nested hundreds of folders deep ([`FileTree::is_too_large`]).
     TooLarge,
+    /// The torrent has an empty file, and the daemon leaves empty files out of a torrent and
+    /// numbers the other files without them (Transmission 4.0), so a file left out by the
+    /// metainfo's numbering would be another file there
+    /// ([`SessionSummary::lists_empty_files`](crate::SessionSummary::lists_empty_files)).
+    EmptyFilesLeftOut,
 }
 
 /// Whether the form can be sent, and what is sent; the app enables Add only for
@@ -140,8 +145,9 @@ pub enum NoChoiceReason {
 ///
 /// [`AddForm::check`] looks at the form in this order and gives the first reason it finds:
 /// [`NotConnected`](Self::NotConnected), [`AlreadyInList`](Self::AlreadyInList),
-/// [`BadLink`](Self::BadLink), [`BadFolder`](Self::BadFolder), then
-/// [`NothingWanted`](Self::NothingWanted).
+/// [`BadLink`](Self::BadLink), [`BadFolder`](Self::BadFolder),
+/// [`NothingWanted`](Self::NothingWanted), then `NotConnected` again for a choice that waits for
+/// the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddCheck {
     /// Add sends this request.
@@ -154,7 +160,10 @@ pub enum AddCheck {
     BadLink(MagnetError),
     /// The daemon has this torrent already, so nothing is sent; the dialog offers to show it.
     AlreadyInList(HashString),
-    /// The daemon is not connected; the form is kept until it is.
+    /// The daemon is not connected; the form is kept until it is. Also while the daemon has just
+    /// been reached and its session has not come yet, for a `.torrent` with an empty file and a
+    /// file left out: the session tells whether the daemon numbers its files otherwise
+    /// ([`AddForm::follow_session`]).
     NotConnected,
 }
 
@@ -168,6 +177,10 @@ pub struct AddForm {
     /// The folder as the user typed or picked it.
     folder: String,
     start: bool,
+    /// Whether [`follow_session`](Self::follow_session) has had a session. Until then the daemon
+    /// could be a Transmission 4.0, so a `.torrent` with an empty file is not sent with a file
+    /// left out.
+    session_seen: bool,
 }
 
 /// What the form adds.
@@ -179,6 +192,8 @@ enum Source {
         /// The size of all files; `None` when the parse could not tell.
         total_size: Option<u64>,
         bytes: Arc<[u8]>,
+        /// Whether the parse lists a file of length zero, which Transmission 4.0 leaves out.
+        has_empty_file: bool,
         /// Or why the torrent can be added only with all its files.
         choice: Result<FileChoice, NoChoiceReason>,
     },
@@ -192,6 +207,8 @@ impl AddForm {
     /// otherwise, or whose list is too large to choose from, has no choice of files and is added
     /// with all of them ([`choice_unavailable`](Self::choice_unavailable) says why). The magnet
     /// form of `LoadedItem::Magnet(None)` starts with an empty link.
+    ///
+    /// The form does not know the daemon yet: [`follow_session`](Self::follow_session) tells it.
     #[must_use]
     pub fn new(item: LoadedItem, folder: String, start: bool) -> Self {
         let source = match item {
@@ -203,6 +220,10 @@ impl AddForm {
             }) => Source::Torrent {
                 path,
                 name: parsed.name,
+                has_empty_file: parsed
+                    .files
+                    .as_ref()
+                    .is_some_and(|files| files.iter().any(|file| file.length == 0)),
                 choice: match (tree, parsed.files) {
                     (Ok(tree), Some(files)) => Ok(FileChoice::new(files.len(), tree)),
                     // A tree is made only of files, so this does not happen.
@@ -219,6 +240,7 @@ impl AddForm {
             source,
             folder,
             start,
+            session_seen: false,
         }
     }
 
@@ -238,6 +260,36 @@ impl AddForm {
             } => Some(choice.tree()),
             Source::Torrent { choice: Err(_), .. } | Source::Magnet(_) => None,
         }
+    }
+
+    /// Takes what the session of `snapshot` says about the daemon, as soon as it is known; the
+    /// dialog passes every snapshot. On a daemon that leaves empty files out (Transmission 4.0),
+    /// a `.torrent` with an empty file loses its choice of files
+    /// ([`NoChoiceReason::EmptyFilesLeftOut`]): the files left out so far are wanted again, and
+    /// the torrent is added with all its files. The choice does not come back.
+    ///
+    /// Until it has had a session, [`check`](Self::check) holds back a `.torrent` with an empty
+    /// file that leaves a file out; after the first, it no longer does. Nothing else changes
+    /// while the session is not known, on a daemon that keeps empty files, for a torrent without
+    /// an empty file, or for a magnet link. Returns whether the choice was taken away, so that
+    /// the tree drawn goes too.
+    pub fn follow_session(&mut self, snapshot: &Snapshot) -> bool {
+        let Some(session) = &snapshot.session else {
+            return false;
+        };
+        self.session_seen = true;
+        if let Source::Torrent {
+            has_empty_file: true,
+            choice,
+            ..
+        } = &mut self.source
+            && choice.is_ok()
+            && !session.lists_empty_files
+        {
+            *choice = Err(NoChoiceReason::EmptyFilesLeftOut);
+            return true;
+        }
+        false
     }
 
     /// Applies a click on the checkbox of the node `key` of the [`tree`](Self::tree): its files
@@ -374,6 +426,10 @@ impl AddForm {
     /// 3. [`AddCheck::BadLink`], then [`AddCheck::BadFolder`]. A link that is not valid names no
     ///    torrent, so it cannot be in the list.
     /// 4. [`AddCheck::NothingWanted`] when no file shown is wanted.
+    /// 5. [`AddCheck::NotConnected`] for a `.torrent` with an empty file that leaves a file out,
+    ///    until [`follow_session`](Self::follow_session) has had a session: the daemon could be
+    ///    a Transmission 4.0, which would read the indices as other files. This is the moment
+    ///    between reaching the daemon and reading its session.
     ///
     /// The request of [`AddCheck::Ready`]:
     /// - sends a `.torrent` as the very bytes that were parsed, with `files_unwanted` from that
@@ -409,12 +465,20 @@ impl AddForm {
             Err(error) => return AddCheck::BadFolder(error),
         };
         let (source, files_unwanted) = match &self.source {
-            Source::Torrent { bytes, choice, .. } => {
+            Source::Torrent {
+                bytes,
+                choice,
+                has_empty_file,
+                ..
+            } => {
                 let files_unwanted = match choice {
                     Ok(choice) if choice.nothing_wanted() => return AddCheck::NothingWanted,
                     Ok(choice) => choice.unwanted(),
                     Err(_) => Vec::new(),
                 };
+                if *has_empty_file && !files_unwanted.is_empty() && !self.session_seen {
+                    return AddCheck::NotConnected;
+                }
                 (AddSource::Metainfo(Arc::clone(bytes)), files_unwanted)
             }
             Source::Magnet(Ok(link)) => (AddSource::Magnet(link.clone()), Vec::new()),

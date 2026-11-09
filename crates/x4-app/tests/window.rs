@@ -221,7 +221,7 @@ fn unsupported_server_is_named_in_the_status_bar(cx: &mut TestAppContext) {
     window.send(
         Event::Snapshot(Arc::new(Snapshot {
             connection: ConnectionState::Unsupported {
-                reason: x4_core::UnsupportedReason::Version("17".into()),
+                reason: x4_core::UnsupportedReason::Version("15".into()),
             },
             ..snapshot(&[])
         })),
@@ -230,7 +230,7 @@ fn unsupported_server_is_named_in_the_status_bar(cx: &mut TestAppContext) {
 
     assert_eq!(
         window.connection_text(cx),
-        "Transmission 4.1 or newer required (server RPC 17)"
+        "Transmission 3.00 or newer required (server RPC 15)"
     );
 }
 

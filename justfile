@@ -55,6 +55,15 @@ machete:
 record-fixtures:
     X4_LIVE_URL="${X4_LIVE_URL:-http://192.168.1.5:9091/transmission/rpc}" cargo run -p x4-rpc --example record_fixtures --features test-support --locked
 
+# Records scrubbed fixtures from the three Docker daemons of `just legacy-daemons` (start them with `up`) into crates/x4-rpc/tests/fixtures/legacy/<name>/.
+record-fixtures-legacy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for name in v3.00 v4.0.5 v4.1.0-beta.2; do
+        eval "$(just legacy-daemons env "$name")"
+        X4_FIXTURES_NAME="$name" cargo run -p x4-rpc --example record_fixtures --features test-support --locked
+    done
+
 # --no-capture runs the tests one at a time and streams their output, so the hash each test
 # prints for its torrent stays visible even if the run is interrupted (nextest drops the captured
 # output of a cancelled test).
@@ -64,6 +73,23 @@ test-live:
     X4_LIVE_REMOTE_DIR="${X4_LIVE_REMOTE_DIR:-/mnt/hdd/torrents/4x4-test}" \
     X4_LIVE_LOCAL_DIR="${X4_LIVE_LOCAL_DIR:-/mnt/pi-hdd/torrents/4x4-test}" \
     cargo nextest run -p x4-rpc -p x4-core -p x4-app --test live --test geoip_live --run-ignored only --locked --no-capture
+
+# The live tests of `test-live` (without geoip_live) against each Docker daemon of `just legacy-daemons` (start them with `up`), on torrents they create in its test directory; a daemon that fails does not stop the others, and the run fails at the end.
+test-live-legacy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    failed=()
+    for name in v3.00 v4.0.5 v4.1.0-beta.2; do
+        eval "$(just legacy-daemons env "$name")"
+        echo "live tests against $name at $X4_LIVE_URL" >&2
+        if ! cargo nextest run -p x4-rpc -p x4-core -p x4-app --test live --run-ignored only --locked --no-capture; then
+            failed+=("$name")
+        fi
+    done
+    if ((${#failed[@]} > 0)); then
+        echo "live tests failed against: ${failed[*]}" >&2
+        exit 1
+    fi
 
 # Enable the git hooks and verify the required tools are installed.
 setup:
@@ -164,6 +190,11 @@ measure *args:
 [positional-arguments]
 virtual +cmd:
     scripts/virtual-session.sh "$@"
+
+# Old Transmission daemons (3.00, 4.0.5, 4.1.0-beta.2) and a seeder in Docker, on 127.0.0.1 ports 19300, 19405, 19412, for tests of the legacy protocol: `up`, `status`, `down`, `env <name>`. Never part of `check`.
+[positional-arguments]
+legacy-daemons *args:
+    bash scripts/legacy-daemons.sh "$@"
 
 update:
     cargo update

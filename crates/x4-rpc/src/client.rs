@@ -1,5 +1,6 @@
-//! The JSON-RPC 2.0 client: request envelope, `X-Transmission-Session-Id` handshake and response
-//! decoding (rpc-spec §2 and §2.2.1).
+//! The client: the `X-Transmission-Session-Id` handshake, HTTP statuses, and the JSON-RPC 2.0
+//! request envelope and response decoding (rpc-spec §2 and §2.2.1); the legacy protocol's lives
+//! in [`crate::legacy`].
 
 use std::fmt::Display;
 use std::time::Duration;
@@ -8,7 +9,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{RpcError, UnsupportedReason};
+use crate::error::RpcError;
+use crate::legacy;
 use crate::transport::{HttpRequest, HttpResponse, Transport};
 
 /// The HTTP timeout per request; [`Client::torrent_add`] waits [`ADD_TIMEOUT`] instead.
@@ -30,27 +32,74 @@ const HTTP_UNAUTHORIZED: u16 = 401;
 const HTTP_FORBIDDEN: u16 = 403;
 const HTTP_CONFLICT: u16 = 409;
 
+/// Which protocol the client speaks to the daemon; `check_server` decides it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// JSON-RPC 2.0, Transmission 4.1 and newer.
+    #[default]
+    JsonRpc,
+    /// The legacy protocol of Transmission 3.00 to 4.1.0-beta, which names its methods and
+    /// fields in its own way and reports errors as text.
+    Legacy,
+}
+
 /// A blocking Transmission RPC client over a [`Transport`].
 ///
 /// Calls take `&mut self`: each one may replace the stored session id. The first call (and any
 /// call after the daemon rotates its session id) costs one extra round trip: the server answers
 /// 409 with a new `X-Transmission-Session-Id`, and the client resends the request once with it.
+///
+/// It speaks JSON-RPC until [`Client::check_server`] finds a daemon that answers only the legacy
+/// protocol; from then on every call goes in that protocol, until the next check.
 #[derive(Debug)]
 pub struct Client<T: Transport> {
     transport: T,
     session_id: Option<String>,
     next_id: u64,
+    protocol: Protocol,
+    /// The daemon's legacy RPC version, which decides the torrent fields a legacy request asks
+    /// for; the oldest 4x4 speaks to until a check reads it.
+    legacy_rpc_version: u32,
+}
+
+/// What a JSON-RPC call got back: its result, or an answer in the legacy protocol.
+#[derive(Debug, PartialEq)]
+pub(crate) enum JsonRpcAnswer<R> {
+    /// The decoded `result`.
+    Result(R),
+    /// The daemon answered in the legacy protocol, which it alone speaks.
+    Legacy,
 }
 
 impl<T: Transport> Client<T> {
-    /// A client with no session id yet; the first call performs the handshake.
+    /// A client with no session id yet, speaking JSON-RPC; the first call performs the handshake.
     #[must_use]
     pub fn new(transport: T) -> Self {
         Self {
             transport,
             session_id: None,
             next_id: 1,
+            protocol: Protocol::JsonRpc,
+            legacy_rpc_version: legacy::OLDEST_RPC_VERSION,
         }
+    }
+
+    /// The protocol the calls go in: [`Protocol::JsonRpc`] until [`Client::check_server`] finds a
+    /// daemon that speaks only the legacy one.
+    #[must_use]
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
+    }
+
+    /// Makes the calls go in `protocol`, for [`Client::check_server`].
+    pub(crate) fn set_protocol(&mut self, protocol: Protocol) {
+        self.protocol = protocol;
+    }
+
+    /// Makes the legacy calls ask only for what a daemon of the legacy RPC version
+    /// `rpc_version` has, for [`Client::check_server`].
+    pub(crate) fn set_legacy_rpc_version(&mut self, rpc_version: u32) {
+        self.legacy_rpc_version = rpc_version;
     }
 
     /// Calls `method` with untyped `params` (omitted when `None`) and returns the untyped `result`
@@ -62,8 +111,8 @@ impl<T: Transport> Client<T> {
     /// # Errors
     ///
     /// Any [`RpcError`]: transport failure, HTTP status, a failed session-id handshake, an invalid
-    /// response, a JSON-RPC error from the server, or [`RpcError::UnsupportedServer`] when the
-    /// server answers in the legacy protocol of Transmission 4.0 and older.
+    /// response (an answer in the legacy protocol too, while the client speaks JSON-RPC), or an
+    /// error from the server.
     #[cfg(feature = "test-support")]
     #[expect(
         clippy::needless_pass_by_value,
@@ -71,6 +120,40 @@ impl<T: Transport> Client<T> {
     )]
     pub fn call_raw(&mut self, method: &str, params: Option<Value>) -> Result<Value, RpcError> {
         self.call(method, params.as_ref())
+    }
+
+    /// Sends `method` with snake case `params` as the client's protocol encodes them and returns
+    /// the whole answer as the daemon sent it (feature `test-support`).
+    ///
+    /// The answer is not decoded: an error the daemon reports is part of it, not an
+    /// [`RpcError`], so that a recorder can keep it. A legacy request asks only for the fields
+    /// the daemon's version has, as every call of the client does.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] when `params` cannot be encoded, the transport fails, the HTTP status is not
+    /// 200 or the body is not JSON.
+    #[cfg(feature = "test-support")]
+    pub fn call_wire(&mut self, method: &str, params: Option<Value>) -> Result<Value, RpcError> {
+        let unencodable =
+            |error: serde_json::Error| RpcError::InvalidRequest(format!("{method}: {error}"));
+        let id = self.take_id();
+        let request = match self.protocol {
+            Protocol::JsonRpc => serde_json::to_vec(&RequestEnvelope {
+                jsonrpc: JSONRPC_VERSION,
+                method,
+                params: params.as_ref(),
+                id,
+            }),
+            Protocol::Legacy => {
+                let request = legacy::encode(method, params, id, self.legacy_rpc_version)?;
+                serde_json::to_vec(&request.body)
+            }
+        }
+        .map_err(unencodable)?;
+        let body = self.post_checked(&request, None)?;
+        serde_json::from_slice(&body)
+            .map_err(|error| invalid(method, format_args!("not JSON: {error}")))
     }
 
     /// Calls `method` with `params` (omitted when `None`) and decodes the `result` as `R`.
@@ -90,6 +173,9 @@ impl<T: Transport> Client<T> {
     /// [`Client::call`] that may take `timeout` in place of the transport's own timeout, for
     /// each POST of it: the first, and the one resent after a session-id conflict.
     ///
+    /// `method` and `params` are in JSON-RPC's names whatever the protocol; in the legacy one
+    /// they are renamed on the way out, and the answer on the way back.
+    ///
     /// # Errors
     ///
     /// As [`Client::call`].
@@ -99,8 +185,34 @@ impl<T: Transport> Client<T> {
         params: Option<&P>,
         timeout: Option<Duration>,
     ) -> Result<R, RpcError> {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        match self.protocol {
+            Protocol::JsonRpc => match self.call_json_rpc(method, params, timeout)? {
+                JsonRpcAnswer::Result(result) => Ok(result),
+                // The daemon behind the address changed since the check: reading this as
+                // anything else could only mislead, and the caller checks the server again.
+                JsonRpcAnswer::Legacy => Err(invalid(
+                    method,
+                    "the server answered in the legacy protocol",
+                )),
+            },
+            Protocol::Legacy => self.call_legacy(method, params, timeout),
+        }
+    }
+
+    /// Calls `method` in JSON-RPC, whatever the client speaks, and tells an answer in the legacy
+    /// protocol apart, for [`Client::check_server`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::call`], except that an answer in the legacy protocol is
+    /// [`JsonRpcAnswer::Legacy`].
+    pub(crate) fn call_json_rpc<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Option<&P>,
+        timeout: Option<Duration>,
+    ) -> Result<JsonRpcAnswer<R>, RpcError> {
+        let id = self.take_id();
         let request = RequestEnvelope {
             jsonrpc: JSONRPC_VERSION,
             method,
@@ -109,9 +221,49 @@ impl<T: Transport> Client<T> {
         };
         let body = serde_json::to_vec(&request)
             .map_err(|error| RpcError::InvalidRequest(format!("{method}: {error}")))?;
-        let response = self.post_with_session(&body, timeout)?;
+        let body = self.post_checked(&body, timeout)?;
+        decode_response(method, id, &body)
+    }
+
+    /// Calls `method` in the legacy protocol: `params` and the answer renamed between JSON-RPC's
+    /// names and the legacy ones.
+    fn call_legacy<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Option<&P>,
+        timeout: Option<Duration>,
+    ) -> Result<R, RpcError> {
+        let unencodable =
+            |error: serde_json::Error| RpcError::InvalidRequest(format!("{method}: {error}"));
+        let tag = self.take_id();
+        let params = params
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(unencodable)?;
+        let request = legacy::encode(method, params, tag, self.legacy_rpc_version)?;
+        let body = serde_json::to_vec(&request.body).map_err(unencodable)?;
+        let body = self.post_checked(&body, timeout)?;
+        let arguments = legacy::decode(method, tag, &request.fill, &body)?;
+        serde_json::from_value(arguments)
+            .map_err(|error| invalid(method, format_args!("unexpected result: {error}")))
+    }
+
+    /// The id (JSON-RPC) or tag (legacy) of the next request.
+    fn take_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        id
+    }
+
+    /// POSTs `body` through the session-id handshake; the body of the answer when it is HTTP 200.
+    fn post_checked(
+        &mut self,
+        body: &[u8],
+        timeout: Option<Duration>,
+    ) -> Result<Vec<u8>, RpcError> {
+        let response = self.post_with_session(body, timeout)?;
         match response.status {
-            HTTP_OK => decode_response(method, id, &response.body),
+            HTTP_OK => Ok(response.body),
             HTTP_UNAUTHORIZED => Err(RpcError::Unauthorized),
             HTTP_FORBIDDEN => Err(RpcError::Forbidden),
             status => Err(RpcError::HttpStatus(status)),
@@ -168,20 +320,22 @@ struct ErrorObject {
     data: Option<Value>,
 }
 
-/// Decodes the body of a 200 response to request `id`.
-fn decode_response<R: DeserializeOwned>(method: &str, id: u64, body: &[u8]) -> Result<R, RpcError> {
+/// Decodes the body of a 200 response to the JSON-RPC request `id`.
+fn decode_response<R: DeserializeOwned>(
+    method: &str,
+    id: u64,
+    body: &[u8],
+) -> Result<JsonRpcAnswer<R>, RpcError> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|error| invalid(method, format_args!("not JSON: {error}")))?;
     let Value::Object(mut envelope) = value else {
         return Err(invalid(method, "not a JSON object"));
     };
-    // Transmission 4.0 and older do not know JSON-RPC: they answer 200 with
+    // Transmission 4.1.0-beta and older do not know JSON-RPC: they answer 200 with
     // `{"arguments":{},"result":"method name not recognized"}`. A string `result` and no
     // `jsonrpc` key is that shape and nothing else, unlike HTML or other garbage.
     if !envelope.contains_key("jsonrpc") && envelope.get("result").is_some_and(Value::is_string) {
-        return Err(RpcError::UnsupportedServer {
-            reason: UnsupportedReason::Legacy,
-        });
+        return Ok(JsonRpcAnswer::Legacy);
     }
     if envelope.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return Err(invalid(method, "not a JSON-RPC 2.0 response"));
@@ -190,6 +344,7 @@ fn decode_response<R: DeserializeOwned>(method: &str, id: u64, body: &[u8]) -> R
     let id_matches = response_id.as_u64() == Some(id);
     match (envelope.remove("result"), envelope.remove("error")) {
         (Some(result), None) if id_matches => serde_json::from_value(result)
+            .map(JsonRpcAnswer::Result)
             .map_err(|error| invalid(method, format_args!("unexpected result: {error}"))),
         // JSON-RPC 2.0 answers with a null id when it could not read the request's id.
         (None, Some(error)) if id_matches || response_id.is_null() => {
@@ -237,8 +392,29 @@ mod tests {
 
     use super::*;
 
-    fn decode(body: &Value) -> Result<Value, RpcError> {
+    fn decode(body: &Value) -> Result<JsonRpcAnswer<Value>, RpcError> {
         decode_response("session_get", 7, body.to_string().as_bytes())
+    }
+
+    #[test]
+    fn a_legacy_answer_is_told_apart() {
+        for body in [
+            json!({ "arguments": {}, "result": "method name not recognized" }),
+            // What Transmission 4.1.0-beta answers to a JSON-RPC request.
+            json!({ "arguments": 0, "result": "no method name" }),
+        ] {
+            assert_eq!(decode(&body), Ok(JsonRpcAnswer::Legacy), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_result_is_decoded() {
+        let body = json!({ "jsonrpc": "2.0", "id": 7, "result": { "version": "4.1.3" } });
+
+        assert_eq!(
+            decode(&body),
+            Ok(JsonRpcAnswer::Result(json!({ "version": "4.1.3" })))
+        );
     }
 
     #[test]

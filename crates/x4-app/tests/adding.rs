@@ -46,6 +46,9 @@ const FOLDER: &str = "add-folder";
 const FREE_SPACE: &str = "add-free-space";
 const FILES: &str = "add-file-list";
 const NO_CHOICE: &str = "add-no-choice";
+/// What the dialog says instead of the files of a torrent with an empty file on Transmission 4.0.
+const EMPTY_FILES_LEFT_OUT: &str = "All files are added: Transmission 4.0 on the server \
+                                    numbers the files of this torrent differently";
 const START: &str = "add-start";
 const REASON: &str = "add-reason";
 const SHOW: &str = "add-show";
@@ -203,6 +206,8 @@ fn session() -> SessionSummary {
         alt_speed_down_kbps: KbPerSecond(0),
         alt_speed_up_kbps: KbPerSecond(0),
         start_added_torrents: true,
+        sequential_download_supported: true,
+        lists_empty_files: true,
     }
 }
 
@@ -1502,6 +1507,137 @@ fn a_torrent_without_a_choice_says_why(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_torrent_with_an_empty_file_has_no_choice_on_transmission_4_0(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    let drops_empty_files = SessionSummary {
+        lists_empty_files: false,
+        ..session()
+    };
+    window.send_session(
+        Vec::new(),
+        ConnectionState::Connected,
+        drops_empty_files,
+        cx,
+    );
+    window.request_torrent("empty.torrent", &content, cx);
+
+    assert!(!window.shown(FILES, cx));
+    assert_eq!(
+        window.label(NO_CHOICE, cx).as_deref(),
+        Some(EMPTY_FILES_LEFT_OUT)
+    );
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.files_unwanted, [] as [usize; 0]);
+}
+
+#[gpui_kit::test]
+fn a_choice_made_before_the_session_goes_when_the_server_is_transmission_4_0(
+    cx: &mut TestAppContext,
+) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.request_torrent("empty.torrent", &content, cx);
+    assert!(
+        window.shown(FILES, cx),
+        "a choice while the server is not known"
+    );
+    window.click_wanted("Empty/b", cx);
+    assert!(window.focused(FILES, cx));
+
+    let drops_empty_files = SessionSummary {
+        lists_empty_files: false,
+        ..session()
+    };
+    window.send_session(
+        Vec::new(),
+        ConnectionState::Connected,
+        drops_empty_files,
+        cx,
+    );
+
+    assert!(!window.shown(FILES, cx));
+    assert_eq!(
+        window.label(NO_CHOICE, cx).as_deref(),
+        Some(EMPTY_FILES_LEFT_OUT)
+    );
+    assert!(
+        window.focused(CONFIRM, cx),
+        "the focus left the list with it"
+    );
+    window.click(CONFIRM, cx);
+    let add = window.sent_add().1;
+    assert_eq!(add.files_unwanted, [] as [usize; 0], "all files");
+    assert!(add.priority_high.is_empty() && add.priority_low.is_empty());
+}
+
+#[gpui_kit::test]
+fn a_choice_made_before_the_session_stays_on_other_servers(cx: &mut TestAppContext) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.request_torrent("empty.torrent", &content, cx);
+    window.click_wanted("Empty/b", cx);
+
+    window.send(Vec::new(), cx);
+
+    assert!(window.shown(FILES, cx));
+    assert!(!window.shown(NO_CHOICE, cx));
+    assert_eq!(window.wanted("Empty/b", cx), (Some(false), Some(false)));
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.files_unwanted, [2]);
+}
+
+#[gpui_kit::test]
+fn a_choice_made_before_the_session_waits_for_it_once_connected(cx: &mut TestAppContext) {
+    let window = Window::open_unlisted(&UiState::default(), cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.request_torrent("empty.torrent", &content, cx);
+    window.click_wanted("Empty/b", cx);
+    window.retype(FOLDER, "/data/films", cx);
+
+    // The daemon answers, and its session has not come yet: the server could be 4.0.
+    window.send_event(
+        Event::Snapshot(Arc::new(Snapshot {
+            torrents: Vec::new(),
+            listed: false,
+            session: None,
+            free_space_bytes: None,
+            rate_down: 0,
+            rate_up: 0,
+            connection: ConnectionState::Connected,
+            stale: false,
+        })),
+        cx,
+    );
+
+    assert!(window.disabled(CONFIRM, cx));
+    assert_eq!(
+        window.label(REASON, cx).as_deref(),
+        Some("Not connected to the server")
+    );
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_adds(), []);
+
+    window.send(Vec::new(), cx);
+
+    assert!(!window.disabled(CONFIRM, cx));
+    assert_eq!(window.label(REASON, cx), None);
+    window.click(CONFIRM, cx);
+    assert_eq!(window.sent_add().1.files_unwanted, [2]);
+}
+
+#[gpui_kit::test]
+fn a_torrent_with_an_empty_file_keeps_its_choice_elsewhere(cx: &mut TestAppContext) {
+    let window = Window::open(cx);
+    let content = folder_torrent("Empty", &[(&["a"], MIB), (&["empty"], 0), (&["b"], MIB)]);
+    window.send(Vec::new(), cx);
+    window.request_torrent("empty.torrent", &content, cx);
+
+    assert!(window.shown(FILES, cx));
+    assert!(!window.shown(NO_CHOICE, cx));
+}
+
+#[gpui_kit::test]
 fn the_dialog_keeps_the_focus_held_key_from_the_table(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.request_torrent("show.torrent", &show(), cx);
@@ -1676,6 +1812,7 @@ fn a_dialog_opened_before_the_session_takes_its_defaults_later(cx: &mut TestAppC
 
     let paused = SessionSummary {
         start_added_torrents: false,
+        sequential_download_supported: true,
         ..session()
     };
     window.send_session(Vec::new(), ConnectionState::Connected, paused.clone(), cx);
@@ -1789,6 +1926,7 @@ fn a_switch_offers_the_open_dialogs_torrent_again_for_the_new_server(cx: &mut Te
             session: Some(SessionSummary {
                 download_dir: NAS_DIR.to_owned(),
                 start_added_torrents: false,
+                sequential_download_supported: true,
                 ..session()
             }),
             free_space_bytes: Some(NAS_FREE),
