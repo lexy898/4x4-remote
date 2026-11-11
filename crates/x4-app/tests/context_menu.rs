@@ -54,6 +54,20 @@ const DIALOG: &str = "dialog";
 const NOTIFICATION: &str = "notification";
 /// The id of the search box.
 const SEARCH: &str = "search";
+/// The key that selects the whole text of a field. gpui-base's text fields take ⌘A on macOS,
+/// where Ctrl+A moves to the start of the line, and Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
+/// The key that copies the selected text of a field: ⌘C on macOS and Ctrl+C elsewhere, as
+/// gpui-base's text fields take them.
+const COPY: &str = if cfg!(target_os = "macos") {
+    "cmd-c"
+} else {
+    "ctrl-c"
+};
 /// The id of gpui-component's table, the header and the rows.
 const TABLE: &str = "table-inner";
 /// The id of what marks a selected row that the table does not mark itself.
@@ -178,9 +192,11 @@ impl Window {
         self.click(("row", row), cx);
     }
 
+    /// Clicks the row `row` with the key that toggles it in the selection: Ctrl, and on macOS
+    /// Command, as gpui's secondary key, which the table reads.
     fn ctrl_click_row(&self, row: usize, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| {
-            window.click_with_modifiers(("row", row), Modifiers::control(), cx);
+            window.click_with_modifiers(("row", row), Modifiers::secondary_key(cx), cx);
         });
     }
 
@@ -1237,8 +1253,8 @@ fn ctrl_c_in_the_search_box_copies_text(cx: &mut TestAppContext) {
 
     window.press("ctrl-f", cx);
     window.act(cx, |window, cx| window.input("abc", cx));
-    window.press("ctrl-a", cx);
-    window.press("ctrl-c", cx);
+    window.press(SELECT_ALL, cx);
+    window.press(COPY, cx);
 
     assert_eq!(clipboard(cx).as_deref(), Some("abc"));
     window.act(cx, |window, _| {

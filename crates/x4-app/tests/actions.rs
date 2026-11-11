@@ -139,9 +139,11 @@ impl Window {
         self.click(("row", row), cx);
     }
 
+    /// Clicks the row `row` with the key that toggles it in the selection: Ctrl, and on macOS
+    /// Command, as gpui's secondary key, which the table reads.
     fn ctrl_click_row(&self, row: usize, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| {
-            window.click_with_modifiers(("row", row), Modifiers::control(), cx);
+            window.click_with_modifiers(("row", row), Modifiers::secondary_key(cx), cx);
         });
     }
 

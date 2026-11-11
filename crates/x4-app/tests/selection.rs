@@ -33,6 +33,13 @@ use x4_core::{
 const SEARCH: &str = "search";
 /// The id of what marks a selected row that the table does not mark itself.
 const ROW_SELECTION: &str = "row-selection";
+/// The key that selects the whole text of a field. gpui-base's text fields take ⌘A on macOS,
+/// where Ctrl+A moves to the start of the line, and Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
 
 /// The names of keys that gpui's Linux platform reports, besides the keys that type one
 /// character (`platform.rs`, `keystroke_from_xkb`). gpui parses any other word as a key name too,
@@ -160,9 +167,11 @@ impl Window {
         self.act(cx, |window, cx| window.click(("row", row), cx));
     }
 
+    /// Clicks the row `row` with the key that toggles it in the selection: Ctrl, and on macOS
+    /// Command, as gpui's secondary key, which the table reads.
     fn ctrl_click(&self, row: usize, cx: &mut TestAppContext) {
         self.act(cx, |window, cx| {
-            window.click_with_modifiers(("row", row), Modifiers::control(), cx);
+            window.click_with_modifiers(("row", row), Modifiers::secondary_key(cx), cx);
         });
     }
 
@@ -832,7 +841,7 @@ fn ctrl_a_in_the_search_box_selects_text_not_torrents(cx: &mut TestAppContext) {
     window.press("ctrl-f", cx);
     window.act(cx, |window, cx| window.input("a", cx));
     assert_eq!(window.read(cx, |table| table.rows().len()), 2);
-    window.press("ctrl-a", cx);
+    window.press(SELECT_ALL, cx);
 
     assert_eq!(
         window.selected(cx),
