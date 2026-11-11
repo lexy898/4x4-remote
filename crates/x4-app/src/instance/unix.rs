@@ -482,7 +482,7 @@ fn read_until_closed(stream: &mut UnixStream, limit: usize, wait: Duration) -> i
         if left.is_zero() {
             return Err(ErrorKind::TimedOut.into());
         }
-        stream.set_read_timeout(Some(left))?;
+        wait_at_most(stream, left)?;
         let room = limit.saturating_add(1).saturating_sub(bytes.len());
         let into = chunk.get_mut(..room.min(CHUNK)).unwrap_or_default();
         match stream.read(into) {
@@ -499,6 +499,20 @@ fn read_until_closed(stream: &mut UnixStream, limit: usize, wait: Duration) -> i
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }
+    }
+}
+
+/// Makes each read from `stream` wait at most `wait`, which is never zero. macOS refuses every
+/// option on a socket that can neither send nor receive any more (`EINVAL`), as one whose other
+/// side has closed it, even with bytes still to read: the answer of a 4x4 that answered and closed
+/// at once. A read from such a socket never waits, so it goes on without the limit.
+fn wait_at_most(stream: &UnixStream, wait: Duration) -> io::Result<()> {
+    match stream.set_read_timeout(Some(wait)) {
+        Err(error) if cfg!(target_os = "macos") && error.kind() == ErrorKind::InvalidInput => {
+            tracing::debug!(%error, "the socket is closed both ways, so its reads do not wait");
+            Ok(())
+        }
+        set => set,
     }
 }
 
@@ -1106,6 +1120,19 @@ mod tests {
                 },
                 AddRequest::Raise,
             ]
+        );
+    }
+
+    #[test]
+    fn what_the_other_side_sent_before_it_closed_is_read() {
+        let (mut ours, mut theirs) = UnixStream::pair().expect("a connected pair");
+        theirs.write_all(b"ok").expect("sent");
+        // Closed both ways now, as a 4x4 that answered and went: macOS refuses options on it.
+        drop(theirs);
+
+        assert_eq!(
+            read_until_closed(&mut ours, 16, Duration::from_secs(1)).expect("read"),
+            b"ok"
         );
     }
 
