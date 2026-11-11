@@ -508,9 +508,13 @@ mod tests {
 
         let error = read_config(&path).expect_err("https is not supported");
 
-        for shown in [error.to_string(), format!("{error:?}")] {
+        // Debug writes the path as a string literal: on Windows, with its backslashes doubled.
+        for (shown, named) in [
+            (error.to_string(), path.display().to_string()),
+            (format!("{error:?}"), format!("{path:?}")),
+        ] {
             assert!(shown.contains("config.toml"), "{shown}");
-            assert!(shown.contains(&*path.to_string_lossy()), "{shown}");
+            assert!(shown.contains(&named), "{shown}");
             assert!(!shown.contains("hunter2"), "{shown}");
             assert!(!shown.contains("user"), "{shown}");
         }

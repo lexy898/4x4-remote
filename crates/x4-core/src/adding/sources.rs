@@ -344,14 +344,28 @@ mod tests {
 
     #[test]
     fn a_file_dialog_names_local_files_by_their_file_uris() {
-        assert_eq!(
-            chosen_file("file:///home/user/My%20Shows/a.torrent"),
-            Some(PathBuf::from("/home/user/My Shows/a.torrent"))
-        );
-        assert_eq!(
-            chosen_file("FILE://localhost/srv/b.torrent"),
-            Some(PathBuf::from("/srv/b.torrent"))
-        );
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                chosen_file("file:///home/user/My%20Shows/a.torrent"),
+                Some(PathBuf::from("/home/user/My Shows/a.torrent"))
+            );
+            assert_eq!(
+                chosen_file("FILE://localhost/srv/b.torrent"),
+                Some(PathBuf::from("/srv/b.torrent"))
+            );
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                chosen_file("file:///C:/Users/user/My%20Shows/a.torrent"),
+                Some(PathBuf::from(r"C:\Users\user\My Shows\a.torrent"))
+            );
+            assert_eq!(
+                chosen_file("FILE://localhost/D:/srv/b.torrent"),
+                Some(PathBuf::from(r"D:\srv\b.torrent"))
+            );
+        }
         for other in [
             "file://server/share/a.torrent",
             "file:///a.torrent?x=1",
@@ -367,6 +381,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_files_a_file_dialog_chose_off_this_computer_are_counted() {
         assert_eq!(
@@ -380,6 +395,28 @@ mod tests {
                 paths: vec![
                     PathBuf::from("/home/user/b.torrent"),
                     PathBuf::from("/home/user/My Shows/a.torrent"),
+                ],
+                not_local: 2,
+            },
+            "the local files in order"
+        );
+        assert_eq!(chosen_files([]), ChosenFiles::default());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_files_a_file_dialog_chose_off_this_computer_are_counted() {
+        assert_eq!(
+            chosen_files([
+                "file:///C:/Users/user/b.torrent",
+                "sftp://host/a.torrent",
+                "file:///C:/Users/user/My%20Shows/a.torrent",
+                "file://server/share/c.torrent",
+            ]),
+            ChosenFiles {
+                paths: vec![
+                    PathBuf::from(r"C:\Users\user\b.torrent"),
+                    PathBuf::from(r"C:\Users\user\My Shows\a.torrent"),
                 ],
                 not_local: 2,
             },

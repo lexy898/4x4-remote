@@ -158,6 +158,7 @@ mod tests {
         CountryCode::new(letters).unwrap()
     }
 
+    #[cfg(unix)]
     fn paths(dirs: &[&str]) -> Vec<PathBuf> {
         dirs.iter().map(PathBuf::from).collect()
     }
@@ -199,6 +200,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_data_home_comes_first_then_the_data_dirs_then_the_fixed_places() {
         let dirs = search_dirs(
@@ -219,6 +221,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn unset_or_empty_xdg_variables_take_their_defaults() {
         let defaults = paths(&[
@@ -243,6 +246,7 @@ mod tests {
         assert_eq!(search_dirs(None, None, None), defaults[1..]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn relative_xdg_entries_are_ignored() {
         let dirs = search_dirs(
@@ -319,10 +323,11 @@ mod tests {
             panic!("one line: {records:?}");
         };
         assert_eq!(missing.level, Level::INFO);
+        // The list is logged as Rust writes it, each path a string literal: on Windows, with
+        // its backslashes doubled.
         let dirs = missing.field("dirs").unwrap_or_default();
         assert!(
-            dirs.contains(&empty.display().to_string())
-                && dirs.contains(&absent.display().to_string()),
+            dirs.contains(&format!("{empty:?}")) && dirs.contains(&format!("{absent:?}")),
             "{missing:?}"
         );
         let files = missing.field("files").unwrap_or_default();

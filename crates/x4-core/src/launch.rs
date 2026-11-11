@@ -170,7 +170,11 @@ mod tests {
     const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
     /// [`HASH`] in base32.
     const HASH_BASE32: &str = "AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH";
+    /// The working directory of the launches: a folder of this system's kind.
+    #[cfg(unix)]
     const CWD: &str = "/home/user/Downloads";
+    #[cfg(windows)]
+    const CWD: &str = r"C:\Users\user\Downloads";
 
     fn launched(arg: &str) -> LaunchArg {
         classify(OsStr::new(arg), Path::new(CWD))
@@ -220,6 +224,7 @@ mod tests {
             );
         }
 
+        #[cfg(unix)]
         for (arg, path) in [
             (
                 "file:///home/user/my%20file%20%C3%BC%20%231.torrent",
@@ -261,6 +266,25 @@ mod tests {
             assert_eq!(launched(arg), file(path), "{arg:?}");
         }
 
+        // The paths and the `file:` URIs of Windows.
+        #[cfg(windows)]
+        for (arg, path) in [
+            // An absolute path is kept as it is.
+            (r"C:\Users\user\a.torrent", r"C:\Users\user\a.torrent"),
+            // A relative one joins the working directory.
+            ("a.torrent", r"C:\Users\user\Downloads\a.torrent"),
+            // So is a path on a network share.
+            (r"\\server\share\a.torrent", r"\\server\share\a.torrent"),
+            (
+                "file:///C:/Users/user/a.torrent",
+                r"C:\Users\user\a.torrent",
+            ),
+            // Percent-encoded UTF-8: the folder of a user named in Cyrillic.
+            ("file:///C:/Users/%D0%90/a.torrent", r"C:\Users\А\a.torrent"),
+        ] {
+            assert_eq!(launched(arg), file(path), "{arg:?}");
+        }
+
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt as _;
@@ -283,6 +307,8 @@ mod tests {
             "sftp://example.com/a.torrent",
             "file://example.com/home/user/a.torrent",
             "file://192.168.1.5/home/user/a.torrent",
+            // A network share, as Windows names one in a URI.
+            "file://server/share/a.torrent",
             "file:///home/user/a.torrent?x=1",
             "file:///home/user/a.torrent?",
             "file:///home/user/a.torrent#top",
@@ -323,10 +349,11 @@ mod tests {
             );
         }
         // A NUL can come from a URI, and from a forwarded argument.
-        assert_eq!(
-            launched("file:///home/user/a%00b.torrent"),
-            rejected(RejectKind::Other)
-        );
+        #[cfg(unix)]
+        let nul_in_a_uri = "file:///home/user/a%00b.torrent";
+        #[cfg(windows)]
+        let nul_in_a_uri = "file:///C:/Users/user/a%00b.torrent";
+        assert_eq!(launched(nul_in_a_uri), rejected(RejectKind::Other));
         assert_eq!(launched("a\0b.torrent"), rejected(RejectKind::Other));
 
         #[cfg(unix)]
@@ -347,6 +374,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn relative_paths_join_the_senders_cwd() {
         let in_dir = |arg: &str, cwd: &str| classify(OsStr::new(arg), Path::new(cwd));
@@ -373,6 +401,40 @@ mod tests {
         assert_eq!(in_dir("a.torrent", ""), rejected(RejectKind::Other));
         assert_eq!(
             in_dir("a.torrent", "relative/dir"),
+            rejected(RejectKind::Other)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relative_paths_join_the_senders_cwd() {
+        let in_dir = |arg: &str, cwd: &str| classify(OsStr::new(arg), Path::new(cwd));
+
+        assert_eq!(
+            in_dir("a.torrent", CWD),
+            file(r"C:\Users\user\Downloads\a.torrent")
+        );
+        assert_eq!(
+            in_dir(r"sub\a.torrent", r"D:\srv"),
+            file(r"D:\srv\sub\a.torrent")
+        );
+        // Opened as the user named it: `..` is not resolved.
+        assert_eq!(
+            in_dir(r"..\x\a.torrent", CWD),
+            file(r"C:\Users\user\Downloads\..\x\a.torrent")
+        );
+        // An absolute path does not depend on the cwd, nor does a path on a network share.
+        assert_eq!(in_dir(r"D:\srv\a.torrent", CWD), file(r"D:\srv\a.torrent"));
+        assert_eq!(in_dir(r"D:\srv\a.torrent", ""), file(r"D:\srv\a.torrent"));
+        assert_eq!(
+            in_dir(r"\\server\share\a.torrent", ""),
+            file(r"\\server\share\a.torrent")
+        );
+        // A cwd that is not absolute cannot place a relative path; the file is not looked for
+        // relative to this process instead.
+        assert_eq!(in_dir("a.torrent", ""), rejected(RejectKind::Other));
+        assert_eq!(
+            in_dir("a.torrent", r"relative\dir"),
             rejected(RejectKind::Other)
         );
     }

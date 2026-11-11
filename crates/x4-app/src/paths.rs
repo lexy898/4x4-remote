@@ -79,6 +79,7 @@ fn runtime_dir_of(value: Option<OsString>) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn only_an_absolute_xdg_runtime_dir_is_the_runtime_dir() {
         assert_eq!(
@@ -105,10 +106,29 @@ mod tests {
         let Ok(paths) = AppPaths::discover() else {
             return; // No home directory in this environment.
         };
+        // The directories of each system that hold the config and the state.
+        #[cfg(target_os = "linux")]
+        let (config_dir, state_dir) = (Path::new("4x4"), Path::new("4x4"));
+        #[cfg(target_os = "macos")]
+        let (config_dir, state_dir) = (
+            Path::new("io.github.lexy898.4x4"),
+            Path::new("io.github.lexy898.4x4"),
+        );
+        #[cfg(windows)]
+        let (config_dir, state_dir) = (
+            Path::new(r"lexy898\4x4\config"),
+            Path::new(r"lexy898\4x4\data"),
+        );
 
-        assert!(paths.config_file.ends_with("4x4/config.toml"), "{paths:?}");
-        assert!(paths.state_file.ends_with("state.toml"), "{paths:?}");
-        assert!(paths.log_dir.ends_with("4x4"), "{paths:?}");
+        assert!(
+            paths.config_file.ends_with(config_dir.join("config.toml")),
+            "{paths:?}"
+        );
+        assert!(
+            paths.state_file.ends_with(state_dir.join("state.toml")),
+            "{paths:?}"
+        );
+        assert!(paths.log_dir.ends_with(state_dir), "{paths:?}");
         assert_eq!(paths.state_file.parent(), Some(paths.log_dir.as_path()));
     }
 }

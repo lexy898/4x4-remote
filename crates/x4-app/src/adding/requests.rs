@@ -259,6 +259,21 @@ mod tests {
     const ONE_FILE: &[u8] =
         b"d4:infod6:lengthi16384e4:name1:a12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaaee";
 
+    /// The working directory of the launches: a folder of this system's kind.
+    #[cfg(unix)]
+    const CWD: &str = "/home/user";
+    #[cfg(windows)]
+    const CWD: &str = r"C:\Users\user";
+
+    /// The file `name` in [`CWD`], as a launch there names it.
+    fn in_cwd(name: &str) -> AddItem {
+        #[cfg(unix)]
+        let path = format!("{CWD}/{name}");
+        #[cfg(windows)]
+        let path = format!(r"{CWD}\{name}");
+        AddItem::File(path.into())
+    }
+
     #[test]
     fn a_regular_torrent_file_is_read_and_parsed() {
         let dir = tempfile::tempdir().unwrap();
@@ -368,10 +383,10 @@ mod tests {
         ];
 
         assert_eq!(
-            launch_requests(args, Path::new("/home/user")),
+            launch_requests(args, Path::new(CWD)),
             [
                 AddRequest::Items(vec![
-                    AddItem::File("/home/user/show.torrent".into()),
+                    in_cwd("show.torrent"),
                     AddItem::Magnet(Some(MagnetLink::parse(&link).unwrap())),
                 ]),
                 AddRequest::Rejected {
@@ -386,13 +401,11 @@ mod tests {
 
     #[test]
     fn launch_arguments_of_one_kind_make_one_request_and_none_make_none() {
-        let cwd = Path::new("/home/user");
+        let cwd = Path::new(CWD);
 
         assert_eq!(
             launch_requests(["a.torrent"], cwd),
-            [AddRequest::Items(vec![AddItem::File(
-                "/home/user/a.torrent".into()
-            )])]
+            [AddRequest::Items(vec![in_cwd("a.torrent")])]
         );
         assert_eq!(
             launch_requests(["-v"], cwd),
@@ -408,13 +421,13 @@ mod tests {
 
     #[test]
     fn the_first_double_dash_ends_the_options_and_is_skipped() {
-        let cwd = Path::new("/home/user");
+        let cwd = Path::new(CWD);
 
         assert_eq!(launch_requests(["--"], cwd), []);
         assert_eq!(
             launch_requests(["--", "a.torrent", "--"], cwd),
             [
-                AddRequest::Items(vec![AddItem::File("/home/user/a.torrent".into())]),
+                AddRequest::Items(vec![in_cwd("a.torrent")]),
                 AddRequest::Rejected {
                     first: RejectedArg {
                         kind: RejectKind::Option
@@ -430,28 +443,25 @@ mod tests {
     fn a_million_launch_arguments_give_a_queueful_and_count_the_rest() {
         let args = (0..1_000_000).map(|n| format!("{n}.torrent"));
 
-        let requests = launch_requests(args, Path::new("/home/user"));
+        let requests = launch_requests(args, Path::new(CWD));
 
         let [AddRequest::Capped { items, left_out }] = requests.as_slice() else {
             panic!("one capped request, not {} requests", requests.len());
         };
         assert_eq!(items.len(), QUEUE_CAP);
         assert_eq!(*left_out, 1_000_000 - QUEUE_CAP);
-        assert_eq!(
-            items.first(),
-            Some(&AddItem::File("/home/user/0.torrent".into()))
-        );
-        assert_eq!(
-            items.last(),
-            Some(&AddItem::File("/home/user/99.torrent".into()))
-        );
+        assert_eq!(items.first(), Some(&in_cwd("0.torrent")));
+        assert_eq!(items.last(), Some(&in_cwd("99.torrent")));
     }
 
     #[test]
     fn what_launch_arguments_build_is_bounded_by_the_queue_and_the_cwd() {
         // A working directory as long as Linux allows, and many short relative names: each item
         // joins the two.
+        #[cfg(unix)]
         let cwd = PathBuf::from(format!("/{}", "d".repeat(4000)));
+        #[cfg(windows)]
+        let cwd = PathBuf::from(format!(r"C:\{}", "d".repeat(4000)));
         let refused = std::iter::repeat_n("-x", 2_000);
         let files = std::iter::repeat_n("a", 10_000);
 
@@ -488,7 +498,7 @@ mod tests {
         let names: Vec<String> = (0..QUEUE_CAP).map(|n| format!("{n}.torrent")).collect();
         let args = names.iter().map(String::as_str).chain(["-x", "b.torrent"]);
 
-        let requests = launch_requests(args, Path::new("/home/user"));
+        let requests = launch_requests(args, Path::new(CWD));
 
         assert!(
             matches!(
