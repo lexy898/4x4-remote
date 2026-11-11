@@ -20,8 +20,8 @@ use std::time::Duration;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, ClipboardItem, ElementId, Entity, ExternalPaths,
-    FileDropEvent, Focusable as _, InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke,
-    OperatingSystem, Task, TestAppContext,
+    FileDropEvent, Focusable as _, InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke, Task,
+    TestAppContext,
 };
 use x4_app::adding::{AddRequest, FilePicker, PickError, Picked};
 use x4_app::app;
@@ -476,7 +476,8 @@ impl Window {
     )]
     fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
         let down = KeyDownEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
             is_held: held,
             prefer_character_input: false,
         };
@@ -492,7 +493,8 @@ impl Window {
     )]
     fn key_up(&self, key: &str, cx: &mut TestAppContext) {
         let up = KeyUpEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
         };
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)
@@ -1314,12 +1316,12 @@ fn the_open_dialog_keeps_every_window_key(cx: &mut TestAppContext) {
 
     // The window's keys and the list's do nothing behind the dialog.
     for key in [
-        "ctrl-f",
+        "secondary-f",
         "delete",
-        "ctrl-p",
+        "secondary-p",
         "alt-enter",
-        "ctrl-l",
-        "ctrl-a",
+        "secondary-l",
+        "secondary-a",
     ] {
         window.press(key, cx);
         assert!(window.dialog_open(cx), "{key}");
@@ -2261,7 +2263,7 @@ fn chosen_files_join_the_queue_in_order(cx: &mut TestAppContext) {
     let show = window.file("show.torrent", &show());
     let notes = window.file("notes.txt", b"not a torrent");
 
-    window.press("ctrl-o", cx);
+    window.press("secondary-o", cx);
     assert!(cx.did_prompt_for_paths());
     let chosen = vec![film, notes, show];
     cx.simulate_path_prompt_response(move |_| Some(chosen));
@@ -2291,9 +2293,9 @@ fn a_second_ctrl_o_while_the_file_dialog_is_open_opens_no_other(cx: &mut TestApp
     let window = Window::open(cx);
     let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
 
-    window.press("ctrl-o", cx);
+    window.press("secondary-o", cx);
     assert_eq!(window.notifications(cx), 0);
-    window.press("ctrl-o", cx);
+    window.press("secondary-o", cx);
     window.click(ADD_FILES_BUTTON, cx);
     assert_eq!(window.notifications(cx), 1, "one notice, however often");
     assert_eq!(
@@ -2310,7 +2312,7 @@ fn a_second_ctrl_o_while_the_file_dialog_is_open_opens_no_other(cx: &mut TestApp
 
     // Once it is answered, the next press opens it again.
     window.press("escape", cx);
-    window.press("ctrl-o", cx);
+    window.press("secondary-o", cx);
     assert!(cx.did_prompt_for_paths());
     cx.simulate_path_prompt_response(|_| None);
     cx.run_until_parked();
@@ -2365,7 +2367,7 @@ fn a_clipboard_of_more_links_than_the_queue_holds_names_the_rest(cx: &mut TestAp
         .collect();
     copy(&links.join("\n"), cx);
 
-    for key in ["ctrl-v", "ctrl-u"] {
+    for key in ["secondary-v", "secondary-u"] {
         let window = Window::open(cx);
         window.press(key, cx);
 
@@ -2390,7 +2392,7 @@ fn ctrl_o_and_ctrl_u_do_nothing_while_a_menu_or_the_dialog_is_open(cx: &mut Test
     copy(magnet('a', Some("Film")).as_str(), cx);
     // Neither key opens the file dialog or a form, wherever the focus is now.
     let keys_do_nothing = |place: &str, cx: &mut TestAppContext| {
-        for key in ["ctrl-o", "ctrl-u", "ctrl-v"] {
+        for key in ["secondary-o", "secondary-u", "secondary-v"] {
             window.press(key, cx);
             assert!(!cx.did_prompt_for_paths(), "{key} in {place}");
             assert!(!window.shown(TITLE, cx), "{key} in {place}");
@@ -2409,7 +2411,7 @@ fn ctrl_o_and_ctrl_u_do_nothing_while_a_menu_or_the_dialog_is_open(cx: &mut Test
     window.press("escape", cx);
     assert!(!window.shown(MENU, cx));
 
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     assert!(window.shown(LIMITS_APPLY, cx));
     keys_do_nothing("the speed limits", cx);
     assert!(window.shown(LIMITS_APPLY, cx), "the popover stays open");
@@ -2428,7 +2430,7 @@ fn ctrl_o_and_ctrl_u_do_nothing_while_a_menu_or_the_dialog_is_open(cx: &mut Test
 
     window.request_torrent("show.torrent", &show(), cx);
     assert_eq!(window.label(TITLE, cx).as_deref(), Some("Add torrent"));
-    for key in ["ctrl-o", "ctrl-u", "ctrl-v"] {
+    for key in ["secondary-o", "secondary-u", "secondary-v"] {
         window.press(key, cx);
         assert!(!cx.did_prompt_for_paths(), "{key} in the add dialog");
         assert_eq!(
@@ -2441,10 +2443,10 @@ fn ctrl_o_and_ctrl_u_do_nothing_while_a_menu_or_the_dialog_is_open(cx: &mut Test
     assert!(!window.dialog_open(cx));
 
     // With nothing open, they work.
-    window.press("ctrl-u", cx);
+    window.press("secondary-u", cx);
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
     window.press("escape", cx);
-    window.press("ctrl-o", cx);
+    window.press("secondary-o", cx);
     assert!(cx.did_prompt_for_paths());
 }
 
@@ -2464,7 +2466,7 @@ fn ctrl_v_in_the_table_queues_every_magnet_on_the_clipboard(cx: &mut TestAppCont
         cx,
     );
 
-    window.press("ctrl-v", cx);
+    window.press("secondary-v", cx);
 
     assert_eq!(
         window.label(TITLE, cx).as_deref(),
@@ -2480,10 +2482,10 @@ fn ctrl_v_in_the_table_queues_every_magnet_on_the_clipboard(cx: &mut TestAppCont
 
     // Without one, it says so, once for a held key.
     copy("just some text", cx);
-    window.key_down("ctrl-v", false, cx);
-    window.key_down("ctrl-v", true, cx);
-    window.key_down("ctrl-v", true, cx);
-    window.key_up("ctrl-v", cx);
+    window.key_down("secondary-v", false, cx);
+    window.key_down("secondary-v", true, cx);
+    window.key_down("secondary-v", true, cx);
+    window.key_up("secondary-v", cx);
     assert!(!window.dialog_open(cx));
     assert_eq!(window.notifications(cx), 1);
     assert_eq!(
@@ -2505,7 +2507,7 @@ fn ctrl_v_in_the_search_box_still_pastes(cx: &mut TestAppContext) {
     assert!(!window.dialog_open(cx));
     assert_eq!(window.notifications(cx), 0);
     // Ctrl+U adds the link from there.
-    window.press("ctrl-u", cx);
+    window.press("secondary-u", cx);
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));
 }
 
@@ -2584,7 +2586,7 @@ fn the_highlight_of_a_drag_covers_the_window_or_the_dialog_and_moves_nothing(
     assert_eq!(window.bounds(TABLE, cx), table);
 
     // The magnet form, after a key press.
-    window.press("ctrl-u", cx);
+    window.press("secondary-u", cx);
     let link = window.bounds(LINK, cx);
     window.drag_over(LINK, &[&film], cx);
     assert_eq!(
@@ -2645,7 +2647,7 @@ fn a_picker_error_is_a_notification(cx: &mut TestAppContext) {
         Some("Could not open the file dialog; .torrent files can also be dropped on the window")
     );
     // The next try asks again.
-    window.press("ctrl-o", cx);
+    window.press("secondary-o", cx);
     assert_eq!(asked.get(), 2);
     assert_eq!(window.notifications(cx), 2);
 }
@@ -2656,7 +2658,7 @@ fn a_drop_after_a_key_press_still_lands(cx: &mut TestAppContext) {
     let film = window.file("film.torrent", &folder_torrent("Film", &[(&["a"], MIB)]));
     let show = window.file("show.torrent", &show());
     // The last input is a key, and the mouse does not move: the files come from another app.
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
 
     window.drop_files(TABLE, &[&film], cx);
     assert_eq!(window.label(NAME, cx).as_deref(), Some("Film"));

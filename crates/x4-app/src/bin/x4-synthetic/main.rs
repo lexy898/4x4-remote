@@ -24,9 +24,9 @@
 //! - `--right-click`, after `--select N` (and `--extend K`), then right-clicks the row `N` with
 //!   the mouse, which opens its context menu, for screenshots of the menu.
 //! - `--press KEY`, which may be given several times, presses each key in turn once the list is
-//!   there (and selected), one every few seconds, as the user would on the keyboard: `ctrl-p`
-//!   pauses the selected torrents, `space` toggles them. The keys are in gpui's spelling, and each
-//!   press is logged, for screenshots of what the actions do.
+//!   there (and selected), one every few seconds, as the user would on the keyboard: `secondary-p`
+//!   (Ctrl, or ⌘ on macOS) pauses the selected torrents, `space` toggles them. The keys are in
+//!   gpui's spelling, and each press is logged, for screenshots of what the actions do.
 //! - `--connection` opens the Connection dialog after the first frame, as `Ctrl+,` would, for
 //!   screenshots of the dialog.
 //! - `--showcase` makes 24 torrents named like free software, films and texts that anyone may
@@ -54,8 +54,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{
     AnyWindowHandle, App, AsyncApp, Entity, InputEvent as _, KeyUpEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point,
-    point, px,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, point, px,
 };
 use x4_app::adding::{AddRequest, AddRequests, launch_requests};
 use x4_app::allocator::{log_pin, pin_mmap_threshold};
@@ -63,6 +62,7 @@ use x4_app::app::{self, ServiceStart, Startup};
 use x4_app::keymap::ExtendSelectionDown;
 use x4_app::logging::init_stderr_logging;
 use x4_app::main_view::MainView;
+use x4_app::platform::host_os;
 use x4_core::{CountryDb, Edition, GeoIp, ThemeChoice, UiState, build_country_file};
 
 use crate::daemon::{Activity, Recipe};
@@ -415,11 +415,10 @@ impl Options {
                     })?;
                 }
                 "--press" => {
-                    let keys = args
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("--press needs a key, such as ctrl-p"))?;
-                    // The demo runs on Linux, the only platform the app supports.
-                    Keystroke::parse_with_os(&keys, OperatingSystem::Linux).map_err(|error| {
+                    let keys = args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--press needs a key, such as secondary-p")
+                    })?;
+                    Keystroke::parse_with_os(&keys, host_os()).map_err(|error| {
                         anyhow::anyhow!("--press needs a key, not {keys:?}: {error}")
                     })?;
                     options.press.push(keys);
@@ -542,11 +541,18 @@ mod tests {
 
     #[test]
     fn press_takes_keys_in_order() {
-        let options =
-            parse(&["--select", "3", "--press", "ctrl-p", "--press", "space"]).expect("two keys");
-        assert_eq!(options.press, ["ctrl-p", "space"]);
+        let options = parse(&[
+            "--select",
+            "3",
+            "--press",
+            "secondary-p",
+            "--press",
+            "space",
+        ])
+        .expect("two keys");
+        assert_eq!(options.press, ["secondary-p", "space"]);
         let missing = parse(&["--press"]).expect_err("no key");
-        assert!(missing.to_string().contains("ctrl-p"), "{missing}");
+        assert!(missing.to_string().contains("secondary-p"), "{missing}");
         let invalid = parse(&["--press", "p-ctrl"]).expect_err("the key comes last");
         assert!(invalid.to_string().contains("\"p-ctrl\""), "{invalid}");
     }

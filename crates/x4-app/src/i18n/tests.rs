@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
+use gpui_kit::OperatingSystem;
 use i18n_embed::unic_langid::LanguageIdentifier;
 use x4_core::{
     ActionError, ColumnId, CompactDuration, ConnectionError, Direction, DisplayState, EmptyTable,
@@ -339,8 +340,41 @@ fn filter_counts_are_plain_numbers() {
 }
 
 #[test]
-fn the_search_placeholder_names_the_shortcut() {
-    assert_eq!(search_placeholder_text(), "Search (Ctrl+F)");
+fn the_secondary_shortcut_reads_ctrl_or_command() {
+    assert_eq!(
+        secondary_shortcut_text(OperatingSystem::Linux, "F"),
+        "Ctrl+F"
+    );
+    assert_eq!(
+        secondary_shortcut_text(OperatingSystem::Windows, ","),
+        "Ctrl+,"
+    );
+    assert_eq!(secondary_shortcut_text(OperatingSystem::Mac, "F"), "⌘F");
+}
+
+#[test]
+fn shortcut_texts_name_the_platform_key() {
+    assert_eq!(
+        search_placeholder_text(OperatingSystem::Linux),
+        "Search (Ctrl+F)"
+    );
+    assert_eq!(search_placeholder_text(OperatingSystem::Mac), "Search (⌘F)");
+    assert_eq!(
+        connection_tooltip_text(OperatingSystem::Linux),
+        "Connection (Ctrl+,)"
+    );
+    assert_eq!(
+        connection_tooltip_text(OperatingSystem::Mac),
+        "Connection (⌘,)"
+    );
+    assert_eq!(
+        not_configured_detail_text(OperatingSystem::Linux),
+        "Set the server in Connection (Ctrl+,)"
+    );
+    assert_eq!(
+        not_configured_detail_text(OperatingSystem::Mac),
+        "Set the server in Connection (⌘,)"
+    );
 }
 
 #[test]

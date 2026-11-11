@@ -1062,7 +1062,7 @@ fn copy_hash_and_path_buttons_write_the_clipboard(cx: &mut TestAppContext) {
     assert_eq!(window.label(COPY_PATH, cx).as_deref(), Some("Copy path"));
 
     // Wherever the keys were, a copy hands them back to the list, as a toolbar button does.
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     assert!(!window.table_focused(cx));
     cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
     window.click(COPY_HASH, cx);

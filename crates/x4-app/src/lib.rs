@@ -52,6 +52,7 @@ pub mod logging;
 pub mod main_view;
 mod own_thread;
 pub mod paths;
+pub mod platform;
 mod private_dir;
 mod removal;
 mod saving;

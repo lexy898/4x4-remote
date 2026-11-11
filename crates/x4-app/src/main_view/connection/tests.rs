@@ -370,7 +370,7 @@ fn ctrl_comma_opens_the_dialog(cx: &mut TestAppContext) {
     let main = Main::open(cx);
     assert!(!main.connection_open(cx));
 
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
 
     assert_eq!(main.label(TITLE, cx).as_deref(), Some("Connection"));
     assert_eq!(
@@ -383,8 +383,8 @@ fn ctrl_comma_opens_the_dialog(cx: &mut TestAppContext) {
     // Escape closes it; from the search box the key works too.
     main.press("escape", cx);
     assert!(!main.dialog_open(cx));
-    main.press("ctrl-f", cx);
-    main.press("ctrl-,", cx);
+    main.press("secondary-f", cx);
+    main.press("secondary-,", cx);
     assert!(main.connection_open(cx));
     assert_eq!(main.switched_to(), [], "nothing changed");
 }
@@ -432,7 +432,7 @@ fn it_does_not_open_over_another_dialog(cx: &mut TestAppContext) {
     main.press("delete", cx);
     assert!(main.shows(REMOVAL_TITLE, cx), "the removal asks");
 
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     // The toolbar and the status bar lie under the dialog's overlay; were they reached, they would
     // ask the view the same.
     main.act(cx, MainView::open_connection);
@@ -459,7 +459,7 @@ fn save_switches_and_writes_the_file(cx: &mut TestAppContext) {
         view.show_config_problem(ConfigProblem::UnsupportedUrl, cx);
     });
     assert!(main.label("config-problem", cx).is_some());
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     main.retype(HOST, "nas", cx);
     main.retype(USERNAME, "admin", cx);
     main.retype(PASSWORD_FIELD, PASSWORD, cx);
@@ -516,7 +516,7 @@ fn save_switches_and_writes_the_file(cx: &mut TestAppContext) {
     );
 
     // The dialog opens again on the new server.
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     assert_eq!(
         main.label(ADDRESS, cx).as_deref(),
         Some("Address: http://nas:9091/transmission/rpc")
@@ -527,7 +527,7 @@ fn save_switches_and_writes_the_file(cx: &mut TestAppContext) {
 fn saving_the_same_settings_only_closes(cx: &mut TestAppContext) {
     let main = Main::open(cx);
     main.first.send(snapshot(vec![torrent("film")]), cx);
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
 
     main.click(SAVE, cx);
 
@@ -552,7 +552,7 @@ fn a_failed_write_keeps_the_dialog_open(cx: &mut TestAppContext) {
     let main = Main::open(cx);
     // A directory where the file should be: it can be neither read nor replaced.
     fs::create_dir_all(&main.config).expect("a directory");
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     main.retype(HOST, "nas", cx);
     main.retype(USERNAME, "admin", cx);
     main.retype(PASSWORD_FIELD, PASSWORD, cx);
@@ -602,7 +602,7 @@ fn save_without_a_config_file_switches_without_writing(cx: &mut TestAppContext) 
         },
         cx,
     );
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     main.retype(HOST, "nas", cx);
 
     main.click(SAVE, cx);
@@ -618,7 +618,7 @@ fn save_without_a_config_file_switches_without_writing(cx: &mut TestAppContext) 
 fn a_window_that_cannot_switch_closes_the_dialog_and_stays_as_it_is(cx: &mut TestAppContext) {
     let main = Main::open_with(|_, _| ConnectionSetup::default(), cx);
     main.first.send(snapshot(vec![torrent("film")]), cx);
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     assert!(main.connection_open(cx), "it opens in any window");
     main.ask_for_a_magnet(cx);
     main.retype(HOST, "nas", cx);
@@ -637,7 +637,7 @@ fn a_window_that_cannot_switch_closes_the_dialog_and_stays_as_it_is(cx: &mut Tes
 #[gpui_kit::test]
 fn the_add_dialog_waits_for_the_connection_dialog(cx: &mut TestAppContext) {
     let main = Main::open(cx);
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
 
     main.ask_for_a_magnet(cx);
 
@@ -654,7 +654,7 @@ fn the_add_dialog_waits_for_the_connection_dialog(cx: &mut TestAppContext) {
     // After a Save that switches, the switch offers it, once.
     main.press("escape", cx);
     assert!(!main.dialog_open(cx));
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     main.ask_for_a_magnet(cx);
     assert_eq!(main.label(ADD_TITLE, cx), None);
     main.retype(HOST, "nas", cx);
@@ -665,7 +665,7 @@ fn the_add_dialog_waits_for_the_connection_dialog(cx: &mut TestAppContext) {
 
     // After a Save that only closes, too.
     main.press("escape", cx);
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     main.ask_for_a_magnet(cx);
     main.click(SAVE, cx);
     assert!(!main.connection_open(cx));
@@ -679,16 +679,16 @@ fn the_dialog_keeps_the_main_windows_keys(cx: &mut TestAppContext) {
     let main = Main::open(cx);
     main.select_one("film", cx);
     // Outside the dialog, both act.
-    main.press("ctrl-o", cx);
+    main.press("secondary-o", cx);
     assert_eq!(main.picks.get(), 1, "Ctrl+O shows the file dialog");
     main.press("delete", cx);
     assert!(main.shows(REMOVAL_TITLE, cx), "Delete asks");
     main.press("escape", cx);
     assert!(!main.dialog_open(cx));
 
-    main.press("ctrl-,", cx);
+    main.press("secondary-,", cx);
     assert!(main.focused(HOST, cx));
-    main.press("ctrl-o", cx);
+    main.press("secondary-o", cx);
     main.press("delete", cx);
     // On a button of the dialog, where no field takes Delete.
     for _ in 0..8 {
@@ -699,7 +699,7 @@ fn the_dialog_keeps_the_main_windows_keys(cx: &mut TestAppContext) {
     }
     assert!(main.focused(CANCEL, cx));
     main.press("delete", cx);
-    main.press("ctrl-o", cx);
+    main.press("secondary-o", cx);
 
     assert_eq!(main.picks.get(), 1, "no file dialog");
     assert!(!main.shows(REMOVAL_TITLE, cx), "no removal");

@@ -3,6 +3,11 @@
 //! into gpui's bindings; `app::init` binds them after the libraries' own. The actions on torrents
 //! themselves are declared in [`actions`](crate::actions).
 //!
+//! Ctrl in this table is `secondary-`: gpui reads it as Ctrl on Linux and Windows and as ⌘ on macOS,
+//! so every Ctrl key named below is ⌘ there. The table `MAC_BINDINGS` adds the keys only macOS
+//! has, ⌘⌫ and ⌥⌘⌫ to remove the selected torrents, as Finder removes files. `bindings_for` says
+//! which rows an OS binds.
+//!
 //! Where a key works is its context:
 //!
 //! - the torrent actions, the selection keys among them, work in the torrent list (`TorrentList`)
@@ -55,7 +60,9 @@ mod tests;
 
 use std::rc::Rc;
 
-use gpui_kit::{Action, App, KeyBinding, KeyBindingContextPredicate, NoAction, actions};
+use gpui_kit::{
+    Action, App, KeyBinding, KeyBindingContextPredicate, NoAction, OperatingSystem, actions,
+};
 
 use crate::actions::{
     CopyHashes, CopyMagnetLinks, PauseTorrents, ReannounceTorrents, RemoveTorrents,
@@ -193,7 +200,8 @@ const FOLDER_FIELD: &str = "FolderField && !PopupMenu";
 /// One row of the key table: a key, the action it runs and where.
 #[derive(Debug, Clone, Copy)]
 pub struct Binding {
-    /// The keystroke, in gpui's spelling: modifiers first, joined by `-`, such as `ctrl-shift-a`.
+    /// The keystroke, in gpui's spelling: modifiers first, joined by `-`, such as
+    /// `secondary-shift-a`. `secondary` is Ctrl, and ⌘ on macOS.
     pub keys: &'static str,
     /// Makes the action the key runs.
     pub action: fn() -> Box<dyn Action>,
@@ -205,12 +213,12 @@ pub struct Binding {
 /// same context, the later one wins.
 pub const BINDINGS: &[Binding] = &[
     Binding {
-        keys: "ctrl-q",
+        keys: "secondary-q",
         action: || Box::new(Quit),
         context: None,
     },
     Binding {
-        keys: "ctrl-f",
+        keys: "secondary-f",
         action: || Box::new(FocusSearch),
         context: Some(MAIN_CONTEXT),
     },
@@ -220,31 +228,31 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(MAIN_OUTSIDE_TEXT_CONTEXT),
     },
     Binding {
-        keys: "ctrl-t",
+        keys: "secondary-t",
         action: || Box::new(ToggleAltSpeed),
         context: Some(MAIN_CONTEXT),
     },
     Binding {
-        keys: "ctrl-l",
+        keys: "secondary-l",
         action: || Box::new(EditSpeedLimits),
         context: Some(MAIN_CONTEXT),
     },
     // Transmission's keys for opening a .torrent file and a link. Neither is bound in a text field,
     // so both work from the search box too.
     Binding {
-        keys: "ctrl-o",
+        keys: "secondary-o",
         action: || Box::new(AddTorrentFiles),
         context: Some(MAIN_CONTEXT),
     },
     Binding {
-        keys: "ctrl-u",
+        keys: "secondary-u",
         action: || Box::new(AddMagnetLink),
         context: Some(MAIN_CONTEXT),
     },
     // The key of an app's preferences in GNOME's apps, editors and browsers. A text field binds
     // nothing to it, so it works from the search box too.
     Binding {
-        keys: "ctrl-,",
+        keys: "secondary-,",
         action: || Box::new(OpenConnection),
         context: Some(MAIN_CONTEXT),
     },
@@ -335,7 +343,7 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(ANY_MENU),
     },
     Binding {
-        keys: "ctrl-f",
+        keys: "secondary-f",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
@@ -345,12 +353,12 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(ANY_MENU),
     },
     Binding {
-        keys: "ctrl-l",
+        keys: "secondary-l",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
     Binding {
-        keys: "ctrl-t",
+        keys: "secondary-t",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
@@ -380,17 +388,17 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(ANY_MENU),
     },
     Binding {
-        keys: "ctrl-o",
+        keys: "secondary-o",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
     Binding {
-        keys: "ctrl-u",
+        keys: "secondary-u",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
     Binding {
-        keys: "ctrl-,",
+        keys: "secondary-,",
         action: || Box::new(NoAction),
         context: Some(ANY_MENU),
     },
@@ -424,17 +432,17 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(SPEED_LIMITS_CONTEXT),
     },
     Binding {
-        keys: "ctrl-o",
+        keys: "secondary-o",
         action: || Box::new(NoAction),
         context: Some(SPEED_LIMITS_CONTEXT),
     },
     Binding {
-        keys: "ctrl-u",
+        keys: "secondary-u",
         action: || Box::new(NoAction),
         context: Some(SPEED_LIMITS_CONTEXT),
     },
     Binding {
-        keys: "ctrl-,",
+        keys: "secondary-,",
         action: || Box::new(NoAction),
         context: Some(SPEED_LIMITS_CONTEXT),
     },
@@ -482,12 +490,12 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(TABLE_NO_MENU),
     },
     Binding {
-        keys: "ctrl-a",
+        keys: "secondary-a",
         action: || Box::new(SelectAllTorrents),
         context: Some(TORRENTS),
     },
     Binding {
-        keys: "ctrl-shift-a",
+        keys: "secondary-shift-a",
         action: || Box::new(DeselectTorrents),
         context: Some(TORRENTS),
     },
@@ -522,17 +530,17 @@ pub const BINDINGS: &[Binding] = &[
     // Ctrl+Shift+R rather than Transmission's Ctrl+V, which pastes magnet links here (below): a
     // check reads every byte of the data, hours on a small server.
     Binding {
-        keys: "ctrl-s",
+        keys: "secondary-s",
         action: || Box::new(StartTorrents),
         context: Some(TORRENTS),
     },
     Binding {
-        keys: "ctrl-p",
+        keys: "secondary-p",
         action: || Box::new(PauseTorrents),
         context: Some(TORRENTS),
     },
     Binding {
-        keys: "ctrl-shift-s",
+        keys: "secondary-shift-s",
         action: || Box::new(StartTorrentsNow),
         context: Some(TORRENTS),
     },
@@ -542,12 +550,12 @@ pub const BINDINGS: &[Binding] = &[
         context: Some(TORRENTS),
     },
     Binding {
-        keys: "ctrl-shift-r",
+        keys: "secondary-shift-r",
         action: || Box::new(VerifyTorrents),
         context: Some(TORRENTS),
     },
     Binding {
-        keys: "ctrl-r",
+        keys: "secondary-r",
         action: || Box::new(ReannounceTorrents),
         context: Some(TORRENTS),
     },
@@ -564,18 +572,18 @@ pub const BINDINGS: &[Binding] = &[
     },
     // The search box lies outside the list and keeps its own Ctrl+C, which copies its text.
     Binding {
-        keys: "ctrl-c",
+        keys: "secondary-c",
         action: || Box::new(CopyMagnetLinks),
         context: Some(TORRENTS),
     },
     Binding {
-        keys: "ctrl-shift-c",
+        keys: "secondary-shift-c",
         action: || Box::new(CopyHashes),
         context: Some(TORRENTS),
     },
     // The search box lies outside the list and keeps its own Ctrl+V, which pastes text into it.
     Binding {
-        keys: "ctrl-v",
+        keys: "secondary-v",
         action: || Box::new(PasteMagnetLinks),
         context: Some(TORRENTS),
     },
@@ -669,15 +677,40 @@ pub const BINDINGS: &[Binding] = &[
     },
 ];
 
-/// gpui's bindings for [`BINDINGS`], in the same order. An entry whose keys or context do not
+/// The bindings only macOS has: Backspace is the key that deletes there (the Delete key of a PC is
+/// Fn+Backspace), and ⌘⌫ is Finder's "move to the trash". Both only open the dialog that asks first.
+pub(crate) const MAC_BINDINGS: &[Binding] = &[
+    Binding {
+        keys: "cmd-backspace",
+        action: || Box::new(RemoveTorrents),
+        context: Some(TORRENTS),
+    },
+    Binding {
+        keys: "cmd-alt-backspace",
+        action: || Box::new(RemoveTorrentsWithData),
+        context: Some(TORRENTS),
+    },
+];
+
+/// The bindings of `os` in the order they are bound: [`BINDINGS`], then `MAC_BINDINGS` on macOS,
+/// where the later rows win.
+pub(crate) fn bindings_for(os: OperatingSystem) -> impl Iterator<Item = &'static Binding> {
+    let mac: &'static [Binding] = if os == OperatingSystem::Mac {
+        MAC_BINDINGS
+    } else {
+        &[]
+    };
+    BINDINGS.iter().chain(mac)
+}
+
+/// gpui's bindings for the OS of `cx` (`bindings_for`), in the same order. An entry whose keys or context do not
 /// parse is logged and left out; the rest still work.
 ///
 /// gpui takes any word as the name of a key, so a misspelled key parses and never fires; the
 /// tests check every key name.
 #[must_use]
 pub fn key_bindings(cx: &App) -> Vec<KeyBinding> {
-    BINDINGS
-        .iter()
+    bindings_for(cx.platform_info().os)
         .filter_map(|binding| {
             let context = binding
                 .context

@@ -455,7 +455,7 @@ fn ctrl_a_selects_every_visible_row_and_only_those(cx: &mut TestAppContext) {
     window.show(Filter::Paused, "", cx);
     assert_eq!(window.read(cx, |table| table.rows().len()), 2);
 
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
     assert_eq!(window.selected(cx), ["a", "c"]);
     assert_eq!(
@@ -493,9 +493,9 @@ fn escape_and_ctrl_shift_a_clear_the_selection(cx: &mut TestAppContext) {
     assert_eq!(window.selected_count(cx), 0);
     assert_eq!(window.drawn_selected(cx), [] as [usize; 0]);
 
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     assert_eq!(window.selected(cx), ["a", "b", "c"]);
-    window.press("ctrl-shift-a", cx);
+    window.press("secondary-shift-a", cx);
     assert_eq!(window.selected_count(cx), 0);
     assert_eq!(window.table_row(cx), None);
     assert_eq!(window.drawn_selected(cx), [] as [usize; 0]);
@@ -643,7 +643,7 @@ fn up_with_nothing_selected_selects_the_first_row(cx: &mut TestAppContext) {
     window.press("shift-up", cx);
     window.assert_only(0, cx);
 
-    window.press("ctrl-shift-a", cx);
+    window.press("secondary-shift-a", cx);
     window.press("down", cx);
     window.assert_only(0, cx);
 }
@@ -660,7 +660,7 @@ fn end_with_nothing_selected_selects_the_last_row(cx: &mut TestAppContext) {
     window.press("shift-end", cx);
     window.assert_only(2, cx);
 
-    window.press("ctrl-shift-a", cx);
+    window.press("secondary-shift-a", cx);
     window.press("home", cx);
     window.assert_only(0, cx);
 }
@@ -676,7 +676,7 @@ fn selection_keys_that_change_nothing_do_not_redraw(cx: &mut TestAppContext) {
         cx.update(|cx| cx.observe(&table, move |_, _| counter.set(counter.get() + 1)));
 
     window.press("escape", cx);
-    window.press("ctrl-shift-a", cx);
+    window.press("secondary-shift-a", cx);
     assert_eq!(redraws.get(), 0, "nothing was selected");
 
     window.click(2, cx);
@@ -687,9 +687,9 @@ fn selection_keys_that_change_nothing_do_not_redraw(cx: &mut TestAppContext) {
     window.press("end", cx);
     assert_eq!(redraws.get(), 0, "the lead is on the last row, on screen");
 
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     redraws.set(0);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     assert_eq!(redraws.get(), 0, "everything was selected");
 
     window.press("escape", cx);
@@ -771,7 +771,7 @@ fn a_click_selects_the_torrent_that_was_pressed_even_if_rows_moved(cx: &mut Test
 
     assert_eq!(window.selected(cx), ["a"]);
     assert_eq!(window.table_row(cx), Some(1), "the table's row follows");
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let sent = window.sent();
     assert!(
         matches!(sent.as_slice(), [Command::Run(_, Action::Stop(hashes))] if *hashes == [torrent("a").hash]),
@@ -814,7 +814,7 @@ fn a_new_snapshot_keeps_the_selection_by_hash(cx: &mut TestAppContext) {
 fn a_filter_change_drops_hidden_rows_from_the_selection(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a"), torrent("b"), paused("c")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     assert_eq!(window.selected_count(cx), 3);
 
     window.show(Filter::Paused, "", cx);
@@ -838,7 +838,7 @@ fn ctrl_a_in_the_search_box_selects_text_not_torrents(cx: &mut TestAppContext) {
     window.send(named(&["alpha", "beta"]), cx);
     window.click(0, cx);
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.act(cx, |window, cx| window.input("a", cx));
     assert_eq!(window.read(cx, |table| table.rows().len()), 2);
     window.press(SELECT_ALL, cx);
@@ -860,9 +860,11 @@ fn ctrl_a_in_the_search_box_selects_text_not_torrents(cx: &mut TestAppContext) {
 fn every_binding_parses(cx: &mut TestAppContext) {
     let bindings = cx.update(|cx| key_bindings(cx));
 
+    // The Mac binds two more keys than the table every OS shares.
+    let mac_keys = if cfg!(target_os = "macos") { 2 } else { 0 };
     assert_eq!(
         bindings.len(),
-        BINDINGS.len(),
+        BINDINGS.len() + mac_keys,
         "an entry that does not parse is left out"
     );
     for (binding, entry) in bindings.iter().zip(BINDINGS) {
@@ -887,5 +889,5 @@ fn every_binding_parses(cx: &mut TestAppContext) {
         .filter(|entry| entry.context.is_none())
         .map(|entry| entry.keys)
         .collect();
-    assert_eq!(global, ["ctrl-q"]);
+    assert_eq!(global, ["secondary-q"]);
 }

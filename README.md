@@ -171,6 +171,8 @@ The [user guide](docs/user-guide.md) describes every part in full.
 
 ### Keys
 
+On macOS, ⌘ (Command) takes the place of Ctrl; ⌘⌫ removes a torrent and ⌥⌘⌫ removes it with its files.
+
 | Key                                                 | Where                     | What it does                                 |
 | --------------------------------------------------- | ------------------------- | -------------------------------------------- |
 | `Ctrl+F`                                            | anywhere in the window    | moves to the search box and selects its text |

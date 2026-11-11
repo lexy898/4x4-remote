@@ -533,7 +533,7 @@ fn ctrl_q_dispatches_quit(cx: &mut TestAppContext) {
         });
     });
 
-    cx.simulate_keystrokes(window.handle, "ctrl-q");
+    cx.simulate_keystrokes(window.handle, "secondary-q");
 
     assert!(quit_requested.get());
 }

@@ -10,9 +10,7 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::test::TestWindowExt as _;
 // The platform's input events; the dialog's own `InputEvent` is the text field's.
 use gpui_kit::InputEvent as _;
-use gpui_kit::{
-    AnyWindowHandle, ClipboardItem, Keystroke, OperatingSystem, TestAppContext, WindowOptions, div,
-};
+use gpui_kit::{AnyWindowHandle, ClipboardItem, Keystroke, TestAppContext, WindowOptions, div};
 use x4_core::{CheckOutcome, ConnectionError, UnsupportedReason};
 use x4_rpc::Credentials;
 
@@ -191,7 +189,8 @@ impl Shown {
     /// repeats are marked held, as Wayland marks them; X11 does not, and sends no key-up between
     /// them either, which the record of the key held tells all the same.
     fn hold(&self, key: &str, repeats: usize, cx: &mut TestAppContext) {
-        let keystroke = Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key");
+        let keystroke = Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+            .expect("a valid key");
         for is_held in std::iter::once(false).chain(std::iter::repeat_n(true, repeats)) {
             let down = KeyDownEvent {
                 keystroke: keystroke.clone(),

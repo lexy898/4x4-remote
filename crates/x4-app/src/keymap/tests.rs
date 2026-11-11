@@ -5,11 +5,13 @@ use std::collections::BTreeSet;
 
 use gpui_kit::{Action as _, KeyBindingContextPredicate, KeyContext, NoAction};
 
+use gpui_kit::{Keystroke, OperatingSystem};
+
 use super::{
     ADD_DIALOG_CONTEXT, ANY_MENU, BINDINGS, Binding, CONNECTION_DIALOG_CONTEXT, FILE_LIST_CONTEXT,
-    FILES, FOLDER_FIELD, FOLDER_FIELD_CONTEXT, MAIN_CONTEXT, MAIN_OUTSIDE_TEXT_CONTEXT,
-    SEARCH_CONTEXT, SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU, TABLE_NO_MENU,
-    TORRENT_LIST_CONTEXT, TORRENTS,
+    FILES, FOLDER_FIELD, FOLDER_FIELD_CONTEXT, MAC_BINDINGS, MAIN_CONTEXT,
+    MAIN_OUTSIDE_TEXT_CONTEXT, SEARCH_CONTEXT, SPEED_LIMITS_CONTEXT, TABLE_CONTEXT, TABLE_MENU,
+    TABLE_NO_MENU, TORRENT_LIST_CONTEXT, TORRENTS, bindings_for,
 };
 
 const README: &str = include_str!("../../../../README.md");
@@ -61,8 +63,8 @@ fn place(keys: &str, context: Option<&str>) -> &'static str {
     }
 }
 
-/// `keys` in gpui's spelling, such as `ctrl-shift-a`, as the README writes them: `Ctrl+Shift+A`.
-/// A key that is `-` itself ends the keystroke: `-`, or `ctrl--`.
+/// `keys` in gpui's spelling, such as `secondary-shift-a`, as the README writes them: `Ctrl+Shift+A`.
+/// A key that is `-` itself ends the keystroke: `-`, or `secondary--`.
 fn spelled(keys: &str) -> String {
     let parts: Vec<&str> = match keys.strip_suffix('-') {
         Some("") => vec!["-"],
@@ -79,6 +81,8 @@ fn spelled(keys: &str) -> String {
         .map(|part| match part {
             "pageup" => "Page Up".to_owned(),
             "pagedown" => "Page Down".to_owned(),
+            // The README writes keys for Linux and Windows, and says once that ⌘ is Ctrl on a Mac.
+            "secondary" => "Ctrl".to_owned(),
             _ => {
                 let mut chars = part.chars();
                 chars
@@ -207,13 +211,13 @@ fn a_row_of_the_key_table_with_an_unknown_place_is_flagged() {
 
 #[test]
 fn keys_are_spelled_as_the_readme_writes_them() {
-    assert_eq!(spelled("ctrl-shift-a"), "Ctrl+Shift+A");
+    assert_eq!(spelled("secondary-shift-a"), "Ctrl+Shift+A");
     assert_eq!(spelled("pagedown"), "Page Down");
     assert_eq!(spelled("shift-delete"), "Shift+Delete");
     assert_eq!(spelled("/"), "/");
     assert_eq!(spelled("+"), "+");
     assert_eq!(spelled("-"), "-");
-    assert_eq!(spelled("ctrl--"), "Ctrl+-");
+    assert_eq!(spelled("secondary--"), "Ctrl+-");
 }
 
 /// The key contexts around an open menu, from the window down to the menu: the context menu,
@@ -248,7 +252,15 @@ const OPEN_MENUS: &[&[&str]] = &[
 
 /// The keys that may act while a menu is open: Ctrl+Q quits from anywhere, and the menu's own
 /// keys, which gpui-component's menu binds deeper than ours, choose an item or close the menu.
-const ACT_IN_A_MENU: &[&str] = &["ctrl-q", "enter", "escape", "up", "down", "left", "right"];
+const ACT_IN_A_MENU: &[&str] = &[
+    "secondary-q",
+    "enter",
+    "escape",
+    "up",
+    "down",
+    "left",
+    "right",
+];
 
 fn is_no_action(binding: &Binding) -> bool {
     (binding.action)().name() == NoAction.name()
@@ -337,7 +349,13 @@ const OPEN_SPEED_LIMITS: &[&[&str]] = &[
 /// The window's keys that act in the open popover of the speed limits: Ctrl+Q quits from
 /// anywhere; Ctrl+F and `/` take the focus out of the popover, which closes it; Ctrl+T and Ctrl+L
 /// are the keys of the status bar the popover belongs to.
-const ACT_IN_THE_SPEED_LIMITS: &[&str] = &["ctrl-q", "ctrl-f", "/", "ctrl-t", "ctrl-l"];
+const ACT_IN_THE_SPEED_LIMITS: &[&str] = &[
+    "secondary-q",
+    "secondary-f",
+    "/",
+    "secondary-t",
+    "secondary-l",
+];
 
 /// The popover of the speed limits keeps the window's other keys, those of the details panel
 /// among them, so that they change nothing behind it.
@@ -360,10 +378,10 @@ fn every_other_window_key_does_nothing_in_the_open_speed_limits() {
 /// in its file list, and in the open history of the folder field. The dialog lies beside the main
 /// window's content, under the root, so `MainWindow` is not among them.
 const OPEN_ADD_DIALOG: &[(&[&str], &[&str])] = &[
-    (&["Root", "Dialog", ADD_DIALOG_CONTEXT], &["ctrl-q"]),
+    (&["Root", "Dialog", ADD_DIALOG_CONTEXT], &["secondary-q"]),
     (
         &["Root", "Dialog", ADD_DIALOG_CONTEXT, "Input"],
-        &["ctrl-q"],
+        &["secondary-q"],
     ),
     (
         &[
@@ -373,13 +391,23 @@ const OPEN_ADD_DIALOG: &[(&[&str], &[&str])] = &[
             FOLDER_FIELD_CONTEXT,
             "Input",
         ],
-        &["ctrl-q", "alt-down"],
+        &["secondary-q", "alt-down"],
     ),
     (
         &["Root", "Dialog", ADD_DIALOG_CONTEXT, FILE_LIST_CONTEXT],
         &[
-            "ctrl-q", "up", "down", "home", "end", "pageup", "pagedown", "left", "right", "space",
-            "+", "-",
+            "secondary-q",
+            "up",
+            "down",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "left",
+            "right",
+            "space",
+            "+",
+            "-",
         ],
     ),
     (
@@ -392,7 +420,7 @@ const OPEN_ADD_DIALOG: &[(&[&str], &[&str])] = &[
             "PopoverContent",
             "PopupMenu",
         ],
-        &["ctrl-q"],
+        &["secondary-q"],
     ),
 ];
 
@@ -434,7 +462,7 @@ fn the_open_connection_dialog_keeps_every_window_key() {
         .into_iter()
         .map(|(keys, _, _)| keys)
         .collect();
-    assert_eq!(acting, BTreeSet::from(["ctrl-q"]));
+    assert_eq!(acting, BTreeSet::from(["secondary-q"]));
     assert_eq!(
         actions_of("enter", CONNECTION_DIALOG_CONTEXT),
         [NoAction.name()],
@@ -454,8 +482,8 @@ fn the_search_box_keeps_its_own_paste() {
         .into_iter()
         .map(|(keys, _, _)| keys)
         .collect();
-    assert!(!acting.contains("ctrl-v"), "{acting:?}");
-    assert!(!acting.contains("ctrl-c"), "{acting:?}");
+    assert!(!acting.contains("secondary-v"), "{acting:?}");
+    assert!(!acting.contains("secondary-c"), "{acting:?}");
     let search: Vec<KeyContext> = IN_THE_SEARCH_BOX_STACK
         .iter()
         .map(|context| KeyContext::parse(context).expect("a key context parses"))
@@ -463,7 +491,7 @@ fn the_search_box_keeps_its_own_paste() {
     assert_eq!(predicate(TORRENTS).depth_of(&search), None);
     // The window's keys to add torrents work there.
     assert!(
-        acting.contains("ctrl-o") && acting.contains("ctrl-u"),
+        acting.contains("secondary-o") && acting.contains("secondary-u"),
         "{acting:?}"
     );
 }
@@ -508,10 +536,13 @@ fn actions_of(keys: &str, context: &str) -> Vec<&'static str> {
 /// The open dialogs keep it too (`the_open_connection_dialog_keeps_every_window_key`).
 #[test]
 fn ctrl_comma_opens_the_connection_dialog_from_the_window() {
-    assert_eq!(actions_of("ctrl-,", MAIN_CONTEXT), ["x4::OpenConnection"]);
+    assert_eq!(
+        actions_of("secondary-,", MAIN_CONTEXT),
+        ["x4::OpenConnection"]
+    );
     for keeper in [ANY_MENU, SPEED_LIMITS_CONTEXT] {
         assert_eq!(
-            actions_of("ctrl-,", keeper),
+            actions_of("secondary-,", keeper),
             [NoAction.name()],
             "Ctrl+, in {keeper}"
         );
@@ -521,10 +552,10 @@ fn ctrl_comma_opens_the_connection_dialog_from_the_window() {
         .map(|(keys, _, _)| keys)
         .collect();
     assert!(
-        in_the_search_box.contains("ctrl-,"),
+        in_the_search_box.contains("secondary-,"),
         "{in_the_search_box:?}"
     );
-    assert_eq!(spelled("ctrl-,"), "Ctrl+,", "as the README writes it");
+    assert_eq!(spelled("secondary-,"), "Ctrl+,", "as the README writes it");
 }
 
 /// Alt+1, Alt+2, Alt+3 and Alt+4 open the panel's tabs in the order of its bar, anywhere in the
@@ -545,5 +576,70 @@ fn the_tab_keys_open_the_tabs_in_the_order_of_the_bar() {
                 "{keys} in {keeper}"
             );
         }
+    }
+}
+
+#[test]
+fn no_binding_names_ctrl_itself() {
+    for binding in BINDINGS.iter().chain(MAC_BINDINGS) {
+        assert!(
+            !binding.keys.contains("ctrl-"),
+            "{:?} would be Ctrl on a Mac too; spell it secondary-",
+            binding.keys
+        );
+    }
+}
+
+#[test]
+fn secondary_is_ctrl_off_the_mac_and_command_on_it() {
+    let secondary: Vec<&str> = BINDINGS
+        .iter()
+        .map(|binding| binding.keys)
+        .filter(|keys| keys.contains("secondary-"))
+        .collect();
+    assert!(secondary.len() > 10, "{secondary:?}");
+    for keys in secondary {
+        for os in [OperatingSystem::Linux, OperatingSystem::Windows] {
+            let keystroke = Keystroke::parse_with_os(keys, os).expect("the keys parse");
+            assert!(keystroke.modifiers.control, "{keys} on {os:?}");
+            assert!(!keystroke.modifiers.platform, "{keys} on {os:?}");
+        }
+        let keystroke = Keystroke::parse_with_os(keys, OperatingSystem::Mac).expect("they parse");
+        assert!(keystroke.modifiers.platform, "{keys} on the Mac");
+        assert!(!keystroke.modifiers.control, "{keys} on the Mac");
+    }
+}
+
+#[test]
+fn the_mac_keys_are_bound_on_the_mac_only() {
+    for os in [OperatingSystem::Linux, OperatingSystem::Windows] {
+        assert!(
+            bindings_for(os).all(|binding| !binding.keys.starts_with("cmd-")),
+            "{os:?} binds a Mac key"
+        );
+    }
+    let mac: Vec<&Binding> = bindings_for(OperatingSystem::Mac).collect();
+    assert_eq!(mac.len(), BINDINGS.len() + MAC_BINDINGS.len());
+    for (keys, action) in [
+        ("cmd-backspace", "x4::RemoveTorrents"),
+        ("cmd-alt-backspace", "x4::RemoveTorrentsWithData"),
+    ] {
+        let position = mac
+            .iter()
+            .position(|binding| binding.keys == keys)
+            .unwrap_or_else(|| panic!("{keys} is bound on the Mac"));
+        assert!(
+            position >= BINDINGS.len(),
+            "{keys} is bound after every row of BINDINGS, to win over them"
+        );
+        assert_eq!((mac[position].action)().name(), action, "{keys}");
+        assert_eq!(mac[position].context, Some(TORRENTS), "{keys}");
+    }
+    // The same actions have Delete and Shift+Delete in the same context.
+    for (keys, action) in [
+        ("delete", "x4::RemoveTorrents"),
+        ("shift-delete", "x4::RemoveTorrentsWithData"),
+    ] {
+        assert_eq!(actions_of(keys, TORRENTS), [action], "{keys}");
     }
 }

@@ -3,6 +3,11 @@
 The full reference of 4x4 Remote, part by part. The [README](../README.md) has the short
 version, the [keys](../README.md#keys) and the files 4x4 keeps.
 
+This guide names the keys as they are on Linux and Windows. On macOS, ⌘ (Command) takes the place
+of Ctrl everywhere (⌘F for `Ctrl+F`, and a ⌘-click toggles a row); ⌘⌫ removes the selected torrents
+and ⌥⌘⌫ removes them with their files, as `Delete` and `Shift+Delete` do. The tooltips and the
+search box name the key of the system.
+
 ## Connection
 
 4x4 talks to one Transmission daemon at a time: the server set in the Connection dialog. The

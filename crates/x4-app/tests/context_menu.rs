@@ -19,7 +19,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, ClipboardItem, Entity, Focusable as _, InputEvent as _,
     KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, OperatingSystem, Pixels, Point, TestAppContext, VisualTestContext, point, px,
+    MouseUpEvent, Pixels, Point, TestAppContext, VisualTestContext, point, px,
 };
 use x4_app::app;
 use x4_app::main_view::MainView;
@@ -320,7 +320,8 @@ impl Window {
     )]
     fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
         let down = KeyDownEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
             is_held: held,
             prefer_character_input: false,
         };
@@ -336,7 +337,8 @@ impl Window {
     )]
     fn key_up(&self, key: &str, cx: &mut TestAppContext) {
         let up = KeyUpEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
         };
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)
@@ -673,7 +675,7 @@ fn a_right_click_selects_the_torrent_that_was_pressed_even_if_rows_moved(cx: &mu
     assert!(!window.menu_open(cx));
     assert_eq!(window.selected(cx), ["a"], "the selection stays as it was");
     assert!(window.table_focused(cx), "the list keeps the keys");
-    window.press("ctrl-r", cx);
+    window.press("secondary-r", cx);
     assert_eq!(window.sent_action().1, Action::Reannounce(hashes(&["a"])));
 }
 
@@ -688,24 +690,40 @@ fn menu_items_dispatch_their_actions(cx: &mut TestAppContext) {
         ],
         cx,
     );
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     let all = hashes(&["a", "b", "c"]);
 
     // Each item names its key, which it looks up in the list, even when the keys were elsewhere,
     // in the search box, as the menu opened.
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.right_click_row(1, cx);
-    for hint in [
-        "kbd:ctrl-s",
-        "kbd:ctrl-p",
-        "kbd:ctrl-shift-s",
-        "kbd:ctrl-shift-r",
-        "kbd:ctrl-r",
-        "kbd:ctrl-c",
-        "kbd:ctrl-shift-c",
-        "kbd:delete",
-        "kbd:shift-delete",
-    ] {
+    // gpui writes the secondary key as ctrl or cmd by the OS, and the Mac removes with ⌘⌫.
+    let hints: &[&'static str] = if cfg!(target_os = "macos") {
+        &[
+            "kbd:cmd-s",
+            "kbd:cmd-p",
+            "kbd:cmd-shift-s",
+            "kbd:cmd-shift-r",
+            "kbd:cmd-r",
+            "kbd:cmd-c",
+            "kbd:cmd-shift-c",
+            "kbd:cmd-backspace",
+            "kbd:cmd-alt-backspace",
+        ]
+    } else {
+        &[
+            "kbd:ctrl-s",
+            "kbd:ctrl-p",
+            "kbd:ctrl-shift-s",
+            "kbd:ctrl-shift-r",
+            "kbd:ctrl-r",
+            "kbd:ctrl-c",
+            "kbd:ctrl-shift-c",
+            "kbd:delete",
+            "kbd:shift-delete",
+        ]
+    };
+    for hint in hints {
         assert!(window.shows_key(hint, cx), "the menu shows {hint}");
     }
     window.press("escape", cx);
@@ -724,14 +742,14 @@ fn menu_items_dispatch_their_actions(cx: &mut TestAppContext) {
     ] {
         // The search box has the keys; a right-click leaves them there, and the item hands them
         // to the list, as a toolbar button does.
-        window.press("ctrl-f", cx);
+        window.press("secondary-f", cx);
         window.right_click_row(1, cx);
         window.choose(label, cx);
         assert_eq!(window.sent_action().1, action, "{label}");
         assert!(window.table_focused(cx), "{label}: the list has the keys");
     }
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.right_click_row(0, cx);
     window.choose(COPY_MAGNET, cx);
     let (id, read) = window.sent_read();
@@ -743,7 +761,7 @@ fn menu_items_dispatch_their_actions(cx: &mut TestAppContext) {
         Some(magnet_lines(&["a", "b", "c"]).as_str())
     );
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.right_click_row(2, cx);
     window.choose(COPY_HASH, cx);
     assert_eq!(
@@ -771,7 +789,7 @@ fn menu_items_dispatch_their_actions(cx: &mut TestAppContext) {
 fn menu_items_are_disabled_while_disconnected_except_copy_hash(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a"), downloading("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     window.send_with(vec![paused("a"), downloading("b")], reconnecting(), cx);
 
     window.right_click_row(0, cx);
@@ -827,7 +845,13 @@ fn delete_with_the_menu_open_does_nothing_to_torrents(cx: &mut TestAppContext) {
     window.click_row(0, cx);
     window.right_click_row(0, cx);
 
-    for key in ["delete", "shift-delete", "space", "ctrl-p", "ctrl-a"] {
+    for key in [
+        "delete",
+        "shift-delete",
+        "space",
+        "secondary-p",
+        "secondary-a",
+    ] {
         window.press(key, cx);
         assert!(window.menu_open(cx), "{key}");
     }
@@ -873,7 +897,7 @@ fn focus_keys_with_the_menu_open_do_nothing(cx: &mut TestAppContext) {
     window.click_row(0, cx);
     window.right_click_row(0, cx);
 
-    for key in ["tab", "shift-tab", "ctrl-f", "/"] {
+    for key in ["tab", "shift-tab", "secondary-f", "/"] {
         window.press(key, cx);
         assert!(window.menu_open(cx), "{key}");
         assert!(
@@ -883,12 +907,12 @@ fn focus_keys_with_the_menu_open_do_nothing(cx: &mut TestAppContext) {
         assert!(!window.focused(SEARCH, cx), "{key}");
     }
     window.press("space", cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent(), [], "nothing acts behind the menu");
 
     window.press("escape", cx);
     assert!(window.table_focused(cx));
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     assert!(
         window.focused(SEARCH, cx),
         "closed, the menu lets Ctrl+F work again"
@@ -907,12 +931,12 @@ fn a_right_click_below_the_rows_opens_no_menu(cx: &mut TestAppContext) {
     window.right_click_row(0, cx);
     assert!(window.menu_open(cx));
     window.press("escape", cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     window.right_click_below_the_rows(cx);
     assert!(!window.menu_open(cx));
     assert_eq!(window.selected(cx), ["a", "b"]);
     assert!(window.table_focused(cx), "the list keeps the keys");
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(
         window.sent_action().1,
         Action::Stop(hashes(&["a", "b"])),
@@ -925,7 +949,7 @@ fn a_right_click_below_the_rows_opens_no_menu(cx: &mut TestAppContext) {
     window.right_click_below_the_rows(cx);
     assert!(!window.menu_open(cx));
     assert!(window.table_focused(cx), "the list keeps the keys");
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(
         window.sent_action().1,
         Action::Stop(hashes(&["a"])),
@@ -938,7 +962,7 @@ fn a_right_click_below_the_rows_opens_no_menu(cx: &mut TestAppContext) {
     assert!(window.table_focused(cx), "the list keeps the keys");
 
     // Where the focus was stays where it was: the search box keeps it.
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     assert!(window.focused(SEARCH, cx));
     window.right_click_below_the_rows(cx);
     assert!(!window.menu_open(cx));
@@ -996,7 +1020,7 @@ fn ctrl_shift_c_copies_hashes_in_display_order(cx: &mut TestAppContext) {
     window.ctrl_click_row(0, cx);
     window.ctrl_click_row(2, cx);
 
-    window.press("ctrl-shift-c", cx);
+    window.press("secondary-shift-c", cx);
 
     let copied = hash_lines(&["a", "c", "d"]);
     assert_eq!(clipboard(cx).as_deref(), Some(copied.as_str()));
@@ -1005,22 +1029,22 @@ fn ctrl_shift_c_copies_hashes_in_display_order(cx: &mut TestAppContext) {
     // Offline too.
     window.send_with(downloading_all(&["a", "b", "c", "d"]), reconnecting(), cx);
     put_on_clipboard("other", cx);
-    window.press("ctrl-shift-c", cx);
+    window.press("secondary-shift-c", cx);
     assert_eq!(clipboard(cx).as_deref(), Some(copied.as_str()));
 
     // A held key copies once.
     put_on_clipboard("other", cx);
-    window.key_down("ctrl-shift-c", false, cx);
+    window.key_down("secondary-shift-c", false, cx);
     assert_eq!(clipboard(cx).as_deref(), Some(copied.as_str()));
     put_on_clipboard("other", cx);
-    window.key_down("ctrl-shift-c", true, cx);
-    window.key_down("ctrl-shift-c", true, cx);
-    window.key_up("ctrl-shift-c", cx);
+    window.key_down("secondary-shift-c", true, cx);
+    window.key_down("secondary-shift-c", true, cx);
+    window.key_up("secondary-shift-c", cx);
     assert_eq!(clipboard(cx).as_deref(), Some("other"));
 
     // Nothing selected, nothing copied.
     window.press("escape", cx);
-    window.press("ctrl-shift-c", cx);
+    window.press("secondary-shift-c", cx);
     assert_eq!(clipboard(cx).as_deref(), Some("other"));
     assert_eq!(window.sent(), []);
 }
@@ -1032,7 +1056,7 @@ fn copy_magnet_writes_the_links_when_they_arrive(cx: &mut TestAppContext) {
     window.click_row(2, cx);
     window.ctrl_click_row(0, cx);
 
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, read) = window.sent_read();
     assert_eq!(read, hashes(&["a", "c"]), "in the order shown");
     assert_eq!(clipboard(cx), None, "nothing until the links arrive");
@@ -1046,7 +1070,7 @@ fn copy_magnet_writes_the_links_when_they_arrive(cx: &mut TestAppContext) {
     assert_eq!(window.sent(), []);
 
     // A failed read is shown as a failed action is, and copies nothing.
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
     assert_eq!(
@@ -1061,7 +1085,7 @@ fn copy_magnet_writes_the_links_when_they_arrive(cx: &mut TestAppContext) {
 
     // The daemon has none of them any more: a failure, not an empty clipboard.
     window.click_row(1, cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Ok(Vec::new()), cx);
     assert_eq!(
@@ -1076,7 +1100,7 @@ fn copy_magnet_writes_the_links_when_they_arrive(cx: &mut TestAppContext) {
 
     // The links are read from the daemon: offline, nothing is asked.
     window.send_with(downloading_all(&["a", "b", "c"]), reconnecting(), cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     assert_eq!(window.sent(), []);
 }
 
@@ -1084,8 +1108,8 @@ fn copy_magnet_writes_the_links_when_they_arrive(cx: &mut TestAppContext) {
 fn a_partial_magnet_answer_copies_what_came_and_says_so(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(downloading_all(&["a", "b", "c"]), cx);
-    window.press("ctrl-a", cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-a", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
 
     // b is gone from the daemon.
@@ -1107,7 +1131,7 @@ fn links_that_arrive_while_4x4_is_not_in_focus_ask_for_another_press(cx: &mut Te
     let window = Window::open(cx);
     window.send(downloading_all(&["a", "b"]), cx);
     window.click_row(0, cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
 
     // The user switched to another app before the daemon answered: on Wayland only the window in
@@ -1130,14 +1154,14 @@ fn a_magnet_copy_that_succeeds_removes_the_notices_of_the_ones_that_did_not(
 ) {
     let window = Window::open(cx);
     window.send(downloading_all(&["a", "b", "c"]), cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
     // "Copied 2 of 3" stays until a copy of all of them replaces it.
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Ok(links(&["a", "c"])), cx);
     assert_eq!(window.notifications(cx), 1);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Ok(links(&["a", "b", "c"])), cx);
     assert_eq!(
@@ -1151,13 +1175,13 @@ fn a_magnet_copy_that_succeeds_removes_the_notices_of_the_ones_that_did_not(
     );
 
     // "Copy them again" goes once the user has.
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.deactivate(cx);
     window.answer(id, Ok(links(&["a", "b", "c"])), cx);
     assert_eq!(window.notifications(cx), 1);
     window.activate(cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Ok(links(&["a", "b", "c"])), cx);
     assert_eq!(
@@ -1167,11 +1191,11 @@ fn a_magnet_copy_that_succeeds_removes_the_notices_of_the_ones_that_did_not(
     );
 
     // A failed read goes the same way.
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
     assert_eq!(window.notifications(cx), 1);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (id, _) = window.sent_read();
     window.answer(id, Ok(links(&["a", "b", "c"])), cx);
     assert_eq!(window.notifications_left(cx), 0, "the failure is old news");
@@ -1182,15 +1206,15 @@ fn a_newer_magnet_copy_supersedes_a_pending_one(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(downloading_all(&["a", "b"]), cx);
     window.click_row(0, cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (older, _) = window.sent_read();
 
     // Pressed again before the answer: the same read is on its way.
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     assert_eq!(window.sent(), []);
 
     window.click_row(1, cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (newer, read) = window.sent_read();
     assert_eq!(read, hashes(&["b"]));
     assert_ne!(newer, older);
@@ -1202,10 +1226,10 @@ fn a_newer_magnet_copy_supersedes_a_pending_one(cx: &mut TestAppContext) {
     assert_eq!(clipboard(cx).as_deref(), Some(magnet("b").as_str()));
 
     // An older answer that comes late changes nothing, a failure neither.
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (pending, _) = window.sent_read();
     window.click_row(0, cx);
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (newest, _) = window.sent_read();
     window.answer(newest, Ok(links(&["a"])), cx);
     window.answer(pending, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
@@ -1213,13 +1237,13 @@ fn a_newer_magnet_copy_supersedes_a_pending_one(cx: &mut TestAppContext) {
     assert_eq!(window.last_failure(cx), None);
 
     // A held Ctrl+C reads once.
-    window.key_down("ctrl-c", false, cx);
+    window.key_down("secondary-c", false, cx);
     let (held, _) = window.sent_read();
     window.answer(held, Ok(links(&["a"])), cx);
     for _ in 0..3 {
-        window.key_down("ctrl-c", true, cx);
+        window.key_down("secondary-c", true, cx);
     }
-    window.key_up("ctrl-c", cx);
+    window.key_up("secondary-c", cx);
     assert_eq!(window.sent(), [], "the repeats of a held key read nothing");
 }
 
@@ -1228,18 +1252,18 @@ fn a_magnet_copy_between_two_pauses_keeps_the_pause_from_repeating(cx: &mut Test
     let window = Window::open(cx);
     window.send(downloading_all(&["a", "b"]), cx);
     window.click_row(0, cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (pause, _) = window.sent_action();
-    window.press("ctrl-c", cx);
+    window.press("secondary-c", cx);
     let (read, _) = window.sent_read();
     assert_ne!(read, pause, "a read and an action never share an id");
 
     // The pause sent last still waits, whatever was read in between.
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent(), []);
 
     window.finish(pause, Ok(()), cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (again, action) = window.sent_action();
     assert_eq!(action, Action::Stop(hashes(&["a"])));
     assert_ne!(again, read);
@@ -1251,7 +1275,7 @@ fn ctrl_c_in_the_search_box_copies_text(cx: &mut TestAppContext) {
     window.send(downloading_all(&["abc", "b"]), cx);
     window.click_row(0, cx);
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.act(cx, |window, cx| window.input("abc", cx));
     window.press(SELECT_ALL, cx);
     window.press(COPY, cx);
@@ -1260,7 +1284,7 @@ fn ctrl_c_in_the_search_box_copies_text(cx: &mut TestAppContext) {
     window.act(cx, |window, _| {
         assert_eq!(window.find(SEARCH).value(), Some("abc"));
     });
-    window.press("ctrl-shift-c", cx);
+    window.press("secondary-shift-c", cx);
     assert_eq!(clipboard(cx).as_deref(), Some("abc"));
     assert_eq!(window.sent(), [], "the keys never reached the torrents");
 }

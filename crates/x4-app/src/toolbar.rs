@@ -29,7 +29,7 @@ use x4_rpc::RemoveData;
 use crate::actions::{
     PauseTorrents, RemoveTorrents, RemoveTorrentsWithData, StartTorrents, TorrentRequest,
 };
-use crate::i18n::{column_name_text, t};
+use crate::i18n::{column_name_text, connection_tooltip_text, t};
 use crate::keymap::{AddMagnetLink, AddTorrentFiles, MAIN_CONTEXT, TORRENT_LIST_CONTEXT};
 use crate::main_view::{AddButton, MainView};
 use crate::search::search_box;
@@ -135,7 +135,7 @@ fn connection_button(cx: &Context<'_, MainView>) -> Button {
         .small()
         .icon(gpui_kit::assets::IconName::Settings)
         .accessibility_label(SharedString::from(t!("toolbar-connection")))
-        .tooltip(t!("toolbar-connection-tooltip"))
+        .tooltip(connection_tooltip_text(cx.platform_info().os))
         .on_click(cx.listener(|view, _, window, cx| view.open_connection(window, cx)))
 }
 

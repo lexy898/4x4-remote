@@ -29,7 +29,7 @@ pub(crate) fn new_search_state(
     window: &mut Window,
     cx: &mut Context<'_, InputState>,
 ) -> InputState {
-    InputState::new(window, cx).placeholder(search_placeholder_text())
+    InputState::new(window, cx).placeholder(search_placeholder_text(cx.platform_info().os))
 }
 
 /// The search box showing `state`, in the colors of `theme`. Its key context lets Escape clear it.

@@ -459,7 +459,7 @@ fn switching_keeps_the_ui_state(cx: &mut TestAppContext) {
     window.first.send(snapshot(vec![torrent("film")]), cx);
     cx.update_window(window.handle, |_, window, cx| {
         window.render_frame(cx);
-        window.press("ctrl-f", cx);
+        window.press("secondary-f", cx);
     })
     .expect("the window is open");
     cx.update_window(window.handle, |_, window, cx| window.input("fil", cx))

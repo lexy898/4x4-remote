@@ -12,7 +12,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, KeyContext,
     KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, OperatingSystem, TestAppContext, VisualTestContext, point, px,
+    MouseUpEvent, TestAppContext, VisualTestContext, point, px,
 };
 use x4_app::app;
 use x4_app::keymap::{EditSpeedLimits, ToggleAltSpeed};
@@ -257,7 +257,8 @@ impl Window {
         reason = "a test helper: a key that does not parse fails the test"
     )]
     fn key_down_typing(&self, key: &str, cx: &mut TestAppContext) {
-        let keystroke = Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key");
+        let keystroke = Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+            .expect("a valid key");
         self.act(cx, |window, cx| window.dispatch_keystroke(keystroke, cx));
     }
 
@@ -289,7 +290,8 @@ impl Window {
     )]
     fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
         let down = KeyDownEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
             is_held: held,
             prefer_character_input: false,
         };
@@ -305,7 +307,8 @@ impl Window {
     )]
     fn key_up(&self, key: &str, cx: &mut TestAppContext) {
         let up = KeyUpEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
         };
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)
@@ -487,7 +490,7 @@ fn turtle_click_and_ctrl_t_toggle_alt_speed(cx: &mut TestAppContext) {
 
     window.send_limits(off(), off(), true, cx);
     assert_eq!(window.checked(TURTLE, cx), Some(true), "the turtle is on");
-    window.press("ctrl-t", cx);
+    window.press("secondary-t", cx);
     assert_eq!(window.sent_action().1, Action::SetAltSpeed(false));
 }
 
@@ -496,15 +499,15 @@ fn a_held_ctrl_t_switches_the_turtle_once(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
 
-    window.key_down("ctrl-t", false, cx);
+    window.key_down("secondary-t", false, cx);
     let (id, action) = window.sent_action();
     assert_eq!(action, Action::SetAltSpeed(true));
     window.finish(id, Ok(()), cx);
     window.send_limits(off(), off(), true, cx);
     // The repeats of the held key come after the turtle went on: they do not switch it off.
-    window.key_down("ctrl-t", true, cx);
-    window.key_down("ctrl-t", true, cx);
-    window.key_up("ctrl-t", cx);
+    window.key_down("secondary-t", true, cx);
+    window.key_down("secondary-t", true, cx);
+    window.key_up("secondary-t", cx);
     assert_eq!(window.sent(), []);
 }
 
@@ -516,8 +519,8 @@ fn turtle_is_disabled_without_a_session(cx: &mut TestAppContext) {
         assert!(window.disabled(LIMITS, cx));
         window.click(TURTLE, cx);
         window.click(LIMITS, cx);
-        window.press("ctrl-t", cx);
-        window.press("ctrl-l", cx);
+        window.press("secondary-t", cx);
+        window.press("secondary-l", cx);
         assert_eq!(window.sent(), []);
         assert!(!window.limits_open(cx));
     };
@@ -541,7 +544,7 @@ fn limits_popover_prefills_the_stored_values(cx: &mut TestAppContext) {
     // On at 1024 kB/s, which are 1000 KiB/s; off, with 100 kB/s stored, which are 98 KiB/s.
     window.send_limits(limit(1024, true), limit(100, false), false, cx);
 
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     assert!(window.limits_open(cx));
     assert_eq!(window.value(DOWN, cx).as_deref(), Some("1000"));
     assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true));
@@ -568,7 +571,7 @@ fn limits_popover_prefills_the_stored_values(cx: &mut TestAppContext) {
     assert_eq!(window.value(DOWN, cx).as_deref(), Some("1000"));
     // Ctrl+L while it is open leaves it as it is.
     window.type_text("7", cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     assert!(window.limits_open(cx));
     assert_eq!(window.value(DOWN, cx).as_deref(), Some("7"));
 }
@@ -579,7 +582,7 @@ fn applying_one_limit_sends_only_that_direction_in_kbps(cx: &mut TestAppContext)
     window.send_limits(off(), off(), false, cx);
 
     // Typing a speed switches its limit on; 512 KiB/s are 524 kB/s.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.type_text("512", cx);
     assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true));
     window.press("enter", cx);
@@ -591,7 +594,7 @@ fn applying_one_limit_sends_only_that_direction_in_kbps(cx: &mut TestAppContext)
     assert!(window.table_focused(cx), "the keys go back to the list");
 
     // The upload limit, from the Apply button: 1000 KiB/s are 1024 kB/s.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.retype(UP, "1000", cx);
     window.click(APPLY, cx);
     assert_eq!(
@@ -602,7 +605,7 @@ fn applying_one_limit_sends_only_that_direction_in_kbps(cx: &mut TestAppContext)
     assert!(window.table_focused(cx));
 
     // Untouched, nothing is sent.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.press("enter", cx);
     assert_eq!(window.sent(), []);
     assert!(!window.limits_open(cx));
@@ -613,7 +616,7 @@ fn turning_a_limit_off_sends_none(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(limit(1024, true), limit(512, true), false, cx);
 
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.click(DOWN_SWITCH, cx);
     assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false));
     window.click(APPLY, cx);
@@ -626,7 +629,7 @@ fn turning_a_limit_off_sends_none(cx: &mut TestAppContext) {
 fn an_invalid_limit_shows_an_error_and_sends_nothing(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     // A valid upload limit does not go either while the download limit is wrong.
     window.retype(UP, "300", cx);
 
@@ -655,7 +658,7 @@ fn an_invalid_limit_shows_an_error_and_sends_nothing(cx: &mut TestAppContext) {
 fn a_limit_switched_on_without_a_speed_asks_for_one(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
 
     window.retype(DOWN, "", cx);
     window.click(DOWN_SWITCH, cx);
@@ -712,7 +715,7 @@ fn a_held_enter_that_opened_the_popover_applies_nothing(cx: &mut TestAppContext)
 fn an_open_popover_applies_nothing_while_the_daemon_is_away(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.type_text("512", cx);
 
     window.send_session(Some(session(off(), off(), false)), reconnecting(), cx);
@@ -745,7 +748,7 @@ fn the_turtle_and_each_limit_fail_in_notifications_of_their_own(cx: &mut TestApp
 
     window.click(TURTLE, cx);
     let (turtle, _) = window.sent_action();
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.type_text("512", cx);
     window.retype(UP, "300", cx);
     window.press("enter", cx);
@@ -816,18 +819,23 @@ fn the_keys_work_from_the_search_box_and_are_bound_in_the_window(cx: &mut TestAp
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
 
-    window.press("ctrl-f", cx);
-    window.press("ctrl-t", cx);
+    window.press("secondary-f", cx);
+    window.press("secondary-t", cx);
     assert_eq!(window.sent_action().1, Action::SetAltSpeed(true));
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     assert!(window.limits_open(cx));
     window.press("escape", cx);
 
-    window.act(cx, |window, _| {
+    window.act(cx, |window, cx| {
         let main = KeyContext::parse("MainWindow").expect("a key context");
-        for (action, keys) in [
-            (&ToggleAltSpeed as &dyn gpui_kit::Action, "ctrl-t"),
-            (&EditSpeedLimits, "ctrl-l"),
+        let modifier = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        for (action, key) in [
+            (&ToggleAltSpeed as &dyn gpui_kit::Action, "t"),
+            (&EditSpeedLimits, "l"),
         ] {
             let binding = window
                 .highest_precedence_binding_for_action_in_context(action, main.clone())
@@ -835,9 +843,9 @@ fn the_keys_work_from_the_search_box_and_are_bound_in_the_window(cx: &mut TestAp
             let shown: Vec<String> = binding
                 .keystrokes()
                 .iter()
-                .map(|keystroke| keystroke.unparse(OperatingSystem::Linux))
+                .map(|keystroke| keystroke.unparse(cx.platform_info().os))
                 .collect();
-            assert_eq!(shown, [keys]);
+            assert_eq!(shown, [format!("{modifier}-{key}")]);
         }
     });
 }
@@ -858,14 +866,14 @@ fn the_speed_keys_do_nothing_behind_the_context_menu(cx: &mut TestAppContext) {
     window.act(cx, |window, cx| window.right_click(("row", 0usize), cx));
     assert!(window.menu_open(cx));
 
-    for key in ["ctrl-l", "ctrl-t"] {
+    for key in ["secondary-l", "secondary-t"] {
         window.press(key, cx);
         assert!(!window.limits_open(cx), "{key}");
         assert!(window.menu_open(cx), "{key}: the menu keeps the keys");
         assert_eq!(window.sent(), [], "{key}");
     }
     // Pause, behind the menu, does nothing either; closed, the menu gives the keys back.
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent(), []);
     window.press("escape", cx);
     assert!(!window.menu_open(cx));
@@ -889,7 +897,7 @@ fn the_speed_keys_do_nothing_behind_a_toolbar_menu(cx: &mut TestAppContext) {
     for button in [REMOVE, COLUMNS] {
         window.click(button, cx);
         assert!(window.menu_open(cx), "{button}");
-        for key in ["ctrl-t", "ctrl-l"] {
+        for key in ["secondary-t", "secondary-l"] {
             window.press(key, cx);
             assert_eq!(window.sent(), [], "{button}, {key}");
             assert!(!window.limits_open(cx), "{button}, {key}");
@@ -903,7 +911,7 @@ fn the_speed_keys_do_nothing_behind_a_toolbar_menu(cx: &mut TestAppContext) {
     }
 
     // Closed, the menus let the keys work again.
-    window.press("ctrl-t", cx);
+    window.press("secondary-t", cx);
     assert_eq!(window.sent_actions(), [Action::SetAltSpeed(true)]);
 }
 
@@ -925,7 +933,7 @@ fn the_details_keys_do_nothing_in_the_open_popover(cx: &mut TestAppContext) {
         window.press(tab_key, cx);
         let before = window.details(cx);
         assert_eq!(before.tab, open_tab);
-        window.press("ctrl-l", cx);
+        window.press("secondary-l", cx);
         assert!(window.focused(DOWN, cx));
         let typed = window.value(DOWN, cx);
         for place in ["the field", "the switch"] {
@@ -963,7 +971,7 @@ fn slash_leaves_the_popover_and_ctrl_t_works_in_it(cx: &mut TestAppContext) {
 
     // The download switch is before its field, Apply three stops after it.
     for (place, key, presses) in [(DOWN_SWITCH, "shift-tab", 1), (APPLY, "tab", 3)] {
-        window.press("ctrl-l", cx);
+        window.press("secondary-l", cx);
         window.type_text("512", cx);
         for _ in 0..presses {
             window.press(key, cx);
@@ -976,10 +984,10 @@ fn slash_leaves_the_popover_and_ctrl_t_works_in_it(cx: &mut TestAppContext) {
         window.press("escape", cx);
     }
 
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.press("shift-tab", cx);
     assert!(window.focused(DOWN_SWITCH, cx));
-    window.press("ctrl-t", cx);
+    window.press("secondary-t", cx);
     assert_eq!(window.sent_action().1, Action::SetAltSpeed(true));
     assert!(window.limits_open(cx), "the popover stays open");
     assert!(window.focused(DOWN_SWITCH, cx));
@@ -991,7 +999,7 @@ fn the_popover_closes_when_the_focus_leaves_it(cx: &mut TestAppContext) {
     window.send_limits(limit(1024, true), off(), false, cx);
 
     // Tab moves through the switches, the fields and Apply, and then out.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.type_text("512", cx);
     for _ in 0..3 {
         window.press("tab", cx);
@@ -1007,7 +1015,7 @@ fn the_popover_closes_when_the_focus_leaves_it(cx: &mut TestAppContext) {
     );
 
     // Shift+Tab: from the download field to its switch, and then out.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.press("shift-tab", cx);
     assert!(window.limits_open(cx));
     assert!(window.focused(DOWN_SWITCH, cx));
@@ -1020,8 +1028,8 @@ fn the_popover_closes_when_the_focus_leaves_it(cx: &mut TestAppContext) {
     assert_eq!(window.sent(), []);
 
     // Ctrl+F: the focus goes to the search box, and stays there.
-    window.press("ctrl-l", cx);
-    window.press("ctrl-f", cx);
+    window.press("secondary-l", cx);
+    window.press("secondary-f", cx);
     assert!(!window.limits_open(cx));
     assert!(window.focused(SEARCH, cx), "the focus stays where it went");
     assert_eq!(window.sent(), []);
@@ -1035,14 +1043,14 @@ fn an_edit_is_measured_against_the_limits_the_popover_opened_with(cx: &mut TestA
     let changed = || session(limit(1024, false), limit(2048, true), false);
 
     window.send_session(Some(opened()), ConnectionState::Connected, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.send_session(Some(changed()), ConnectionState::Connected, cx);
     window.click(APPLY, cx);
     assert_eq!(window.sent(), [], "nothing was touched");
     assert!(!window.limits_open(cx));
 
     window.send_session(Some(opened()), ConnectionState::Connected, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.send_session(Some(changed()), ConnectionState::Connected, cx);
     // 300 KiB/s are 307 kB/s; the untouched download limit stays as the daemon has it now.
     window.retype(UP, "300", cx);
@@ -1077,7 +1085,7 @@ fn a_held_space_that_opened_the_popover_types_nothing(cx: &mut TestAppContext) {
 fn clearing_a_field_switches_its_limit_off(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(limit(1024, true), off(), false, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
 
     window.retype(DOWN, "", cx);
     assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false));
@@ -1090,7 +1098,7 @@ fn clearing_a_field_switches_its_limit_off(cx: &mut TestAppContext) {
 
     // A switch clicked on while its field is empty still asks for a speed.
     window.send_limits(off(), off(), false, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.retype(UP, "", cx);
     window.click(UP_SWITCH, cx);
     window.click(APPLY, cx);
@@ -1107,14 +1115,14 @@ fn an_edit_left_without_applying_is_forgotten(cx: &mut TestAppContext) {
     window.send_limits(off(), off(), false, cx);
 
     for close_by in [FREE_SPACE, LIMITS] {
-        window.press("ctrl-l", cx);
+        window.press("secondary-l", cx);
         window.type_text("512", cx);
         assert_eq!(window.checked(DOWN_SWITCH, cx), Some(true), "{close_by}");
         window.click(close_by, cx);
         assert!(!window.limits_open(cx), "{close_by}");
         assert_eq!(window.sent(), [], "{close_by}");
 
-        window.press("ctrl-l", cx);
+        window.press("secondary-l", cx);
         assert_eq!(window.value(DOWN, cx).as_deref(), Some("98"), "{close_by}");
         assert_eq!(window.checked(DOWN_SWITCH, cx), Some(false), "{close_by}");
         window.press("escape", cx);
@@ -1128,7 +1136,7 @@ fn a_click_on_blank_space_in_the_popover_keeps_the_field_focused(cx: &mut TestAp
 
     // The gap between a switch and its field belongs to the form, which must not take the focus
     // from the field: what is typed still goes into it, and so does Enter.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     assert!(window.focused(DOWN, cx));
     window.click_between(DOWN_SWITCH, DOWN, cx);
     assert!(window.limits_open(cx));
@@ -1139,7 +1147,7 @@ fn a_click_on_blank_space_in_the_popover_keeps_the_field_focused(cx: &mut TestAp
     assert!(!window.limits_open(cx));
 
     // The same in the upload row.
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.click(UP, cx);
     window.click_between(UP_SWITCH, UP, cx);
     assert!(window.focused(UP, cx), "the field keeps the focus");
@@ -1153,7 +1161,7 @@ fn a_click_on_blank_space_in_the_popover_keeps_the_field_focused(cx: &mut TestAp
 fn the_popover_survives_a_switch_to_another_app(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send_limits(off(), off(), false, cx);
-    window.press("ctrl-l", cx);
+    window.press("secondary-l", cx);
     window.type_text("512", cx);
 
     // The focus leaves the window with the activation, which is no reason to close the popover.

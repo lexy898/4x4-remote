@@ -16,7 +16,7 @@ use gpui_kit::test::{ClickOptions, TestWindowExt as _};
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, Focusable as _, InputEvent as _,
     KeyContext, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point, TestAppContext,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext,
 };
 use x4_app::actions::{RemoveTorrents, RemoveTorrentsWithData};
 use x4_app::app;
@@ -306,7 +306,8 @@ impl Window {
     )]
     fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
         let down = KeyDownEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
             is_held: held,
             prefer_character_input: false,
         };
@@ -322,7 +323,8 @@ impl Window {
     )]
     fn key_up(&self, key: &str, cx: &mut TestAppContext) {
         let up = KeyUpEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
         };
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)
@@ -599,7 +601,7 @@ fn shift_delete_only_opens_the_danger_dialog(cx: &mut TestAppContext) {
 fn cancel_has_focus_in_the_danger_dialog(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![torrent("a"), torrent("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
     window.press("shift-delete", cx);
 
@@ -692,7 +694,7 @@ fn clicking_delete_files_sends_remove_with_data_for_the_captured_hashes(cx: &mut
     let window = Window::open(cx);
     let names = ["a", "b", "c", "d", "e", "f", "g"];
     window.send(names.into_iter().map(gibibyte).collect(), cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     window.press("shift-delete", cx);
     assert_eq!(window.names(cx), 5, "five names, and how many more");
 
@@ -882,11 +884,17 @@ fn the_remove_button_asks_either_way_from_its_menu(cx: &mut TestAppContext) {
     assert!(window.table_focused(cx));
 
     // The tooltip names the key: it looks the action's key up in the torrent list's context.
-    window.act(cx, |window, _| {
+    window.act(cx, |window, cx| {
         let list = KeyContext::parse("TorrentList").expect("a key context");
+        // The Mac removes with ⌘⌫ and ⌥⌘⌫, which are bound after Delete and win.
+        let (remove, remove_with_data) = if cfg!(target_os = "macos") {
+            ("cmd-backspace", "cmd-alt-backspace")
+        } else {
+            ("delete", "shift-delete")
+        };
         for (action, keys) in [
-            (&RemoveTorrents as &dyn gpui_kit::Action, "delete"),
-            (&RemoveTorrentsWithData, "shift-delete"),
+            (&RemoveTorrents as &dyn gpui_kit::Action, remove),
+            (&RemoveTorrentsWithData, remove_with_data),
         ] {
             let binding = window
                 .highest_precedence_binding_for_action_in_context(action, list.clone())
@@ -894,7 +902,7 @@ fn the_remove_button_asks_either_way_from_its_menu(cx: &mut TestAppContext) {
             let shown: Vec<String> = binding
                 .keystrokes()
                 .iter()
-                .map(|keystroke| keystroke.unparse(OperatingSystem::Linux))
+                .map(|keystroke| keystroke.unparse(cx.platform_info().os))
                 .collect();
             assert_eq!(shown, [keys]);
         }
@@ -913,7 +921,7 @@ fn focus_keys_in_an_open_toolbar_menu_do_nothing(cx: &mut TestAppContext) {
     for button in [REMOVE, COLUMNS] {
         window.click(button, cx);
         assert!(window.shown(MENU, cx), "{button}");
-        for key in ["tab", "shift-tab", "ctrl-f", "/"] {
+        for key in ["tab", "shift-tab", "secondary-f", "/"] {
             window.press(key, cx);
             assert!(
                 window.shown(MENU, cx),
@@ -931,7 +939,7 @@ fn focus_keys_in_an_open_toolbar_menu_do_nothing(cx: &mut TestAppContext) {
         window.press("escape", cx);
         assert!(!window.shown(MENU, cx), "{button}");
     }
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     assert!(
         window.focused(SEARCH, cx),
         "closed, the menus let Ctrl+F work again"
@@ -942,9 +950,9 @@ fn focus_keys_in_an_open_toolbar_menu_do_nothing(cx: &mut TestAppContext) {
 fn delete_in_the_search_box_edits_text_and_opens_no_dialog(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![torrent("ab"), torrent("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.act(cx, |window, cx| window.input("ab", cx));
     window.press("home", cx);
     window.press("delete", cx);
@@ -1024,7 +1032,7 @@ fn names_are_shown_in_full_however_long(cx: &mut TestAppContext) {
         vec![torrent(&long(2019)), torrent(&long(2020)), torrent("x")],
         cx,
     );
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     window.press("shift-delete", cx);
 
     assert_eq!(window.text((NAME, 0_usize), cx), Some(long(2019)));
@@ -1043,7 +1051,7 @@ fn names_are_shown_in_full_however_long(cx: &mut TestAppContext) {
 fn a_failed_removal_is_shown(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![torrent("a"), torrent("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     window.press("shift-delete", cx);
     Window::let_the_buttons_arm(cx);
     window.click(DANGER_CONFIRM, cx);
@@ -1071,7 +1079,7 @@ fn a_double_click_on_the_menu_item_does_not_delete_files(cx: &mut TestAppContext
     let window = Window::open(cx);
     let names = ["a", "b", "c", "d", "e", "f", "g"];
     window.send(names.into_iter().map(torrent).collect(), cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     let point = window.item_over_button("shift-delete", DANGER_CONFIRM, REMOVE_WITH_DATA, cx);
 
     window.click_at(point, 1, cx);
@@ -1107,7 +1115,7 @@ fn open_with_a_click_on_the_item(
 ) -> (Window, Point<Pixels>, Timeline) {
     let window = Window::open(cx);
     window.send(SEVEN.into_iter().map(torrent).collect(), cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     let point = window.item_over_button(key, button, label, cx);
 
     let clock = Timeline::start(cx);
@@ -1221,7 +1229,7 @@ fn a_double_click_on_the_menu_item_does_not_remove_from_list(cx: &mut TestAppCon
     let window = Window::open(cx);
     let names = ["a", "b", "c", "d", "e", "f", "g"];
     window.send(names.into_iter().map(torrent).collect(), cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     let point = window.item_over_button("delete", LIGHT_CONFIRM, REMOVE_FROM_LIST, cx);
 
     window.click_at(point, 1, cx);

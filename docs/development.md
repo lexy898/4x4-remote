@@ -267,10 +267,10 @@ never contacted. "Synthetic torrent 0016" (`--select 15`; with `--static`, "Synt
 `--select 10`) is busy: it downloads from 150 peers and has a tracker of every status, so that `just
 virtual just demo-synthetic --select 15 --press alt-3` shows a long Peers tab and `--press alt-4`
 the Trackers tab with each kind of row. `--press KEY`, which can be given several times, presses
-each key in turn once the list is there and selected, one every three seconds, as on the keyboard:
-for example `just virtual just demo-synthetic --static --select 5 --press ctrl-p --press space`
+each key in turn once the list is there and selected, one every three seconds, as on the keyboard
+(`secondary-` is Ctrl, or ⌘ on macOS): for example `just virtual just demo-synthetic --static --select 5 --press secondary-p --press space`
 pauses the sixth torrent and starts it again, `--press shift-delete` opens the dialog that would
-delete its files, and `--press ctrl-o` opens the desktop's file dialog, with its filter for torrent
+delete its files, and `--press secondary-o` opens the desktop's file dialog, with its filter for torrent
 files. `--add PATH_OR_MAGNET`, which can also be given several times, asks to add each `.torrent`
 file or magnet link at the start, as if 4x4 had been opened with them, which opens the add dialog;
 what it does not open makes its notification. The window is set to a made-up server,

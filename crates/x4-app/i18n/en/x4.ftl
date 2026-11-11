@@ -124,7 +124,7 @@ connection-service-stopped = Service stopped
 connection-service-failed = Service could not start
 # No server has been set yet: the status bar's words and the tooltip that says what to do.
 connection-not-configured = No server set
-connection-not-configured-detail = Set the server in Connection (Ctrl+,)
+connection-not-configured-detail = Set the server in Connection ({ $shortcut })
 
 ## The Connection dialog, where the server is set
 
@@ -230,7 +230,7 @@ theme-switch-tooltip = Switch between the system, light and dark themes
 # The toolbar button that opens the Connection dialog, where the server is set: its name for screen
 # readers, and its tooltip, which names its key.
 toolbar-connection = Connection
-toolbar-connection-tooltip = Connection (Ctrl+,)
+toolbar-connection-tooltip = Connection ({ $shortcut })
 
 # The toolbar buttons that add torrents: their names for screen readers, which their tooltips show
 # too, with the key. Add file opens the file dialog to choose .torrent files; Add magnet adds the
@@ -574,7 +574,11 @@ filter-label =
 ## The search box
 
 # What the empty search box says: what it is for, and the key that moves the focus to it.
-search-placeholder = Search (Ctrl+F)
+search-placeholder = Search ({ $shortcut })
+
+# The name of a shortcut of the secondary modifier: Ctrl, and Command on macOS.
+shortcut-secondary = Ctrl+{ $key }
+shortcut-secondary-mac = ⌘{ $key }
 
 ## The torrent list
 

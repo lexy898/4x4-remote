@@ -14,7 +14,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, ElementId, Entity, Focusable as _,
     InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, OperatingSystem, Pixels, Point, Role, TestAppContext, px,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, TestAppContext, px,
 };
 use x4_app::app;
 use x4_app::main_view::MainView;
@@ -320,7 +320,8 @@ impl Window {
     )]
     fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
         let down = KeyDownEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
             is_held: held,
             prefer_character_input: false,
         };
@@ -336,7 +337,8 @@ impl Window {
     )]
     fn key_up(&self, key: &str, cx: &mut TestAppContext) {
         let up = KeyUpEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
         };
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)

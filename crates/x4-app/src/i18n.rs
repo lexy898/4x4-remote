@@ -23,7 +23,7 @@ use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Datelike as _, TimeZone, Timelike as _};
-use gpui_kit::SharedString;
+use gpui_kit::{OperatingSystem, SharedString};
 use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
 use i18n_embed::{I18nAssets, LanguageLoader as _};
 use rust_embed::RustEmbed;
@@ -333,9 +333,43 @@ pub(crate) fn filter_label_text(filter: Filter, count: Option<usize>) -> SharedS
     }
 }
 
-/// What the empty search box says: "Search (Ctrl+F)".
-pub(crate) fn search_placeholder_text() -> SharedString {
-    t!("search-placeholder").into()
+/// How a shortcut of the secondary modifier, `key` with Ctrl (or ⌘ on macOS), is named on `os`:
+/// "Ctrl+F", or "⌘F" on the Mac.
+pub(crate) fn secondary_shortcut_text(os: OperatingSystem, key: &str) -> SharedString {
+    if os == OperatingSystem::Mac {
+        t!("shortcut-secondary-mac", key = key)
+    } else {
+        t!("shortcut-secondary", key = key)
+    }
+    .into()
+}
+
+/// What the empty search box says: "Search (Ctrl+F)", or "Search (⌘F)" on the Mac.
+pub(crate) fn search_placeholder_text(os: OperatingSystem) -> SharedString {
+    t!(
+        "search-placeholder",
+        shortcut = secondary_shortcut_text(os, "F").to_string()
+    )
+    .into()
+}
+
+/// The tooltip of the toolbar's Connection button: "Connection (Ctrl+,)".
+pub(crate) fn connection_tooltip_text(os: OperatingSystem) -> SharedString {
+    t!(
+        "toolbar-connection-tooltip",
+        shortcut = secondary_shortcut_text(os, ",").to_string()
+    )
+    .into()
+}
+
+/// What the connection indicator says while no server is set: "Set the server in Connection
+/// (Ctrl+,)".
+pub(crate) fn not_configured_detail_text(os: OperatingSystem) -> SharedString {
+    t!(
+        "connection-not-configured-detail",
+        shortcut = secondary_shortcut_text(os, ",").to_string()
+    )
+    .into()
 }
 
 /// How many torrents the list shows, such as "3 torrents".

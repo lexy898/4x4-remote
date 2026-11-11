@@ -14,7 +14,7 @@ use std::sync::Arc;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, InputEvent as _, KeyContext,
-    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, OperatingSystem, TestAppContext,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, TestAppContext,
 };
 use x4_app::actions::{PauseTorrents, StartTorrents};
 use x4_app::app;
@@ -158,7 +158,8 @@ impl Window {
     )]
     fn key_down(&self, key: &str, held: bool, cx: &mut TestAppContext) {
         let down = KeyDownEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
             is_held: held,
             prefer_character_input: false,
         };
@@ -174,7 +175,8 @@ impl Window {
     )]
     fn key_up(&self, key: &str, cx: &mut TestAppContext) {
         let up = KeyUpEvent {
-            keystroke: Keystroke::parse_with_os(key, OperatingSystem::Linux).expect("a valid key"),
+            keystroke: Keystroke::parse_with_os(key, cx.update(|cx| cx.platform_info().os))
+                .expect("a valid key"),
         };
         self.act(cx, |window, cx| {
             window.dispatch_event(up.to_platform_input(), cx)
@@ -281,7 +283,7 @@ fn ctrl_s_starts_the_selected_paused_torrents(cx: &mut TestAppContext) {
     window.ctrl_click_row(0, cx);
     window.ctrl_click_row(2, cx);
 
-    window.press("ctrl-s", cx);
+    window.press("secondary-s", cx);
 
     let (_, action) = window.sent_action();
     assert_eq!(action, Action::Start(hashes(&["a", "c", "d"])));
@@ -292,7 +294,7 @@ fn space_pauses_when_any_target_runs(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a"), downloading("b"), paused("c")], cx);
 
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     window.press("space", cx);
     assert_eq!(
         window.sent_action().1,
@@ -322,18 +324,18 @@ fn start_now_and_verify_and_reannounce_send_their_actions(cx: &mut TestAppContex
         ],
         cx,
     );
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
-    window.press("ctrl-shift-s", cx);
+    window.press("secondary-shift-s", cx);
     let (start_now, action) = window.sent_action();
     assert_eq!(action, Action::StartNow(hashes(&["a", "b", "c"])));
-    window.press("ctrl-shift-r", cx);
+    window.press("secondary-shift-r", cx);
     let (verify, action) = window.sent_action();
     assert_eq!(action, Action::Verify(hashes(&["a", "b", "c"])));
-    window.press("ctrl-r", cx);
+    window.press("secondary-r", cx);
     let (reannounce, action) = window.sent_action();
     assert_eq!(action, Action::Reannounce(hashes(&["a", "b", "c"])));
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (pause, action) = window.sent_action();
     assert_eq!(action, Action::Stop(hashes(&["a", "b", "c"])));
 
@@ -342,11 +344,11 @@ fn start_now_and_verify_and_reannounce_send_their_actions(cx: &mut TestAppContex
 
     // Reannouncing reaches only torrents that run, and starting now only those that do not.
     window.click_row(0, cx);
-    window.press("ctrl-r", cx);
+    window.press("secondary-r", cx);
     assert_eq!(window.sent(), [], "a paused torrent is not announced");
     window.click_row(1, cx);
-    window.press("ctrl-shift-s", cx);
-    window.press("ctrl-s", cx);
+    window.press("secondary-shift-s", cx);
+    window.press("secondary-s", cx);
     assert_eq!(
         window.sent(),
         [],
@@ -381,13 +383,13 @@ fn toolbar_buttons_follow_availability(cx: &mut TestAppContext) {
 
     // The buttons are named for screen readers, and their tooltips name the keys: a tooltip looks
     // its action's key up in the torrent list's context, as here.
-    window.act(cx, |window, _| {
+    window.act(cx, |window, cx| {
         assert_eq!(window.find(START).label(), Some("Start"));
         assert_eq!(window.find(PAUSE).label(), Some("Pause"));
         let list = KeyContext::parse("TorrentList").expect("a key context");
-        for (action, keys) in [
-            (&StartTorrents as &dyn gpui_kit::Action, "ctrl-s"),
-            (&PauseTorrents, "ctrl-p"),
+        for (action, key) in [
+            (&StartTorrents as &dyn gpui_kit::Action, "s"),
+            (&PauseTorrents, "p"),
         ] {
             let binding = window
                 .highest_precedence_binding_for_action_in_context(action, list.clone())
@@ -395,9 +397,14 @@ fn toolbar_buttons_follow_availability(cx: &mut TestAppContext) {
             let shown: Vec<String> = binding
                 .keystrokes()
                 .iter()
-                .map(|keystroke| keystroke.unparse(OperatingSystem::Linux))
+                .map(|keystroke| keystroke.unparse(cx.platform_info().os))
                 .collect();
-            assert_eq!(shown, [keys]);
+            let modifier = if cfg!(target_os = "macos") {
+                "cmd"
+            } else {
+                "ctrl"
+            };
+            assert_eq!(shown, [format!("{modifier}-{key}")]);
         }
     });
 }
@@ -442,7 +449,7 @@ fn a_toolbar_button_hands_the_keys_back_to_the_list(cx: &mut TestAppContext) {
     window.click(PAUSE, cx);
     assert!(window.table_focused(cx));
     window.press("down", cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent_action().1, Action::Stop(hashes(&["b"])));
 }
 
@@ -476,7 +483,7 @@ fn toolbar_enables_start_when_a_paused_row_gets_selected(cx: &mut TestAppContext
 fn actions_do_nothing_while_disconnected(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a"), torrent("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     assert!(window.availability(cx).pause);
 
     window.send_with(vec![paused("a"), torrent("b")], reconnecting(), cx);
@@ -490,12 +497,12 @@ fn actions_do_nothing_while_disconnected(cx: &mut TestAppContext) {
         "only copying the hashes works offline"
     );
     for key in [
-        "ctrl-s",
-        "ctrl-p",
+        "secondary-s",
+        "secondary-p",
         "space",
-        "ctrl-shift-s",
-        "ctrl-shift-r",
-        "ctrl-r",
+        "secondary-shift-s",
+        "secondary-shift-r",
+        "secondary-r",
     ] {
         window.press(key, cx);
     }
@@ -507,13 +514,13 @@ fn actions_do_nothing_while_disconnected(cx: &mut TestAppContext) {
 
     // Connected again: the same keys act.
     window.send(vec![paused("a"), torrent("b")], cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent_action().1, Action::Stop(hashes(&["a", "b"])));
 
     // A service that stopped sends nothing more.
     window.events.close();
     cx.run_until_parked();
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     window.click(PAUSE, cx);
     assert_eq!(window.sent(), []);
     assert!(window.disabled(PAUSE, cx));
@@ -544,17 +551,17 @@ fn holding_space_sends_one_command(cx: &mut TestAppContext) {
     window.finish(id, Ok(()), cx);
 
     // X11 does not mark its repeats, but sends no key-up between them either.
-    window.key_down("ctrl-shift-r", false, cx);
+    window.key_down("secondary-shift-r", false, cx);
     let (id, action) = window.sent_action();
     assert_eq!(action, Action::Verify(hashes(&["a"])));
     window.finish(id, Ok(()), cx);
-    window.key_down("ctrl-shift-r", false, cx);
+    window.key_down("secondary-shift-r", false, cx);
     assert_eq!(
         window.sent(),
         [],
         "every action key works so, not only Space"
     );
-    window.key_up("ctrl-shift-r", cx);
+    window.key_up("secondary-shift-r", cx);
 
     // Keys that are not actions still repeat: a held Down moves on with every repeat.
     window.send(
@@ -562,7 +569,7 @@ fn holding_space_sends_one_command(cx: &mut TestAppContext) {
         cx,
     );
     window.hold("down", 2, cx);
-    window.press("ctrl-r", cx);
+    window.press("secondary-r", cx);
     assert_eq!(window.sent_action().1, Action::Reannounce(hashes(&["d"])));
 }
 
@@ -607,32 +614,32 @@ fn an_identical_pending_request_is_not_sent_again(cx: &mut TestAppContext) {
     window.send(vec![downloading("a"), downloading("b"), paused("c")], cx);
     window.click_row(0, cx);
     window.ctrl_click_row(1, cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (first, action) = window.sent_action();
     assert_eq!(action, Action::Stop(hashes(&["a", "b"])));
 
     // Pressed again, or Pause clicked twice, before the daemon has answered: the same pause is on
     // its way already.
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     window.press("space", cx);
     window.click(PAUSE, cx);
     window.click(PAUSE, cx);
     assert_eq!(window.sent(), []);
 
     // Another action on the same torrents goes, and so does the same action on others.
-    window.press("ctrl-r", cx);
+    window.press("secondary-r", cx);
     assert_eq!(
         window.sent_action().1,
         Action::Reannounce(hashes(&["a", "b"]))
     );
     window.click_row(0, cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent_action().1, Action::Stop(hashes(&["a"])));
 
     // Once the daemon has answered, the same pause can go again.
     window.finish(first, Ok(()), cx);
     window.ctrl_click_row(1, cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     assert_eq!(window.sent_action().1, Action::Stop(hashes(&["a", "b"])));
 }
 
@@ -640,13 +647,13 @@ fn an_identical_pending_request_is_not_sent_again(cx: &mut TestAppContext) {
 fn a_repeated_choice_after_a_different_action_is_sent(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![downloading("a"), paused("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
     // Pause, then Start, then Pause again, before the daemon has answered any of them: the last
     // press is what the user wants, and the daemon runs the commands in order.
-    window.press("ctrl-p", cx);
-    window.press("ctrl-s", cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
+    window.press("secondary-s", cx);
+    window.press("secondary-p", cx);
 
     let sent: Vec<Action> = window
         .sent()
@@ -671,9 +678,9 @@ fn a_repeated_choice_after_a_different_action_is_sent(cx: &mut TestAppContext) {
 fn a_selected_row_the_search_hides_is_not_acted_on(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("alpha"), paused("beta")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.act(cx, |window, cx| window.input("beta", cx));
     window.click(START, cx);
 
@@ -684,9 +691,9 @@ fn a_selected_row_the_search_hides_is_not_acted_on(cx: &mut TestAppContext) {
 fn delete_and_space_in_the_search_box_edit_text(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a b"), torrent("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.act(cx, |window, cx| window.input("a", cx));
     window.press("space", cx);
     window.act(cx, |window, cx| window.input("b", cx));
@@ -706,8 +713,8 @@ fn delete_and_space_in_the_search_box_edit_text(cx: &mut TestAppContext) {
 fn a_failed_action_is_shown_with_its_count(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![paused("a"), paused("b"), torrent("c")], cx);
-    window.press("ctrl-a", cx);
-    window.press("ctrl-s", cx);
+    window.press("secondary-a", cx);
+    window.press("secondary-s", cx);
     let (id, _) = window.sent_action();
     assert_eq!(window.last_failure(cx), None);
 
@@ -727,7 +734,7 @@ fn a_failed_action_is_shown_with_its_count(cx: &mut TestAppContext) {
 
     // A success shows nothing: the next snapshot shows what changed.
     window.click_row(2, cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (id, _) = window.sent_action();
     window.finish(id, Ok(()), cx);
     assert_eq!(
@@ -737,7 +744,7 @@ fn a_failed_action_is_shown_with_its_count(cx: &mut TestAppContext) {
     );
 
     // A refused action: the daemon went away before it was sent.
-    window.press("ctrl-shift-r", cx);
+    window.press("secondary-shift-r", cx);
     let (id, _) = window.sent_action();
     window.finish(id, Err(ActionError::NotConnected), cx);
     assert_eq!(
@@ -750,8 +757,8 @@ fn a_failed_action_is_shown_with_its_count(cx: &mut TestAppContext) {
 fn a_timed_out_action_says_it_may_have_happened(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(vec![downloading("a"), torrent("b")], cx);
-    window.press("ctrl-a", cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-a", cx);
+    window.press("secondary-p", cx);
     let (id, _) = window.sent_action();
 
     window.finish(id, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
@@ -771,9 +778,9 @@ fn a_pause_failure_and_a_verify_failure_are_both_shown(cx: &mut TestAppContext) 
     let window = Window::open(cx);
     window.send(vec![downloading("a"), torrent("b")], cx);
     window.click_row(0, cx);
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (pause, _) = window.sent_action();
-    window.press("ctrl-shift-r", cx);
+    window.press("secondary-shift-r", cx);
     let (verify, _) = window.sent_action();
 
     let busy = || Err(ActionError::Rpc(ConnectionError::Server("busy".to_owned())));
@@ -787,7 +794,7 @@ fn a_pause_failure_and_a_verify_failure_are_both_shown(cx: &mut TestAppContext) 
     );
 
     // A newer failure of a pause takes the place of the older one.
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
     let (pause, _) = window.sent_action();
     window.finish(pause, Err(ActionError::Rpc(ConnectionError::Timeout)), cx);
     assert_eq!(window.notifications(cx), 2);
@@ -804,7 +811,7 @@ fn a_pause_failure_and_a_verify_failure_are_both_shown(cx: &mut TestAppContext) 
 fn an_action_the_service_cannot_take_says_nothing_was_sent(cx: &mut TestAppContext) {
     let mut window = Window::open(cx);
     window.send(vec![downloading("a"), downloading("b")], cx);
-    window.press("ctrl-a", cx);
+    window.press("secondary-a", cx);
     // The service's end of the commands is gone, while the window still thinks it connected.
     drop(std::mem::replace(
         &mut window.commands,
@@ -812,7 +819,7 @@ fn an_action_the_service_cannot_take_says_nothing_was_sent(cx: &mut TestAppConte
     ));
     assert!(window.availability(cx).pause);
 
-    window.press("ctrl-p", cx);
+    window.press("secondary-p", cx);
 
     assert_eq!(
         window.last_failure(cx).as_deref(),

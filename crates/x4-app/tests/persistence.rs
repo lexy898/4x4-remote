@@ -408,7 +408,7 @@ fn typing_in_the_search_box_never_saves(cx: &mut TestAppContext) {
     let dir = temp_dir();
     let window = Window::open(&dir.path().join("state.toml"), cx);
 
-    window.act(cx, |window, cx| window.press("ctrl-f", cx));
+    window.act(cx, |window, cx| window.press("secondary-f", cx));
     for key in ["u", "b", "u"] {
         window.act(cx, |window, cx| window.input(key, cx));
         advance(400, cx);
@@ -424,7 +424,7 @@ fn typing_in_the_search_box_never_saves(cx: &mut TestAppContext) {
     // Typing does not hold back the save of a real change either.
     window.click_size_header(cx);
     advance(500, cx);
-    window.act(cx, |window, cx| window.press("ctrl-f", cx));
+    window.act(cx, |window, cx| window.press("secondary-f", cx));
     window.act(cx, |window, cx| window.input("n", cx));
     advance(500, cx);
     assert_eq!(window.saves(cx), 1);

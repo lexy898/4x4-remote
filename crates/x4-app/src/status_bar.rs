@@ -22,15 +22,16 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, App, ClickEvent, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TestSupportExt as _, Window, div, px,
+    OperatingSystem, ParentElement as _, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, TestSupportExt as _, Window, div, px,
 };
 use x4_core::{Indicator, StatusModel};
 
 use crate::app::ConfigProblem;
 use crate::i18n::{
     alt_speed_tooltip_text, config_problem_text, connected_to_text, connection_reason_detail_text,
-    connection_text, download_rate_text, free_space_text, limits_button_text, t, upload_rate_text,
+    connection_text, download_rate_text, free_space_text, limits_button_text,
+    not_configured_detail_text, t, upload_rate_text,
 };
 use crate::keymap::{EditSpeedLimits, MAIN_CONTEXT, ToggleAltSpeed};
 use crate::main_view::MainView;
@@ -43,7 +44,11 @@ const DOT_SIZE: f32 = 8.;
 /// The tooltip of the connection indicator, when there is more to say than its text: what the
 /// dot alone means, with the name of `server` (`host:port`) when the window knows it, or why the
 /// last try to reconnect failed.
-fn connection_tooltip(indicator: &Indicator, server: Option<&str>) -> Option<SharedString> {
+fn connection_tooltip(
+    indicator: &Indicator,
+    server: Option<&str>,
+    os: OperatingSystem,
+) -> Option<SharedString> {
     match indicator {
         Indicator::Connected => {
             Some(server.map_or_else(|| t!("connection-connected").into(), connected_to_text))
@@ -51,7 +56,7 @@ fn connection_tooltip(indicator: &Indicator, server: Option<&str>) -> Option<Sha
         Indicator::Reconnecting { last_error, .. } => {
             Some(connection_reason_detail_text(last_error))
         }
-        Indicator::NotConfigured => Some(t!("connection-not-configured-detail").into()),
+        Indicator::NotConfigured => Some(not_configured_detail_text(os)),
         Indicator::ServiceFailed
         | Indicator::ServiceStopped
         | Indicator::Unsupported(_)
@@ -204,7 +209,7 @@ fn connection_indicator(
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let label = connection_text(indicator);
-    let tooltip = connection_tooltip(indicator, server);
+    let tooltip = connection_tooltip(indicator, server, cx.platform_info().os);
     // The dot alone says nothing to a screen reader, so the indicator is named either way.
     let name = if label.is_empty() {
         tooltip.clone().unwrap_or_default()
@@ -307,12 +312,16 @@ mod tests {
     #[test]
     fn the_tooltip_explains_the_dot_and_the_reconnect_reason() {
         assert_eq!(
-            connection_tooltip(&Indicator::Connected, None),
+            connection_tooltip(&Indicator::Connected, None, OperatingSystem::Linux),
             Some("Connected".into()),
             "a window that knows no server"
         );
         assert_eq!(
-            connection_tooltip(&Indicator::Connected, Some("nas:9091")),
+            connection_tooltip(
+                &Indicator::Connected,
+                Some("nas:9091"),
+                OperatingSystem::Linux
+            ),
             Some("Connected to nas:9091".into())
         );
         assert_eq!(
@@ -321,7 +330,8 @@ mod tests {
                     attempt: 1,
                     last_error: ConnectionError::Unauthorized,
                 },
-                Some("nas:9091")
+                Some("nas:9091"),
+                OperatingSystem::Linux
             ),
             Some("The server rejected the credentials".into())
         );
@@ -332,7 +342,7 @@ mod tests {
             Indicator::Unsupported(UnsupportedReason::NoVersion),
         ] {
             assert_eq!(
-                connection_tooltip(&indicator, Some("nas:9091")),
+                connection_tooltip(&indicator, Some("nas:9091"), OperatingSystem::Linux),
                 None,
                 "the text says it all: {indicator:?}"
             );
@@ -342,8 +352,12 @@ mod tests {
     #[test]
     fn the_tooltip_without_a_server_says_where_to_set_one() {
         assert_eq!(
-            connection_tooltip(&Indicator::NotConfigured, None),
+            connection_tooltip(&Indicator::NotConfigured, None, OperatingSystem::Linux),
             Some("Set the server in Connection (Ctrl+,)".into())
+        );
+        assert_eq!(
+            connection_tooltip(&Indicator::NotConfigured, None, OperatingSystem::Mac),
+            Some("Set the server in Connection (⌘,)".into())
         );
     }
 }

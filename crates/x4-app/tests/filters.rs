@@ -12,7 +12,10 @@ use std::sync::Arc;
 
 use gpui_kit::component::table::TableState;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, TestAppContext};
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, Entity, Focusable as _, OperatingSystem, PlatformInfo,
+    TestAppContext,
+};
 use x4_app::app;
 use x4_app::main_view::MainView;
 use x4_app::torrent_table::TorrentTable;
@@ -34,11 +37,21 @@ struct Window {
 }
 
 impl Window {
+    fn open(cx: &mut TestAppContext) -> Self {
+        Self::open_as(None, cx)
+    }
+
+    /// Opens the window on the OS `os`, or on the host's when it is `None`: the keys are bound
+    /// for the OS the app is told it runs on.
     #[expect(
         clippy::expect_used,
         reason = "a test helper: a window that does not open fails the test"
     )]
-    fn open(cx: &mut TestAppContext) -> Self {
+    fn open_as(os: Option<OperatingSystem>, cx: &mut TestAppContext) -> Self {
+        if let Some(os) = os {
+            let info = cx.update(|cx| cx.platform_info());
+            cx.set_platform_info(PlatformInfo { os, ..info });
+        }
         let (events, events_rx) = async_channel::unbounded();
         let (commands_tx, commands) = crossbeam_channel::unbounded();
         let (handle, view) = cx
@@ -245,7 +258,7 @@ fn sidebar_counts_match_snapshot(cx: &mut TestAppContext) {
 
     // Neither the filter nor the search changes the counts.
     window.click_filter(Filter::Paused, cx);
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.type_text("one", cx);
     assert_eq!(window.names(cx), ["paused one"]);
     for filter in Filter::ALL {
@@ -325,13 +338,28 @@ fn clicking_a_filter_filters_rows(cx: &mut TestAppContext) {
     );
 }
 
+/// On the Mac the key to search is ⌘F, and Ctrl+F is no key of the app there.
+#[gpui_kit::test]
+fn command_f_focuses_the_search_box_on_the_mac(cx: &mut TestAppContext) {
+    let window = Window::open_as(Some(OperatingSystem::Mac), cx);
+    window.send(zoo(), cx);
+    assert!(window.table_focused(cx), "the table has the focus at first");
+
+    window.press("ctrl-f", cx);
+    assert!(!window.search_focused(cx), "Ctrl+F does nothing on the Mac");
+    assert!(window.table_focused(cx));
+
+    window.press("cmd-f", cx);
+    assert!(window.search_focused(cx));
+}
+
 #[gpui_kit::test]
 fn ctrl_f_and_slash_focus_search(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(zoo(), cx);
     assert!(window.table_focused(cx), "the table has the focus at first");
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     assert!(window.search_focused(cx));
 
     window.press("escape", cx);
@@ -344,7 +372,7 @@ fn ctrl_f_and_slash_focus_search(cx: &mut TestAppContext) {
 
     // Ctrl+F in the box selects what is there, so that typing replaces it.
     window.type_text("old", cx);
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     assert!(window.search_focused(cx));
     window.type_text("new", cx);
     assert_eq!(window.search_text(cx), "new");
@@ -355,7 +383,7 @@ fn slash_in_search_box_types_a_slash(cx: &mut TestAppContext) {
     let window = Window::open(cx);
     window.send(zoo(), cx);
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.type_text("a/b", cx);
 
     assert_eq!(window.search_text(cx), "a/b");
@@ -375,7 +403,7 @@ fn search_filters_case_insensitively(cx: &mut TestAppContext) {
         cx,
     );
 
-    window.press("ctrl-f", cx);
+    window.press("secondary-f", cx);
     window.type_text("лассо", cx);
 
     assert_eq!(window.names(cx), ["Тед Лассо S01"]);
@@ -424,5 +452,12 @@ fn the_search_box_has_a_placeholder(cx: &mut TestAppContext) {
         window.find(SEARCH).placeholder().map(str::to_owned)
     });
 
-    assert_eq!(placeholder.as_deref(), Some("Search (Ctrl+F)"));
+    assert_eq!(
+        placeholder.as_deref(),
+        Some(if cfg!(target_os = "macos") {
+            "Search (⌘F)"
+        } else {
+            "Search (Ctrl+F)"
+        })
+    );
 }
