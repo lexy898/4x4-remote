@@ -18,6 +18,65 @@ just run
 The second command installs the system libraries the GUI toolkit builds and links against; Wayland
 and the Vulkan loader are loaded at runtime. `Ctrl+Q` or closing the window quits.
 
+## Windows and macOS
+
+4x4 is developed on Linux, and CI also builds it and runs its tests on Windows and macOS. Next to
+`check`, which runs the whole gate on Ubuntu, two jobs of [`ci.yml`](../.github/workflows/ci.yml)
+run clippy and the tests on the other systems: `windows` on `windows-2025` and `macos` on
+`macos-15`. They take the toolchain of `check` (the MSRV on pushes and pull requests, the newest
+stable in the weekly run) and run:
+
+```bash
+cargo clippy --workspace --all-targets --features x4-app/synthetic --locked -- -D warnings
+cargo nextest run --workspace --features x4-app/synthetic --locked --no-tests=warn
+```
+
+The rest of the gate (formatting, spelling, the docs, the lint policy and the dependency checks)
+does not depend on the system, so only `check` runs it. The `windows` job turns off git's
+`core.autocrlf` before the checkout: Git for Windows would check text files out with CRLF line
+endings, and the tests that read committed text files, such as the README's table of keys, expect
+them as committed. A test of something only one kind of system has (a Unix socket, a FIFO, the XDG
+directories) is compiled for that kind alone; a test that gives its subject Unix paths has a twin
+for Windows with the same cases in Windows paths.
+
+CI runs on pull requests and on pushes to `master`. To run it on a branch before its pull request:
+`gh workflow run ci.yml --ref <branch>`.
+
+### The Windows quick check
+
+A CI round takes long, so check code for Windows on Linux before pushing it, above all code under
+`cfg(windows)`, which a Linux build never compiles. Clippy for the Windows target compiles and lints
+the workspace without linking it, so it needs neither Windows nor MSVC, only a rustup toolchain
+with the `x86_64-pc-windows-msvc` target. Arch's `rust` package has no rustup, so keep one in a
+folder of its own, apart from the system Rust:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    RUSTUP_HOME=$HOME/.cache/x4-scratch/cross/rustup \
+    CARGO_HOME=$HOME/.cache/x4-scratch/cross/cargo \
+    sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.99 \
+    --component clippy --target x86_64-pc-windows-msvc
+```
+
+Then, in the checkout:
+
+```bash
+RUSTUP_HOME=$HOME/.cache/x4-scratch/cross/rustup CARGO_HOME=$HOME/.cache/x4-scratch/cross/cargo \
+PATH=$HOME/.cache/x4-scratch/cross/cargo/bin:$PATH CARGO_TARGET_DIR=$HOME/.cache/x4-scratch/cross/target \
+cargo clippy --workspace --all-targets --features x4-app/synthetic --locked \
+  --target x86_64-pc-windows-msvc -- -D warnings
+```
+
+The build has a target directory of its own and leaves the one of `just check` alone. It runs no
+tests: they run in the `windows` job alone.
+
+### macOS in CI only
+
+macOS has no such check. Clippy for `aarch64-apple-darwin` stops at `gpui-pre-apple`, the macOS
+part of the GUI toolkit: its build script makes the Metal shaders of the renderer only when it runs
+on macOS, and the crate does not compile without them. The `macos` job is the only check of code
+for macOS, so a change to it needs a green CI run before it is merged.
+
 ## Packaging
 
 Without a checkout, the package is built from GitHub, as [Install](../README.md#install) says.
