@@ -953,9 +953,13 @@ fn a_date_is_written_in_the_zone_with_leading_zeros() {
 fn a_date_out_of_range_says_none() {
     let before = UNIX_EPOCH - Duration::from_secs(1);
     assert_eq!(date_time_in(before, &east(0)), "—");
-    // Some 31 million years ahead, past what a date can hold.
-    let far = UNIX_EPOCH + Duration::from_secs(1_000_000_000_000_000);
-    assert_eq!(date_time_in(far, &east(0)), "—");
+    // Some 31 million years ahead, past what a date can hold. Only Unix has such a time: on
+    // Windows, the times end in the year 30828, which a date still holds.
+    #[cfg(unix)]
+    {
+        let far = UNIX_EPOCH + Duration::from_secs(1_000_000_000_000_000);
+        assert_eq!(date_time_in(far, &east(0)), "—");
+    }
 }
 
 #[test]
