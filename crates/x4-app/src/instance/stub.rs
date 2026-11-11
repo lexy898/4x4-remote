@@ -15,12 +15,23 @@ pub struct Listener(Infallible);
 #[derive(Debug)]
 pub struct Serving(Infallible);
 
+// The app drops it on every system, as the Unix one lets the next launch take over when dropped.
+impl Drop for Serving {
+    fn drop(&mut self) {
+        match self.0 {}
+    }
+}
+
 impl Listener {
     /// Answers later launches by sending their requests into `adds`; never called here.
     ///
     /// # Errors
     ///
     /// None: no listener exists on this system.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "same signature as the Unix listener's, which keeps the sender"
+    )]
     pub fn serve(self, adds: async_channel::Sender<AddRequest>) -> io::Result<Serving> {
         let _ = adds;
         match self.0 {}

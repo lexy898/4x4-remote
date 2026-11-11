@@ -396,6 +396,7 @@ mod tests {
         assert!(!records.iter().any(|record| record.level == Level::ERROR));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_that_cannot_be_opened_is_logged_with_the_reason_of_the_system() {
         use std::os::unix::fs::PermissionsExt as _;

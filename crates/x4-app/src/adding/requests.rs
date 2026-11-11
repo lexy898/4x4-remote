@@ -248,7 +248,6 @@ fn open_without_waiting(path: &Path) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
 
     use x4_core::QUEUE_CAP;
     use x4_core::launch::RejectKind;
@@ -313,6 +312,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_fifo_is_refused_without_being_opened() {
         let dir = tempfile::tempdir().unwrap();
@@ -327,6 +327,7 @@ mod tests {
         assert_eq!(read_torrent(fifo).err(), Some(LoadError::NotAFile));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_fifo_opens_without_waiting_and_is_no_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -341,8 +342,11 @@ mod tests {
         assert_eq!(read_at_most(&fifo).err(), Some(LoadError::NotAFile));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_that_may_not_be_read_says_so() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("closed.torrent");
         fs::write(&path, ONE_FILE).unwrap();

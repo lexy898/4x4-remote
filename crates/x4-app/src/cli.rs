@@ -77,6 +77,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_argument_that_is_not_unicode_is_no_version_request() {
         use std::os::unix::ffi::OsStrExt;

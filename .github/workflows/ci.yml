@@ -51,3 +51,55 @@ jobs:
 
       - name: Run the full gate
         run: just check
+
+  # Lint and test on Windows and macOS. Only the Linux job runs the whole gate: formatting,
+  # spelling, docs and the dependency checks do not depend on the platform.
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      # Git for Windows checks text files out with CRLF line endings by default, which the tests
+      # that read the committed files byte for byte would see.
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ github.event_name == 'schedule' && 'stable' || '1.99' }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --features x4-app/synthetic --locked -- -D warnings
+
+      - name: Test
+        run: cargo nextest run --workspace --features x4-app/synthetic --locked --no-tests=warn
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ github.event_name == 'schedule' && 'stable' || '1.99' }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --features x4-app/synthetic --locked -- -D warnings
+
+      - name: Test
+        run: cargo nextest run --workspace --features x4-app/synthetic --locked --no-tests=warn
