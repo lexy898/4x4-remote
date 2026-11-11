@@ -597,6 +597,12 @@ mod tests {
     fn the_first_claim_is_primary_and_the_second_hands_off() {
         let dir = runtime_dir();
         let listener = primary_in(dir.path());
+        // macOS refuses the sticky bit on a file to a user who is not root.
+        let private = if cfg!(target_os = "macos") {
+            0o600
+        } else {
+            0o1600
+        };
         for name in [format!("{APP}.lock"), format!("{APP}.sock")] {
             let mode = fs::metadata(dir.path().join(&name))
                 .expect("there")
@@ -604,8 +610,8 @@ mod tests {
                 .mode();
             assert_eq!(
                 mode & 0o7777,
-                0o1600,
-                "{name}: the user's alone, and sticky"
+                private,
+                "{name}: the user's alone, and sticky but on macOS"
             );
         }
         let answered = answer_one(listener);
@@ -942,6 +948,59 @@ mod tests {
             claim_in(&not_a_dir, &launch(&[]), quick()),
             Claim::Standalone(StandaloneReason::UnsafeDir { .. })
         ));
+    }
+
+    #[test]
+    fn the_files_of_the_first_4x4_are_made_private_without_a_warning() {
+        let dir = runtime_dir();
+        let mut claimed = None;
+
+        let records = crate::test_log::records_of(|| {
+            claimed = Some(claim_in(dir.path(), &launch(&[]), quick()));
+        });
+
+        assert!(matches!(claimed, Some(Claim::Primary(_))), "{claimed:?}");
+        let warnings: Vec<_> = records
+            .iter()
+            .filter(|record| record.level == tracing::Level::WARN)
+            .collect();
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_socket_path_as_long_as_an_address_holds_is_bound_and_a_longer_one_is_not() {
+        let dir = runtime_dir();
+        let socket = format!("{APP}.sock");
+        // A runtime directory in `dir` whose socket path has `bytes` bytes.
+        let runtime_with_a_socket_path_of = |bytes: usize| {
+            let around = dir.path().as_os_str().len() + "/".len() + "/".len() + socket.len();
+            let runtime = dir.path().join("d".repeat(bytes - around));
+            fs::create_dir(&runtime).expect("made");
+            fs::set_permissions(&runtime, Permissions::from_mode(0o700)).expect("chmod");
+            assert_eq!(runtime.join(&socket).as_os_str().len(), bytes);
+            runtime
+        };
+
+        let longest = claim_in(
+            &runtime_with_a_socket_path_of(MAX_SOCKET_PATH),
+            &launch(&[]),
+            quick(),
+        );
+        let longer = claim_in(
+            &runtime_with_a_socket_path_of(MAX_SOCKET_PATH + 1),
+            &launch(&[]),
+            quick(),
+        );
+
+        assert!(matches!(longest, Claim::Primary(_)), "{longest:?}");
+        assert!(
+            matches!(
+                longer,
+                Claim::Standalone(StandaloneReason::PathTooLong { bytes })
+                    if bytes == MAX_SOCKET_PATH + 1
+            ),
+            "{longer:?}"
+        );
     }
 
     #[test]

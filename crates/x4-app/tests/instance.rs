@@ -20,11 +20,23 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+use tempfile::TempDir;
 use x4_app::app::{self, DEVEL_APP_ID, ServiceStart, Startup};
 use x4_app::instance::{Claim, Frame, Reply, Timeouts, claim_with};
 
 /// How long the binary may take to hand over and exit.
 const BINARY_LIMIT: Duration = Duration::from_secs(20);
+
+/// A temporary directory for the files of a test. On macOS it is made in `/tmp`: the user's own
+/// temporary directory there, `/var/folders/…/T/`, is so long that the socket of a runtime
+/// directory below it would not fit the 104 bytes of a socket address.
+fn temp_root() -> io::Result<TempDir> {
+    if cfg!(target_os = "macos") {
+        tempfile::tempdir_in("/tmp")
+    } else {
+        tempfile::tempdir()
+    }
+}
 
 /// The directory `name` in `parent`, of the user's alone: 0700, as logind makes the runtime
 /// directory.
@@ -84,14 +96,17 @@ fn magnet() -> String {
 
 #[test]
 fn the_real_binary_hands_off_to_a_test_held_primary() {
-    let root = tempfile::tempdir().expect("a temporary directory");
-    let runtime = private_dir(root.path(), "runtime");
-    let home = private_dir(root.path(), "home");
-    let config = private_dir(root.path(), "config");
-    let state = private_dir(root.path(), "state");
-    let data = private_dir(root.path(), "data");
-    let cache = private_dir(root.path(), "cache");
-    let work = private_dir(root.path(), "work");
+    let root = temp_root().expect("a temporary directory");
+    // The directory as the system names it, with its symbolic links resolved (on macOS, `/tmp` is
+    // one): the working directory the binary sends is that one.
+    let base = fs::canonicalize(root.path()).expect("a real path");
+    let runtime = private_dir(&base, "runtime");
+    let home = private_dir(&base, "home");
+    let config = private_dir(&base, "config");
+    let state = private_dir(&base, "state");
+    let data = private_dir(&base, "data");
+    let cache = private_dir(&base, "cache");
+    let work = private_dir(&base, "work");
     // Should the hand-off ever fail, the binary would run on its own: against a daemon that is
     // not there, and without a display to open its window on.
     fs::create_dir_all(config.join("4x4")).expect("made");
@@ -107,7 +122,7 @@ fn the_real_binary_hands_off_to_a_test_held_primary() {
         let reply = primary.answer_next(|frame| frames.send(frame).is_ok());
         assert_eq!(reply.expect("the binary connects"), Reply::Ok);
     });
-    let log = root.path().join("stderr.log");
+    let log = base.join("stderr.log");
     let link = magnet();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_4x4"))
@@ -157,7 +172,7 @@ fn the_real_binary_hands_off_to_a_test_held_primary() {
 #[gpui_kit::test]
 fn a_handed_off_magnet_opens_the_dialog_and_raises_the_window(cx: &mut TestAppContext) {
     const APP: &str = "io.github.lexy898.FourByFour.Test";
-    let root = tempfile::tempdir().expect("a temporary directory");
+    let root = temp_root().expect("a temporary directory");
     let runtime = private_dir(root.path(), "runtime");
     let primary = hold_primary(APP, &runtime);
     let startup = Startup::from_state_file(

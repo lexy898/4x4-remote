@@ -23,6 +23,17 @@ use x4_app::instance::{Claim, Frame, Timeouts, claim_with};
 /// How long the binary may take to print the version and exit.
 const BINARY_LIMIT: Duration = Duration::from_secs(20);
 
+/// A temporary directory for the files of a test. On macOS it is made in `/tmp`: the user's own
+/// temporary directory there, `/var/folders/…/T/`, is so long that the socket of a runtime
+/// directory below it would not fit the 104 bytes of a socket address.
+fn temp_root() -> io::Result<TempDir> {
+    if cfg!(target_os = "macos") {
+        tempfile::tempdir_in("/tmp")
+    } else {
+        tempfile::tempdir()
+    }
+}
+
 /// The directories a run of the binary is given, all in one temporary directory.
 struct Session {
     _root: TempDir,
@@ -44,7 +55,7 @@ struct Run {
 
 impl Session {
     fn new() -> io::Result<Self> {
-        let root = tempfile::tempdir()?;
+        let root = temp_root()?;
         let dir = |name: &str| -> io::Result<PathBuf> {
             let dir = root.path().join(name);
             fs::create_dir_all(&dir)?;

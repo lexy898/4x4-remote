@@ -37,6 +37,13 @@ const TOOLBAR_BUTTON: &str = "toolbar-connection";
 const INDICATOR: &str = "status-connection";
 const ADD_TITLE: &str = "add-title";
 const REMOVAL_TITLE: &str = "removal-title";
+/// The key that selects the whole text of a field. gpui-base's text fields take ⌘A on macOS,
+/// where Ctrl+A moves to the start of the line, and Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
 
 /// The test's ends of the channels of one service.
 struct FakeService {
@@ -264,7 +271,7 @@ impl Main {
     /// Replaces the text of the field `id` with `text`, as the user would.
     fn retype(&self, id: &'static str, text: &str, cx: &mut TestAppContext) {
         self.click(id, cx);
-        self.press("ctrl-a", cx);
+        self.press(SELECT_ALL, cx);
         self.on_window(cx, |window, cx| window.input(text, cx));
     }
 

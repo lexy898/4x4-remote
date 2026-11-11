@@ -60,6 +60,20 @@ const ROW_SIZE: &str = "file-size";
 const ROW_NAME: &str = "file-name";
 const PROGRESS: &str = "file-progress";
 const PRIORITY: &str = "file-priority";
+/// The key that selects the whole text of a field. gpui-base's text fields take ⌘A on macOS,
+/// where Ctrl+A moves to the start of the line, and Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
+/// The key that pastes into a field: ⌘V on macOS and Ctrl+V elsewhere, as gpui-base's text
+/// fields take them.
+const PASTE: &str = if cfg!(target_os = "macos") {
+    "cmd-v"
+} else {
+    "ctrl-v"
+};
 /// The id of an open menu, and of a notification.
 const MENU: &str = "popup-menu";
 const NOTIFICATION: &str = "notification";
@@ -444,10 +458,10 @@ impl Window {
     }
 
     /// Replaces the text of the field `id` with `text`, as the user would: a click into it,
-    /// Ctrl+A and the new text.
+    /// [`SELECT_ALL`] and the new text.
     fn retype(&self, id: &'static str, text: &str, cx: &mut TestAppContext) {
         self.click(id, cx);
-        self.press("ctrl-a", cx);
+        self.press(SELECT_ALL, cx);
         if text.is_empty() {
             self.press("backspace", cx);
         } else {
@@ -2485,7 +2499,7 @@ fn ctrl_v_in_the_search_box_still_pastes(cx: &mut TestAppContext) {
     copy(link.as_str(), cx);
 
     window.click(SEARCH, cx);
-    window.press("ctrl-v", cx);
+    window.press(PASTE, cx);
 
     assert_eq!(window.value(SEARCH, cx).as_deref(), Some(link.as_str()));
     assert!(!window.dialog_open(cx));

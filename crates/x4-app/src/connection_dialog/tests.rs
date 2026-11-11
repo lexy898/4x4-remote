@@ -40,6 +40,20 @@ const CANCEL: &str = "connection-cancel";
 const SAVE_ERROR: &str = "connection-save-error";
 /// The eye button of the password field, inside the field.
 const MASK_TOGGLE: &str = "toggle-mask";
+/// The key that selects the whole text of a field. gpui-base's text fields take ⌘A on macOS,
+/// where Ctrl+A moves to the start of the line, and Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
+/// The key that pastes into a field: ⌘V on macOS and Ctrl+V elsewhere, as gpui-base's text
+/// fields take them.
+const PASTE: &str = if cfg!(target_os = "macos") {
+    "cmd-v"
+} else {
+    "ctrl-v"
+};
 
 const PROBLEMS: [&str; 4] = [HOST_PROBLEM, PORT_PROBLEM, PATH_PROBLEM, USERNAME_PROBLEM];
 
@@ -200,10 +214,10 @@ impl Shown {
     }
 
     /// Replaces the text of the field `id` with `text`, as the user would: a click into it,
-    /// Ctrl+A and the new text, typed.
+    /// [`SELECT_ALL`] and the new text, typed.
     fn retype(&self, id: &'static str, text: &str, cx: &mut TestAppContext) {
         self.click(id, cx);
-        self.press("ctrl-a", cx);
+        self.press(SELECT_ALL, cx);
         if text.is_empty() {
             self.press("backspace", cx);
         } else {
@@ -211,12 +225,12 @@ impl Shown {
         }
     }
 
-    /// Pastes `text` over the whole of the field `id`, with Ctrl+V.
+    /// Pastes `text` over the whole of the field `id`, with [`PASTE`].
     fn paste(&self, id: &'static str, text: &str, cx: &mut TestAppContext) {
         cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned())));
         self.click(id, cx);
-        self.press("ctrl-a", cx);
-        self.press("ctrl-v", cx);
+        self.press(SELECT_ALL, cx);
+        self.press(PASTE, cx);
     }
 
     /// What the element `id` says: the accessible name of a field, a button or a line of text;

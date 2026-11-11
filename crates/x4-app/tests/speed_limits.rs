@@ -55,6 +55,13 @@ const DETAILS: &str = "details";
 const NOT_A_NUMBER: &str = "Enter a whole number of KiB/s";
 /// What a field says under it when its number is 0 or too large.
 const OUT_OF_RANGE: &str = "Enter a speed from 1 to 1,000,000 KiB/s";
+/// The key that selects the whole text of a field. gpui-base's text fields take ⌘A on macOS,
+/// where Ctrl+A moves to the start of the line, and Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
 
 /// An open main window and the far ends of its channels, standing in for the service.
 struct Window {
@@ -264,10 +271,10 @@ impl Window {
     }
 
     /// Replaces the text of the field `id` with `text`, as the user would: a click into it,
-    /// Ctrl+A and the new text.
+    /// [`SELECT_ALL`] and the new text.
     fn retype(&self, id: &'static str, text: &str, cx: &mut TestAppContext) {
         self.click(id, cx);
-        self.press("ctrl-a", cx);
+        self.press(SELECT_ALL, cx);
         if text.is_empty() {
             self.press("backspace", cx);
         } else {
@@ -1136,7 +1143,7 @@ fn a_click_on_blank_space_in_the_popover_keeps_the_field_focused(cx: &mut TestAp
     window.click(UP, cx);
     window.click_between(UP_SWITCH, UP, cx);
     assert!(window.focused(UP, cx), "the field keeps the focus");
-    window.press("ctrl-a", cx);
+    window.press(SELECT_ALL, cx);
     window.type_text("7", cx);
     window.press("enter", cx);
     assert_eq!(window.sent_actions(), [set_limit(Direction::Up, Some(7))]);
