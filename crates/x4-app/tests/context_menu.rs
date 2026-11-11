@@ -697,7 +697,8 @@ fn menu_items_dispatch_their_actions(cx: &mut TestAppContext) {
     // in the search box, as the menu opened.
     window.press("secondary-f", cx);
     window.right_click_row(1, cx);
-    // gpui writes the secondary key as ctrl or cmd by the OS, and the Mac removes with ⌘⌫.
+    // gpui writes the secondary key as ctrl or cmd by the OS, and the Mac removes with ⌘⌫ and ⌥⌘⌫
+    // (written alt-cmd), which are bound after Delete and win.
     let hints: &[&'static str] = if cfg!(target_os = "macos") {
         &[
             "kbd:cmd-s",
@@ -708,7 +709,7 @@ fn menu_items_dispatch_their_actions(cx: &mut TestAppContext) {
             "kbd:cmd-c",
             "kbd:cmd-shift-c",
             "kbd:cmd-backspace",
-            "kbd:cmd-alt-backspace",
+            "kbd:alt-cmd-backspace",
         ]
     } else {
         &[

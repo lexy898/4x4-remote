@@ -886,9 +886,10 @@ fn the_remove_button_asks_either_way_from_its_menu(cx: &mut TestAppContext) {
     // The tooltip names the key: it looks the action's key up in the torrent list's context.
     window.act(cx, |window, cx| {
         let list = KeyContext::parse("TorrentList").expect("a key context");
-        // The Mac removes with ⌘⌫ and ⌥⌘⌫, which are bound after Delete and win.
+        // The Mac removes with ⌘⌫ and ⌥⌘⌫, which are bound after Delete and win; gpui writes the
+        // modifiers of the second as alt-cmd.
         let (remove, remove_with_data) = if cfg!(target_os = "macos") {
-            ("cmd-backspace", "cmd-alt-backspace")
+            ("cmd-backspace", "alt-cmd-backspace")
         } else {
             ("delete", "shift-delete")
         };
