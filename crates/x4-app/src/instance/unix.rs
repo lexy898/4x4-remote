@@ -615,12 +615,6 @@ mod tests {
     fn the_first_claim_is_primary_and_the_second_hands_off() {
         let dir = runtime_dir();
         let listener = primary_in(dir.path());
-        // macOS refuses the sticky bit on a file to a user who is not root.
-        let private = if cfg!(target_os = "macos") {
-            0o600
-        } else {
-            0o1600
-        };
         for name in [format!("{APP}.lock"), format!("{APP}.sock")] {
             let mode = fs::metadata(dir.path().join(&name))
                 .expect("there")
@@ -628,8 +622,8 @@ mod tests {
                 .mode();
             assert_eq!(
                 mode & 0o7777,
-                private,
-                "{name}: the user's alone, and sticky but on macOS"
+                0o1600,
+                "{name}: the user's alone, and sticky"
             );
         }
         let answered = answer_one(listener);
