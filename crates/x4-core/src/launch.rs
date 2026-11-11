@@ -131,8 +131,9 @@ fn magnet(arg: &OsStr) -> LaunchArg {
     }
 }
 
-/// The local file a `file:` URI names, through [`Url::to_file_path`], which refuses a host other
-/// than `localhost`.
+/// The local file a `file:` URI names, through [`Url::to_file_path`]. A URI with a host other than
+/// `localhost` (which the URL parser drops) names a file of another computer, and is refused here:
+/// on Windows, `to_file_path` would make it the path of a network share.
 fn file_uri(arg: &OsStr) -> LaunchArg {
     let Some(text) = arg.to_str() else {
         return reject(RejectKind::Url);
@@ -147,7 +148,7 @@ fn file_uri(arg: &OsStr) -> LaunchArg {
     let Ok(url) = Url::parse(text) else {
         return reject(RejectKind::Url);
     };
-    if url.query().is_some() || url.fragment().is_some() {
+    if url.host().is_some() || url.query().is_some() || url.fragment().is_some() {
         return reject(RejectKind::Url);
     }
     url.to_file_path()
