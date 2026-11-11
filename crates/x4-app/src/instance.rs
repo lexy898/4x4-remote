@@ -80,8 +80,8 @@ pub enum StandaloneReason {
         /// Its mode bits, without the file type.
         mode: u32,
     },
-    /// The socket's path does not fit a Unix socket address.
-    #[error("the socket path would have {bytes} bytes, more than the 107 of a Unix socket address")]
+    /// The socket's path does not fit a Unix socket address: 107 bytes on Linux, 103 on macOS.
+    #[error("the socket path would have {bytes} bytes, more than a Unix socket address holds")]
     PathTooLong {
         /// The length of the path in bytes.
         bytes: usize,

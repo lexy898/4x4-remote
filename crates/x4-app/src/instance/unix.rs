@@ -27,8 +27,12 @@ use crate::adding::{AddRequest, launch_requests};
 const LISTENER_THREAD: &str = "instance-listener";
 /// Its stack: it only reads a frame into the heap, tells its arguments apart and sends them on.
 const LISTENER_STACK: usize = 64 * 1024;
-/// The longest path of a Unix socket's address, without its NUL (unix(7)).
+/// The longest path of a Unix socket's address, without its NUL: `sun_path` holds 108 bytes on
+/// Linux (unix(7)) and 104 on macOS (unix(4)).
+#[cfg(not(target_os = "macos"))]
 const MAX_SOCKET_PATH: usize = 107;
+#[cfg(target_os = "macos")]
+const MAX_SOCKET_PATH: usize = 103;
 /// The mode of the lock and the socket: the user's alone, and sticky.
 const FILE_MODE: u32 = 0o1600;
 /// The pause after the listener could not take a connection, such as with too many files open.
