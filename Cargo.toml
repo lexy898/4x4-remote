@@ -18,7 +18,7 @@ anyhow = "1.0.104"
 # title of our own (Linux only), parented to the window it opens over (`raw_handle`: the X11 window
 # id, or a Wayland surface exported through xdg-foreign, hence `wayland`). gpui already pulls in
 # this version and every crate these features need; ours adds no crate.
-ashpd = { version = "0.13.13", default-features = false, features = [
+ashpd = { version = "0.14.0", default-features = false, features = [
   "async-io",
   "file_chooser",
   "raw_handle",
